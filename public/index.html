@@ -737,7 +737,7 @@ function watchingCard(w) {
   const kickoff = w.kickoff ? new Date(w.kickoff).toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' }) : '—';
   const minsOut = w.kickoff ? Math.round((new Date(w.kickoff) - Date.now()) / 60000) : null;
   return `
-    <div class="fixture-card watching" onclick="openDrawer(${JSON.stringify(w).replace(/"/g,'&quot;')})">
+    <div class="fixture-card watching" onclick="openDrawerById('${w.id}')">
       ${scoreBadge(w.projectedScore)}
       <div class="fixture-meta">
         <div class="fixture-name">${w.fixture}</div>
@@ -1122,6 +1122,11 @@ function valueRow(label, modelP, odds, ev, kelly, stake, isProjected) {
         <span style="color:var(--text2);margin-left:8px">(${(kelly*100).toFixed(1)}% of bankroll)</span>
       </div>` : ''}
     </div>`;
+}
+
+function openDrawerById(id) {
+  const w = STATE.watching.find(x => x.id === id);
+  if (w) openDrawer(w);
 }
 
 function openDrawer(w) {
