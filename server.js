@@ -658,6 +658,15 @@ app.listen(PORT, () => {
   console.log(`Edge Scout running at http://localhost:${PORT}`);
   setupScheduler();
 
+  // Keep-alive: ping own /health every 10 min to prevent Render free-tier spin-down
+  if (process.env.NODE_ENV === 'production') {
+    const SELF = `https://edge-scout.onrender.com`;
+    setInterval(() => {
+      axios.get(`${SELF}/health`).catch(() => {});
+    }, 10 * 60 * 1000);
+    console.log('[KeepAlive] Self-ping every 10 min enabled');
+  }
+
   // On startup, fire morning scan if we haven't today
   const settings = getSettings();
   const watching = getWatching();
