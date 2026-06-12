@@ -182,11 +182,12 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
 .prob-box.home { border-top: 2px solid var(--cyan); }
 .prob-box.draw { border-top: 2px solid var(--text2); }
 .prob-box.away { border-top: 2px solid var(--pink); }
-.factor-row { display: grid; grid-template-columns: 70px 1fr 40px 1fr 70px; align-items: center; gap: 6px; margin-bottom: 7px; font-size: .72rem; }
-.factor-label { font-family: 'DM Mono', monospace; color: var(--text2); text-align: center; text-transform: uppercase; letter-spacing: .04em; }
+.factor-row { display: grid; grid-template-columns: 36px 1fr 90px 1fr 36px; align-items: center; gap: 8px; margin-bottom: 8px; }
+.factor-label { font-family: 'DM Mono', monospace; color: var(--text2); text-align: center; text-transform: uppercase; letter-spacing: .04em; font-size: .62rem; white-space: nowrap; }
 .factor-bar-wrap { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
-.factor-bar-home { height: 100%; background: var(--cyan); border-radius: 3px; transition: width .4s; }
-.factor-bar-away { height: 100%; background: var(--pink); border-radius: 3px; float: right; transition: width .4s; }
+.factor-bar-wrap.rtl { display: flex; flex-direction: row-reverse; }
+.factor-bar-home { height: 6px; background: var(--cyan); border-radius: 3px; }
+.factor-bar-away { height: 6px; background: var(--pink); border-radius: 3px; }
 .factor-val { font-family: 'DM Mono', monospace; text-align: center; font-size: .75rem; }
 .factor-val.home { color: var(--cyan); }
 .factor-val.away { color: var(--pink); }
@@ -1140,7 +1141,7 @@ function openDrawer(w) {
       <span class="factor-val home">${hv}</span>
       <div class="factor-bar-wrap"><div class="factor-bar-home" style="width:${hv}%"></div></div>
       <span class="factor-label">${FACTOR_LABELS[k]}</span>
-      <div class="factor-bar-wrap"><div class="factor-bar-away" style="width:${av}%"></div></div>
+      <div class="factor-bar-wrap rtl"><div class="factor-bar-away" style="width:${av}%"></div></div>
       <span class="factor-val away">${av}</span>
     </div>`;
   }).join('');
