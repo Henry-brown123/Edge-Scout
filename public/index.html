@@ -1,0 +1,1025 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Edge Scout</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:       #0a0a0f;
+  --surface:  #111118;
+  --surface2: #1a1a24;
+  --surface3: #22222f;
+  --border:   #2a2a3a;
+  --cyan:     #4cc9f0;
+  --pink:     #f72585;
+  --green:    #00ff87;
+  --amber:    #ffd166;
+  --red:      #ff4d6d;
+  --text:     #e8eaf6;
+  --muted:    #6b7280;
+  --font-head: 'Syne', system-ui, sans-serif;
+  --font-data: 'DM Mono', monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: var(--font-data); font-size: 13px; min-height: 100vh; }
+
+/* ── Layout ── */
+.app { display: flex; flex-direction: column; height: 100vh; }
+
+header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 20px;
+  display: flex; align-items: center; gap: 16px;
+  height: 54px; flex-shrink: 0;
+}
+.logo {
+  font-family: var(--font-head);
+  font-size: 18px; font-weight: 800;
+  color: var(--cyan); letter-spacing: -0.5px;
+  display: flex; align-items: center; gap: 8px; flex-shrink: 0;
+}
+.logo svg { width: 20px; height: 20px; }
+
+nav { display: flex; gap: 2px; flex: 1; overflow-x: auto; scrollbar-width: none; }
+nav::-webkit-scrollbar { display: none; }
+.nav-btn {
+  background: none; border: none; color: var(--muted);
+  padding: 6px 14px; border-radius: 6px; cursor: pointer;
+  font-family: var(--font-head); font-size: 13px; font-weight: 600;
+  transition: all .15s; white-space: nowrap; flex-shrink: 0;
+}
+.nav-btn:hover { color: var(--text); background: var(--surface2); }
+.nav-btn.active { color: var(--cyan); background: rgba(76,201,240,.1); }
+
+.status-pill {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 20px; padding: 4px 12px;
+  font-size: 11px; color: var(--muted); flex-shrink: 0;
+}
+.dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+.dot.live { background: var(--green); animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+main { flex: 1; overflow-y: auto; padding: 20px; }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+@media(max-width:600px){
+  header { flex-wrap: wrap; height: auto; padding: 10px 12px 0; }
+  .logo { flex: 1; }
+  .status-pill { margin-left: auto; }
+  nav { width: 100%; border-top: 1px solid var(--border); padding: 4px 0; }
+  main { padding: 12px; }
+}
+
+/* ── Cards ── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px; padding: 18px; margin-bottom: 16px;
+}
+.card-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 16px;
+}
+.card-title {
+  font-family: var(--font-head);
+  font-size: 11px; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 1px;
+}
+
+/* ── Buttons ── */
+.btn {
+  padding: 8px 18px; border-radius: 8px; border: none;
+  cursor: pointer; font-family: var(--font-head);
+  font-size: 12px; font-weight: 700; transition: all .15s;
+}
+.btn-cyan  { background: var(--cyan);  color: #000; }
+.btn-cyan:hover  { background: #7dd8f5; }
+.btn-pink  { background: var(--pink);  color: #fff; }
+.btn-pink:hover  { background: #f95fa5; }
+.btn-ghost { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+.btn-ghost:hover { border-color: var(--cyan); color: var(--cyan); }
+.btn-sm { padding: 5px 12px; font-size: 11px; }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+
+/* ── Grids ── */
+.grid-2 { display: grid; grid-template-columns: repeat(2,1fr); gap: 12px; }
+.grid-3 { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; }
+.grid-4 { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }
+@media(max-width:900px){ .grid-4,.grid-3 { grid-template-columns: repeat(2,1fr); } }
+@media(max-width:600px){ .grid-4,.grid-3,.grid-2 { grid-template-columns: 1fr; } }
+
+/* ── Stat tiles ── */
+.stat-tile { background: var(--surface2); border-radius: 10px; padding: 16px; }
+.stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .8px; margin-bottom: 6px; }
+.stat-value { font-family: var(--font-head); font-size: 26px; font-weight: 800; }
+.stat-sub   { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.c-cyan  { color: var(--cyan);  }
+.c-green { color: var(--green); }
+.c-red   { color: var(--red);   }
+.c-amber { color: var(--amber); }
+.c-pink  { color: var(--pink);  }
+
+/* ── Success Score badge ── */
+.score-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 44px; height: 44px; border-radius: 10px;
+  font-family: var(--font-head); font-size: 15px; font-weight: 800;
+  flex-shrink: 0;
+}
+.score-0   { background: rgba(107,114,128,.15); color: var(--muted); }
+.score-40  { background: rgba(255,209,102,.15); color: var(--amber); border: 1px solid rgba(255,209,102,.3); }
+.score-60  { background: rgba(76,201,240,.15);  color: var(--cyan);  border: 1px solid rgba(76,201,240,.3);  }
+.score-80  { background: rgba(0,255,135,.15);   color: var(--green); border: 1px solid rgba(0,255,135,.3);   }
+
+/* ── Fixture card ── */
+.fixture-card {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px; padding: 14px 16px;
+  display: flex; align-items: center; gap: 14px;
+  margin-bottom: 8px; transition: border-color .15s;
+}
+.fixture-card:hover { border-color: var(--cyan); }
+.fixture-card.recommended { border-color: rgba(76,201,240,.4); background: rgba(76,201,240,.05); }
+.fixture-card.watching    { border-left: 3px solid var(--amber); }
+
+.fixture-meta { flex: 1; min-width: 0; }
+.fixture-name { font-family: var(--font-head); font-size: 14px; font-weight: 700; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fixture-info { font-size: 11px; color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; }
+
+.fixture-right { display: flex; align-items: center; gap: 10px; }
+
+.stage-tag {
+  font-family: var(--font-head); font-size: 9px; font-weight: 700;
+  padding: 3px 8px; border-radius: 4px; text-transform: uppercase; letter-spacing: .5px;
+}
+.tag-watching    { background: rgba(255,209,102,.15); color: var(--amber); }
+.tag-recommended { background: rgba(76,201,240,.15);  color: var(--cyan);  }
+.tag-resolved    { background: rgba(0,255,135,.15);   color: var(--green); }
+
+.stake-box { text-align: right; }
+.stake-amount { font-family: var(--font-head); font-size: 16px; font-weight: 800; color: var(--cyan); }
+.stake-label  { font-size: 10px; color: var(--muted); }
+
+/* ── Edge bar ── */
+.edge-bar { display: flex; align-items: center; gap: 8px; }
+.bar-track { flex: 1; height: 4px; background: var(--surface3); border-radius: 2px; overflow: hidden; min-width: 50px; }
+.bar-fill  { height: 100%; border-radius: 2px; transition: width .4s; }
+.bar-cyan  { background: var(--cyan); }
+.bar-green { background: var(--green); }
+
+/* ── World Cup banner ── */
+.wc-banner {
+  background: linear-gradient(135deg, rgba(247,37,133,.1) 0%, rgba(76,201,240,.1) 100%);
+  border: 1px solid rgba(247,37,133,.3);
+  border-radius: 12px; padding: 16px 20px;
+  display: flex; align-items: center; gap: 16px;
+  margin-bottom: 16px;
+}
+.wc-icon { font-size: 32px; flex-shrink: 0; }
+.wc-text h2 { font-family: var(--font-head); font-size: 16px; font-weight: 800; color: var(--pink); margin-bottom: 2px; }
+.wc-text p  { font-size: 12px; color: var(--muted); }
+.wc-badge { margin-left: auto; background: var(--pink); color: #fff; font-family: var(--font-head); font-size: 10px; font-weight: 700; padding: 4px 10px; border-radius: 6px; white-space: nowrap; }
+
+/* ── Scan controls ── */
+.scan-controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 16px; }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+select, input[type=number], input[type=date], input[type=text] {
+  background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+  padding: 7px 10px; border-radius: 8px; font-family: var(--font-data); font-size: 12px; outline: none;
+  transition: border-color .15s;
+}
+select:focus, input:focus { border-color: var(--cyan); }
+select option { background: var(--surface2); }
+
+/* ── Log ── */
+.log-box {
+  background: var(--surface2); border-radius: 8px; padding: 12px;
+  font-family: var(--font-data); font-size: 11px;
+  max-height: 180px; overflow-y: auto; line-height: 1.8;
+}
+.log-info  { color: var(--muted); }
+.log-found { color: var(--green); }
+.log-warn  { color: var(--amber); }
+.log-error { color: var(--red);   }
+
+/* ── Spinner ── */
+.spinner {
+  display: inline-block; width: 14px; height: 14px;
+  border: 2px solid var(--border); border-top-color: var(--cyan);
+  border-radius: 50%; animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Table ── */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th { padding: 8px 12px; text-align: left; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+td { padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 12px; vertical-align: middle; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: rgba(76,201,240,.04); }
+td.mono { font-family: var(--font-data); }
+
+/* ── Badge ── */
+.badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-family: var(--font-head); font-weight: 700; }
+.badge-green  { background: rgba(0,255,135,.1);  color: var(--green); }
+.badge-red    { background: rgba(255,77,109,.1);  color: var(--red);   }
+.badge-amber  { background: rgba(255,209,102,.1); color: var(--amber); }
+.badge-cyan   { background: rgba(76,201,240,.1);  color: var(--cyan);  }
+.badge-muted  { background: var(--surface3); color: var(--muted); }
+
+/* ── P&L chart ── */
+.chart-wrap { height: 200px; position: relative; margin-top: 12px; }
+canvas { width: 100% !important; }
+
+/* ── Calibration table ── */
+.cal-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.cal-bucket { font-family: var(--font-head); font-size: 12px; font-weight: 700; min-width: 60px; }
+.cal-bar-track { flex: 1; height: 8px; background: var(--surface3); border-radius: 4px; overflow: hidden; }
+.cal-bar-fill  { height: 100%; border-radius: 4px; transition: width .5s; }
+.cal-pct { font-size: 12px; min-width: 40px; text-align: right; }
+
+/* ── Toast ── */
+#toast {
+  position: fixed; bottom: 24px; right: 24px;
+  background: var(--surface); border: 1px solid var(--border);
+  padding: 10px 18px; border-radius: 10px; font-size: 12px;
+  opacity: 0; transition: opacity .3s; pointer-events: none; z-index: 999;
+}
+#toast.show { opacity: 1; }
+
+/* ── Weights editor ── */
+.weight-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.weight-label { min-width: 130px; font-family: var(--font-head); font-size: 12px; font-weight: 600; }
+input[type=range] { flex: 1; accent-color: var(--cyan); }
+.weight-val { min-width: 30px; text-align: right; font-family: var(--font-data); font-weight: 500; }
+
+/* ── Empty state ── */
+.empty { text-align: center; padding: 48px; color: var(--muted); }
+.empty-icon { font-size: 40px; margin-bottom: 12px; opacity: .4; }
+.empty p { font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="app">
+
+<header>
+  <div class="logo">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35M11 8v6M8 11h6"/>
+    </svg>
+    Edge Scout
+  </div>
+  <nav>
+    <button class="nav-btn active" data-tab="scout">Scout</button>
+    <button class="nav-btn" data-tab="performance">Performance</button>
+    <button class="nav-btn" data-tab="settings">Settings</button>
+  </nav>
+  <div class="status-pill">
+    <div class="dot" id="api-dot"></div>
+    <span id="api-status">Connecting…</span>
+  </div>
+</header>
+
+<main>
+
+<!-- ═══════════════════════════ SCOUT ══════════════════════════════ -->
+<div class="tab-panel active" id="tab-scout">
+
+  <!-- World Cup banner -->
+  <div class="wc-banner" id="wc-banner">
+    <div class="wc-icon">🏆</div>
+    <div class="wc-text">
+      <h2>FIFA World Cup 2026 — Live</h2>
+      <p>Paper trading active · £1,000 bankroll · Validation phase Jun 12 – Jul 19</p>
+    </div>
+    <div class="wc-badge" id="wc-bankroll-badge">£1,000.00</div>
+  </div>
+
+  <!-- Scan controls -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Morning Scan</span>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-ghost btn-sm" onclick="loadState()">Refresh</button>
+        <button class="btn btn-cyan btn-sm" id="scan-btn" onclick="triggerMorningScan()">Run Scan Now</button>
+      </div>
+    </div>
+    <div class="scan-controls">
+      <div class="field">
+        <label>Leagues</label>
+        <select id="league-select" multiple size="4" style="min-width:160px">
+          <option value="1"   selected>🏆 World Cup 2026</option>
+          <option value="39"  selected>🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League</option>
+          <option value="140" selected>🇪🇸 La Liga</option>
+          <option value="78"  selected>🇩🇪 Bundesliga</option>
+          <option value="135" selected>🇮🇹 Serie A</option>
+          <option value="61"  selected>🇫🇷 Ligue 1</option>
+          <option value="2"   selected>⭐ Champions League</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Success threshold</label>
+        <input type="number" id="threshold-input" value="40" min="20" max="90" style="width:70px">
+      </div>
+      <div class="field">
+        <label>Paper bankroll (£)</label>
+        <input type="number" id="bankroll-input" value="1000" min="100" style="width:110px">
+      </div>
+    </div>
+    <div id="scan-log" class="log-box" style="display:none"></div>
+    <div id="scan-status" style="font-size:12px;color:var(--muted);margin-top:8px"></div>
+  </div>
+
+  <!-- Stats row -->
+  <div class="grid-4" id="scout-stats" style="margin-bottom:16px">
+    <div class="stat-tile">
+      <div class="stat-label">Paper Bankroll</div>
+      <div class="stat-value c-cyan" id="s-bankroll">£1,000</div>
+      <div class="stat-sub" id="s-pnl">+£0.00 (0%)</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Watching Today</div>
+      <div class="stat-value c-amber" id="s-watching">0</div>
+      <div class="stat-sub">fixtures flagged</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Locked Bets</div>
+      <div class="stat-value c-green" id="s-locked">0</div>
+      <div class="stat-sub">pending resolution</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Win Rate</div>
+      <div class="stat-value" id="s-winrate">—</div>
+      <div class="stat-sub" id="s-record">0W 0L</div>
+    </div>
+  </div>
+
+  <!-- RECOMMENDED bets -->
+  <div class="card" id="recommended-card">
+    <div class="card-header">
+      <span class="card-title">Locked Bets — Recommended</span>
+      <span style="font-size:11px;color:var(--muted)">Score 40+ · Confirmed lineups · Live odds</span>
+    </div>
+    <div id="recommended-list">
+      <div class="empty" id="recommended-empty">
+        <div class="empty-icon">🔒</div>
+        <p>No locked bets yet. Pre-match scans fire automatically at T-60.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- WATCHING fixtures -->
+  <div class="card" id="watching-card">
+    <div class="card-header">
+      <span class="card-title">Watching — Early Flags</span>
+      <span style="font-size:11px;color:var(--muted)">Projected scores · Not yet locked</span>
+    </div>
+    <div id="watching-list">
+      <div class="empty" id="watching-empty">
+        <div class="empty-icon">👁</div>
+        <p>Run a scan to flag today's fixtures.</p>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════ PERFORMANCE ════════════════════════ -->
+<div class="tab-panel" id="tab-performance">
+
+  <!-- Summary stats -->
+  <div class="grid-4" style="margin-bottom:16px">
+    <div class="stat-tile">
+      <div class="stat-label">Current Bankroll</div>
+      <div class="stat-value c-cyan" id="p-bankroll">£1,000</div>
+      <div class="stat-sub" id="p-pnl-sub">+£0 (0.0%)</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Total Bets</div>
+      <div class="stat-value" id="p-total">0</div>
+      <div class="stat-sub" id="p-record">0W / 0L</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Win Rate</div>
+      <div class="stat-value" id="p-winrate">—</div>
+      <div class="stat-sub">resolved bets only</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">ROI</div>
+      <div class="stat-value" id="p-roi">—</div>
+      <div class="stat-sub">return on staked</div>
+    </div>
+  </div>
+
+  <div class="grid-2" style="margin-bottom:16px">
+    <div class="card">
+      <div class="card-header"><span class="card-title">P&L Curve</span></div>
+      <div class="chart-wrap"><canvas id="pnl-chart"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">Calibration — Win Rate by Score</span></div>
+      <div id="calibration-chart" style="margin-top:4px"></div>
+      <div class="empty" id="cal-empty" style="padding:24px">
+        <p>Need 10+ resolved bets to show calibration.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Bet Log</span>
+      <button class="btn btn-ghost btn-sm" onclick="exportCSV()">Export CSV</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Fixture</th><th>League</th><th>Bet</th><th>Score</th>
+            <th>Odds</th><th>Edge</th><th>Stake</th><th>P&L</th><th>Result</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="bets-body"></tbody>
+      </table>
+      <div class="empty" id="bets-empty"><div class="empty-icon">📋</div><p>No resolved bets yet.</p></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════ SETTINGS ═══════════════════════════ -->
+<div class="tab-panel" id="tab-settings">
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Model Weights</span>
+        <button class="btn btn-ghost btn-sm" onclick="resetWeights()">Reset</button>
+      </div>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:14px">
+        Adjust the 8 factor weights. Total should equal 100.
+        Run Backfill to optimise these automatically from historical data.
+      </p>
+      <div id="weights-editor"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px">
+        <span style="font-size:11px;color:var(--muted)">Total: <strong id="weights-total">100</strong></span>
+        <button class="btn btn-cyan btn-sm" onclick="saveWeights()">Save Weights</button>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">Scoring Parameters</span></div>
+        <div style="display:flex;flex-direction:column;gap:14px">
+          <div class="field">
+            <label>Recency Decay λ (per matchday)</label>
+            <input type="number" id="decay-input" value="0.05" step="0.01" min="0" max="0.3" style="width:90px">
+          </div>
+          <div class="field">
+            <label>Form Window (matches)</label>
+            <input type="number" id="form-window-input" value="6" min="3" max="15" style="width:70px">
+          </div>
+          <div class="field">
+            <label>H2H Window (matches)</label>
+            <input type="number" id="h2h-window-input" value="5" min="1" max="10" style="width:70px">
+          </div>
+          <div class="field">
+            <label>Kelly Fraction</label>
+            <select id="kelly-frac-input">
+              <option value="0.25">Quarter Kelly</option>
+              <option value="0.5" selected>Half Kelly</option>
+              <option value="1">Full Kelly</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Success Score threshold</label>
+            <input type="number" id="threshold-settings" value="40" min="20" max="90" style="width:70px">
+          </div>
+          <button class="btn btn-cyan btn-sm" onclick="saveSettings()" style="align-self:flex-start">Save Settings</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">Paper Trading</span></div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
+          Reset wipes all bets and returns the bankroll to £1,000. Use at the end of a validation phase.
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="confirmReset()" style="border-color:var(--red);color:var(--red)">Reset Bankroll & Bets</button>
+      </div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">API Status</span></div>
+        <div class="grid-2">
+          <div class="stat-tile">
+            <div class="stat-label">API-Sports Remaining</div>
+            <div class="stat-value c-cyan" id="api-remaining">—</div>
+            <div class="stat-sub">of 7,500 daily</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-label">Odds API Remaining</div>
+            <div class="stat-value" id="odds-remaining">—</div>
+            <div class="stat-sub">of 500 monthly</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</main>
+</div><!-- /.app -->
+<div id="toast"></div>
+
+<script>
+// ─── STATE ───────────────────────────────────────────────────────────────────
+let STATE = { bankroll: { initial: 1000, current: 1000 }, bets: [], watching: [], settings: {} };
+
+// ─── NAV ─────────────────────────────────────────────────────────────────────
+document.querySelectorAll('.nav-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'performance') renderPerformance();
+    if (btn.dataset.tab === 'settings')    renderSettings();
+  });
+});
+
+// ─── TOAST ───────────────────────────────────────────────────────────────────
+function toast(msg, type = 'info') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.borderColor = type === 'error' ? 'var(--red)' : type === 'success' ? 'var(--green)' : 'var(--border)';
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3200);
+}
+
+// ─── API ─────────────────────────────────────────────────────────────────────
+const API_BASE = window.location.port === '3000' ? '' : 'http://localhost:3000';
+
+async function apiFetch(url, opts = {}) {
+  const r = await fetch(API_BASE + url, opts);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+async function loadState() {
+  try {
+    const s = await apiFetch('/api/state');
+    STATE = s;
+    renderScout();
+    updateBankrollBadge();
+  } catch(e) { toast('Failed to load state: ' + e.message, 'error'); }
+}
+
+async function checkApiStatus() {
+  // Liveness: ping /api/state (always available)
+  try {
+    await apiFetch('/api/state');
+    document.getElementById('api-dot').className     = 'dot live';
+    document.getElementById('api-status').textContent = 'Live';
+  } catch {
+    document.getElementById('api-dot').className     = 'dot';
+    document.getElementById('api-status').textContent = 'Server Error';
+    return;
+  }
+  // Quota: best-effort call to API-Sports /status
+  try {
+    const d = await apiFetch('/api/status');
+    const used  = d?.response?.requests?.current;
+    const limit = d?.response?.requests?.limit_day;
+    if (used != null) document.getElementById('api-remaining').textContent = (limit - used).toLocaleString();
+  } catch { /* quota display is non-critical */ }
+}
+
+// ─── SCORE BADGE ─────────────────────────────────────────────────────────────
+function scoreBadge(n) {
+  const cls = n >= 80 ? 'score-80' : n >= 60 ? 'score-60' : n >= 40 ? 'score-40' : 'score-0';
+  return `<div class="score-badge ${cls}">${n}</div>`;
+}
+
+function scoreClass(n) { return n >= 80 ? 'c-green' : n >= 60 ? 'c-cyan' : n >= 40 ? 'c-amber' : ''; }
+
+// ─── RENDER SCOUT ─────────────────────────────────────────────────────────────
+function renderScout() {
+  const { bankroll, bets, watching } = STATE;
+
+  // Bankroll badge
+  updateBankrollBadge();
+
+  // Stats
+  const locked   = bets.filter(b => b.stage === 'RECOMMENDED');
+  const resolved = bets.filter(b => b.stage === 'RESOLVED');
+  const wins     = resolved.filter(b => b.result === 'win').length;
+  const losses   = resolved.filter(b => b.result === 'loss').length;
+  const pnl      = bankroll.current - bankroll.initial;
+  const pnlPct   = ((pnl / bankroll.initial) * 100).toFixed(1);
+
+  document.getElementById('s-bankroll').textContent = `£${bankroll.current.toLocaleString('en-GB', {minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  document.getElementById('s-bankroll').className   = `stat-value ${pnl >= 0 ? 'c-green' : 'c-red'}`;
+  document.getElementById('s-pnl').textContent      = `${pnl >= 0 ? '+' : ''}£${pnl.toFixed(2)} (${pnlPct}%)`;
+  document.getElementById('s-watching').textContent = watching.length;
+  document.getElementById('s-locked').textContent   = locked.length;
+  document.getElementById('s-winrate').textContent  = resolved.length ? `${((wins/(wins+losses||1))*100).toFixed(0)}%` : '—';
+  document.getElementById('s-record').textContent   = `${wins}W ${losses}L`;
+
+  // Recommended — use innerHTML only, never move the empty-state node
+  const recEl = document.getElementById('recommended-list');
+  if (locked.length) {
+    recEl.innerHTML = locked.map(b => recommendedCard(b)).join('');
+  } else {
+    recEl.innerHTML = `<div class="empty"><div class="empty-icon">🔒</div><p>No locked bets yet. Pre-match scans fire automatically at T-60.</p></div>`;
+  }
+
+  // Watching
+  const watEl  = document.getElementById('watching-list');
+  const today  = new Date().toISOString().split('T')[0];
+  const todayW = watching.filter(w => w.kickoff?.startsWith(today));
+  if (todayW.length) {
+    watEl.innerHTML = todayW.map(w => watchingCard(w)).join('');
+  } else {
+    watEl.innerHTML = `<div class="empty"><div class="empty-icon">👁</div><p>Run a scan to flag today's fixtures.</p></div>`;
+  }
+}
+
+function updateBankrollBadge() {
+  const br  = STATE.bankroll;
+  if (!br) return;
+  const pnl = br.current - br.initial;
+  const el  = document.getElementById('wc-bankroll-badge');
+  if (!el) return;
+  el.textContent = `£${br.current.toFixed(2)}`;
+  el.style.background = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+  el.style.color       = pnl >= 0 ? '#000' : '#fff';
+}
+
+function recommendedCard(b) {
+  const kickoff = b.kickoff ? new Date(b.kickoff).toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' }) : '—';
+  const edgePct = (b.edge * 100).toFixed(1);
+  return `
+    <div class="fixture-card recommended">
+      ${scoreBadge(b.successScore)}
+      <div class="fixture-meta">
+        <div class="fixture-name">${b.fixture}</div>
+        <div class="fixture-info">
+          <span>${b.leagueName}</span>
+          <span>KO ${kickoff}</span>
+          <span class="badge badge-cyan">${b.bet}</span>
+          <span style="color:var(--cyan)">+${edgePct}% edge</span>
+          <span>@${b.bookOdds.toFixed(2)}</span>
+          ${b.weather ? `<span title="Weather">🌧 ${b.weather.precipProb}% rain, ${b.weather.windSpeed?.toFixed(0)}km/h</span>` : ''}
+        </div>
+      </div>
+      <div class="fixture-right">
+        <div class="stake-box">
+          <div class="stake-amount">£${b.suggestedStake.toFixed(2)}</div>
+          <div class="stake-label">Half Kelly</div>
+        </div>
+        <span class="stage-tag tag-recommended">Locked</span>
+        <button class="btn btn-ghost btn-sm" onclick="manualResolve('${b.id}','win')" title="Mark Win" style="color:var(--green);border-color:var(--green)">W</button>
+        <button class="btn btn-ghost btn-sm" onclick="manualResolve('${b.id}','loss')" title="Mark Loss" style="color:var(--red);border-color:var(--red)">L</button>
+      </div>
+    </div>`;
+}
+
+function watchingCard(w) {
+  const kickoff = w.kickoff ? new Date(w.kickoff).toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' }) : '—';
+  const minsOut = w.kickoff ? Math.round((new Date(w.kickoff) - Date.now()) / 60000) : null;
+  return `
+    <div class="fixture-card watching">
+      ${scoreBadge(w.projectedScore)}
+      <div class="fixture-meta">
+        <div class="fixture-name">${w.fixture}</div>
+        <div class="fixture-info">
+          <span>${w.leagueName}</span>
+          <span>KO ${kickoff}</span>
+          ${minsOut != null ? `<span style="color:var(--amber)">T-${minsOut}m</span>` : ''}
+          <span class="badge badge-amber">Projected: ${w.projectedBet}</span>
+        </div>
+      </div>
+      <div class="fixture-right">
+        <span class="stage-tag tag-watching">Watching</span>
+        <button class="btn btn-ghost btn-sm" onclick="forcePreMatch('${w.id}')">Lock now</button>
+      </div>
+    </div>`;
+}
+
+// ─── SCAN ─────────────────────────────────────────────────────────────────────
+function scanLog(msg, type = 'info') {
+  const el = document.getElementById('scan-log');
+  el.style.display = 'block';
+  const d = document.createElement('div');
+  d.className = 'log-' + type;
+  d.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  el.appendChild(d);
+  el.scrollTop = el.scrollHeight;
+}
+
+async function triggerMorningScan() {
+  const btn = document.getElementById('scan-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Scanning…';
+  document.getElementById('scan-log').innerHTML = '';
+  scanLog('Triggering morning scan on server…', 'info');
+
+  const leagues = Array.from(document.getElementById('league-select').selectedOptions).map(o => o.value);
+  try {
+    await apiFetch('/api/scan/morning', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ leagues }),
+    });
+    scanLog('Scan started server-side. Refreshing in 15s…', 'found');
+    setTimeout(async () => {
+      await loadState();
+      scanLog(`Done. ${STATE.watching.length} fixtures watching, ${STATE.bets.filter(b=>b.stage==='RECOMMENDED').length} locked.`, 'found');
+      btn.disabled = false;
+      btn.textContent = 'Run Scan Now';
+    }, 15000);
+  } catch(e) {
+    scanLog('Error: ' + e.message, 'error');
+    btn.disabled = false;
+    btn.textContent = 'Run Scan Now';
+  }
+}
+
+async function forcePreMatch(watchId) {
+  toast('Running pre-match scan…', 'info');
+  try {
+    const result = await apiFetch(`/api/scan/prematch/${watchId}`, { method: 'POST' });
+    if (result.dropped) toast('Score below threshold — dropped', 'info');
+    else toast(`Locked: ${result.fixture} — £${result.suggestedStake?.toFixed(2)}`, 'success');
+    await loadState();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function manualResolve(id, result) {
+  try {
+    const { bet, bankroll } = await apiFetch(`/api/bets/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ result }),
+    });
+    toast(`${bet.fixture}: ${result.toUpperCase()} — P&L £${bet.pnl >= 0 ? '+' : ''}${bet.pnl?.toFixed(2)}`, result === 'win' ? 'success' : 'info');
+    await loadState();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ─── PERFORMANCE ─────────────────────────────────────────────────────────────
+function renderPerformance() {
+  const { bankroll, bets } = STATE;
+  const resolved = bets.filter(b => b.stage === 'RESOLVED');
+  const wins     = resolved.filter(b => b.result === 'win').length;
+  const losses   = resolved.filter(b => b.result === 'loss').length;
+  const staked   = resolved.reduce((s, b) => s + b.suggestedStake, 0);
+  const pnl      = bankroll.current - bankroll.initial;
+  const pnlPct   = ((pnl / bankroll.initial) * 100).toFixed(1);
+  const roi      = staked ? ((pnl / staked) * 100).toFixed(1) : '—';
+
+  document.getElementById('p-bankroll').textContent  = `£${bankroll.current.toFixed(2)}`;
+  document.getElementById('p-bankroll').className    = `stat-value ${pnl >= 0 ? 'c-green' : 'c-red'}`;
+  document.getElementById('p-pnl-sub').textContent   = `${pnl >= 0 ? '+' : ''}£${pnl.toFixed(2)} (${pnlPct}%)`;
+  document.getElementById('p-total').textContent     = bets.length;
+  document.getElementById('p-record').textContent    = `${wins}W / ${losses}L`;
+  document.getElementById('p-winrate').textContent   = resolved.length ? `${((wins/(wins+losses||1))*100).toFixed(0)}%` : '—';
+  document.getElementById('p-winrate').className     = `stat-value ${wins >= losses ? 'c-green' : 'c-red'}`;
+  document.getElementById('p-roi').textContent       = roi !== '—' ? `${roi}%` : '—';
+  document.getElementById('p-roi').className         = `stat-value ${parseFloat(roi) >= 0 ? 'c-green' : 'c-red'}`;
+
+  // P&L chart
+  const curve = [];
+  let running = 0;
+  bets.filter(b => b.result).slice().reverse().forEach(b => {
+    running += b.pnl || 0;
+    curve.push(running);
+  });
+  drawPnlChart(curve, bankroll.initial);
+
+  // Calibration
+  renderCalibration(resolved);
+
+  // Bet log
+  const tbody = document.getElementById('bets-body');
+  const empty = document.getElementById('bets-empty');
+  tbody.innerHTML = '';
+  const allBets = bets.filter(b => b.stage !== 'WATCHING');
+  empty.style.display = allBets.length ? 'none' : 'block';
+
+  allBets.forEach(b => {
+    const pnlStr = b.pnl != null ? `${b.pnl >= 0 ? '+' : ''}£${b.pnl.toFixed(2)}` : '—';
+    const pnlCls = b.pnl > 0 ? 'c-green' : b.pnl < 0 ? 'c-red' : '';
+    const resultBadge = b.result === 'win' ? '<span class="badge badge-green">WIN</span>'
+      : b.result === 'loss' ? '<span class="badge badge-red">LOSS</span>'
+      : '<span class="badge badge-muted">PENDING</span>';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="mono">${b.fixture}</td>
+      <td style="color:var(--muted)">${b.leagueName || '—'}</td>
+      <td><span class="badge badge-cyan">${b.bet}</span></td>
+      <td>${scoreBadge(b.successScore)}</td>
+      <td class="mono">${b.bookOdds?.toFixed(2)}</td>
+      <td class="mono c-cyan">+${((b.edge||0)*100).toFixed(1)}%</td>
+      <td class="mono">£${b.suggestedStake?.toFixed(2)}</td>
+      <td class="mono ${pnlCls}">${pnlStr}</td>
+      <td>${resultBadge}</td>
+      <td><button class="btn btn-ghost btn-sm" onclick="deleteBet('${b.id}')" style="padding:2px 8px;color:var(--muted)">✕</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function renderCalibration(resolved) {
+  const buckets = { '20-39': {w:0,l:0}, '40-59': {w:0,l:0}, '60-79': {w:0,l:0}, '80+': {w:0,l:0} };
+  resolved.forEach(b => {
+    const s = b.successScore;
+    const key = s >= 80 ? '80+' : s >= 60 ? '60-79' : s >= 40 ? '40-59' : '20-39';
+    if (b.result === 'win') buckets[key].w++;
+    else if (b.result === 'loss') buckets[key].l++;
+  });
+  const total = Object.values(buckets).reduce((s, v) => s + v.w + v.l, 0);
+  const el    = document.getElementById('calibration-chart');
+  const empty = document.getElementById('cal-empty');
+  if (total < 10) { el.innerHTML = ''; empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+  el.innerHTML = Object.entries(buckets).map(([k, v]) => {
+    const tot = v.w + v.l;
+    const pct = tot ? ((v.w / tot) * 100).toFixed(0) : 0;
+    const color = pct >= 55 ? 'var(--green)' : pct >= 45 ? 'var(--cyan)' : 'var(--red)';
+    return `
+      <div class="cal-row">
+        <div class="cal-bucket" style="color:${color}">${k}</div>
+        <div class="cal-bar-track">
+          <div class="cal-bar-fill" style="width:${pct}%;background:${color}"></div>
+        </div>
+        <div class="cal-pct" style="color:${color}">${pct}%</div>
+        <div style="font-size:10px;color:var(--muted);min-width:50px">${v.w}W ${v.l}L</div>
+      </div>`;
+  }).join('');
+}
+
+function drawPnlChart(data, initial = 1000) {
+  const canvas = document.getElementById('pnl-chart');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  canvas.width  = canvas.parentElement.offsetWidth || 400;
+  canvas.height = 200;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!data.length) return;
+
+  const pad = { t: 10, r: 10, b: 28, l: 46 };
+  const W   = canvas.width  - pad.l - pad.r;
+  const H   = canvas.height - pad.t - pad.b;
+  const min = Math.min(...data, 0);
+  const max = Math.max(...data, 0);
+  const range = max - min || 1;
+
+  const xp = i => pad.l + (i / (data.length - 1 || 1)) * W;
+  const yp = v => pad.t + H - ((v - min) / range) * H;
+
+  // Grid & zero line
+  ctx.strokeStyle = '#2a2a3a'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(pad.l, yp(0)); ctx.lineTo(pad.l + W, yp(0)); ctx.stroke();
+
+  // Fill
+  const grad = ctx.createLinearGradient(0, pad.t, 0, pad.t + H);
+  grad.addColorStop(0, 'rgba(76,201,240,0.25)');
+  grad.addColorStop(1, 'rgba(76,201,240,0)');
+  ctx.beginPath();
+  data.forEach((v, i) => i === 0 ? ctx.moveTo(xp(i), yp(v)) : ctx.lineTo(xp(i), yp(v)));
+  ctx.lineTo(xp(data.length - 1), yp(0)); ctx.lineTo(xp(0), yp(0));
+  ctx.closePath(); ctx.fillStyle = grad; ctx.fill();
+
+  // Line
+  ctx.strokeStyle = '#4cc9f0'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  data.forEach((v, i) => i === 0 ? ctx.moveTo(xp(i), yp(v)) : ctx.lineTo(xp(i), yp(v)));
+  ctx.stroke();
+
+  // Axis labels
+  ctx.fillStyle = '#6b7280'; ctx.font = '10px DM Mono, monospace';
+  ctx.fillText(`+£${max.toFixed(0)}`, 2, pad.t + 10);
+  ctx.fillText(`£${min.toFixed(0)}`, 2, pad.t + H);
+  ctx.fillText('£0', 2, yp(0) + 4);
+}
+
+async function deleteBet(id) {
+  try {
+    await apiFetch(`/api/bets/${id}`, { method: 'DELETE' });
+    await loadState();
+    renderPerformance();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function exportCSV() {
+  const rows = [['Fixture','League','Bet','Score','Odds','Edge%','Stake','P&L','Result']];
+  STATE.bets.forEach(b => rows.push([
+    b.fixture, b.leagueName, b.bet, b.successScore,
+    b.bookOdds?.toFixed(2), ((b.edge||0)*100).toFixed(2),
+    b.suggestedStake?.toFixed(2), b.pnl?.toFixed(2) || '', b.result || 'pending',
+  ]));
+  const csv = rows.map(r => r.join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+  a.download = `edge-scout-${new Date().toISOString().split('T')[0]}.csv`;
+  a.click();
+}
+
+// ─── SETTINGS ────────────────────────────────────────────────────────────────
+function renderSettings() {
+  const s = STATE.settings || {};
+  const W = s.weights || { form:18, homeAdv:12, xg:16, h2h:10, defense:14, momentum:10, injuries:8, standings:12 };
+  const labels = { form:'Form', homeAdv:'Home Advantage', xg:'xG / Attacking', h2h:'Head to Head', defense:'Defense', momentum:'Momentum', injuries:'Injuries', standings:'Standings' };
+  const ed = document.getElementById('weights-editor');
+  ed.innerHTML = Object.entries(W).map(([k, v]) => `
+    <div class="weight-row">
+      <span class="weight-label">${labels[k]}</span>
+      <input type="range" min="1" max="40" value="${v}" id="w-${k}" oninput="updateWeightTotal()">
+      <span class="weight-val" id="wv-${k}">${v}</span>
+    </div>`).join('');
+  updateWeightTotal();
+
+  if (s.decay       != null) document.getElementById('decay-input').value           = s.decay;
+  if (s.formWindow  != null) document.getElementById('form-window-input').value     = s.formWindow;
+  if (s.h2hWindow   != null) document.getElementById('h2h-window-input').value      = s.h2hWindow;
+  if (s.kellyFraction!=null) document.getElementById('kelly-frac-input').value      = s.kellyFraction;
+  if (s.successThreshold!=null) document.getElementById('threshold-settings').value = s.successThreshold;
+}
+
+function updateWeightTotal() {
+  const W = STATE.settings?.weights || {};
+  let total = 0;
+  Object.keys(W).forEach(k => {
+    const el = document.getElementById('w-' + k);
+    if (el) { const v = parseInt(el.value); document.getElementById('wv-' + k).textContent = v; total += v; }
+  });
+  const el = document.getElementById('weights-total');
+  if (el) { el.textContent = total; el.style.color = Math.abs(total - 100) <= 5 ? 'var(--green)' : 'var(--amber)'; }
+}
+
+async function saveWeights() {
+  const W = {};
+  Object.keys(STATE.settings?.weights || {}).forEach(k => {
+    const el = document.getElementById('w-' + k);
+    if (el) W[k] = parseInt(el.value);
+  });
+  await apiFetch('/api/settings', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ weights: W }),
+  });
+  STATE.settings.weights = W;
+  toast('Weights saved!', 'success');
+}
+
+async function resetWeights() {
+  const defaults = { form:18, homeAdv:12, xg:16, h2h:10, defense:14, momentum:10, injuries:8, standings:12 };
+  await apiFetch('/api/settings', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ weights: defaults }),
+  });
+  STATE.settings.weights = defaults;
+  renderSettings();
+  toast('Weights reset', 'success');
+}
+
+async function saveSettings() {
+  const patch = {
+    decay:            parseFloat(document.getElementById('decay-input').value),
+    formWindow:       parseInt(document.getElementById('form-window-input').value),
+    h2hWindow:        parseInt(document.getElementById('h2h-window-input').value),
+    kellyFraction:    parseFloat(document.getElementById('kelly-frac-input').value),
+    successThreshold: parseInt(document.getElementById('threshold-settings').value),
+  };
+  await apiFetch('/api/settings', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  Object.assign(STATE.settings, patch);
+  toast('Settings saved!', 'success');
+}
+
+async function confirmReset() {
+  if (!confirm('This will wipe all bets and reset the bankroll to £1,000. Are you sure?')) return;
+  await apiFetch('/api/bankroll/reset', { method: 'POST' });
+  await loadState();
+  toast('Bankroll reset to £1,000', 'success');
+}
+
+// ─── AUTO-REFRESH ─────────────────────────────────────────────────────────────
+// Poll state every 60s to pick up auto-resolved bets
+setInterval(loadState, 60000);
+
+// ─── INIT ─────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  loadState();
+  checkApiStatus();
+  setInterval(checkApiStatus, 300000); // refresh API status every 5m
+});
+</script>
+</body>
+</html>

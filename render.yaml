@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: edge-scout
+    runtime: node
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: API_SPORTS_KEY
+        sync: false
+      - key: ODDS_API_KEY
+        sync: false
+      - key: NODE_ENV
+        value: production
+    disk:
+      name: data
+      mountPath: /app/data
+      sizeGB: 1
