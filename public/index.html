@@ -1086,7 +1086,8 @@ function weatherDesc(w) {
   const icon = icons[w.code] || '🌡';
   const rain = w.precipProb > 0 ? `${w.precipProb}% rain` : 'Dry';
   const wind = `${w.windSpeed} km/h wind`;
-  return `${icon} ${rain} · ${wind}`;
+  const temp = w.temperature != null ? `${w.temperature}°C` : '';
+  return `${icon} ${temp ? temp + ' · ' : ''}${rain} · ${wind}`;
 }
 
 function valueRow(label, modelP, odds, ev, kelly, stake, isProjected, successScore) {

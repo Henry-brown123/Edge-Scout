@@ -135,7 +135,7 @@ function venueCoords(venueName, city) {
 
 async function fetchWeather(lat, lon, kickoffISO) {
   try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=precipitation_probability,windspeed_10m,weathercode&timezone=auto&forecast_days=7`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=precipitation_probability,windspeed_10m,weathercode,temperature_2m&timezone=auto&forecast_days=7`;
     const { data } = await axios.get(url, { timeout: 8000 });
     const kickoff = new Date(kickoffISO);
     const idx = data.hourly?.time?.findIndex(t => {
@@ -144,9 +144,10 @@ async function fetchWeather(lat, lon, kickoffISO) {
     });
     if (idx >= 0) {
       return {
-        precipProb: data.hourly.precipitation_probability[idx],
-        windSpeed:  data.hourly.windspeed_10m[idx],
-        code:       data.hourly.weathercode[idx],
+        precipProb:  data.hourly.precipitation_probability[idx],
+        windSpeed:   data.hourly.windspeed_10m[idx],
+        code:        data.hourly.weathercode[idx],
+        temperature: data.hourly.temperature_2m[idx],
       };
     }
   } catch {}
