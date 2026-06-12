@@ -606,7 +606,9 @@ function toast(msg, type = 'info') {
 }
 
 // ─── API ─────────────────────────────────────────────────────────────────────
-const API_BASE = window.location.port === '3000' ? '' : 'http://localhost:3000';
+const API_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+  ? (window.location.port === '3000' ? '' : 'http://localhost:3000')
+  : '';
 
 async function apiFetch(url, opts = {}) {
   const r = await fetch(API_BASE + url, opts);
@@ -1132,7 +1134,12 @@ function valueRow(label, modelP, odds, ev, kelly, stake, isProjected, successSco
     </div>`;
 }
 
-function openDrawerById(id) {
+async function openDrawerById(id) {
+  try {
+    const fresh = await apiFetch('/api/state');
+    STATE = fresh;
+    renderScout();
+  } catch {}
   const w = STATE.watching.find(x => x.id === id);
   if (w) openDrawer(w);
 }
