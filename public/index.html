@@ -714,7 +714,7 @@ function recommendedCard(b) {
         <div class="fixture-name">${b.fixture}</div>
         <div class="fixture-info">
           <span>${b.leagueName}</span>
-          <span>KO ${kickoff} (BST)</span>
+          <span>🇬🇧 KO ${kickoff}</span>
           <span class="badge badge-cyan">${b.bet}</span>
           <span style="color:var(--cyan)">+${edgePct}% edge</span>
           <span>@${b.bookOdds.toFixed(2)}</span>
@@ -743,7 +743,7 @@ function watchingCard(w) {
         <div class="fixture-name">${w.fixture}</div>
         <div class="fixture-info">
           <span>${w.leagueName}</span>
-          <span>KO ${kickoff} (BST)</span>
+          <span>🇬🇧 KO ${kickoff}</span>
           ${minsOut != null ? `<span style="color:var(--amber)">T-${minsOut}m</span>` : ''}
           <span class="badge badge-amber">Projected: ${w.projectedBet}</span>
         </div>
@@ -1183,7 +1183,7 @@ function openDrawer(w) {
   document.getElementById('drawer').innerHTML = `
     <button class="drawer-close" onclick="closeDrawer()">✕</button>
     <div class="drawer-title">${w.fixture}</div>
-    <div class="drawer-sub">${w.leagueName} · KO ${kickoff} (BST)${minsOut != null ? ` · <span style="color:var(--amber)">T-${minsOut}m</span>` : ''}</div>
+    <div class="drawer-sub">${w.leagueName} · 🇬🇧 KO ${kickoff}${minsOut != null ? ` · <span style="color:var(--amber)">T-${minsOut}m</span>` : ''}</div>
 
     <div class="drawer-section">
       <h4>Model Probabilities</h4>
