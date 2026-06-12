@@ -1089,15 +1089,22 @@ function weatherDesc(w) {
   return `${icon} ${rain} · ${wind}`;
 }
 
-function valueRow(label, modelP, odds, ev, kelly, stake, isProjected) {
+function valueRow(label, modelP, odds, ev, kelly, stake, isProjected, successScore) {
   const edge = odds ? ((modelP - 1/odds) * 100) : null;
   const edgeCol = edge > 0 ? 'var(--green)' : 'var(--red)';
+  const scoreCol = successScore >= 60 ? 'var(--green)' : successScore >= 40 ? 'var(--amber)' : 'var(--text2)';
   const tag = isProjected ? `<span style="font-size:.6rem;background:var(--amber);color:#000;border-radius:3px;padding:1px 5px;margin-left:6px;vertical-align:middle">BEST</span>` : '';
   return `
     <div style="background:var(--surface2);border-radius:10px;padding:12px 14px;margin-bottom:8px;${isProjected ? 'border:1px solid rgba(247,37,133,.35)' : ''}">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
         <span style="font-family:'Syne',sans-serif;font-weight:700;font-size:.9rem">${label}${tag}</span>
-        ${odds ? `<span style="font-family:'DM Mono',monospace;font-size:.85rem;color:var(--text2)">@ ${odds.toFixed(2)}</span>` : ''}
+        <div style="display:flex;align-items:center;gap:10px">
+          ${odds ? `<span style="font-family:'DM Mono',monospace;font-size:.85rem;color:var(--text2)">@ ${odds.toFixed(2)}</span>` : ''}
+          ${successScore != null ? `<div style="background:var(--surface);border:1px solid ${scoreCol};border-radius:6px;padding:2px 8px;text-align:center">
+            <span style="font-family:'Syne',sans-serif;font-weight:700;font-size:1rem;color:${scoreCol}">${successScore}</span>
+            <span style="font-family:'DM Mono',monospace;font-size:.55rem;color:var(--text2);display:block;text-transform:uppercase;line-height:1">Score</span>
+          </div>` : ''}
+        </div>
       </div>
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;font-family:'DM Mono',monospace;text-align:center">
         <div>
@@ -1163,7 +1170,8 @@ function openDrawer(w) {
       labelMap[c.bet] || c.bet,
       c.modelProb, c.bookOdds,
       c.ev, c.kelly?.fracKelly, c.kelly?.stake,
-      c.bet === w.projectedBet
+      c.bet === w.projectedBet,
+      c.successScore ?? null
     )
   ).join('');
 
