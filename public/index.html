@@ -149,7 +149,51 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
 }
 .fixture-card:hover { border-color: var(--cyan); }
 .fixture-card.recommended { border-color: rgba(76,201,240,.4); background: rgba(76,201,240,.05); }
-.fixture-card.watching    { border-left: 3px solid var(--amber); }
+.fixture-card.watching    { border-left: 3px solid var(--amber); cursor: pointer; }
+
+/* ─── DETAIL DRAWER ─────────────────────────────────────────────────────── */
+.drawer-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 200;
+  opacity: 0; pointer-events: none; transition: opacity .2s;
+}
+.drawer-overlay.open { opacity: 1; pointer-events: all; }
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(480px, 100vw);
+  background: var(--surface); border-left: 1px solid var(--border);
+  z-index: 201; overflow-y: auto; padding: 24px;
+  transform: translateX(100%); transition: transform .25s ease;
+}
+.drawer.open { transform: translateX(0); }
+.drawer-close {
+  position: absolute; top: 16px; right: 16px;
+  background: none; border: none; color: var(--text2); font-size: 1.4rem;
+  cursor: pointer; line-height: 1;
+}
+.drawer-close:hover { color: var(--text); }
+.drawer-title { font-family: 'Syne', sans-serif; font-size: 1.15rem; font-weight: 700; margin: 0 32px 4px 0; }
+.drawer-sub   { color: var(--text2); font-size: .8rem; margin-bottom: 20px; }
+.drawer-section { margin-bottom: 20px; }
+.drawer-section h4 { font-family: 'DM Mono', monospace; font-size: .7rem; letter-spacing: .08em;
+  color: var(--text2); text-transform: uppercase; margin: 0 0 10px; }
+.prob-row { display: flex; gap: 8px; margin-bottom: 12px; }
+.prob-box { flex: 1; background: var(--surface2); border-radius: 8px; padding: 10px 8px; text-align: center; }
+.prob-box .prob-val { font-family: 'Syne', sans-serif; font-size: 1.3rem; font-weight: 700; }
+.prob-box .prob-lbl { font-family: 'DM Mono', monospace; font-size: .65rem; color: var(--text2); text-transform: uppercase; }
+.prob-box.home { border-top: 2px solid var(--cyan); }
+.prob-box.draw { border-top: 2px solid var(--text2); }
+.prob-box.away { border-top: 2px solid var(--pink); }
+.factor-row { display: grid; grid-template-columns: 70px 1fr 40px 1fr 70px; align-items: center; gap: 6px; margin-bottom: 7px; font-size: .72rem; }
+.factor-label { font-family: 'DM Mono', monospace; color: var(--text2); text-align: center; text-transform: uppercase; letter-spacing: .04em; }
+.factor-bar-wrap { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+.factor-bar-home { height: 100%; background: var(--cyan); border-radius: 3px; transition: width .4s; }
+.factor-bar-away { height: 100%; background: var(--pink); border-radius: 3px; float: right; transition: width .4s; }
+.factor-val { font-family: 'DM Mono', monospace; text-align: center; font-size: .75rem; }
+.factor-val.home { color: var(--cyan); }
+.factor-val.away { color: var(--pink); }
+.weather-strip { display: flex; gap: 12px; font-family: 'DM Mono', monospace; font-size: .78rem; color: var(--text2);
+  background: var(--surface2); border-radius: 8px; padding: 10px 14px; }
+.weather-strip span { display: flex; align-items: center; gap: 5px; }
+.drawer-actions { display: flex; gap: 10px; margin-top: 8px; }
 
 .fixture-meta { flex: 1; min-width: 0; }
 .fixture-name { font-family: var(--font-head); font-size: 14px; font-weight: 700; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -692,7 +736,7 @@ function watchingCard(w) {
   const kickoff = w.kickoff ? new Date(w.kickoff).toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' }) : '—';
   const minsOut = w.kickoff ? Math.round((new Date(w.kickoff) - Date.now()) / 60000) : null;
   return `
-    <div class="fixture-card watching">
+    <div class="fixture-card watching" onclick="openDrawer(${JSON.stringify(w).replace(/"/g,'&quot;')})">
       ${scoreBadge(w.projectedScore)}
       <div class="fixture-meta">
         <div class="fixture-name">${w.fixture}</div>
@@ -704,8 +748,8 @@ function watchingCard(w) {
         </div>
       </div>
       <div class="fixture-right">
-        <span class="stage-tag tag-watching">Watching</span>
-        <button class="btn btn-ghost btn-sm" onclick="forcePreMatch('${w.id}')">Lock now</button>
+        <span class="stage-tag tag-watching">WATCHING</span>
+        <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();forcePreMatch('${w.id}')">Lock now</button>
       </div>
     </div>`;
 }
@@ -1018,8 +1062,133 @@ setInterval(loadState, 60000);
 document.addEventListener('DOMContentLoaded', () => {
   loadState();
   checkApiStatus();
-  setInterval(checkApiStatus, 300000); // refresh API status every 5m
+  setInterval(checkApiStatus, 300000);
 });
+
+// ─── DETAIL DRAWER ────────────────────────────────────────────────────────────
+const WEIGHTS = { form:18, homeAdv:12, xg:16, h2h:10, defense:14, momentum:10, injuries:8, standings:12 };
+const FACTOR_LABELS = { form:'Form', homeAdv:'Home Adv', xg:'xG', h2h:'H2H', defense:'Defense', momentum:'Momentum', injuries:'Injuries', standings:'Standing' };
+
+function computeProbs(hF, aF) {
+  const total = Object.values(WEIGHTS).reduce((a,b) => a+b, 0);
+  const score = f => Object.keys(WEIGHTS).reduce((s,k) => s + (f[k]||50) * WEIGHTS[k], 0) / total;
+  const homeScore = score(hF);
+  const awayAdj   = score(aF) * 0.88;
+  const drawScore = 50;
+  const raw = homeScore + awayAdj + drawScore;
+  return { home: homeScore/raw, draw: drawScore/raw, away: awayAdj/raw };
+}
+
+function weatherDesc(w) {
+  if (!w) return 'No data';
+  const icons = { 0:'☀️', 1:'🌤', 2:'⛅', 3:'☁️', 45:'🌫', 51:'🌦', 61:'🌧', 71:'🌨', 80:'🌦', 95:'⛈' };
+  const icon = icons[w.code] || '🌡';
+  const rain = w.precipProb > 0 ? `${w.precipProb}% rain` : 'Dry';
+  const wind = `${w.windSpeed} km/h wind`;
+  return `${icon} ${rain} · ${wind}`;
+}
+
+function openDrawer(w) {
+  const probs = computeProbs(w.homeF || {}, w.awayF || {});
+  const vsIdx = w.fixture.indexOf(' vs ');
+  const home = vsIdx > -1 ? w.fixture.slice(0, vsIdx) : w.fixture;
+  const away = vsIdx > -1 ? w.fixture.slice(vsIdx + 4) : '';
+  const kickoff = w.kickoff ? new Date(w.kickoff).toLocaleString('en-GB', { weekday:'short', hour:'2-digit', minute:'2-digit' }) : '—';
+  const minsOut = w.kickoff ? Math.round((new Date(w.kickoff) - Date.now()) / 60000) : null;
+
+  const factors = Object.keys(WEIGHTS);
+
+  const factorRows = factors.map(k => {
+    const hv = w.homeF?.[k] ?? 50;
+    const av = w.awayF?.[k] ?? 50;
+    return `<div class="factor-row">
+      <span class="factor-val home">${hv}</span>
+      <div class="factor-bar-wrap"><div class="factor-bar-home" style="width:${hv}%"></div></div>
+      <span class="factor-label">${FACTOR_LABELS[k]}</span>
+      <div class="factor-bar-wrap"><div class="factor-bar-away" style="width:${av}%"></div></div>
+      <span class="factor-val away">${av}</span>
+    </div>`;
+  }).join('');
+
+  const bookOdds  = w.bookOdds  || null;
+  const modelProb = w.modelProb || probs[w.projectedBet === 'Home Win' ? 'home' : w.projectedBet === 'Away Win' ? 'away' : 'draw'];
+  const impliedProb = bookOdds ? (1/bookOdds).toFixed(3) : '—';
+  const edge = bookOdds ? ((modelProb - 1/bookOdds)*100).toFixed(1) : '—';
+  const ev   = bookOdds ? ((modelProb * (bookOdds - 1) - (1 - modelProb))*100).toFixed(1) : '—';
+
+  document.getElementById('drawer').innerHTML = `
+    <button class="drawer-close" onclick="closeDrawer()">✕</button>
+    <div class="drawer-title">${w.fixture}</div>
+    <div class="drawer-sub">${w.leagueName} · KO ${kickoff}${minsOut != null ? ` · T-${minsOut}m` : ''}</div>
+
+    <div class="drawer-section">
+      <h4>Model Probabilities</h4>
+      <div class="prob-row">
+        <div class="prob-box home">
+          <div class="prob-val" style="color:var(--cyan)">${(probs.home*100).toFixed(0)}%</div>
+          <div class="prob-lbl">${home} Win</div>
+        </div>
+        <div class="prob-box draw">
+          <div class="prob-val">${(probs.draw*100).toFixed(0)}%</div>
+          <div class="prob-lbl">Draw</div>
+        </div>
+        <div class="prob-box away">
+          <div class="prob-val" style="color:var(--pink)">${(probs.away*100).toFixed(0)}%</div>
+          <div class="prob-lbl">${away} Win</div>
+        </div>
+      </div>
+    </div>
+
+    ${bookOdds ? `
+    <div class="drawer-section">
+      <h4>Value Analysis — ${w.projectedBet}</h4>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-family:'DM Mono',monospace;">
+        <div style="background:var(--surface2);border-radius:8px;padding:10px;text-align:center">
+          <div style="font-size:1.1rem;font-weight:700;color:var(--cyan)">${(modelProb*100).toFixed(1)}%</div>
+          <div style="font-size:.65rem;color:var(--text2);text-transform:uppercase">Model prob</div>
+        </div>
+        <div style="background:var(--surface2);border-radius:8px;padding:10px;text-align:center">
+          <div style="font-size:1.1rem;font-weight:700">${impliedProb === '—' ? '—' : (impliedProb*100).toFixed(1)+'%'}</div>
+          <div style="font-size:.65rem;color:var(--text2);text-transform:uppercase">Implied (${bookOdds})</div>
+        </div>
+        <div style="background:var(--surface2);border-radius:8px;padding:10px;text-align:center">
+          <div style="font-size:1.1rem;font-weight:700;color:${parseFloat(edge)>0?'var(--green)':'var(--red)'}">${edge > 0 ? '+' : ''}${edge}%</div>
+          <div style="font-size:.65rem;color:var(--text2);text-transform:uppercase">Edge</div>
+        </div>
+      </div>
+    </div>` : `
+    <div class="drawer-section">
+      <h4>Value Analysis</h4>
+      <p style="color:var(--text2);font-size:.8rem;font-family:'DM Mono',monospace">Live odds locked at T-60. Projected bet: <span style="color:var(--amber)">${w.projectedBet}</span> · Projected score: <span style="color:var(--amber)">${w.projectedScore}</span></p>
+    </div>`}
+
+    <div class="drawer-section">
+      <h4>Factor Breakdown <span style="color:var(--cyan);margin-left:8px">▬ ${home}</span> <span style="color:var(--pink);margin-left:8px">▬ ${away}</span></h4>
+      ${factorRows}
+    </div>
+
+    <div class="drawer-section">
+      <h4>Conditions</h4>
+      <div class="weather-strip"><span>${weatherDesc(w.weather)}</span></div>
+    </div>
+
+    <div class="drawer-actions">
+      <button class="btn btn-primary btn-sm" onclick="closeDrawer();forcePreMatch('${w.id}')">Lock Bet Now</button>
+      <button class="btn btn-ghost btn-sm" onclick="closeDrawer()">Close</button>
+    </div>`;
+
+  document.getElementById('drawer-overlay').classList.add('open');
+  document.getElementById('drawer').classList.add('open');
+}
+
+function closeDrawer() {
+  document.getElementById('drawer-overlay').classList.remove('open');
+  document.getElementById('drawer').classList.remove('open');
+}
 </script>
+
+<div class="drawer-overlay" id="drawer-overlay" onclick="closeDrawer()"></div>
+<div class="drawer" id="drawer"></div>
+
 </body>
 </html>
