@@ -1088,6 +1088,41 @@ function weatherDesc(w) {
   return `${icon} ${rain} · ${wind}`;
 }
 
+function valueRow(label, modelP, odds, ev, kelly, stake, isProjected) {
+  const edge = odds ? ((modelP - 1/odds) * 100) : null;
+  const edgeCol = edge > 0 ? 'var(--green)' : 'var(--red)';
+  const tag = isProjected ? `<span style="font-size:.6rem;background:var(--amber);color:#000;border-radius:3px;padding:1px 5px;margin-left:6px;vertical-align:middle">BEST</span>` : '';
+  return `
+    <div style="background:var(--surface2);border-radius:10px;padding:12px 14px;margin-bottom:8px;${isProjected ? 'border:1px solid rgba(247,37,133,.35)' : ''}">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <span style="font-family:'Syne',sans-serif;font-weight:700;font-size:.9rem">${label}${tag}</span>
+        ${odds ? `<span style="font-family:'DM Mono',monospace;font-size:.85rem;color:var(--text2)">@ ${odds.toFixed(2)}</span>` : ''}
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;font-family:'DM Mono',monospace;text-align:center">
+        <div>
+          <div style="font-size:1rem;font-weight:700;color:var(--cyan)">${(modelP*100).toFixed(1)}%</div>
+          <div style="font-size:.6rem;color:var(--text2);text-transform:uppercase">Model</div>
+        </div>
+        <div>
+          <div style="font-size:1rem;font-weight:700">${odds ? ((1/odds)*100).toFixed(1)+'%' : '—'}</div>
+          <div style="font-size:.6rem;color:var(--text2);text-transform:uppercase">Implied</div>
+        </div>
+        <div>
+          <div style="font-size:1rem;font-weight:700;color:${edgeCol}">${edge != null ? (edge > 0 ? '+' : '') + edge.toFixed(1)+'%' : '—'}</div>
+          <div style="font-size:.6rem;color:var(--text2);text-transform:uppercase">Edge</div>
+        </div>
+        <div>
+          <div style="font-size:1rem;font-weight:700;color:${ev > 0 ? 'var(--green)' : 'var(--red)'}">${ev != null ? (ev > 0 ? '+' : '') + (ev*100).toFixed(1)+'%' : '—'}</div>
+          <div style="font-size:.6rem;color:var(--text2);text-transform:uppercase">EV</div>
+        </div>
+      </div>
+      ${stake > 0 ? `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-family:'DM Mono',monospace;font-size:.78rem;color:var(--text2)">
+        Kelly stake: <span style="color:var(--green);font-weight:700">£${stake.toFixed(2)}</span>
+        <span style="color:var(--text2);margin-left:8px">(${(kelly*100).toFixed(1)}% of bankroll)</span>
+      </div>` : ''}
+    </div>`;
+}
+
 function openDrawer(w) {
   const probs = computeProbs(w.homeF || {}, w.awayF || {});
   const vsIdx = w.fixture.indexOf(' vs ');
@@ -1095,9 +1130,9 @@ function openDrawer(w) {
   const away = vsIdx > -1 ? w.fixture.slice(vsIdx + 4) : '';
   const kickoff = w.kickoff ? new Date(w.kickoff).toLocaleString('en-GB', { weekday:'short', hour:'2-digit', minute:'2-digit' }) : '—';
   const minsOut = w.kickoff ? Math.round((new Date(w.kickoff) - Date.now()) / 60000) : null;
+  const isPreMatch = minsOut != null && minsOut <= 60;
 
   const factors = Object.keys(WEIGHTS);
-
   const factorRows = factors.map(k => {
     const hv = w.homeF?.[k] ?? 50;
     const av = w.awayF?.[k] ?? 50;
@@ -1110,16 +1145,30 @@ function openDrawer(w) {
     </div>`;
   }).join('');
 
-  const bookOdds  = w.bookOdds  || null;
-  const modelProb = w.modelProb || probs[w.projectedBet === 'Home Win' ? 'home' : w.projectedBet === 'Away Win' ? 'away' : 'draw'];
-  const impliedProb = bookOdds ? (1/bookOdds).toFixed(3) : '—';
-  const edge = bookOdds ? ((modelProb - 1/bookOdds)*100).toFixed(1) : '—';
-  const ev   = bookOdds ? ((modelProb * (bookOdds - 1) - (1 - modelProb))*100).toFixed(1) : '—';
+  // Build value rows — use allCandidates if available, otherwise derive from probs
+  const candidates = w.allCandidates || [
+    { bet:'Home Win', modelProb: probs.home, bookOdds: w.projectedBet==='Home Win' ? w.bookOdds : null, ev: null, kelly: null },
+    { bet:'Draw',     modelProb: probs.draw, bookOdds: w.projectedBet==='Draw'     ? w.bookOdds : null, ev: null, kelly: null },
+    { bet:'Away Win', modelProb: probs.away, bookOdds: w.projectedBet==='Away Win' ? w.bookOdds : null, ev: null, kelly: null },
+  ];
+  const labelMap = { 'Home Win': `${home} Win`, 'Draw': 'Draw', 'Away Win': `${away} Win` };
+  const valueRows = candidates.map(c =>
+    valueRow(
+      labelMap[c.bet] || c.bet,
+      c.modelProb, c.bookOdds,
+      c.ev, c.kelly?.fracKelly, c.kelly?.stake,
+      c.bet === w.projectedBet
+    )
+  ).join('');
+
+  const oddsNote = isPreMatch
+    ? `<p style="font-size:.72rem;color:var(--green);font-family:'DM Mono',monospace;margin:0 0 10px">⚡ T-60 — live confirmed odds</p>`
+    : `<p style="font-size:.72rem;color:var(--text2);font-family:'DM Mono',monospace;margin:0 0 10px">Morning scan odds · Will refresh at T-60</p>`;
 
   document.getElementById('drawer').innerHTML = `
     <button class="drawer-close" onclick="closeDrawer()">✕</button>
     <div class="drawer-title">${w.fixture}</div>
-    <div class="drawer-sub">${w.leagueName} · KO ${kickoff}${minsOut != null ? ` · T-${minsOut}m` : ''}</div>
+    <div class="drawer-sub">${w.leagueName} · KO ${kickoff}${minsOut != null ? ` · <span style="color:var(--amber)">T-${minsOut}m</span>` : ''}</div>
 
     <div class="drawer-section">
       <h4>Model Probabilities</h4>
@@ -1139,28 +1188,11 @@ function openDrawer(w) {
       </div>
     </div>
 
-    ${bookOdds ? `
     <div class="drawer-section">
-      <h4>Value Analysis — ${w.projectedBet}</h4>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-family:'DM Mono',monospace;">
-        <div style="background:var(--surface2);border-radius:8px;padding:10px;text-align:center">
-          <div style="font-size:1.1rem;font-weight:700;color:var(--cyan)">${(modelProb*100).toFixed(1)}%</div>
-          <div style="font-size:.65rem;color:var(--text2);text-transform:uppercase">Model prob</div>
-        </div>
-        <div style="background:var(--surface2);border-radius:8px;padding:10px;text-align:center">
-          <div style="font-size:1.1rem;font-weight:700">${impliedProb === '—' ? '—' : (impliedProb*100).toFixed(1)+'%'}</div>
-          <div style="font-size:.65rem;color:var(--text2);text-transform:uppercase">Implied (${bookOdds})</div>
-        </div>
-        <div style="background:var(--surface2);border-radius:8px;padding:10px;text-align:center">
-          <div style="font-size:1.1rem;font-weight:700;color:${parseFloat(edge)>0?'var(--green)':'var(--red)'}">${edge > 0 ? '+' : ''}${edge}%</div>
-          <div style="font-size:.65rem;color:var(--text2);text-transform:uppercase">Edge</div>
-        </div>
-      </div>
-    </div>` : `
-    <div class="drawer-section">
-      <h4>Value Analysis</h4>
-      <p style="color:var(--text2);font-size:.8rem;font-family:'DM Mono',monospace">Live odds locked at T-60. Projected bet: <span style="color:var(--amber)">${w.projectedBet}</span> · Projected score: <span style="color:var(--amber)">${w.projectedScore}</span></p>
-    </div>`}
+      <h4>Value Analysis — All Outcomes</h4>
+      ${oddsNote}
+      ${valueRows}
+    </div>
 
     <div class="drawer-section">
       <h4>Factor Breakdown <span style="color:var(--cyan);margin-left:8px">▬ ${home}</span> <span style="color:var(--pink);margin-left:8px">▬ ${away}</span></h4>

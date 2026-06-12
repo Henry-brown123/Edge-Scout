@@ -310,9 +310,16 @@ async function runMorningScan(leagueIds) {
               scoredAt:   new Date().toISOString(),
               projectedScore: best.successScore,
               projectedBet:   best.bet,
+              modelProb:      best.modelProb,
+              bookOdds:       best.bookOdds,
+              impliedProb:    best.impliedProb,
+              edge:           best.edge,
+              ev:             best.ev,
+              kelly:          best.kelly,
+              allCandidates:  scored.results,
               weather:        scored.weather,
-              homeF: scored.homeF,
-              awayF: scored.awayF,
+              homeF:          scored.homeF,
+              awayF:          scored.awayF,
             });
             console.log(`  [WATCHING] ${scored.homeName} vs ${scored.awayName} — score ${best.successScore}`);
           }
