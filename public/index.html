@@ -472,11 +472,35 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       <div class="chart-wrap"><canvas id="pnl-chart"></canvas></div>
     </div>
     <div class="card">
-      <div class="card-header"><span class="card-title">Calibration — Win Rate by Score</span></div>
+      <div class="card-header"><span class="card-title">Calibration — Win Rate by Score (Placed Bets)</span></div>
       <div id="calibration-chart" style="margin-top:4px"></div>
       <div class="empty" id="cal-empty" style="padding:24px">
         <p>Need 10+ resolved bets to show calibration.</p>
       </div>
+    </div>
+  </div>
+
+  <!-- Full model calibration across all scored fixtures -->
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header">
+      <span class="card-title">Model Calibration — All Scored Fixtures</span>
+      <span id="cal-counts" style="font-family:'DM Mono',monospace;font-size:.75rem;color:var(--text2)"></span>
+    </div>
+    <p style="font-size:.78rem;color:var(--text2);font-family:'DM Mono',monospace;margin:0 0 14px">
+      Win rate of model's top pick across every scored fixture — regardless of whether a bet was placed.
+      A well-calibrated model shows win rate ≈ predicted probability.
+    </p>
+
+    <div style="margin-bottom:20px">
+      <div style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Score Bucket Performance</div>
+      <div id="cal-score-buckets"></div>
+      <div class="empty" id="cal-score-empty" style="padding:16px;display:none"><p>No resolved fixtures yet.</p></div>
+    </div>
+
+    <div>
+      <div style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Probability Band Accuracy</div>
+      <div id="cal-prob-bands"></div>
+      <div class="empty" id="cal-prob-empty" style="padding:16px;display:none"><p>No resolved fixtures yet.</p></div>
     </div>
   </div>
 
@@ -848,8 +872,11 @@ function renderPerformance() {
   });
   drawPnlChart(curve, bankroll.initial);
 
-  // Calibration
+  // Placed-bets calibration (existing)
   renderCalibration(resolved);
+
+  // Full model calibration across all scored fixtures
+  renderFullCalibration();
 
   // Bet log
   const tbody = document.getElementById('bets-body');
@@ -908,6 +935,82 @@ function renderCalibration(resolved) {
         <div style="font-size:10px;color:var(--muted);min-width:50px">${v.w}W ${v.l}L</div>
       </div>`;
   }).join('');
+}
+
+async function renderFullCalibration() {
+  let cal = [];
+  try { cal = await apiFetch('/api/calibration'); } catch { return; }
+
+  const resolved = cal.filter(c => c.resolved);
+  const total    = cal.length;
+  const placed   = cal.filter(c => c.betPlaced).length;
+
+  const countsEl = document.getElementById('cal-counts');
+  if (countsEl) countsEl.textContent = `${total} scored · ${resolved.length} resolved · ${placed} bets placed`;
+
+  // Score bucket performance
+  const scoreBuckets = { '0–19':{w:0,l:0}, '20–39':{w:0,l:0}, '40–59':{w:0,l:0}, '60–79':{w:0,l:0}, '80+':{w:0,l:0} };
+  resolved.forEach(c => {
+    const s = c.successScore || 0;
+    const key = s >= 80 ? '80+' : s >= 60 ? '60–79' : s >= 40 ? '40–59' : s >= 20 ? '20–39' : '0–19';
+    if (c.topPickCorrect) scoreBuckets[key].w++; else scoreBuckets[key].l++;
+  });
+
+  const sbEl    = document.getElementById('cal-score-buckets');
+  const sbEmpty = document.getElementById('cal-score-empty');
+  const sbTotal = Object.values(scoreBuckets).reduce((s,v) => s + v.w + v.l, 0);
+  if (sbTotal === 0) {
+    sbEl.innerHTML = ''; sbEmpty.style.display = 'block';
+  } else {
+    sbEmpty.style.display = 'none';
+    sbEl.innerHTML = Object.entries(scoreBuckets).map(([k, v]) => {
+      const tot = v.w + v.l;
+      if (!tot) return '';
+      const pct   = Math.round((v.w / tot) * 100);
+      const color = pct >= 55 ? 'var(--green)' : pct >= 40 ? 'var(--cyan)' : 'var(--red)';
+      const threshold = k === '40–59' || k === '60–79' || k === '80+';
+      return `<div class="cal-row">
+        <div class="cal-bucket" style="color:${color}">${k}${threshold ? ' ★' : ''}</div>
+        <div class="cal-bar-track"><div class="cal-bar-fill" style="width:${pct}%;background:${color}"></div></div>
+        <div class="cal-pct" style="color:${color}">${pct}%</div>
+        <div style="font-size:10px;color:var(--text2);min-width:60px">${v.w}W ${v.l}L / ${tot}</div>
+      </div>`;
+    }).join('');
+  }
+
+  // Probability band accuracy
+  const bands = { '<30%':{w:0,l:0,sum:0}, '30–40%':{w:0,l:0,sum:0}, '40–50%':{w:0,l:0,sum:0}, '50–60%':{w:0,l:0,sum:0}, '60%+':{w:0,l:0,sum:0} };
+  resolved.forEach(c => {
+    const best = c.candidates?.reduce((a, b) => a.successScore > b.successScore ? a : b);
+    const p = best?.modelProb ?? 0;
+    const key = p >= 0.60 ? '60%+' : p >= 0.50 ? '50–60%' : p >= 0.40 ? '40–50%' : p >= 0.30 ? '30–40%' : '<30%';
+    bands[key].sum += p;
+    if (c.topPickCorrect) bands[key].w++; else bands[key].l++;
+  });
+
+  const pbEl    = document.getElementById('cal-prob-bands');
+  const pbEmpty = document.getElementById('cal-prob-empty');
+  const pbTotal = Object.values(bands).reduce((s, v) => s + v.w + v.l, 0);
+  if (pbTotal === 0) {
+    pbEl.innerHTML = ''; pbEmpty.style.display = 'block';
+  } else {
+    pbEmpty.style.display = 'none';
+    pbEl.innerHTML = Object.entries(bands).map(([k, v]) => {
+      const tot = v.w + v.l;
+      if (!tot) return '';
+      const actual  = Math.round((v.w / tot) * 100);
+      const avgPred = Math.round((v.sum / tot) * 100);
+      const diff    = actual - avgPred;
+      const diffCol = Math.abs(diff) <= 5 ? 'var(--green)' : Math.abs(diff) <= 12 ? 'var(--amber)' : 'var(--red)';
+      return `<div style="display:grid;grid-template-columns:70px 1fr 52px 70px 70px;align-items:center;gap:8px;margin-bottom:8px;font-family:'DM Mono',monospace;font-size:.75rem">
+        <span style="color:var(--text2)">${k}</span>
+        <div class="cal-bar-track"><div class="cal-bar-fill" style="width:${actual}%;background:var(--cyan)"></div></div>
+        <span style="color:var(--cyan)">${actual}%</span>
+        <span style="color:var(--text2)">pred ${avgPred}%</span>
+        <span style="color:${diffCol}">${diff >= 0 ? '+' : ''}${diff}pp</span>
+      </div>`;
+    }).join('');
+  }
 }
 
 function drawPnlChart(data, initial = 1000) {

@@ -44,12 +44,14 @@ function getBankroll() {
   return readJSON('bankroll.json') || { initial: 1000, current: 1000, lastUpdated: null };
 }
 
-function getBets() { return readJSON('bets.json') || []; }
-function getWatching() { return readJSON('watching.json') || []; }
+function getBets()        { return readJSON('bets.json')        || []; }
+function getWatching()    { return readJSON('watching.json')    || []; }
+function getCalibration() { return readJSON('calibration.json') || []; }
 
-function saveBets(bets)       { writeJSON('bets.json', bets); }
-function saveWatching(list)   { writeJSON('watching.json', list); }
-function saveBankroll(br)     { writeJSON('bankroll.json', { ...br, lastUpdated: new Date().toISOString() }); }
+function saveBets(bets)         { writeJSON('bets.json', bets); }
+function saveWatching(list)     { writeJSON('watching.json', list); }
+function saveBankroll(br)       { writeJSON('bankroll.json', { ...br, lastUpdated: new Date().toISOString() }); }
+function saveCalibration(list)  { writeJSON('calibration.json', list); }
 
 // ─── API CLIENTS ─────────────────────────────────────────────────────────────
 
@@ -294,11 +296,34 @@ async function runMorningScan(leagueIds) {
       // Odds
       const oddsMap = await fetchOddsForLeague(meta.sport || 'soccer_epl');
 
+      // Existing calibration entries for today (avoid dupes on re-scan)
+      const todayStr  = new Date().toISOString().split('T')[0];
+      const calNow    = getCalibration().filter(c => !c.scoredAt?.startsWith(todayStr));
+
       for (const fix of fixtures) {
         try {
           const scored = await scoreOneFixture(fix, formFixtures, standings, {}, oddsMap, settings);
-          // Pick highest success score candidate
-          const best = scored.results.reduce((a, b) => a.successScore > b.successScore ? a : b);
+          const best   = scored.results.reduce((a, b) => a.successScore > b.successScore ? a : b);
+          const calEntry = {
+            id:           uuidv4(),
+            fixtureId:    fix.fixture.id,
+            fixture:      `${scored.homeName} vs ${scored.awayName}`,
+            leagueId,
+            leagueName:   meta.name,
+            kickoff:      fix.fixture?.date,
+            scoredAt:     new Date().toISOString(),
+            successScore: best.successScore,
+            projectedBet: best.bet,
+            candidates:   scored.results,
+            betPlaced:    false,
+            betId:        null,
+            resolved:     false,
+            resolvedAt:   null,
+            actualResult: null,
+            topPickCorrect: null,
+          };
+          calNow.push(calEntry);
+
           if (best.successScore >= 20) { // low threshold for WATCHING
             watching.push({
               id: uuidv4(),
@@ -321,11 +346,13 @@ async function runMorningScan(leagueIds) {
               weather:        scored.weather,
               homeF:          scored.homeF,
               awayF:          scored.awayF,
+              calId:          calEntry.id,
             });
             console.log(`  [WATCHING] ${scored.homeName} vs ${scored.awayName} — score ${best.successScore}`);
           }
         } catch (e) { console.error(`  [MorningScan] score error ${fix.fixture?.id}: ${e.message}`); }
       }
+      saveCalibration(calNow);
     } catch (e) { console.error(`[MorningScan] league ${leagueId} error: ${e.message}`); }
   }
 
@@ -420,6 +447,13 @@ async function runPreMatchScan(watchingEntry) {
     bets.unshift(bet);
     saveBets(bets);
 
+    // Mark calibration entry as bet placed
+    if (watchingEntry.calId) {
+      const cal = getCalibration();
+      const ce  = cal.find(c => c.id === watchingEntry.calId);
+      if (ce) { ce.betPlaced = true; ce.betId = betId; ce.stake = best.kelly.stake; saveCalibration(cal); }
+    }
+
     console.log(`[PreMatch] LOCKED: ${bet.fixture} — ${bet.bet} (score ${bet.successScore}, stake £${bet.suggestedStake})`);
     return bet;
   } catch (e) {
@@ -431,49 +465,76 @@ async function runPreMatchScan(watchingEntry) {
 // ─── AUTO-RESOLUTION ────────────────────────────────────────────────────────
 
 async function checkAndResolve() {
-  const bets = getBets();
-  const pending = bets.filter(b => b.stage === 'RECOMMENDED' && !b.result);
-  if (!pending.length) return;
+  const bets    = getBets();
+  const cal     = getCalibration();
+  const now     = Date.now();
 
-  const now = Date.now();
-  let changed = false;
+  // Pending bets
+  const pendingBets = bets.filter(b => b.stage === 'RECOMMENDED' && !b.result);
+  // Unresolved calibration entries past expected finish (kickoff + 110m)
+  const pendingCal  = cal.filter(c => !c.resolved && c.kickoff &&
+    now > new Date(c.kickoff).getTime() + 110 * 60000);
 
-  for (const bet of pending) {
-    const expectedFinish = new Date(bet.expectedFinish).getTime();
-    if (now < expectedFinish) continue; // not finished yet
+  // Deduplicate fixture IDs to fetch — cover both bets and cal entries
+  const fixtureIds = [...new Set([
+    ...pendingBets.map(b => b.fixtureId),
+    ...pendingCal.map(c => c.fixtureId),
+  ])];
 
+  if (!fixtureIds.length) return;
+
+  let betsChanged = false;
+  let calChanged  = false;
+
+  for (const fid of fixtureIds) {
     try {
-      const { data } = await apiSports.get('/fixtures', { params: { id: bet.fixtureId } });
-      const fix = data?.response?.[0];
+      const { data } = await apiSports.get('/fixtures', { params: { id: fid } });
+      const fix    = data?.response?.[0];
       if (!fix) continue;
-
       const status = fix.fixture?.status?.short;
       if (!['FT', 'AET', 'PEN', 'AWD', 'WO'].includes(status)) continue;
 
-      const hg = fix.goals?.home ?? 0;
-      const ag = fix.goals?.away ?? 0;
+      const hg            = fix.goals?.home ?? 0;
+      const ag            = fix.goals?.away ?? 0;
       const actualOutcome = hg > ag ? 'Home Win' : hg < ag ? 'Away Win' : 'Draw';
-      const won = actualOutcome === bet.bet;
-      const pnl = won
-        ? parseFloat(((bet.bookOdds - 1) * bet.suggestedStake).toFixed(2))
-        : -bet.suggestedStake;
+      const resolvedAt    = new Date().toISOString();
+      const finalScore    = `${hg}-${ag}`;
 
-      bet.result     = won ? 'win' : 'loss';
-      bet.pnl        = pnl;
-      bet.stage      = 'RESOLVED';
-      bet.resolvedAt = new Date().toISOString();
-      bet.finalScore = `${hg}-${ag}`;
+      // Resolve bet if exists
+      const bet = pendingBets.find(b => b.fixtureId === fid);
+      if (bet) {
+        const won = actualOutcome === bet.bet;
+        const pnl = won
+          ? parseFloat(((bet.bookOdds - 1) * bet.suggestedStake).toFixed(2))
+          : -bet.suggestedStake;
+        bet.result     = won ? 'win' : 'loss';
+        bet.pnl        = pnl;
+        bet.stage      = 'RESOLVED';
+        bet.resolvedAt = resolvedAt;
+        bet.finalScore = finalScore;
+        const br = getBankroll();
+        br.current = parseFloat((br.current + pnl).toFixed(2));
+        saveBankroll(br);
+        betsChanged = true;
+        console.log(`[Resolve] ${bet.fixture} — ${bet.bet} → ${bet.result} (${finalScore}), P&L: £${pnl}, Bankroll: £${br.current}`);
+      }
 
-      const br = getBankroll();
-      br.current = parseFloat((br.current + pnl).toFixed(2));
-      saveBankroll(br);
-      changed = true;
-
-      console.log(`[Resolve] ${bet.fixture} — ${bet.bet} → ${bet.result} (${hg}-${ag}), P&L: £${pnl}, Bankroll: £${br.current}`);
-    } catch (e) { console.error(`[Resolve] error ${bet.fixtureId}: ${e.message}`); }
+      // Resolve calibration entry
+      const ce = pendingCal.find(c => c.fixtureId === fid);
+      if (ce) {
+        ce.resolved       = true;
+        ce.resolvedAt     = resolvedAt;
+        ce.actualResult   = actualOutcome;
+        ce.finalScore     = finalScore;
+        ce.topPickCorrect = actualOutcome === ce.projectedBet;
+        calChanged = true;
+        console.log(`[Calibration] ${ce.fixture} → actual: ${actualOutcome}, predicted: ${ce.projectedBet} (${ce.topPickCorrect ? '✓' : '✗'})`);
+      }
+    } catch (e) { console.error(`[Resolve] error ${fid}: ${e.message}`); }
   }
 
-  if (changed) saveBets(bets);
+  if (betsChanged) saveBets(bets);
+  if (calChanged)  saveCalibration(cal);
 }
 
 // ─── SCHEDULER ───────────────────────────────────────────────────────────────
@@ -595,7 +656,8 @@ app.put('/api/settings', (req, res) => {
 });
 
 // GET bets
-app.get('/api/bets', (_req, res) => res.json(getBets()));
+app.get('/api/bets',        (_req, res) => res.json(getBets()));
+app.get('/api/calibration', (_req, res) => res.json(getCalibration()));
 
 // PATCH bet result (manual override)
 app.patch('/api/bets/:id', (req, res) => {
