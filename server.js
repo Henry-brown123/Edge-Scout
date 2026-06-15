@@ -15,6 +15,13 @@ const {
   computeModelProb, kelly, computeSuccessScore, weatherModifier,
 } = require('./scoring');
 
+const {
+  getTeamProfiles,
+  updateTeamProfiles,
+  addResultToProfile,
+  applyTeamProfileModifiers,
+} = require('./teamProfiles');
+
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
@@ -114,6 +121,19 @@ function lookupFIFARank(teamName) {
 function rankToQuality(rank) {
   // rank 1 → 100, rank 55 → 50, rank 105 → 0 (clamped 5-100)
   return Math.max(5, Math.min(100, Math.round(105 - rank)));
+}
+
+function daysSinceLastMatch(formFixtures, teamId, kickoffDate) {
+  const kickoff = new Date(kickoffDate).getTime();
+  const recent  = formFixtures
+    .filter(f =>
+      ['FT', 'AET', 'PEN'].includes(f.fixture?.status?.short) &&
+      (f.teams?.home?.id === teamId || f.teams?.away?.id === teamId) &&
+      new Date(f.fixture?.date).getTime() < kickoff
+    )
+    .sort((a, b) => new Date(b.fixture.date) - new Date(a.fixture.date));
+  if (!recent.length) return null;
+  return Math.round((kickoff - new Date(recent[0].fixture.date).getTime()) / 86400000);
 }
 
 // ─── STADIUM COORDINATES ─────────────────────────────────────────────────────
@@ -296,6 +316,18 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     };
   }
 
+  // Team profile modifiers
+  const kickoffDate = fix.fixture?.date;
+  const homeDays = kickoffDate ? daysSinceLastMatch(formFixtures, homeId, kickoffDate) : null;
+  const awayDays = kickoffDate ? daysSinceLastMatch(formFixtures, awayId, kickoffDate) : null;
+  const teamProfileMap = getTeamProfiles([homeId, awayId]);
+  const homeProfile = teamProfileMap[homeId] || null;
+  const awayProfile = teamProfileMap[awayId] || null;
+  const { probs: adjustedProbs, teamIntel } = applyTeamProfileModifiers(
+    probs, homeProfile, awayProfile, context, dataConf, homeDays, awayDays
+  );
+  probs = adjustedProbs;
+
   // Weather
   const coords = venueCoords(fix.fixture?.venue?.name, fix.fixture?.venue?.city);
   let weather = null;
@@ -344,6 +376,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     kickoff: fix.fixture?.date,
     context, lowConfidence,
     homeDataConf, awayDataConf, dataConf,
+    teamIntel,
   };
 }
 
@@ -358,6 +391,9 @@ async function runMorningScan(leagueIds) {
 
   // Save scan-meta so the UI can display "Last scanned" even if it finds nothing
   writeJSON('scan-meta.json', { date: today, startedAt: scanStart, completedAt: null, count: 0 });
+
+  // Accumulate deduplicated form fixtures across all leagues for team profile rebuild
+  const allFormFixtures = new Map(); // fixtureId → fixture
 
   for (const leagueId of leagueIds) {
     const meta = LEAGUES[leagueId] || { season: 2024 };
@@ -377,6 +413,9 @@ async function runMorningScan(leagueIds) {
       const formFixtures = formResults.flatMap(r => r.data?.response || [])
         .filter(f => f.fixture?.status?.short === 'FT')
         .sort((a, b) => new Date(b.fixture?.date) - new Date(a.fixture?.date));
+
+      // Accumulate for team profile rebuild (deduplicate by fixture ID)
+      formFixtures.forEach(f => allFormFixtures.set(f.fixture?.id, f));
 
       // Standings
       const { data: sd } = await apiSports.get('/standings', { params: { league: leagueId, season: meta.season } });
@@ -440,6 +479,7 @@ async function runMorningScan(leagueIds) {
               context:         scored.context,
               homeDataConf:    scored.homeDataConf,
               awayDataConf:    scored.awayDataConf,
+              teamIntel:       scored.teamIntel,
             });
             console.log(`  [WATCHING] ${scored.homeName} vs ${scored.awayName} — score ${best.successScore}`);
           }
@@ -447,6 +487,11 @@ async function runMorningScan(leagueIds) {
       }
       saveCalibration(calNow);
     } catch (e) { console.error(`[MorningScan] league ${leagueId} error: ${e.message}`); }
+  }
+
+  // Rebuild all team profiles from accumulated form fixtures
+  if (allFormFixtures.size > 0) {
+    updateTeamProfiles([...allFormFixtures.values()]);
   }
 
   saveWatching(watching);
@@ -635,6 +680,18 @@ async function checkAndResolve() {
         calChanged = true;
         console.log(`[Calibration] ${ce.fixture} → actual: ${actualOutcome}, predicted: ${ce.projectedBet} (${ce.topPickCorrect ? '✓' : '✗'})`);
       }
+
+      // Incremental team profile update
+      const homeId   = fix.teams?.home?.id;
+      const awayId   = fix.teams?.away?.id;
+      const homeName = fix.teams?.home?.name;
+      const awayName = fix.teams?.away?.name;
+      const homeWon  = actualOutcome === 'Home Win';
+      const awayWon  = actualOutcome === 'Away Win';
+      const isDraw   = actualOutcome === 'Draw';
+      if (homeId) addResultToProfile(homeId, true,  homeWon, isDraw, awayId, awayName, hg - ag);
+      if (awayId) addResultToProfile(awayId, false, awayWon, isDraw, homeId, homeName, ag - hg);
+
     } catch (e) { console.error(`[Resolve] error ${fid}: ${e.message}`); }
   }
 
@@ -777,6 +834,13 @@ app.put('/api/settings', (req, res) => {
 app.get('/api/bets',        (_req, res) => res.json(getBets()));
 app.get('/api/calibration', (_req, res) => res.json(getCalibration()));
 app.get('/api/scan-meta',   (_req, res) => res.json(readJSON('scan-meta.json') || {}));
+
+app.get('/api/team-profile/:teamId', (req, res) => {
+  const profiles = getTeamProfiles([parseInt(req.params.teamId, 10)]);
+  const profile  = profiles[req.params.teamId] || null;
+  if (!profile) return res.status(404).json({ error: 'No profile yet — run morning scan first' });
+  res.json(profile);
+});
 
 // PATCH bet result (manual override)
 app.patch('/api/bets/:id', (req, res) => {
