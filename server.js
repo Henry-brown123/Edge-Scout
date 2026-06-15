@@ -86,6 +86,31 @@ const LEAGUES = {
   '2':   { name: 'Champions League',    season: 2024, sport: 'soccer_uefa_champs_league' },
 };
 
+// ─── BACKFILL CONFIG ──────────────────────────────────────────────────────────
+// Leagues and seasons to fetch for profile backfill.
+// International: WC qualifying + Nations League + friendlies give 20-40 data
+//   points per team. Club: 3 seasons of top-5 leagues gives 80-120 per team.
+
+const BACKFILL_CONFIG = [
+  // ── International ──────────────────────────────────────────────────────────
+  { leagueId: '1',  name: 'FIFA World Cup',              seasons: [2026, 2022] },
+  { leagueId: '32', name: 'WC Qualifying CONMEBOL',      seasons: [2026, 2022] },
+  { leagueId: '33', name: 'WC Qualifying UEFA',          seasons: [2024, 2022] },
+  { leagueId: '34', name: 'WC Qualifying CONCACAF',      seasons: [2026, 2022] },
+  { leagueId: '5',  name: 'FIFA Nations League',         seasons: [2024, 2022] },
+  { leagueId: '10', name: 'International Friendlies',    seasons: [2025, 2024] },
+  // ── Club — 3 seasons per top-5 league + CL ────────────────────────────────
+  // NOTE (Option 3): PL 2024/25 season has ended. Seasons 2022/2023/2024 are
+  // fetched here so club profiles are populated for the 2025/26 season when it
+  // starts (August 2026). Re-run this backfill at season start to pick up 2025.
+  { leagueId: '39',  name: 'Premier League',             seasons: [2024, 2023, 2022] },
+  { leagueId: '140', name: 'La Liga',                    seasons: [2024, 2023, 2022] },
+  { leagueId: '78',  name: 'Bundesliga',                 seasons: [2024, 2023, 2022] },
+  { leagueId: '135', name: 'Serie A',                    seasons: [2024, 2023, 2022] },
+  { leagueId: '61',  name: 'Ligue 1',                    seasons: [2024, 2023, 2022] },
+  { leagueId: '2',   name: 'UEFA Champions League',      seasons: [2024, 2023, 2022] },
+];
+
 // ─── FIFA RANKING QUALITY ANCHOR ─────────────────────────────────────────────
 // Hardcoded approximate FIFA rankings for WC 2026 teams + major leagues.
 // Used to calibrate model when historical fixture data is thin (≤15 matches).
@@ -750,6 +775,45 @@ function setupScheduler() {
   console.log('[Scheduler] Cron jobs active (07:00 morning scan, T-60 pre-match, 5-min resolution)');
 }
 
+// ─── PROFILE BACKFILL ────────────────────────────────────────────────────────
+
+async function runProfileBackfill(onProgress) {
+  const allFixtures = new Map(); // fixtureId → fixture (deduped across all fetches)
+  const results = [];
+  let apiCalls = 0;
+
+  for (const entry of BACKFILL_CONFIG) {
+    for (const season of entry.seasons) {
+      try {
+        const { data } = await apiSports.get('/fixtures', {
+          params: { league: entry.leagueId, season, last: 100 },
+        });
+        apiCalls++;
+        const fixtures = (data?.response || []).filter(f =>
+          ['FT', 'AET', 'PEN'].includes(f.fixture?.status?.short)
+        );
+        fixtures.forEach(f => allFixtures.set(f.fixture?.id, f));
+        const msg = `[Backfill] ${entry.name} ${season}: ${fixtures.length} FT fixtures (total deduped: ${allFixtures.size})`;
+        console.log(msg);
+        results.push({ league: entry.name, season, count: fixtures.length });
+        if (onProgress) onProgress(msg);
+        // Polite pause between API calls to avoid rate-limit bursts
+        await new Promise(r => setTimeout(r, 300));
+      } catch (e) {
+        const msg = `[Backfill] SKIP ${entry.name} ${season}: ${e.message}`;
+        console.warn(msg);
+        results.push({ league: entry.name, season, count: 0, error: e.message });
+      }
+    }
+  }
+
+  const allArr    = [...allFixtures.values()];
+  const built     = updateTeamProfiles(allArr);
+  const summary   = { apiCalls, totalFixtures: allFixtures.size, profilesBuilt: built, breakdown: results };
+  console.log(`[Backfill] Done — ${allFixtures.size} fixtures → ${built} profiles`);
+  return summary;
+}
+
 // ─── EXPRESS APP ─────────────────────────────────────────────────────────────
 
 app.use(cors());
@@ -880,6 +944,27 @@ app.post('/api/scan/morning', async (req, res) => {
   const leagues = req.body.leagues || getSettings().activeLeagues;
   res.json({ started: true, leagues });
   runMorningScan(leagues).catch(e => console.error('[ManualMorningScan]', e.message));
+});
+
+// Historical profile backfill — fetches 3 seasons of data per league and rebuilds all profiles
+app.post('/api/backfill/profiles', async (req, res) => {
+  const lines = [];
+  res.json({ started: true, message: 'Backfill running in background — poll /api/backfill/status for progress' });
+  try {
+    const summary = await runProfileBackfill(msg => lines.push(msg));
+    writeJSON('backfill-meta.json', { ...summary, completedAt: new Date().toISOString() });
+    console.log('[Backfill] Summary written to backfill-meta.json');
+  } catch (e) {
+    console.error('[Backfill] Fatal error:', e.message);
+    writeJSON('backfill-meta.json', { error: e.message, completedAt: new Date().toISOString() });
+  }
+});
+
+app.get('/api/backfill/status', (_req, res) => {
+  const meta = readJSON('backfill-meta.json');
+  if (!meta) return res.json({ status: 'not_run' });
+  if (meta.error) return res.json({ status: 'error', ...meta });
+  res.json({ status: 'complete', ...meta });
 });
 
 // Trigger pre-match scan for a specific watching entry

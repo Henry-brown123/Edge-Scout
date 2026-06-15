@@ -12,14 +12,36 @@ const LEAGUE_AVG_HOME_WIN_RATE = {
   international:  0.360,
 };
 
-// Minimum data thresholds before each modifier is applied
-const THRESHOLDS = {
-  homeMultiplier:    10,
-  awayModifier:      10,
-  oppositionAnomaly: 6,
-  momentumPattern:   8,
-  congestion:        10,
+// Minimum data thresholds before each modifier is applied — context-aware.
+// International thresholds are lower because teams play far fewer fixtures
+// per year than club sides. Modifiers are additionally dampened when a
+// profile has fewer than 10 data points (see applyTeamProfileModifiers).
+const CONTEXT_THRESHOLDS = {
+  club_domestic: {
+    homeMultiplier:    10,
+    awayModifier:      10,
+    oppositionAnomaly: 6,
+    momentumPattern:   8,
+    congestion:        10,
+  },
+  club_european: {
+    homeMultiplier:    10,
+    awayModifier:      10,
+    oppositionAnomaly: 6,
+    momentumPattern:   8,
+    congestion:        10,
+  },
+  international: {
+    homeMultiplier:    4,   // WC group stage gives 3 home games — activate early
+    awayModifier:      4,
+    oppositionAnomaly: 4,
+    momentumPattern:   5,
+    congestion:        10,  // less relevant for tournaments
+  },
 };
+
+// Backwards-compatible alias (used in module.exports)
+const THRESHOLDS = CONTEXT_THRESHOLDS.club_domestic;
 
 // ─── PERSISTENCE ─────────────────────────────────────────────────────────────
 
@@ -79,7 +101,8 @@ function buildProfileFromFixtures(teamId, teamName, fixtures) {
 
   if (!completed.length) return null;
 
-  const context = deriveContext(completed);
+  const context    = deriveContext(completed);
+  const thresholds = CONTEXT_THRESHOLDS[context] || CONTEXT_THRESHOLDS.club_domestic;
 
   // ── Home / Away records ────────────────────────────────────────────────────
   const homeFixtures = completed.filter(f => f.teams?.home?.id === tid);
@@ -110,7 +133,7 @@ function buildProfileFromFixtures(teamId, teamName, fixtures) {
   const leagueAvg             = LEAGUE_AVG_HOME_WIN_RATE[context] || 0.463;
   const homeConfidence        = Math.min(homeRecord.played / 20, 1);
   const awayConfidence        = Math.min(awayRecord.played / 20, 1);
-  const homeWinRateMultiplier = homeRecord.played >= THRESHOLDS.homeMultiplier
+  const homeWinRateMultiplier = homeRecord.played >= thresholds.homeMultiplier
     ? homeWinRate / Math.max(leagueAvg, 0.01)
     : 1.0;
 
@@ -129,7 +152,7 @@ function buildProfileFromFixtures(teamId, teamName, fixtures) {
   }
 
   const oppositionAnomalies = Object.entries(oppMap)
-    .filter(([, d]) => d.total >= THRESHOLDS.oppositionAnomaly)
+    .filter(([, d]) => d.total >= thresholds.oppositionAnomaly)
     .map(([oppId, d]) => {
       const actual       = d.wins / d.total;
       const anomalyScore = actual - overallWinRate;
@@ -168,7 +191,7 @@ function buildProfileFromFixtures(teamId, teamName, fixtures) {
     if (seqResults[i - 1].gd <= -3) { hd.total++; if (cur.won) hd.wins++; }
   }
 
-  const msCore = d => d.total < THRESHOLDS.momentumPattern
+  const msCore = d => d.total < thresholds.momentumPattern
     ? { winRate: null, matches: d.total }
     : { winRate: parseFloat((d.wins / d.total).toFixed(3)), matches: d.total };
 
@@ -196,7 +219,7 @@ function buildProfileFromFixtures(teamId, teamName, fixtures) {
     else                { rest.total++; if (won) rest.wins++; }
   }
 
-  const cs = d => d.total >= THRESHOLDS.congestion
+  const cs = d => d.total >= thresholds.congestion
     ? parseFloat((d.wins / d.total).toFixed(3))
     : null;
 
@@ -291,6 +314,7 @@ function addResultToProfile(teamId, isHome, won, drawn, opponentId, opponentName
   else record.lost++;
 
   const leagueAvg  = LEAGUE_AVG_HOME_WIN_RATE[p.context] || 0.463;
+  const thresholds = CONTEXT_THRESHOLDS[p.context] || CONTEXT_THRESHOLDS.club_domestic;
   p.homeWinRate    = p.homeRecord.played > 0 ? p.homeRecord.won / p.homeRecord.played : 0;
   p.awayWinRate    = p.awayRecord.played > 0 ? p.awayRecord.won / p.awayRecord.played : 0;
   const tw         = p.homeRecord.won + p.awayRecord.won;
@@ -298,7 +322,7 @@ function addResultToProfile(teamId, isHome, won, drawn, opponentId, opponentName
   p.overallWinRate = tp > 0 ? tw / tp : 0.33;
   p.homeConfidence = Math.min(p.homeRecord.played / 20, 1);
   p.awayConfidence = Math.min(p.awayRecord.played / 20, 1);
-  p.homeWinRateMultiplier = p.homeRecord.played >= THRESHOLDS.homeMultiplier
+  p.homeWinRateMultiplier = p.homeRecord.played >= thresholds.homeMultiplier
     ? p.homeWinRate / Math.max(leagueAvg, 0.01) : 1.0;
   p.dataPoints++;
   p.lastUpdated = new Date().toISOString();
@@ -335,7 +359,15 @@ function addResultToProfile(teamId, isHome, won, drawn, opponentId, opponentName
 // Returns { probs, applied, notes, teamIntel }.
 
 function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dataConf, homeDaysRest, awayDaysRest) {
-  const leagueAvg = LEAGUE_AVG_HOME_WIN_RATE[context] || 0.463;
+  const leagueAvg  = LEAGUE_AVG_HOME_WIN_RATE[context] || 0.463;
+  const thresholds = CONTEXT_THRESHOLDS[context] || CONTEXT_THRESHOLDS.club_domestic;
+
+  // For international profiles with fewer than 10 data points, dampen all
+  // modifiers proportionally so they contribute lightly until more data exists.
+  const intlSparsityDamp = (profile) => {
+    if (context !== 'international' || !profile) return 1;
+    return Math.min(profile.dataPoints / 10, 1);
+  };
 
   // Summary always returned (even if no modifiers apply) for UI display
   const teamIntel = {
@@ -375,11 +407,11 @@ function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dat
   let { home, draw, away } = probs;
   const notes = [];
 
-  // 1. Home advantage multiplier (blend with confidence, dampened by dataConf)
-  if (homeProfile.homeRecord?.played >= THRESHOLDS.homeMultiplier && homeProfile.homeConfidence >= 0.5) {
+  // 1. Home advantage multiplier (blend with confidence, dampened by dataConf + intl sparsity)
+  if (homeProfile.homeRecord?.played >= thresholds.homeMultiplier) {
     const mult     = homeProfile.homeWinRateMultiplier || 1.0;
     const blended  = homeProfile.homeConfidence * mult + (1 - homeProfile.homeConfidence);
-    const dampened = 1 + (blended - 1) * Math.min(dataConf * 2, 1);
+    const dampened = 1 + (blended - 1) * Math.min(dataConf * 2, 1) * intlSparsityDamp(homeProfile);
     const clamped  = Math.max(0.5, Math.min(2.0, dampened));
     if (Math.abs(clamped - 1) > 0.02) {
       home = home * clamped;
@@ -389,11 +421,12 @@ function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dat
 
   // 2. Opposition anomaly
   const anomaly = homeProfile.oppositionAnomalies?.find(
-    a => a.opponentId === awayProfile.teamId && a.significant && a.matches >= THRESHOLDS.oppositionAnomaly
+    a => a.opponentId === awayProfile.teamId && a.significant && a.matches >= thresholds.oppositionAnomaly
   );
   if (anomaly) {
     teamIntel.oppositionAnomaly = anomaly;
-    const adj = anomaly.anomalyScore * 0.5; // dampen to avoid overfit
+    const sparsity = intlSparsityDamp(homeProfile);
+    const adj = anomaly.anomalyScore * 0.5 * sparsity;
     home += adj;
     away -= adj;
     notes.push(`H2H anomaly: ${adj >= 0 ? '+' : ''}${(adj * 100).toFixed(1)}pp vs ${anomaly.opponentName} (${anomaly.matches} meetings, actual ${(anomaly.actualWinRate * 100).toFixed(0)}% vs ${(anomaly.expectedWinRate * 100).toFixed(0)}% expected)`);
@@ -412,13 +445,15 @@ function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dat
   const hAdj = congAdj(homeProfile, homeDaysRest);
   const aAdj = congAdj(awayProfile, awayDaysRest);
 
-  if (Math.abs(hAdj) > 0.005) {
-    home += hAdj;
-    notes.push(`Home congestion ${hAdj >= 0 ? '+' : ''}${(hAdj * 100).toFixed(1)}pp (${homeDaysRest}d rest)`);
+  const hAdjFinal = hAdj * intlSparsityDamp(homeProfile);
+  const aAdjFinal = aAdj * intlSparsityDamp(awayProfile);
+  if (Math.abs(hAdjFinal) > 0.005) {
+    home += hAdjFinal;
+    notes.push(`Home congestion ${hAdjFinal >= 0 ? '+' : ''}${(hAdjFinal * 100).toFixed(1)}pp (${homeDaysRest}d rest)`);
   }
-  if (Math.abs(aAdj) > 0.005) {
-    away += aAdj;
-    notes.push(`Away congestion ${aAdj >= 0 ? '+' : ''}${(aAdj * 100).toFixed(1)}pp (${awayDaysRest}d rest)`);
+  if (Math.abs(aAdjFinal) > 0.005) {
+    away += aAdjFinal;
+    notes.push(`Away congestion ${aAdjFinal >= 0 ? '+' : ''}${(aAdjFinal * 100).toFixed(1)}pp (${awayDaysRest}d rest)`);
   }
 
   // Clamp and renormalise
@@ -444,5 +479,6 @@ module.exports = {
   addResultToProfile,
   applyTeamProfileModifiers,
   LEAGUE_AVG_HOME_WIN_RATE,
+  CONTEXT_THRESHOLDS,
   THRESHOLDS,
 };
