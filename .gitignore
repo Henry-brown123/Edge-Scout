@@ -4,4 +4,5 @@ node_modules/
 data/bets.json
 data/watching.json
 data/bankroll.json
+data/scan-meta.json
 .claude/settings.local.json

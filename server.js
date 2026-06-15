@@ -78,6 +78,43 @@ const LEAGUES = {
   '2':   { name: 'Champions League',    season: 2024, sport: 'soccer_uefa_champs_league' },
 };
 
+// ─── FIFA RANKING QUALITY ANCHOR ─────────────────────────────────────────────
+// Hardcoded approximate FIFA rankings for WC 2026 teams + major leagues.
+// Used to calibrate model when historical fixture data is thin (≤15 matches).
+
+const FIFA_RANK_FALLBACK = {
+  'Argentina':1,'France':2,'England':3,'Brazil':4,'Belgium':5,
+  'Portugal':6,'Spain':7,'Netherlands':8,'Colombia':8,'Italy':9,
+  'Germany':10,'Croatia':12,'Morocco':13,'Switzerland':14,'Denmark':14,
+  'United States':15,'USA':15,'Mexico':16,'Uruguay':17,'Japan':19,
+  'Senegal':18,'Austria':25,'Sweden':28,'Turkey':31,'Algeria':36,
+  'Chile':35,'Norway':37,'Czechia':38,'Scotland':40,'Slovenia':42,
+  'Slovakia':43,'Romania':46,'Nigeria':47,'Côte d\'Ivoire':50,'Ireland':50,
+  'Costa Rica':51,'Canada':51,'Finland':52,'Cameroon':53,'Bosnia & Herzegovina':62,
+  'Bosnia':62,'Venezuela':58,'Democratic Republic of Congo':59,'Iraq':59,
+  'Qatar':66,'Iceland':67,'Honduras':73,'El Salvador':73,'Jordan':87,
+  'China PR':91,'China':91,'Peru':93,'Indonesia':130,'Kuwait':145,
+  'South Korea':23,'Australia':24,'Ecuador':45,'Ghana':60,'Jamaica':62,
+  'Panama':64,'Saudi Arabia':56,'Iran':22,'Ukraine':22,'Poland':26,
+  'Wales':29,'Hungary':27,'Serbia':33,'Egypt':36,'Tunisia':30,
+  'Bolivia':82,'Paraguay':63,'New Zealand':90,'Palestine':95,'Georgia':74,
+  'Tajikistan':105,'Thailand':115,'Vietnam':119,'India':127,'Uzbekistan':70,
+};
+
+function lookupFIFARank(teamName) {
+  if (!teamName) return 55;
+  const lower = teamName.toLowerCase();
+  const key = Object.keys(FIFA_RANK_FALLBACK).find(k =>
+    lower.includes(k.toLowerCase()) || k.toLowerCase().includes(lower)
+  );
+  return key ? FIFA_RANK_FALLBACK[key] : 55; // default: ~55th in world
+}
+
+function rankToQuality(rank) {
+  // rank 1 → 100, rank 55 → 50, rank 105 → 0 (clamped 5-100)
+  return Math.max(5, Math.min(100, Math.round(105 - rank)));
+}
+
 // ─── STADIUM COORDINATES ─────────────────────────────────────────────────────
 // Used for Open-Meteo weather fetches
 
@@ -217,10 +254,38 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     standings: standingsScore(standings, awayId),
   };
 
-  const probs = computeModelProb(homeF, awayF, settings.weights);
+  // Data confidence: how many real fixtures do we have for the home team?
   const formCount = formFixtures.filter(f =>
     f.teams?.home?.id === homeId || f.teams?.away?.id === homeId
   ).length;
+  const dataConf = Math.min(formCount / 15, 1); // 0 = no historical data, 1 = 15+ fixtures
+
+  let probs = computeModelProb(homeF, awayF, settings.weights);
+
+  // FIFA ranking quality adjustment — anchors model when historical data is thin.
+  // At dataConf=0 (no data), probabilities are 100% ranking-derived.
+  // At dataConf=1 (15+ fixtures), pure model output is used.
+  if (dataConf < 1) {
+    const homeRank = lookupFIFARank(homeName);
+    const awayRank = lookupFIFARank(awayName);
+    const homeQ    = rankToQuality(homeRank);
+    const awayQ    = rankToQuality(awayRank);
+    const rankDiff = homeQ - awayQ; // positive = home team ranked higher quality
+
+    // Linear ranking-based probs (base: home ~35%, draw ~25%, away ~40% neutral)
+    const scale = 0.0025;
+    const rH = Math.max(0.05, Math.min(0.85, 0.35 + rankDiff * scale));
+    const rA = Math.max(0.05, Math.min(0.85, 0.40 - rankDiff * scale));
+    const rD = Math.max(0.05, 1 - rH - rA);
+    const rSum = rH + rD + rA;
+    const rankAdj = { home: rH / rSum, draw: rD / rSum, away: rA / rSum };
+
+    probs = {
+      home: dataConf * probs.home + (1 - dataConf) * rankAdj.home,
+      draw: dataConf * probs.draw + (1 - dataConf) * rankAdj.draw,
+      away: dataConf * probs.away + (1 - dataConf) * rankAdj.away,
+    };
+  }
 
   // Weather
   const coords = venueCoords(fix.fixture?.venue?.name, fix.fixture?.venue?.city);
@@ -256,9 +321,15 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     });
   }
 
+  // Sanity check: if model diverges from any bookmaker implied prob by >25pp,
+  // flag as low confidence — the model lacks the data to argue with the market.
+  const maxModelBookGap = Math.max(...results.map(c => Math.abs(c.modelProb - c.impliedProb)));
+  const lowConfidence   = maxModelBookGap > 0.25;
+  results.forEach(c => { c.lowConfidence = lowConfidence; });
+
   return {
     fix, homeName, awayName, homeF, awayF, probs, weather, results,
-    kickoff: fix.fixture?.date,
+    kickoff: fix.fixture?.date, lowConfidence,
   };
 }
 
@@ -266,9 +337,13 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
 
 async function runMorningScan(leagueIds) {
   console.log(`[MorningScan] Starting for leagues: ${leagueIds.join(', ')}`);
-  const settings = getSettings();
-  const today    = new Date().toISOString().split('T')[0];
-  const watching = [];
+  const settings  = getSettings();
+  const today     = new Date().toISOString().split('T')[0];
+  const scanStart = new Date().toISOString();
+  const watching  = [];
+
+  // Save scan-meta so the UI can display "Last scanned" even if it finds nothing
+  writeJSON('scan-meta.json', { date: today, startedAt: scanStart, completedAt: null, count: 0 });
 
   for (const leagueId of leagueIds) {
     const meta = LEAGUES[leagueId] || { season: 2024 };
@@ -334,19 +409,20 @@ async function runMorningScan(leagueIds) {
               kickoff:    fix.fixture?.date,
               stage:      'WATCHING',
               scoredAt:   new Date().toISOString(),
-              projectedScore: best.successScore,
-              projectedBet:   best.bet,
-              modelProb:      best.modelProb,
-              bookOdds:       best.bookOdds,
-              impliedProb:    best.impliedProb,
-              edge:           best.edge,
-              ev:             best.ev,
-              kelly:          best.kelly,
-              allCandidates:  scored.results,
-              weather:        scored.weather,
-              homeF:          scored.homeF,
-              awayF:          scored.awayF,
-              calId:          calEntry.id,
+              projectedScore:  best.successScore,
+              projectedBet:    best.bet,
+              modelProb:       best.modelProb,
+              bookOdds:        best.bookOdds,
+              impliedProb:     best.impliedProb,
+              edge:            best.edge,
+              ev:              best.ev,
+              kelly:           best.kelly,
+              allCandidates:   scored.results,
+              weather:         scored.weather,
+              homeF:           scored.homeF,
+              awayF:           scored.awayF,
+              calId:           calEntry.id,
+              lowConfidence:   scored.lowConfidence,
             });
             console.log(`  [WATCHING] ${scored.homeName} vs ${scored.awayName} — score ${best.successScore}`);
           }
@@ -357,6 +433,7 @@ async function runMorningScan(leagueIds) {
   }
 
   saveWatching(watching);
+  writeJSON('scan-meta.json', { date: today, startedAt: scanStart, completedAt: new Date().toISOString(), count: watching.length });
   console.log(`[MorningScan] Done. ${watching.length} fixtures watching.`);
   return watching;
 }
@@ -409,6 +486,10 @@ async function runPreMatchScan(watchingEntry) {
 
     if (best.successScore < threshold) {
       console.log(`[PreMatch] ${scored.homeName} vs ${scored.awayName} DROPPED (score ${best.successScore} < ${threshold})`);
+      return null;
+    }
+    if (scored.lowConfidence) {
+      console.log(`[PreMatch] ${scored.homeName} vs ${scored.awayName} DROPPED — low confidence (model/book gap >25pp)`);
       return null;
     }
 
@@ -658,6 +739,7 @@ app.put('/api/settings', (req, res) => {
 // GET bets
 app.get('/api/bets',        (_req, res) => res.json(getBets()));
 app.get('/api/calibration', (_req, res) => res.json(getCalibration()));
+app.get('/api/scan-meta',   (_req, res) => res.json(readJSON('scan-meta.json') || {}));
 
 // PATCH bet result (manual override)
 app.patch('/api/bets/:id', (req, res) => {
@@ -737,13 +819,24 @@ app.listen(PORT, () => {
     console.log('[KeepAlive] Self-ping every 10 min enabled');
   }
 
-  // On startup, fire morning scan if we haven't today
-  const settings = getSettings();
-  const watching = getWatching();
-  const today    = new Date().toISOString().split('T')[0];
-  const stale    = !watching.length || watching.every(w => !w.scoredAt?.startsWith(today));
+  // On startup, strip any watching entries whose kickoff has already passed,
+  // then rescan if we have no scan for today.
+  const settings    = getSettings();
+  const today       = new Date().toISOString().split('T')[0];
+  const nowMs       = Date.now();
+  const rawWatching = getWatching();
+  const future      = rawWatching.filter(w => new Date(w.kickoff).getTime() > nowMs);
+  if (future.length < rawWatching.length) {
+    saveWatching(future);
+    console.log(`[Startup] Removed ${rawWatching.length - future.length} past-kickoff entries from watching list`);
+  }
+
+  const scanMeta = readJSON('scan-meta.json');
+  const stale    = !scanMeta || scanMeta.date !== today || !scanMeta.completedAt;
   if (stale) {
-    console.log('[Startup] No watching fixtures for today — running morning scan…');
+    console.log('[Startup] No completed scan for today — running morning scan…');
     runMorningScan(settings.activeLeagues).catch(e => console.error('[Startup:MorningScan]', e.message));
+  } else {
+    console.log(`[Startup] Today's scan already completed at ${scanMeta.completedAt} (${scanMeta.count} watching)`);
   }
 });

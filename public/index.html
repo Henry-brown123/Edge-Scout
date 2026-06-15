@@ -642,10 +642,28 @@ async function apiFetch(url, opts = {}) {
 
 async function loadState() {
   try {
-    const s = await apiFetch('/api/state');
+    const [s, meta] = await Promise.all([apiFetch('/api/state'), apiFetch('/api/scan-meta').catch(() => null)]);
     STATE = s;
     renderScout();
     updateBankrollBadge();
+
+    const el = document.getElementById('scan-status');
+    if (el && meta?.completedAt) {
+      const d     = new Date(meta.completedAt);
+      const today = new Date().toISOString().split('T')[0];
+      const isToday = meta.date === today;
+      const label = isToday
+        ? `Last scan: today at ${d.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' })} · ${meta.count} watching`
+        : `⚠ Last scan: ${meta.date} (${meta.count} watching) — today's scan not yet run`;
+      el.textContent = label;
+      el.style.color = isToday ? 'var(--muted)' : 'var(--amber)';
+    } else if (el && meta?.startedAt && !meta?.completedAt) {
+      el.textContent = 'Scan in progress…';
+      el.style.color = 'var(--cyan)';
+    } else if (el) {
+      el.textContent = 'No scan run yet today';
+      el.style.color = 'var(--amber)';
+    }
   } catch(e) { toast('Failed to load state: ' + e.message, 'error'); }
 }
 
@@ -776,6 +794,7 @@ function watchingCard(w) {
       </div>
       <div class="fixture-right">
         <span class="stage-tag tag-watching">WATCHING</span>
+        ${w.lowConfidence ? '<span class="badge badge-red" title="Model diverges >25pp from bookmaker — will not auto-lock">LOW CONF</span>' : ''}
         <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();forcePreMatch('${w.id}')">Lock now</button>
       </div>
     </div>`;
@@ -1294,6 +1313,7 @@ function openDrawer(w) {
     <button class="drawer-close" onclick="closeDrawer()">✕</button>
     <div class="drawer-title">${w.fixture}</div>
     <div class="drawer-sub">${w.leagueName} · 🇬🇧 KO ${kickoff}${minsOut != null ? ` · <span style="color:var(--amber)">T-${minsOut}m</span>` : ''}</div>
+    ${w.lowConfidence ? `<div style="background:rgba(255,82,82,.12);border:1px solid rgba(255,82,82,.3);border-radius:6px;padding:8px 12px;margin:8px 0;font-size:.78rem;color:var(--red)">⚠ <strong>Low confidence</strong> — model diverges >25pp from bookmaker on at least one outcome. This fixture will not auto-lock. Review manually before placing.</div>` : ''}
 
     <div class="drawer-section">
       <h4>Model Probabilities</h4>
