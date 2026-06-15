@@ -4,7 +4,9 @@
 
 function classifyFixture(leagueId) {
   const id = parseInt(leagueId, 10);
-  const INTERNATIONAL = [1, 4, 5, 6, 7, 8, 9, 10, 960];
+  // Includes WC/continental qualifying leagues (26-35) so team profiles built
+  // from qualifying data are correctly classified as international, not club_domestic.
+  const INTERNATIONAL = [1, 4, 5, 6, 7, 8, 9, 10, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 960];
   const CLUB_EUROPEAN = [2, 3, 848];
   if (INTERNATIONAL.includes(id)) return 'international';
   if (CLUB_EUROPEAN.includes(id))  return 'club_european';
