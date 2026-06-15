@@ -1,9 +1,66 @@
 'use strict';
 
-const DEFAULT_WEIGHTS = {
-  form: 18, homeAdv: 12, xg: 16, h2h: 10,
-  defense: 14, momentum: 10, injuries: 8, standings: 12,
+// ─── FIXTURE CONTEXT ─────────────────────────────────────────────────────────
+
+function classifyFixture(leagueId) {
+  const id = parseInt(leagueId, 10);
+  const INTERNATIONAL = [1, 4, 5, 6, 7, 8, 9, 10, 960];
+  const CLUB_EUROPEAN = [2, 3, 848];
+  if (INTERNATIONAL.includes(id)) return 'international';
+  if (CLUB_EUROPEAN.includes(id))  return 'club_european';
+  return 'club_domestic';
+}
+
+// ─── CONTEXT-AWARE WEIGHTS ────────────────────────────────────────────────────
+
+const WEIGHTS_BY_CONTEXT = {
+  club_domestic: {
+    form: 22, homeAdv: 14, xg: 16, h2h: 10,
+    defense: 14, momentum: 10, injuries: 8, standings: 6,
+  },
+  club_european: {
+    form: 18, homeAdv: 10, xg: 14, h2h: 12,
+    defense: 14, momentum: 12, injuries: 12, standings: 8,
+  },
+  international: {
+    form: 14, homeAdv: 6, xg: 10, h2h: 14,
+    defense: 12, momentum: 10, injuries: 18, standings: 16,
+  },
 };
+
+// Keep DEFAULT_WEIGHTS as a named export for any callers that reference it directly
+const DEFAULT_WEIGHTS = WEIGHTS_BY_CONTEXT.club_domestic;
+
+// ─── CONTEXT-SPECIFIC CONFIG ─────────────────────────────────────────────────
+
+const CONTEXT_CONFIG = {
+  club_domestic: {
+    awayMult:      0.88,   // strong home advantage
+    rankScale:     0,      // rankings irrelevant — use real form data
+    homeBase:      0.40,   // ranking base probs (not used when scale=0)
+    awayBase:      0.35,
+    dataConfMin:   0.4,    // minimum dataConf before pre-match lock
+    gapThresholdBase: 0.25,
+  },
+  club_european: {
+    awayMult:      0.92,
+    rankScale:     0.003,
+    homeBase:      0.35,
+    awayBase:      0.40,
+    dataConfMin:   0.3,
+    gapThresholdBase: 0.20,
+  },
+  international: {
+    awayMult:      0.97,   // near-neutral venues, minimal home advantage
+    rankScale:     0.010,
+    homeBase:      0.30,
+    awayBase:      0.45,
+    dataConfMin:   0.0,    // no min data requirement — use stricter gap threshold
+    gapThresholdBase: 0.10, // 10pp at full data confidence; formula clamps to 0 at dataConf=0
+  },
+};
+
+// ─── SCORING HELPERS ─────────────────────────────────────────────────────────
 
 function recencyAvg(arr, decay = 0.05) {
   if (!arr.length) return 0;
@@ -111,19 +168,30 @@ function injuryScore(injuries, teamId) {
   return Math.max(0, Math.round(100 - impact));
 }
 
-function computeModelProb(homeFactors, awayFactors, weights = DEFAULT_WEIGHTS) {
+// ─── MODEL PROBABILITY ────────────────────────────────────────────────────────
+
+function computeModelProb(homeFactors, awayFactors, weights, context = 'club_domestic') {
+  const cfg   = CONTEXT_CONFIG[context] || CONTEXT_CONFIG.club_domestic;
   const total = Object.values(weights).reduce((a, b) => a + b, 0) || 100;
+
   const score = f => (
     f.form * weights.form + f.homeAdv * weights.homeAdv + f.xg * weights.xg +
     f.h2h * weights.h2h + f.defense * weights.defense + f.momentum * weights.momentum +
     f.injuries * weights.injuries + f.standings * weights.standings
   ) / total;
+
   const homeScore = score(homeFactors);
-  const awayAdj   = score(awayFactors) * 0.88;
-  const drawScore = 50;
+  const awayAdj   = score(awayFactors) * cfg.awayMult;
+
+  // Draw probability shrinks for mismatched teams, varies by context
+  const qualityGap = Math.abs(homeScore - awayAdj);
+  const drawScore  = Math.max(20, 35 - qualityGap * 0.3);
+
   const raw = homeScore + awayAdj + drawScore;
   return { home: homeScore / raw, draw: drawScore / raw, away: awayAdj / raw };
 }
+
+// ─── KELLY CRITERION ─────────────────────────────────────────────────────────
 
 function kelly(prob, odds, fraction = 0.5, bankroll = 1000) {
   const b = odds - 1;
@@ -132,22 +200,28 @@ function kelly(prob, odds, fraction = 0.5, bankroll = 1000) {
   return { fullKelly: k, fracKelly: fracK, stake: parseFloat((fracK * bankroll).toFixed(2)) };
 }
 
-// Success Score 0-99
-// win probability (0-35) + value/edge (0-45) + confidence/data (0-19)
-function computeSuccessScore(modelProb, bookOdds, formFixtureCount = 20) {
+// ─── SUCCESS SCORE ────────────────────────────────────────────────────────────
+// 0-99: win probability (0-35) + value/edge (0-45) + confidence/data (0-19)
+// dataConf multiplier suppresses scores when historical data is thin.
+// At dataConf=0: multiplier = 0.4, so max raw 59 becomes ~24 (below 40 threshold).
+
+function computeSuccessScore(modelProb, bookOdds, formFixtureCount = 20, dataConf = 1) {
   const impliedProb = 1 / bookOdds;
   const edge = modelProb - impliedProb;
   if (edge <= 0) return 0;
   const winComp        = modelProb * 35;
   const valueComp      = Math.min(edge / 0.20, 1) * 45;
   const confidenceComp = Math.min(formFixtureCount / 50, 1) * 19;
-  return Math.min(99, Math.round(winComp + valueComp + confidenceComp));
+  const raw            = Math.min(99, Math.round(winComp + valueComp + confidenceComp));
+  const dataMultiplier = 0.4 + (dataConf * 0.6);
+  return Math.round(raw * dataMultiplier);
 }
 
-// Brief-specified recency decay brackets for backfill weight training
-// last 6 months = 1.0, 6-18m = 0.7, 18m-3yr = 0.4, 3yr+ = 0.15
+// ─── SUPPORTING UTILITIES ─────────────────────────────────────────────────────
+
+// Recency decay brackets for historical weight training
 function historicalWeight(fixtureDate) {
-  const ageMs = Date.now() - new Date(fixtureDate).getTime();
+  const ageMs     = Date.now() - new Date(fixtureDate).getTime();
   const ageMonths = ageMs / (1000 * 60 * 60 * 24 * 30.5);
   if (ageMonths <= 6)  return 1.0;
   if (ageMonths <= 18) return 0.7;
@@ -166,8 +240,13 @@ function weatherModifier(w) {
 }
 
 module.exports = {
+  classifyFixture,
+  WEIGHTS_BY_CONTEXT,
+  CONTEXT_CONFIG,
   DEFAULT_WEIGHTS,
-  recencyAvg, outcomePoints, formScore, homeAdvScore, xgScore,
-  defenseScore, momentumScore, h2hScore, standingsScore, injuryScore,
-  computeModelProb, kelly, computeSuccessScore, historicalWeight, weatherModifier,
+  recencyAvg, outcomePoints,
+  formScore, homeAdvScore, xgScore, defenseScore,
+  momentumScore, h2hScore, standingsScore, injuryScore,
+  computeModelProb, kelly, computeSuccessScore,
+  historicalWeight, weatherModifier,
 };

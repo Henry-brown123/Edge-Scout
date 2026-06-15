@@ -9,6 +9,7 @@ const cron     = require('node-cron');
 const { v4: uuidv4 } = require('uuid');
 
 const {
+  classifyFixture, WEIGHTS_BY_CONTEXT, CONTEXT_CONFIG,
   formScore, homeAdvScore, xgScore, defenseScore, momentumScore,
   h2hScore, standingsScore, injuryScore,
   computeModelProb, kelly, computeSuccessScore, weatherModifier,
@@ -221,6 +222,12 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   const homeName = fix.teams?.home?.name;
   const awayName = fix.teams?.away?.name;
 
+  // Determine fixture context once — drives weights, ranking scale, thresholds
+  const leagueId = fix.league?.id || settings._leagueId;
+  const context  = classifyFixture(leagueId);
+  const cfg      = CONTEXT_CONFIG[context];
+  const weights  = WEIGHTS_BY_CONTEXT[context];
+
   // H2H + injuries in parallel
   const [h2hRes, injRes] = await Promise.allSettled([
     apiSports.get('/fixtures/headtohead', { params: { h2h: `${homeId}-${awayId}`, last: 5 } }),
@@ -254,30 +261,32 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     standings: standingsScore(standings, awayId),
   };
 
-  // Data confidence: how many real fixtures do we have for the home team?
-  const formCount = formFixtures.filter(f =>
+  // Data confidence per team (capped at 1 when ≥15 fixtures available)
+  const homeFormCount = formFixtures.filter(f =>
     f.teams?.home?.id === homeId || f.teams?.away?.id === homeId
   ).length;
-  const dataConf = Math.min(formCount / 15, 1); // 0 = no historical data, 1 = 15+ fixtures
+  const awayFormCount = formFixtures.filter(f =>
+    f.teams?.home?.id === awayId || f.teams?.away?.id === awayId
+  ).length;
+  const homeDataConf = Math.min(homeFormCount / 15, 1);
+  const awayDataConf = Math.min(awayFormCount / 15, 1);
+  const dataConf     = Math.min(homeDataConf, awayDataConf); // use the weaker team's confidence
 
-  let probs = computeModelProb(homeF, awayF, settings.weights);
+  let probs = computeModelProb(homeF, awayF, weights, context);
 
   // FIFA ranking quality adjustment — anchors model when historical data is thin.
-  // At dataConf=0 (no data), probabilities are 100% ranking-derived.
-  // At dataConf=1 (15+ fixtures), pure model output is used.
-  if (dataConf < 1) {
+  // scale=0 for club_domestic means rankings have no effect there.
+  if (cfg.rankScale > 0 && dataConf < 1) {
     const homeRank = lookupFIFARank(homeName);
     const awayRank = lookupFIFARank(awayName);
     const homeQ    = rankToQuality(homeRank);
     const awayQ    = rankToQuality(awayRank);
-    const rankDiff = homeQ - awayQ; // positive = home team ranked higher quality
+    const rankDiff = homeQ - awayQ; // positive = home ranked stronger
 
-    // Linear ranking-based probs (base: home ~35%, draw ~25%, away ~40% neutral)
-    const scale = 0.0025;
-    const rH = Math.max(0.05, Math.min(0.85, 0.35 + rankDiff * scale));
-    const rA = Math.max(0.05, Math.min(0.85, 0.40 - rankDiff * scale));
+    const rH = Math.max(0.05, Math.min(0.85, cfg.homeBase + rankDiff * cfg.rankScale));
+    const rA = Math.max(0.05, Math.min(0.85, cfg.awayBase - rankDiff * cfg.rankScale));
     const rD = Math.max(0.05, 1 - rH - rA);
-    const rSum = rH + rD + rA;
+    const rSum   = rH + rD + rA;
     const rankAdj = { home: rH / rSum, draw: rD / rSum, away: rA / rSum };
 
     probs = {
@@ -295,10 +304,10 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   }
   const wxMod = weatherModifier(weather) / 100; // 0.6–1.0 multiplier
 
-  // Find best edge across H/D/A
-  const oddsKey  = `${homeName}|${awayName}`;
-  const bookOdds = oddsMap[oddsKey] || {};
-  const lookup   = { 'Home Win': homeName, Draw: 'Draw', 'Away Win': awayName };
+  // Build results for H/D/A
+  const oddsKey    = `${homeName}|${awayName}`;
+  const bookOdds   = oddsMap[oddsKey] || {};
+  const lookup     = { 'Home Win': homeName, Draw: 'Draw', 'Away Win': awayName };
   const candidates = [
     { label: 'Home Win', prob: probs.home },
     { label: 'Draw',     prob: probs.draw },
@@ -310,7 +319,8 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     const odds       = bookOdds[lookup[c.label]] || (1 / c.prob * 1.06);
     const impliedP   = 1 / odds;
     const edge       = c.prob - impliedP;
-    const rawScore   = computeSuccessScore(c.prob, odds, formCount);
+    // Pass dataConf so scores are suppressed when data is thin (Fix 2)
+    const rawScore   = computeSuccessScore(c.prob, odds, homeFormCount, dataConf);
     const finalScore = Math.round(rawScore * wxMod);
     const k          = kelly(c.prob, odds, settings.kellyFraction, getBankroll().current);
 
@@ -321,15 +331,19 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     });
   }
 
-  // Sanity check: if model diverges from any bookmaker implied prob by >25pp,
-  // flag as low confidence — the model lacks the data to argue with the market.
-  const maxModelBookGap = Math.max(...results.map(c => Math.abs(c.modelProb - c.impliedProb)));
-  const lowConfidence   = maxModelBookGap > 0.25;
+  // Dynamic low-confidence sanity check (Fix 3):
+  // Threshold shrinks as data confidence falls — at dataConf=0 for international,
+  // any >10pp divergence from the market is flagged.
+  const maxModelBookGap  = Math.max(...results.map(c => Math.abs(c.modelProb - c.impliedProb)));
+  const gapThreshold     = Math.max(0, cfg.gapThresholdBase - (1 - dataConf) * 0.15);
+  const lowConfidence    = maxModelBookGap > gapThreshold;
   results.forEach(c => { c.lowConfidence = lowConfidence; });
 
   return {
     fix, homeName, awayName, homeF, awayF, probs, weather, results,
-    kickoff: fix.fixture?.date, lowConfidence,
+    kickoff: fix.fixture?.date,
+    context, lowConfidence,
+    homeDataConf, awayDataConf, dataConf,
   };
 }
 
@@ -423,6 +437,9 @@ async function runMorningScan(leagueIds) {
               awayF:           scored.awayF,
               calId:           calEntry.id,
               lowConfidence:   scored.lowConfidence,
+              context:         scored.context,
+              homeDataConf:    scored.homeDataConf,
+              awayDataConf:    scored.awayDataConf,
             });
             console.log(`  [WATCHING] ${scored.homeName} vs ${scored.awayName} — score ${best.successScore}`);
           }
@@ -489,7 +506,14 @@ async function runPreMatchScan(watchingEntry) {
       return null;
     }
     if (scored.lowConfidence) {
-      console.log(`[PreMatch] ${scored.homeName} vs ${scored.awayName} DROPPED — low confidence (model/book gap >25pp)`);
+      console.log(`[PreMatch] ${scored.homeName} vs ${scored.awayName} DROPPED — low confidence (model/book divergence too large for data level)`);
+      return null;
+    }
+
+    // Fix 5: hard minimum data requirement per context
+    const dataMin = CONTEXT_CONFIG[scored.context]?.dataConfMin ?? 0.3;
+    if (scored.homeDataConf < dataMin && scored.awayDataConf < dataMin) {
+      console.log(`[PreMatch] ${scored.homeName} vs ${scored.awayName} DROPPED — insufficient data (home ${scored.homeDataConf.toFixed(2)}, away ${scored.awayDataConf.toFixed(2)}, min ${dataMin} for ${scored.context})`);
       return null;
     }
 
@@ -616,6 +640,16 @@ async function checkAndResolve() {
 
   if (betsChanged) saveBets(bets);
   if (calChanged)  saveCalibration(cal);
+
+  // Fix 8 — Phase 2 readiness check: 50+ resolved calibration entries with lineup data
+  const resolvedCal = getCalibration().filter(c => c.resolved);
+  if (resolvedCal.length >= 50) {
+    const meta = readJSON('scan-meta.json') || {};
+    if (!meta.phase2Ready) {
+      writeJSON('scan-meta.json', { ...meta, phase2Ready: true, phase2ReadyAt: new Date().toISOString() });
+      console.log('[Phase2] Threshold reached — 50+ resolved calibration entries. Model is ready for Phase 2.');
+    }
+  }
 }
 
 // ─── SCHEDULER ───────────────────────────────────────────────────────────────
@@ -623,8 +657,9 @@ async function checkAndResolve() {
 function setupScheduler() {
   const settings = getSettings();
 
-  // 07:00 every day — morning scan
+  // 07:00 UTC every day — morning scan
   cron.schedule('0 7 * * *', () => {
+    console.log(`[Cron] 07:00 tick — running morning scan at ${new Date().toISOString()}`);
     const leagues = getSettings().activeLeagues || ['1','39','140','78','135','61','2'];
     runMorningScan(leagues).catch(e => console.error('[Cron:MorningScan]', e.message));
   });
@@ -644,8 +679,8 @@ function setupScheduler() {
     });
 
     if (toScan.length) {
+      console.log(`[Cron] T-60 tick — ${toScan.length} fixture(s) entering pre-match scan`);
       Promise.all(toScan.map(w => runPreMatchScan(w))).catch(e => console.error('[Cron:PreMatch]', e.message));
-      // Remove scanned from watching list
       saveWatching(locked);
     }
   });
@@ -708,12 +743,14 @@ app.get('/api/odds/events', async (req, res) => {
 
 // GET full state (bets, watching, bankroll)
 app.get('/api/state', (_req, res) => {
+  const scanMeta = readJSON('scan-meta.json') || {};
   res.json({
-    bankroll:  getBankroll(),
-    bets:      getBets(),
-    watching:  getWatching(),
-    settings:  getSettings(),
-    leagues:   LEAGUES,
+    bankroll:    getBankroll(),
+    bets:        getBets(),
+    watching:    getWatching(),
+    settings:    getSettings(),
+    leagues:     LEAGUES,
+    phase2Ready: !!scanMeta.phase2Ready,
   });
 });
 

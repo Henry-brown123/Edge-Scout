@@ -350,6 +350,15 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     <div class="wc-badge" id="wc-bankroll-badge">£1,000.00</div>
   </div>
 
+  <!-- Phase 2 readiness banner (hidden until 50+ resolved calibration entries) -->
+  <div id="phase2-banner" style="display:none;align-items:center;gap:12px;background:rgba(76,201,240,.1);border:1px solid rgba(76,201,240,.3);border-radius:8px;padding:12px 16px;margin-bottom:16px">
+    <span style="font-size:1.4rem">🚀</span>
+    <div>
+      <div style="font-weight:700;color:var(--cyan);font-size:.9rem">Model ready for Phase 2</div>
+      <div style="font-size:.78rem;color:var(--text2)">50+ resolved calibration entries reached. Return to your Edge Scout Claude conversation to begin Phase 2 weight optimisation.</div>
+    </div>
+  </div>
+
   <!-- Scan controls -->
   <div class="card">
     <div class="card-header">
@@ -647,6 +656,10 @@ async function loadState() {
     renderScout();
     updateBankrollBadge();
 
+    // Phase 2 readiness banner
+    const p2banner = document.getElementById('phase2-banner');
+    if (p2banner) p2banner.style.display = s.phase2Ready ? 'flex' : 'none';
+
     const el = document.getElementById('scan-status');
     if (el && meta?.completedAt) {
       const d     = new Date(meta.completedAt);
@@ -694,6 +707,17 @@ function scoreBadge(n) {
 }
 
 function scoreClass(n) { return n >= 80 ? 'c-green' : n >= 60 ? 'c-cyan' : n >= 40 ? 'c-amber' : ''; }
+
+function contextBadge(ctx) {
+  if (!ctx) return '';
+  const map = {
+    international:  ['INTL',     'badge-cyan'],
+    club_european:  ['EUROPEAN', 'badge-amber'],
+    club_domestic:  ['DOMESTIC', 'badge-muted'],
+  };
+  const [label, cls] = map[ctx] || ['?', 'badge-muted'];
+  return `<span class="badge ${cls}" title="Model context: ${ctx}">${label}</span>`;
+}
 
 // ─── RENDER SCOUT ─────────────────────────────────────────────────────────────
 function renderScout() {
@@ -794,7 +818,8 @@ function watchingCard(w) {
       </div>
       <div class="fixture-right">
         <span class="stage-tag tag-watching">WATCHING</span>
-        ${w.lowConfidence ? '<span class="badge badge-red" title="Model diverges >25pp from bookmaker — will not auto-lock">LOW CONF</span>' : ''}
+        ${contextBadge(w.context)}
+        ${w.lowConfidence ? '<span class="badge badge-red" title="Model diverges from bookmaker beyond data-confidence threshold — will not auto-lock">LOW CONF</span>' : ''}
         <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();forcePreMatch('${w.id}')">Lock now</button>
       </div>
     </div>`;
