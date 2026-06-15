@@ -786,18 +786,18 @@ async function runProfileBackfill(onProgress) {
     for (const season of entry.seasons) {
       try {
         const { data } = await apiSports.get('/fixtures', {
-          params: { league: entry.leagueId, season, last: 100 },
+          params: { league: entry.leagueId, season, status: 'FT' },
         });
         apiCalls++;
-        const fixtures = (data?.response || []).filter(f =>
+        const raw      = data?.response || [];
+        const fixtures = raw.filter(f =>
           ['FT', 'AET', 'PEN'].includes(f.fixture?.status?.short)
         );
         fixtures.forEach(f => allFixtures.set(f.fixture?.id, f));
-        const msg = `[Backfill] ${entry.name} ${season}: ${fixtures.length} FT fixtures (total deduped: ${allFixtures.size})`;
+        const msg = `[Backfill] ${entry.name} ${season}: ${fixtures.length}/${raw.length} FT fixtures (total deduped: ${allFixtures.size}) errors:${JSON.stringify(data?.errors||[])}`;
         console.log(msg);
-        results.push({ league: entry.name, season, count: fixtures.length });
+        results.push({ league: entry.name, season, count: fixtures.length, raw: raw.length });
         if (onProgress) onProgress(msg);
-        // Polite pause between API calls to avoid rate-limit bursts
         await new Promise(r => setTimeout(r, 300));
       } catch (e) {
         const msg = `[Backfill] SKIP ${entry.name} ${season}: ${e.message}`;
