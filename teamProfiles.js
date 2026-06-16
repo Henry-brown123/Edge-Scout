@@ -424,11 +424,14 @@ function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dat
   let { home, draw, away } = probs;
   const notes = [];
 
-  // 1. Home advantage multiplier (blend with confidence, dampened by dataConf + intl sparsity)
+  // 1. Home advantage multiplier — dampened by the profile's own homeConfidence, not
+  //    the pipeline dataConf (which is near-zero for teams in their first tournament match
+  //    even though they have qualifying history in the profile).
   if (homeProfile.homeRecord?.played >= thresholds.homeMultiplier) {
     const mult     = homeProfile.homeWinRateMultiplier || 1.0;
-    const blended  = homeProfile.homeConfidence * mult + (1 - homeProfile.homeConfidence);
-    const dampened = 1 + (blended - 1) * Math.min(dataConf * 2, 1) * intlSparsityDamp(homeProfile);
+    const profConf = Math.max(homeProfile.homeConfidence, dataConf); // use whichever is higher
+    const blended  = profConf * mult + (1 - profConf);
+    const dampened = 1 + (blended - 1) * intlSparsityDamp(homeProfile);
     const clamped  = Math.max(0.5, Math.min(2.0, dampened));
     if (Math.abs(clamped - 1) > 0.02) {
       home = home * clamped;
