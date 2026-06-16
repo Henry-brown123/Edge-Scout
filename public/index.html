@@ -1078,7 +1078,7 @@ async function renderFullCalibration() {
   const countsEl = document.getElementById('cal-counts');
   if (countsEl) countsEl.textContent = `${total} scored · ${resolved.length} resolved · ${placed} bets placed`;
 
-  // Score bucket performance
+  // Score bucket performance (from placed/resolved calibration entries)
   const scoreBuckets = { '0–19':{w:0,l:0}, '20–39':{w:0,l:0}, '40–59':{w:0,l:0}, '60–79':{w:0,l:0}, '80+':{w:0,l:0} };
   resolved.forEach(c => {
     const s = c.successScore || 0;
@@ -1108,38 +1108,66 @@ async function renderFullCalibration() {
     }).join('');
   }
 
-  // Probability band accuracy
-  const bands = { '<30%':{w:0,l:0,sum:0}, '30–40%':{w:0,l:0,sum:0}, '40–50%':{w:0,l:0,sum:0}, '50–60%':{w:0,l:0,sum:0}, '60%+':{w:0,l:0,sum:0} };
-  resolved.forEach(c => {
-    const best = c.candidates?.reduce((a, b) => a.successScore > b.successScore ? a : b);
-    const p = best?.modelProb ?? 0;
-    const key = p >= 0.60 ? '60%+' : p >= 0.50 ? '50–60%' : p >= 0.40 ? '40–50%' : p >= 0.30 ? '30–40%' : '<30%';
-    bands[key].sum += p;
-    if (c.topPickCorrect) bands[key].w++; else bands[key].l++;
-  });
-
+  // Probability band accuracy — from ALL 7k+ historical scored fixtures
   const pbEl    = document.getElementById('cal-prob-bands');
   const pbEmpty = document.getElementById('cal-prob-empty');
-  const pbTotal = Object.values(bands).reduce((s, v) => s + v.w + v.l, 0);
-  if (pbTotal === 0) {
-    pbEl.innerHTML = ''; pbEmpty.style.display = 'block';
-  } else {
+
+  let histCal = null;
+  try { histCal = await apiFetch('/api/backfill/historical/calibration'); } catch {}
+
+  if (histCal?.total > 0 && Object.keys(histCal.bands).length > 0) {
     pbEmpty.style.display = 'none';
-    pbEl.innerHTML = Object.entries(bands).map(([k, v]) => {
-      const tot = v.w + v.l;
-      if (!tot) return '';
-      const actual  = Math.round((v.w / tot) * 100);
-      const avgPred = Math.round((v.sum / tot) * 100);
-      const diff    = actual - avgPred;
-      const diffCol = Math.abs(diff) <= 5 ? 'var(--green)' : Math.abs(diff) <= 12 ? 'var(--amber)' : 'var(--red)';
-      return `<div style="display:grid;grid-template-columns:70px 1fr 52px 70px 70px;align-items:center;gap:8px;margin-bottom:8px;font-family:'DM Mono',monospace;font-size:.75rem">
-        <span style="color:var(--text2)">${k}</span>
-        <div class="cal-bar-track"><div class="cal-bar-fill" style="width:${actual}%;background:var(--cyan)"></div></div>
-        <span style="color:var(--cyan)">${actual}%</span>
-        <span style="color:var(--text2)">pred ${avgPred}%</span>
-        <span style="color:${diffCol}">${diff >= 0 ? '+' : ''}${diff}pp</span>
-      </div>`;
-    }).join('');
+    const bandOrder = ['<40%', '40–50%', '50–60%', '60–70%', '70%+'];
+    pbEl.innerHTML = `<div style="font-size:.7rem;color:var(--text2);font-family:'DM Mono',monospace;margin-bottom:10px">
+        Source: ${histCal.total.toLocaleString()} historical fixtures · top-pick actual vs predicted win rate
+      </div>` +
+      bandOrder.filter(k => histCal.bands[k]).map(k => {
+        const v       = histCal.bands[k];
+        const actual  = Math.round(v.actual * 100);
+        const avgPred = Math.round(v.avgPred * 100);
+        const diff    = actual - avgPred;
+        const diffCol = Math.abs(diff) <= 5 ? 'var(--green)' : Math.abs(diff) <= 12 ? 'var(--amber)' : 'var(--red)';
+        const barCol  = actual >= avgPred ? 'var(--cyan)' : 'var(--amber)';
+        return `<div style="display:grid;grid-template-columns:70px 1fr 52px 70px 70px 80px;align-items:center;gap:8px;margin-bottom:8px;font-family:'DM Mono',monospace;font-size:.75rem">
+          <span style="color:var(--text2)">${k}</span>
+          <div class="cal-bar-track"><div class="cal-bar-fill" style="width:${actual}%;background:${barCol}"></div></div>
+          <span style="color:${barCol}">${actual}%</span>
+          <span style="color:var(--text2)">pred ${avgPred}%</span>
+          <span style="color:${diffCol}">${diff >= 0 ? '+' : ''}${diff}pp</span>
+          <span style="color:var(--muted);font-size:.68rem">${v.total.toLocaleString()} fixtures</span>
+        </div>`;
+      }).join('');
+  } else {
+    // Fallback to placed-bets calibration when no historical data
+    const bands = { '<40%':{w:0,l:0,sum:0}, '40–50%':{w:0,l:0,sum:0}, '50–60%':{w:0,l:0,sum:0}, '60–70%':{w:0,l:0,sum:0}, '70%+':{w:0,l:0,sum:0} };
+    resolved.forEach(c => {
+      const best = c.candidates?.reduce((a, b) => a.successScore > b.successScore ? a : b);
+      const p = best?.modelProb ?? 0;
+      const key = p >= 0.70 ? '70%+' : p >= 0.60 ? '60–70%' : p >= 0.50 ? '50–60%' : p >= 0.40 ? '40–50%' : '<40%';
+      bands[key].sum += p;
+      if (c.topPickCorrect) bands[key].w++; else bands[key].l++;
+    });
+    const pbTotal = Object.values(bands).reduce((s, v) => s + v.w + v.l, 0);
+    if (pbTotal === 0) {
+      pbEl.innerHTML = ''; pbEmpty.style.display = 'block';
+    } else {
+      pbEmpty.style.display = 'none';
+      pbEl.innerHTML = Object.entries(bands).map(([k, v]) => {
+        const tot = v.w + v.l;
+        if (!tot) return '';
+        const actual  = Math.round((v.w / tot) * 100);
+        const avgPred = Math.round((v.sum / tot) * 100);
+        const diff    = actual - avgPred;
+        const diffCol = Math.abs(diff) <= 5 ? 'var(--green)' : Math.abs(diff) <= 12 ? 'var(--amber)' : 'var(--red)';
+        return `<div style="display:grid;grid-template-columns:70px 1fr 52px 70px 70px;align-items:center;gap:8px;margin-bottom:8px;font-family:'DM Mono',monospace;font-size:.75rem">
+          <span style="color:var(--text2)">${k}</span>
+          <div class="cal-bar-track"><div class="cal-bar-fill" style="width:${actual}%;background:var(--cyan)"></div></div>
+          <span style="color:var(--cyan)">${actual}%</span>
+          <span style="color:var(--text2)">pred ${avgPred}%</span>
+          <span style="color:${diffCol}">${diff >= 0 ? '+' : ''}${diff}pp</span>
+        </div>`;
+      }).join('');
+    }
   }
 }
 

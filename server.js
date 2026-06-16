@@ -100,9 +100,9 @@ const LEAGUES = {
 const BACKFILL_CONFIG = [
   // ── International ──────────────────────────────────────────────────────────
   { leagueId: '1',  name: 'FIFA World Cup',              seasons: [2026, 2022] },
-  { leagueId: '32', name: 'WC Qualifying CONMEBOL',      seasons: [2026, 2022] },
-  { leagueId: '33', name: 'WC Qualifying UEFA',          seasons: [2024, 2022] },
-  { leagueId: '34', name: 'WC Qualifying CONCACAF',      seasons: [2026, 2022] },
+  { leagueId: '32', name: 'WC Qualifying UEFA',           seasons: [2024, 2020] },
+  { leagueId: '34', name: 'WC Qualifying CONMEBOL',      seasons: [2026, 2022] },
+  { leagueId: '31', name: 'WC Qualifying CONCACAF',      seasons: [2026, 2022] },
   { leagueId: '5',  name: 'FIFA Nations League',         seasons: [2024, 2022] },
   { leagueId: '10', name: 'International Friendlies',    seasons: [2025, 2024] },
   // ── Club — 3 seasons per top-5 league + CL ────────────────────────────────
@@ -579,6 +579,28 @@ async function runPreMatchScan(watchingEntry) {
       return null;
     }
 
+    // Fix 2: value consistency check — only acts when 10+ comparable resolved entries exist
+    let consistencyWarning = null;
+    try {
+      const cal = getCalibration();
+      const comparable = cal.filter(c => {
+        if (!c.resolved) return false;
+        const candidate = c.candidates?.find(x => x.bet === best.bet);
+        if (!candidate) return false;
+        return Math.abs((candidate.modelProb || 0) - best.modelProb) <= 0.05
+            && Math.abs((c.successScore || 0) - best.successScore) <= 10;
+      });
+      if (comparable.length >= 10) {
+        const wins   = comparable.filter(c => c.topPickCorrect).length;
+        const histWR = wins / comparable.length;
+        const gap    = best.modelProb - histWR;
+        if (gap > 0.10) {
+          consistencyWarning = `Historical win rate in similar bands: ${(histWR * 100).toFixed(0)}% vs model ${(best.modelProb * 100).toFixed(0)}% (${comparable.length} samples)`;
+          console.log(`[PreMatch] CONSISTENCY WARNING: ${consistencyWarning}`);
+        }
+      }
+    } catch {}
+
     // Lock the bet
     const br    = getBankroll();
     const betId = uuidv4();
@@ -605,10 +627,11 @@ async function runPreMatchScan(watchingEntry) {
       result:       null,
       pnl:          null,
       resolvedAt:   null,
-      homeF:            scored.homeF,
-      awayF:            scored.awayF,
-      weather:          scored.weather,
-      weatherCondition: scored.weatherCondition,
+      homeF:               scored.homeF,
+      awayF:               scored.awayF,
+      weather:             scored.weather,
+      weatherCondition:    scored.weatherCondition,
+      consistencyWarning:  consistencyWarning,
     };
 
     const bets = getBets();
@@ -825,8 +848,9 @@ const HISTORICAL_BACKFILL_CONFIG = [
   { leagueId: '78',  name: 'Bundesliga',        seasons: [2024, 2023, 2022] },
   { leagueId: '61',  name: 'Ligue 1',           seasons: [2024, 2023, 2022] },
   { leagueId: '2',   name: 'Champions League',  seasons: [2024, 2023, 2022] },
-  { leagueId: '32',  name: 'WC Qual CONMEBOL',  seasons: [2022, 2021] },
-  { leagueId: '33',  name: 'WC Qual UEFA',      seasons: [2022, 2021] },
+  { leagueId: '32',  name: 'WC Qual UEFA',      seasons: [2024, 2020] },
+  { leagueId: '34',  name: 'WC Qual CONMEBOL',  seasons: [2026, 2022] },
+  { leagueId: '31',  name: 'WC Qual CONCACAF',  seasons: [2026, 2022] },
   { leagueId: '5',   name: 'Nations League',    seasons: [2024, 2022] },
   { leagueId: '10',  name: 'Intl Friendlies',   seasons: [2024, 2023, 2022] },
 ];
@@ -1185,6 +1209,49 @@ app.post('/api/backfill/historical/apply-weights', (req, res) => {
   settings.optimisedWeights = meta.optimisedWeights;
   writeJSON('settings.json', settings);
   res.json({ ok: true, optimisedWeights: meta.optimisedWeights });
+});
+
+// Calibration data from all historical scored records for Fix 3 chart
+app.get('/api/backfill/historical/calibration', (req, res) => {
+  const { computeModelProb, WEIGHTS_BY_CONTEXT } = require('./scoring');
+  const data = readJSON('backfill-historical.json');
+  if (!data?.scoredRecords?.length) return res.json({ bands: {}, total: 0 });
+
+  const settings = getSettings();
+  const bands = {
+    '<40%':  { w: 0, l: 0, sum: 0 },
+    '40–50%':{ w: 0, l: 0, sum: 0 },
+    '50–60%':{ w: 0, l: 0, sum: 0 },
+    '60–70%':{ w: 0, l: 0, sum: 0 },
+    '70%+':  { w: 0, l: 0, sum: 0 },
+  };
+
+  for (const r of data.scoredRecords) {
+    try {
+      const weights = (settings.optimisedWeights?.[r.context]) || WEIGHTS_BY_CONTEXT[r.context] || WEIGHTS_BY_CONTEXT.club_domestic;
+      const probs   = computeModelProb(r.homeFactors, r.awayFactors, weights, r.context);
+      const predP   = probs[r.actualOutcome]; // probability assigned to the outcome that actually happened
+      const topKey  = Object.entries(probs).sort((a,b) => b[1]-a[1])[0][0];
+      const topProb = probs[topKey];
+
+      const key = topProb >= 0.70 ? '70%+' : topProb >= 0.60 ? '60–70%' : topProb >= 0.50 ? '50–60%' : topProb >= 0.40 ? '40–50%' : '<40%';
+      bands[key].sum += topProb;
+      if (topKey === r.actualOutcome) bands[key].w++; else bands[key].l++;
+    } catch {}
+  }
+
+  const result = {};
+  for (const [k, v] of Object.entries(bands)) {
+    const tot = v.w + v.l;
+    if (!tot) continue;
+    result[k] = {
+      actual:  parseFloat((v.w / tot).toFixed(4)),
+      avgPred: parseFloat((v.sum / tot).toFixed(4)),
+      w: v.w, l: v.l, total: tot,
+    };
+  }
+
+  res.json({ bands: result, total: data.scoredRecords.length });
 });
 
 // Trigger pre-match scan for a specific watching entry
