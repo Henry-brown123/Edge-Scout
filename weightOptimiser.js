@@ -49,9 +49,16 @@ function scoreFixtureFromPool(fix, teamIndex) {
   const ag = Number(fix.goals?.away ?? fix.score?.fulltime?.away);
   if (!Number.isFinite(hg) || !Number.isFinite(ag)) return null;
 
-  const fid = fix.fixture?.id;
-  const homeFixtures = (teamIndex[homeId] || []).filter(f => f.fixture?.id !== fid);
-  const awayFixtures = (teamIndex[awayId] || []).filter(f => f.fixture?.id !== fid);
+  const fid     = fix.fixture?.id;
+  const fixDate = fix.fixture?.date; // ISO string — lexicographic comparison is safe for dates
+
+  // Only use fixtures completed BEFORE this match. teamIndex is sorted descending,
+  // so filtering by date < fixDate preserves that order (most recent prior match first).
+  // This eliminates look-ahead bias: a match from Aug 2024 only sees pre-Aug-2024 form.
+  const homeFixtures = (teamIndex[homeId] || [])
+    .filter(f => f.fixture?.id !== fid && f.fixture?.date < fixDate);
+  const awayFixtures = (teamIndex[awayId] || [])
+    .filter(f => f.fixture?.id !== fid && f.fixture?.date < fixDate);
 
   const h2h = homeFixtures.filter(f =>
     f.teams?.home?.id === awayId || f.teams?.away?.id === awayId
@@ -134,45 +141,54 @@ function computeAccuracy(records, weights, context) {
 // Numerical gradient descent minimising recency-weighted cross-entropy loss.
 // Weights are constrained to ≥1 and renormalised to sum to 100 after each step.
 
-function optimiseWeights(records, context, iterations = 120) {
+function optimiseWeights(records, context, iterations = 200) {
   const defaultW = { ...(WEIGHTS_BY_CONTEXT[context] || WEIGHTS_BY_CONTEXT.club_domestic) };
   const keys     = Object.keys(defaultW);
 
-  let w        = { ...defaultW };
+  // Work in float space to avoid integer-rounding traps.
+  // Weights are kept proportional (sum to 100) by normalising after each step.
+  // Only round to integers in the final output.
+  let w        = Object.fromEntries(keys.map(k => [k, Number(defaultW[k])]));
   let bestLoss = computeLogLoss(records, w, context);
   let bestW    = { ...w };
 
-  const lr  = 1.2;
-  const eps = 1.0;
+  const lr  = 2.0;
+  const eps = 0.5; // smaller epsilon for finer gradient estimation
 
   for (let iter = 0; iter < iterations; iter++) {
     const grad = {};
     for (const k of keys) {
-      const wp = { ...w, [k]: w[k] + eps };
-      const wm = { ...w, [k]: Math.max(0, w[k] - eps) };
+      const wp = { ...w, [k]: Math.max(0.1, w[k] + eps) };
+      const wm = { ...w, [k]: Math.max(0.1, w[k] - eps) };
       grad[k]  = (computeLogLoss(records, wp, context) - computeLogLoss(records, wm, context)) / (2 * eps);
     }
 
+    // Gradient step in float space
     const nw = {};
-    for (const k of keys) nw[k] = Math.max(1, w[k] - lr * grad[k]);
+    for (const k of keys) nw[k] = Math.max(0.1, w[k] - lr * grad[k]);
 
-    // Renormalise to sum to 100
+    // Renormalise to maintain proportional sum (not forced to 100 until output)
     const sum = Object.values(nw).reduce((a, b) => a + b, 0);
-    for (const k of keys) nw[k] = Math.round((nw[k] / sum) * 100);
-    const drift = 100 - Object.values(nw).reduce((a, b) => a + b, 0);
-    nw[keys[0]] += drift;
+    const scale = 100 / sum;
+    for (const k of keys) nw[k] *= scale;
 
     const newLoss = computeLogLoss(records, nw, context);
     if (newLoss < bestLoss) { bestLoss = newLoss; bestW = { ...nw }; }
     w = nw;
   }
 
-  const accuracy         = computeAccuracy(records, bestW, context);
+  // Round to integers for output, fix rounding drift
+  const rounded = {};
+  for (const k of keys) rounded[k] = Math.max(1, Math.round(bestW[k]));
+  const drift = 100 - Object.values(rounded).reduce((a, b) => a + b, 0);
+  rounded[keys[0]] += drift;
+
+  const accuracy         = computeAccuracy(records, rounded, context);
   const baselineAccuracy = computeAccuracy(records, defaultW, context);
 
   return {
     context,
-    weights:           bestW,
+    weights:           rounded,
     defaultWeights:    defaultW,
     finalLoss:         parseFloat(bestLoss.toFixed(4)),
     accuracy,
