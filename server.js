@@ -878,17 +878,32 @@ async function runHistoricalBackfill(onProgress) {
         console.log(msg); onProgress?.(msg);
       } else {
         try {
-          const { data } = await apiSports.get('/fixtures', {
-            params: { league: entry.leagueId, season: entry.season, status: 'FT' },
-          });
-          const raw      = data?.response || [];
-          const fixtures = raw.filter(f => ['FT','AET','PEN'].includes(f.fixture?.status?.short));
-          fixtures.forEach(f => { fixtureMap.set(f.fixture.id, stripFixture(f)); });
-          newCount += fixtures.length;
-          existing.fetchedLeagues[key] = { count: fixtures.length, fetchedAt: new Date().toISOString() };
-          const msg = `[Fetch] ${entry.name} ${entry.season}: ${fixtures.length} fixtures (pool: ${fixtureMap.size})`;
-          console.log(msg); onProgress?.(msg);
-          await new Promise(r => setTimeout(r, 350));
+          // Paginate through all pages — API-Sports returns max 100 fixtures per page.
+          let page = 1;
+          let totalPages = 1;
+          let seasonCount = 0;
+          let pagesFetched = 0;
+
+          do {
+            const { data } = await apiSports.get('/fixtures', {
+              params: { league: entry.leagueId, season: entry.season, status: 'FT', page },
+            });
+            totalPages = data?.paging?.total ?? 1;
+            const raw  = data?.response || [];
+            const ok   = raw.filter(f => ['FT','AET','PEN'].includes(f.fixture?.status?.short));
+            ok.forEach(f => { fixtureMap.set(f.fixture.id, stripFixture(f)); });
+            seasonCount  += ok.length;
+            pagesFetched += 1;
+            const msg = `[Fetch] ${entry.name} ${entry.season} p${page}/${totalPages}: ${ok.length} fixtures`;
+            console.log(msg); onProgress?.(msg);
+            page++;
+            if (page <= totalPages) await new Promise(r => setTimeout(r, 300));
+          } while (page <= totalPages);
+
+          newCount += seasonCount;
+          existing.fetchedLeagues[key] = { count: seasonCount, pages: pagesFetched, fetchedAt: new Date().toISOString() };
+          const doneMsg = `[Done] ${entry.name} ${entry.season}: ${seasonCount} fixtures across ${pagesFetched} page(s) (pool: ${fixtureMap.size})`;
+          console.log(doneMsg); onProgress?.(doneMsg);
         } catch (e) {
           const msg = `[Error] ${entry.name} ${entry.season}: ${e.message}`;
           console.warn(msg); onProgress?.(msg);
