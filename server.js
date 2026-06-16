@@ -22,6 +22,12 @@ const {
   applyTeamProfileModifiers,
 } = require('./teamProfiles');
 
+const {
+  buildTeamIndex,
+  scoreFixtureFromPool,
+  optimiseWeights: optimiseModelWeights,
+} = require('./weightOptimiser');
+
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
@@ -248,7 +254,8 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   const leagueId = fix.league?.id || settings._leagueId;
   const context  = classifyFixture(leagueId);
   const cfg      = CONTEXT_CONFIG[context];
-  const weights  = WEIGHTS_BY_CONTEXT[context];
+  // Use optimised weights if available in settings, otherwise fall back to hand-tuned defaults
+  const weights  = settings.optimisedWeights?.[context] || WEIGHTS_BY_CONTEXT[context];
 
   // H2H + injuries in parallel
   const [h2hRes, injRes] = await Promise.allSettled([
@@ -804,6 +811,198 @@ async function runProfileBackfill(onProgress) {
   return summary;
 }
 
+// ─── HISTORICAL BACKFILL ──────────────────────────────────────────────────────
+// Fetches 3 seasons of completed fixtures per league, computes factor scores
+// for every match using the pool as each team's form history, runs gradient
+// descent weight optimisation (per context) every OPTIMISE_EVERY records.
+// Persists raw fixtures + scored records to data/backfill-historical.json so
+// re-runs only fetch missing league/season pairs.
+
+const HISTORICAL_BACKFILL_CONFIG = [
+  { leagueId: '39',  name: 'Premier League',   seasons: [2024, 2023, 2022] },
+  { leagueId: '140', name: 'La Liga',           seasons: [2024, 2023, 2022] },
+  { leagueId: '135', name: 'Serie A',           seasons: [2024, 2023, 2022] },
+  { leagueId: '78',  name: 'Bundesliga',        seasons: [2024, 2023, 2022] },
+  { leagueId: '61',  name: 'Ligue 1',           seasons: [2024, 2023, 2022] },
+  { leagueId: '2',   name: 'Champions League',  seasons: [2024, 2023, 2022] },
+  { leagueId: '32',  name: 'WC Qual CONMEBOL',  seasons: [2022, 2021] },
+  { leagueId: '33',  name: 'WC Qual UEFA',      seasons: [2022, 2021] },
+  { leagueId: '5',   name: 'Nations League',    seasons: [2024, 2022] },
+  { leagueId: '10',  name: 'Intl Friendlies',   seasons: [2024, 2023, 2022] },
+];
+
+const OPTIMISE_EVERY = 500; // run weight optimisation after every N scored records
+
+// Strip a raw API-Sports fixture down to fields needed for profiling + factor scoring.
+function stripFixture(f) {
+  return {
+    fixture: { id: f.fixture.id, date: f.fixture.date, status: { short: f.fixture.status.short } },
+    teams:   { home: { id: f.teams.home.id, name: f.teams.home.name },
+               away: { id: f.teams.away.id, name: f.teams.away.name } },
+    goals:   { home: f.goals.home, away: f.goals.away },
+    score:   { fulltime: f.score?.fulltime || {} },
+    league:  { id: f.league.id, name: f.league.name, season: f.league.season },
+  };
+}
+
+let _historicalBackfillRunning = false;
+let _historicalBackfillStatus  = null; // in-progress status for polling
+
+async function runHistoricalBackfill(onProgress) {
+  if (_historicalBackfillRunning) return { error: 'already_running' };
+  _historicalBackfillRunning = true;
+  _historicalBackfillStatus  = { phase: 'fetching', leaguesDone: 0, totalLeagues: 0, fixturesFetched: 0, scored: 0, startedAt: new Date().toISOString() };
+
+  try {
+    // Load persisted data
+    const existing = readJSON('backfill-historical.json') || {
+      fetchedLeagues: {},
+      fixtures:       [],
+      scoredRecords:  [],
+      optimisedWeights: null,
+      accuracy:         null,
+    };
+
+    const fixtureMap = new Map(existing.fixtures.map(f => [f.fixture?.id, f]));
+    const scoredMap  = new Map(existing.scoredRecords.map(r => [r.fixtureId, r]));
+    let   newCount   = 0;
+
+    const allCombos = HISTORICAL_BACKFILL_CONFIG.flatMap(e => e.seasons.map(s => ({ ...e, season: s })));
+    _historicalBackfillStatus.totalLeagues = allCombos.length;
+
+    // ── Phase 1: Fetch missing league/season pairs ─────────────────────────
+    for (const entry of allCombos) {
+      const key = `${entry.leagueId}_${entry.season}`;
+      if (existing.fetchedLeagues[key]) {
+        const msg = `[Skip] ${entry.name} ${entry.season} (${existing.fetchedLeagues[key].count} cached)`;
+        console.log(msg); onProgress?.(msg);
+      } else {
+        try {
+          const { data } = await apiSports.get('/fixtures', {
+            params: { league: entry.leagueId, season: entry.season, status: 'FT' },
+          });
+          const raw      = data?.response || [];
+          const fixtures = raw.filter(f => ['FT','AET','PEN'].includes(f.fixture?.status?.short));
+          fixtures.forEach(f => { fixtureMap.set(f.fixture.id, stripFixture(f)); });
+          newCount += fixtures.length;
+          existing.fetchedLeagues[key] = { count: fixtures.length, fetchedAt: new Date().toISOString() };
+          const msg = `[Fetch] ${entry.name} ${entry.season}: ${fixtures.length} fixtures (pool: ${fixtureMap.size})`;
+          console.log(msg); onProgress?.(msg);
+          await new Promise(r => setTimeout(r, 350));
+        } catch (e) {
+          const msg = `[Error] ${entry.name} ${entry.season}: ${e.message}`;
+          console.warn(msg); onProgress?.(msg);
+        }
+      }
+      _historicalBackfillStatus.leaguesDone++;
+      _historicalBackfillStatus.fixturesFetched = fixtureMap.size;
+    }
+
+    // ── Phase 2: Score new fixtures ────────────────────────────────────────
+    if (newCount > 0) {
+      _historicalBackfillStatus.phase = 'scoring';
+      const allFixtures = [...fixtureMap.values()];
+      const teamIndex   = buildTeamIndex(allFixtures);
+      let   scored      = 0;
+      let   nextOptimiseAt = Math.ceil(scoredMap.size / OPTIMISE_EVERY) * OPTIMISE_EVERY;
+      if (nextOptimiseAt <= scoredMap.size) nextOptimiseAt += OPTIMISE_EVERY;
+
+      for (const fix of allFixtures) {
+        if (scoredMap.has(fix.fixture?.id)) continue;
+        const record = scoreFixtureFromPool(fix, teamIndex);
+        if (record) {
+          scoredMap.set(record.fixtureId, record);
+          scored++;
+        }
+
+        // Incremental optimisation checkpoint
+        if (scoredMap.size >= nextOptimiseAt && scoredMap.size >= OPTIMISE_EVERY) {
+          const msg = `[Optimise] Checkpoint at ${scoredMap.size} records — running optimisation…`;
+          console.log(msg); onProgress?.(msg);
+          _runOptimisation([...scoredMap.values()], existing, onProgress);
+          nextOptimiseAt += OPTIMISE_EVERY;
+        }
+      }
+
+      const msg = `[Score] ${scored} fixtures scored (total: ${scoredMap.size})`;
+      console.log(msg); onProgress?.(msg);
+      _historicalBackfillStatus.scored = scoredMap.size;
+    }
+
+    // ── Phase 3: Final weight optimisation ─────────────────────────────────
+    const allRecords = [...scoredMap.values()];
+    if (allRecords.length >= OPTIMISE_EVERY) {
+      _historicalBackfillStatus.phase = 'optimising';
+      const msg = `[Optimise] Final pass on ${allRecords.length} records…`;
+      console.log(msg); onProgress?.(msg);
+      _runOptimisation(allRecords, existing, onProgress);
+    }
+
+    // ── Phase 4: Persist ───────────────────────────────────────────────────
+    existing.fixtures      = [...fixtureMap.values()];
+    existing.scoredRecords = allRecords;
+    existing.totalFixtures = fixtureMap.size;
+    existing.scoredCount   = scoredMap.size;
+    existing.lastUpdated   = new Date().toISOString();
+    // Compact JSON for large file
+    fs.writeFileSync(path.join(DATA_DIR, 'backfill-historical.json'), JSON.stringify(existing));
+
+    // ── Phase 5: Rebuild team profiles ─────────────────────────────────────
+    const profileCount = updateTeamProfiles(existing.fixtures);
+    const msg2 = `[Profiles] Rebuilt ${profileCount} profiles from ${existing.totalFixtures} fixtures`;
+    console.log(msg2); onProgress?.(msg2);
+
+    const summary = {
+      totalFixtures:    fixtureMap.size,
+      scoredCount:      scoredMap.size,
+      newFixtures:      newCount,
+      profilesBuilt:    profileCount,
+      optimisedWeights: existing.optimisedWeights,
+      accuracy:         existing.accuracy,
+      completedAt:      new Date().toISOString(),
+    };
+    writeJSON('backfill-historical-meta.json', summary);
+    _historicalBackfillStatus = { ...summary, phase: 'complete' };
+    console.log(`[HistoricalBackfill] Done — ${summary.totalFixtures} fixtures, ${summary.scoredCount} scored, ${profileCount} profiles`);
+    return summary;
+
+  } catch (e) {
+    console.error('[HistoricalBackfill] Fatal:', e.message);
+    _historicalBackfillStatus = { phase: 'error', error: e.message };
+    writeJSON('backfill-historical-meta.json', { error: e.message, completedAt: new Date().toISOString() });
+    throw e;
+  } finally {
+    _historicalBackfillRunning = false;
+  }
+}
+
+// Run weight optimisation for all three contexts and mutate `existing` in place.
+function _runOptimisation(records, existing, onProgress) {
+  const optimisedWeights = existing.optimisedWeights || {};
+  const accuracy         = existing.accuracy         || {};
+
+  for (const ctx of ['club_domestic', 'club_european', 'international']) {
+    const ctxRecords = records.filter(r => r.context === ctx);
+    if (ctxRecords.length < 50) continue;
+    const result = optimiseModelWeights(records, ctx);
+    optimisedWeights[ctx] = result.weights;
+    accuracy[ctx] = {
+      accuracy:         result.accuracy,
+      baseline:         result.baselineAccuracy,
+      loss:             result.finalLoss,
+      improvement:      result.improvement,
+      count:            result.recordCount,
+      optimisedAt:      new Date().toISOString(),
+    };
+    const msg = `[Optimise] ${ctx}: ${result.recordCount} records · accuracy ${(result.accuracy*100).toFixed(1)}% (baseline ${(result.baselineAccuracy*100).toFixed(1)}%, Δ${result.improvement >= 0 ? '+' : ''}${result.improvement}pp)`;
+    console.log(msg); onProgress?.(msg);
+  }
+
+  existing.optimisedWeights = optimisedWeights;
+  existing.accuracy         = accuracy;
+  existing.lastOptimisedAt  = new Date().toISOString();
+}
+
 // ─── EXPRESS APP ─────────────────────────────────────────────────────────────
 
 app.use(cors());
@@ -955,6 +1154,34 @@ app.get('/api/backfill/status', (_req, res) => {
   if (!meta) return res.json({ status: 'not_run' });
   if (meta.error) return res.json({ status: 'error', ...meta });
   res.json({ status: 'complete', ...meta });
+});
+
+// Historical backfill — full 3-season fetch, factor scoring, weight optimisation
+app.post('/api/backfill/historical', async (req, res) => {
+  if (_historicalBackfillRunning) {
+    return res.json({ started: false, message: 'Already running', status: _historicalBackfillStatus });
+  }
+  res.json({ started: true, message: 'Historical backfill running — poll /api/backfill/historical/status' });
+  runHistoricalBackfill().catch(e => console.error('[HistoricalBackfill]', e.message));
+});
+
+app.get('/api/backfill/historical/status', (_req, res) => {
+  if (_historicalBackfillRunning) {
+    return res.json({ running: true, ..._historicalBackfillStatus });
+  }
+  const meta = readJSON('backfill-historical-meta.json');
+  if (!meta) return res.json({ status: 'not_run' });
+  res.json({ running: false, status: meta.error ? 'error' : 'complete', ...meta });
+});
+
+// Apply optimised weights to settings (so live scoring uses them)
+app.post('/api/backfill/historical/apply-weights', (req, res) => {
+  const meta = readJSON('backfill-historical-meta.json');
+  if (!meta?.optimisedWeights) return res.status(400).json({ error: 'No optimised weights available — run historical backfill first' });
+  const settings = getSettings();
+  settings.optimisedWeights = meta.optimisedWeights;
+  writeJSON('settings.json', settings);
+  res.json({ ok: true, optimisedWeights: meta.optimisedWeights });
 });
 
 // Trigger pre-match scan for a specific watching entry

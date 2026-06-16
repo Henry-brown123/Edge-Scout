@@ -312,6 +312,18 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
 .empty { text-align: center; padding: 48px; color: var(--muted); }
 .empty-icon { font-size: 40px; margin-bottom: 12px; opacity: .4; }
 .empty p { font-size: 13px; }
+
+/* ── Backfill status ── */
+.bf-row { display: flex; justify-content: space-between; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+.bf-row:last-child { border-bottom: none; }
+.bf-ctx { font-family: var(--font-head); font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; min-width: 110px; }
+.bf-val { color: var(--text); font-family: var(--font-data); }
+.bf-delta { font-family: var(--font-head); font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 4px; }
+.bf-delta.pos { background: rgba(0,255,135,.15); color: var(--green); }
+.bf-delta.neg { background: rgba(255,77,109,.15);  color: var(--red); }
+.bf-delta.neu { background: var(--surface3); color: var(--muted); }
+.bf-progress { height: 4px; background: var(--surface3); border-radius: 2px; margin: 6px 0 10px; overflow: hidden; }
+.bf-progress-fill { height: 100%; background: var(--cyan); border-radius: 2px; transition: width .4s; }
 </style>
 </head>
 <body>
@@ -536,6 +548,68 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
 
 <!-- ═══════════════════════════ SETTINGS ═══════════════════════════ -->
 <div class="tab-panel" id="tab-settings">
+
+  <!-- Historical Backfill & Weight Optimisation (full width) -->
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header">
+      <span class="card-title">Historical Backfill &amp; Weight Optimisation</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span id="bf-status-pill" style="font-size:10px;font-family:var(--font-head);font-weight:700;padding:3px 10px;border-radius:20px;background:var(--surface3);color:var(--muted)">NOT RUN</span>
+        <button class="btn btn-cyan btn-sm" id="bf-run-btn" onclick="runHistoricalBackfill()">Run Backfill</button>
+        <button class="btn btn-ghost btn-sm" onclick="loadBackfillStatus()">Refresh</button>
+      </div>
+    </div>
+    <p style="font-size:11px;color:var(--muted);margin-bottom:14px">
+      Fetches 3 seasons per league (PL, La Liga, Serie A, Bundesliga, Ligue 1, CL + WC qualifying &amp; Nations League). Re-runs skip already-fetched data. After 500+ fixtures, gradient descent finds optimal weights per context.
+    </p>
+
+    <!-- Progress bar (visible during run) -->
+    <div id="bf-progress-wrap" style="display:none">
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:4px">
+        <span id="bf-phase-label">Fetching…</span>
+        <span id="bf-league-counter">0 / 0</span>
+      </div>
+      <div class="bf-progress"><div class="bf-progress-fill" id="bf-progress-fill" style="width:0%"></div></div>
+    </div>
+
+    <!-- Stats row -->
+    <div class="grid-4" style="margin-bottom:16px" id="bf-stats-row">
+      <div class="stat-tile">
+        <div class="stat-label">Fixtures Fetched</div>
+        <div class="stat-value c-cyan" id="bf-total-fixtures">—</div>
+        <div class="stat-sub" id="bf-league-count">0 league/seasons</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-label">Scored Records</div>
+        <div class="stat-value c-amber" id="bf-scored">—</div>
+        <div class="stat-sub">factor-scored matches</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-label">Profiles Built</div>
+        <div class="stat-value c-green" id="bf-profiles">—</div>
+        <div class="stat-sub">from backfill data</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-label">Last Run</div>
+        <div class="stat-value" id="bf-last-run" style="font-size:13px">—</div>
+        <div class="stat-sub" id="bf-last-run-sub"></div>
+      </div>
+    </div>
+
+    <!-- Accuracy table (after optimisation) -->
+    <div id="bf-accuracy-section" style="display:none">
+      <div style="font-family:var(--font-data);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px">Weight Optimisation Results</div>
+      <div id="bf-accuracy-table"></div>
+      <div style="display:flex;justify-content:flex-end;margin-top:12px;gap:8px">
+        <span id="bf-weights-applied-note" style="font-size:11px;color:var(--muted);align-self:center;display:none">Optimised weights applied to live scoring</span>
+        <button class="btn btn-ghost btn-sm" id="bf-apply-btn" onclick="applyOptimisedWeights()" style="display:none">Apply Optimised Weights</button>
+      </div>
+    </div>
+
+    <!-- Log (scrollable, shows during run) -->
+    <div id="bf-log" class="log-box" style="display:none;margin-top:12px;max-height:140px"></div>
+  </div>
+
   <div class="grid-2">
     <div class="card">
       <div class="card-header">
@@ -625,7 +699,7 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.classList.add('active');
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
     if (btn.dataset.tab === 'performance') renderPerformance();
-    if (btn.dataset.tab === 'settings')    renderSettings();
+    if (btn.dataset.tab === 'settings')  { renderSettings(); loadBackfillStatus(); }
   });
 });
 
@@ -1470,6 +1544,151 @@ function closeDrawer() {
   document.getElementById('drawer-overlay').classList.remove('open');
   document.getElementById('drawer').classList.remove('open');
 }
+
+// ─── HISTORICAL BACKFILL ──────────────────────────────────────────────────────
+
+let _bfPollInterval = null;
+
+function setBfPill(text, color) {
+  const p = document.getElementById('bf-status-pill');
+  p.textContent = text;
+  p.style.background = `rgba(${color},0.15)`;
+  p.style.color = `rgb(${color})`;
+}
+
+function renderBackfillStatus(d) {
+  if (!d || d.status === 'not_run') {
+    setBfPill('NOT RUN', '107,114,128');
+    document.getElementById('bf-accuracy-section').style.display = 'none';
+    document.getElementById('bf-apply-btn').style.display = 'none';
+    document.getElementById('bf-progress-wrap').style.display = 'none';
+    return;
+  }
+
+  if (d.running) {
+    setBfPill('RUNNING', '76,201,240');
+    document.getElementById('bf-run-btn').disabled = true;
+    document.getElementById('bf-progress-wrap').style.display = 'block';
+    const total = d.totalLeagues || 0;
+    const done  = d.leaguesDone  || 0;
+    const pct   = total > 0 ? Math.round((done / total) * 100) : 0;
+    document.getElementById('bf-progress-fill').style.width = pct + '%';
+    document.getElementById('bf-league-counter').textContent = `${done} / ${total} league/seasons`;
+    const phases = { fetching: 'Fetching fixtures…', scoring: 'Scoring records…', optimising: 'Optimising weights…' };
+    document.getElementById('bf-phase-label').textContent = phases[d.phase] || d.phase || 'Running…';
+    // Update stats live
+    if (d.fixturesFetched) document.getElementById('bf-total-fixtures').textContent = d.fixturesFetched.toLocaleString();
+    if (d.scored)          document.getElementById('bf-scored').textContent = d.scored.toLocaleString();
+    return;
+  }
+
+  // Complete or error
+  document.getElementById('bf-run-btn').disabled = false;
+  document.getElementById('bf-progress-wrap').style.display = 'none';
+
+  if (d.status === 'error') {
+    setBfPill('ERROR', '255,77,109');
+    return;
+  }
+
+  setBfPill('COMPLETE', '0,255,135');
+
+  if (d.totalFixtures) document.getElementById('bf-total-fixtures').textContent = d.totalFixtures.toLocaleString();
+  if (d.scoredCount)   document.getElementById('bf-scored').textContent = d.scoredCount.toLocaleString();
+  if (d.profilesBuilt != null) document.getElementById('bf-profiles').textContent = d.profilesBuilt.toLocaleString();
+  if (d.completedAt) {
+    const dt = new Date(d.completedAt);
+    document.getElementById('bf-last-run').textContent = dt.toLocaleDateString('en-GB', { day:'numeric', month:'short' });
+    document.getElementById('bf-last-run-sub').textContent = dt.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' });
+  }
+
+  // Fetch count from fetchedLeagues
+  const fetchedLeagues = d.fetchedLeagues || {};
+  const leagueCount = Object.keys(fetchedLeagues).length;
+  document.getElementById('bf-league-count').textContent = `${leagueCount} league/seasons`;
+
+  // Accuracy table
+  if (d.accuracy && Object.keys(d.accuracy).length > 0) {
+    document.getElementById('bf-accuracy-section').style.display = 'block';
+    document.getElementById('bf-apply-btn').style.display = 'inline-block';
+
+    const ctxLabels = { club_domestic: 'Club Domestic', club_european: 'Club European', international: 'International' };
+    const rows = Object.entries(d.accuracy).map(([ctx, a]) => {
+      const imp = a.improvement ?? 0;
+      const deltaClass = imp > 0.5 ? 'pos' : imp < -0.5 ? 'neg' : 'neu';
+      const deltaSign  = imp > 0 ? '+' : '';
+      return `<div class="bf-row">
+        <span class="bf-ctx">${ctxLabels[ctx] || ctx}</span>
+        <span class="bf-val">${a.count?.toLocaleString()} records</span>
+        <span class="bf-val">Baseline <strong>${a.baseline != null ? (a.baseline*100).toFixed(1) : '—'}%</strong></span>
+        <span class="bf-val">Optimised <strong style="color:var(--green)">${a.accuracy != null ? (a.accuracy*100).toFixed(1) : '—'}%</strong></span>
+        <span class="bf-delta ${deltaClass}">${deltaSign}${imp.toFixed(1)}pp</span>
+      </div>`;
+    });
+    document.getElementById('bf-accuracy-table').innerHTML = rows.join('');
+
+    // Check if already applied
+    const settings = STATE.settings || {};
+    if (settings.optimisedWeights) {
+      document.getElementById('bf-apply-btn').style.display = 'none';
+      document.getElementById('bf-weights-applied-note').style.display = 'inline';
+    }
+  }
+}
+
+async function loadBackfillStatus() {
+  try {
+    const d = await apiFetch('/api/backfill/historical/status');
+    renderBackfillStatus(d);
+  } catch {}
+}
+
+async function runHistoricalBackfill() {
+  document.getElementById('bf-run-btn').disabled = true;
+  document.getElementById('bf-log').style.display = 'block';
+  document.getElementById('bf-log').innerHTML = '<span class="log-info">Starting historical backfill…</span><br>';
+  setBfPill('RUNNING', '76,201,240');
+  document.getElementById('bf-progress-wrap').style.display = 'block';
+  document.getElementById('bf-progress-fill').style.width = '0%';
+
+  try {
+    await apiFetch('/api/backfill/historical', { method: 'POST' });
+  } catch (e) {
+    toast('Backfill start failed: ' + e.message, 'error');
+    document.getElementById('bf-run-btn').disabled = false;
+    return;
+  }
+
+  // Poll until complete
+  _bfPollInterval = setInterval(async () => {
+    try {
+      const d = await apiFetch('/api/backfill/historical/status');
+      renderBackfillStatus(d);
+      if (!d.running) {
+        clearInterval(_bfPollInterval);
+        _bfPollInterval = null;
+        // Reload state so settings.optimisedWeights is fresh
+        await loadState();
+        loadBackfillStatus();
+        toast(d.status === 'complete' ? `Backfill complete — ${d.totalFixtures?.toLocaleString()} fixtures, ${d.scoredCount?.toLocaleString()} scored` : 'Backfill error', d.status === 'complete' ? 'success' : 'error');
+      }
+    } catch {}
+  }, 4000);
+}
+
+async function applyOptimisedWeights() {
+  try {
+    await apiFetch('/api/backfill/historical/apply-weights', { method: 'POST' });
+    toast('Optimised weights applied — live scoring now uses gradient-descent weights', 'success');
+    document.getElementById('bf-apply-btn').style.display = 'none';
+    document.getElementById('bf-weights-applied-note').style.display = 'inline';
+    await loadState();
+    renderSettings();
+  } catch (e) {
+    toast('Failed to apply weights: ' + e.message, 'error');
+  }
+}
+
 </script>
 
 <div class="drawer-overlay" id="drawer-overlay" onclick="closeDrawer()"></div>
