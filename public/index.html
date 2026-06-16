@@ -501,6 +501,15 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     </div>
   </div>
 
+  <!-- Calibration Health indicator -->
+  <div class="card" style="margin-bottom:16px" id="cal-health-card">
+    <div class="card-header">
+      <span class="card-title">Calibration Health</span>
+      <div id="cal-health-light" style="display:flex;align-items:center;gap:8px;font-family:'DM Mono',monospace;font-size:.75rem"></div>
+    </div>
+    <div id="cal-health-body" style="font-family:'DM Mono',monospace;font-size:.75rem;color:var(--text2)">Loading…</div>
+  </div>
+
   <!-- Full model calibration across all scored fixtures -->
   <div class="card" style="margin-bottom:16px">
     <div class="card-header">
@@ -692,6 +701,11 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
           <div class="field">
             <label>Success Score threshold</label>
             <input type="number" id="threshold-settings" value="40" min="20" max="90" style="width:70px">
+          </div>
+          <div class="field">
+            <label>Calibration factor <span style="color:var(--muted);font-weight:400">(edge &amp; score only)</span></label>
+            <input type="number" id="cal-factor-input" value="1.08" step="0.01" min="1.00" max="1.30" style="width:80px">
+            <div style="font-size:10px;color:var(--muted);margin-top:3px">Scales model probs before edge calc. 1.00 = off. Adjust as calibration data accumulates.</div>
           </div>
           <button class="btn btn-cyan btn-sm" onclick="saveSettings()" style="align-self:flex-start">Save Settings</button>
         </div>
@@ -1046,6 +1060,7 @@ function renderPerformance() {
 
   // Full model calibration across all scored fixtures
   renderFullCalibration();
+  renderCalibrationHealth();
 
   // Bet log
   const tbody = document.getElementById('bets-body');
@@ -1104,6 +1119,78 @@ function renderCalibration(resolved) {
         <div style="font-size:10px;color:var(--muted);min-width:50px">${v.w}W ${v.l}L</div>
       </div>`;
   }).join('');
+}
+
+async function renderCalibrationHealth() {
+  const lightEl = document.getElementById('cal-health-light');
+  const bodyEl  = document.getElementById('cal-health-body');
+  if (!lightEl || !bodyEl) return;
+
+  let data = null;
+  try { data = await apiFetch('/api/backfill/historical/calibration'); } catch {}
+
+  if (!data?.total) {
+    lightEl.innerHTML = '';
+    bodyEl.textContent = 'No historical calibration data — run Historical Backfill first.';
+    return;
+  }
+
+  const bands = data.bands;
+  const entries = Object.entries(bands);
+  if (!entries.length) { bodyEl.textContent = 'No bands computed yet.'; return; }
+
+  // Compute per-band bias (pp) and determine traffic light
+  const biases = entries.map(([k, v]) => ({
+    band: k,
+    bias: Math.round((v.actual - v.avgPred) * 100),
+    actual: Math.round(v.actual * 100),
+    pred: Math.round(v.avgPred * 100),
+    n: v.total,
+  }));
+
+  const maxAbsBias  = Math.max(...biases.map(b => Math.abs(b.bias)));
+  const signs       = biases.map(b => Math.sign(b.bias)).filter(s => s !== 0);
+  const diverging   = signs.length > 0 && signs.some(s => s !== signs[0]);
+  const avgBias     = Math.round(biases.reduce((s, b) => s + b.bias, 0) / biases.length);
+
+  let status, color, dot;
+  if (maxAbsBias > 10 || diverging) {
+    status = 'RED — bias >10pp or bands diverging'; color = 'var(--red)';   dot = '#ef4444';
+  } else if (maxAbsBias > 5) {
+    status = 'AMBER — bias 5–10pp in at least one band'; color = 'var(--amber)'; dot = '#f59e0b';
+  } else {
+    status = 'GREEN — all bands within ±5pp'; color = 'var(--green)'; dot = '#10b981';
+  }
+
+  lightEl.innerHTML = `
+    <span style="width:10px;height:10px;border-radius:50%;background:${dot};display:inline-block;box-shadow:0 0 6px ${dot}"></span>
+    <span style="color:${color}">${status}</span>`;
+
+  // Suggested calibration factor: 1 + avgBias/100, clamped to [1.00, 1.30]
+  const suggested = Math.min(1.30, Math.max(1.00, 1 + avgBias / 100)).toFixed(2);
+  const current   = (STATE.settings?.calibrationFactor ?? 1.08).toFixed(2);
+
+  bodyEl.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:12px">
+      ${biases.map(b => {
+        const bc = Math.abs(b.bias) <= 5 ? 'var(--green)' : Math.abs(b.bias) <= 10 ? 'var(--amber)' : 'var(--red)';
+        return `<div style="background:var(--surface2);border-radius:6px;padding:8px;text-align:center">
+          <div style="color:var(--text2);font-size:.65rem;margin-bottom:4px">${b.band}</div>
+          <div style="color:var(--cyan);font-size:1rem;font-weight:700">${b.actual}%</div>
+          <div style="color:var(--text2);font-size:.65rem">pred ${b.pred}%</div>
+          <div style="color:${bc};font-size:.72rem;margin-top:2px">${b.bias >= 0 ? '+' : ''}${b.bias}pp</div>
+          <div style="color:var(--muted);font-size:.6rem">${b.n.toLocaleString()} fixtures</div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div style="display:flex;align-items:center;gap:16px;font-size:.72rem">
+      <span>Avg bias: <strong style="color:${avgBias > 0 ? 'var(--amber)' : 'var(--green)'}">${avgBias >= 0 ? '+' : ''}${avgBias}pp</strong></span>
+      <span>Suggested factor: <strong style="color:var(--cyan)">${suggested}</strong></span>
+      <span>Active factor: <strong style="color:var(--text1)">${current}</strong></span>
+      ${suggested !== current
+        ? `<button class="btn btn-ghost btn-sm" style="padding:2px 10px;font-size:.68rem" onclick="applyCalFactor(${suggested})">Apply ${suggested}</button>`
+        : `<span style="color:var(--green)">✓ factor matches data</span>`}
+    </div>`;
 }
 
 async function renderFullCalibration() {
@@ -1296,6 +1383,7 @@ function renderSettings() {
   if (s.h2hWindow   != null) document.getElementById('h2h-window-input').value      = s.h2hWindow;
   if (s.kellyFraction!=null) document.getElementById('kelly-frac-input').value      = s.kellyFraction;
   if (s.successThreshold!=null) document.getElementById('threshold-settings').value = s.successThreshold;
+  if (s.calibrationFactor!=null) document.getElementById('cal-factor-input').value  = s.calibrationFactor;
 }
 
 function updateWeightTotal() {
@@ -1340,7 +1428,8 @@ async function saveSettings() {
     formWindow:       parseInt(document.getElementById('form-window-input').value),
     h2hWindow:        parseInt(document.getElementById('h2h-window-input').value),
     kellyFraction:    parseFloat(document.getElementById('kelly-frac-input').value),
-    successThreshold: parseInt(document.getElementById('threshold-settings').value),
+    successThreshold:  parseInt(document.getElementById('threshold-settings').value),
+    calibrationFactor: parseFloat(document.getElementById('cal-factor-input').value),
   };
   await apiFetch('/api/settings', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -1754,6 +1843,16 @@ async function applyOptimisedWeights() {
   } catch (e) {
     toast('Failed to apply weights: ' + e.message, 'error');
   }
+}
+
+async function applyCalFactor(factor) {
+  const patch = { calibrationFactor: parseFloat(factor) };
+  await apiFetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
+  Object.assign(STATE.settings, patch);
+  const el = document.getElementById('cal-factor-input');
+  if (el) el.value = factor;
+  toast(`Calibration factor set to ${factor} — edge and success scores updated`, 'success');
+  renderCalibrationHealth();
 }
 
 async function loadOddsHistoryStats() {

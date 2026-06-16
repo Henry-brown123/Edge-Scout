@@ -46,12 +46,16 @@ function writeJSON(file, data) {
   fs.writeFileSync(path.join(DATA_DIR, file), JSON.stringify(data, null, 2));
 }
 
+const SETTINGS_DEFAULTS = {
+  weights: { form:18, homeAdv:12, xg:16, h2h:10, defense:14, momentum:10, injuries:8, standings:12 },
+  decay: 0.05, formWindow: 6, h2hWindow: 5, kellyFraction: 0.5,
+  activeLeagues: ['1','39','140','78','135','61','2'], successThreshold: 40,
+  calibrationFactor: 1.08,
+};
+
 function getSettings() {
-  return readJSON('settings.json') || {
-    weights: { form:18, homeAdv:12, xg:16, h2h:10, defense:14, momentum:10, injuries:8, standings:12 },
-    decay: 0.05, formWindow: 6, h2hWindow: 5, kellyFraction: 0.5,
-    activeLeagues: ['1','39','140','78','135','61','2'], successThreshold: 40,
-  };
+  const stored = readJSON('settings.json');
+  return stored ? { ...SETTINGS_DEFAULTS, ...stored } : { ...SETTINGS_DEFAULTS };
 }
 
 function getBankroll() {
@@ -448,20 +452,25 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     { label: 'Away Win', prob: probs.away },
   ];
 
+  // Calibration correction: model consistently underpredicts top-pick outcomes by ~5pp.
+  // Scale probs by calFactor for edge/EV/kelly/score calculations only.
+  // Raw probs are preserved in modelProb for display.
+  const calFactor = settings.calibrationFactor ?? 1.08;
+
   const results = [];
   for (const c of candidates) {
-    const odds       = bookOdds[lookup[c.label]] || (1 / c.prob * 1.06);
-    const impliedP   = 1 / odds;
-    const edge       = c.prob - impliedP;
-    // Pass dataConf so scores are suppressed when data is thin (Fix 2)
-    const rawScore   = computeSuccessScore(c.prob, odds, homeFormCount, dataConf);
+    const odds      = bookOdds[lookup[c.label]] || (1 / c.prob * 1.06);
+    const impliedP  = 1 / odds;
+    const calProb   = Math.min(0.97, c.prob * calFactor); // corrected prob for value calculations
+    const edge      = calProb - impliedP;
+    const rawScore  = computeSuccessScore(calProb, odds, homeFormCount, dataConf);
     const finalScore = Math.round(rawScore * wxMod);
-    const k          = kelly(c.prob, odds, settings.kellyFraction, getBankroll().current);
+    const k         = kelly(calProb, odds, settings.kellyFraction, getBankroll().current);
 
     results.push({
       bet: c.label, modelProb: c.prob, bookOdds: odds, impliedProb: impliedP,
       edge, successScore: finalScore, kelly: k,
-      ev: c.prob * (odds - 1) - (1 - c.prob),
+      ev: calProb * (odds - 1) - (1 - calProb),
     });
   }
 
