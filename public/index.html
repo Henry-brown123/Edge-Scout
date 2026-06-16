@@ -610,6 +610,45 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     <div id="bf-log" class="log-box" style="display:none;margin-top:12px;max-height:140px"></div>
   </div>
 
+  <!-- Odds History Database -->
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header">
+      <span class="card-title">Odds History Database</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span id="oh-status-pill" style="font-size:10px;font-family:var(--font-head);font-weight:700;padding:3px 10px;border-radius:20px;background:var(--surface3);color:var(--muted)">LOADING</span>
+        <button class="btn btn-cyan btn-sm" onclick="runOddsBackfill()">Backfill 90 Days</button>
+        <button class="btn btn-ghost btn-sm" onclick="loadOddsHistoryStats()">Refresh</button>
+      </div>
+    </div>
+    <p style="font-size:11px;color:var(--muted);margin-bottom:14px">
+      Every morning scan and pre-match lock persists a full odds snapshot. Backfill pulls 90 days of weekly snapshots from The Odds API history endpoint.
+      Every World Cup &amp; league fixture from today forward is automatically collected.
+    </p>
+    <div class="grid-4" style="margin-bottom:14px">
+      <div class="stat-tile">
+        <div class="stat-label">Fixtures Stored</div>
+        <div class="stat-value c-cyan" id="oh-total">—</div>
+        <div class="stat-sub" id="oh-date-range">—</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-label">Resolved</div>
+        <div class="stat-value c-green" id="oh-resolved">—</div>
+        <div class="stat-sub">with outcome known</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-label">Morning Scans</div>
+        <div class="stat-value c-amber" id="oh-morning">—</div>
+        <div class="stat-sub">odds snapshots</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-label">Pre-Match Locks</div>
+        <div class="stat-value" id="oh-prematch">—</div>
+        <div class="stat-sub">at decision time</div>
+      </div>
+    </div>
+    <div id="oh-by-league" style="font-family:'DM Mono',monospace;font-size:.72rem;color:var(--text2)"></div>
+  </div>
+
   <div class="grid-2">
     <div class="card">
       <div class="card-header">
@@ -699,7 +738,7 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.classList.add('active');
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
     if (btn.dataset.tab === 'performance') renderPerformance();
-    if (btn.dataset.tab === 'settings')  { renderSettings(); loadBackfillStatus(); }
+    if (btn.dataset.tab === 'settings')  { renderSettings(); loadBackfillStatus(); loadOddsHistoryStats(); }
   });
 });
 
@@ -1714,6 +1753,52 @@ async function applyOptimisedWeights() {
     renderSettings();
   } catch (e) {
     toast('Failed to apply weights: ' + e.message, 'error');
+  }
+}
+
+async function loadOddsHistoryStats() {
+  const pill = document.getElementById('oh-status-pill');
+  try {
+    const d = await apiFetch('/api/odds-history/stats');
+    document.getElementById('oh-total').textContent    = d.total.toLocaleString();
+    document.getElementById('oh-resolved').textContent = d.resolved.toLocaleString();
+    document.getElementById('oh-morning').textContent  = (d.byStage?.morning || 0).toLocaleString();
+    document.getElementById('oh-prematch').textContent = (d.byStage?.pre_match_lock || 0).toLocaleString();
+
+    if (d.dateRange) {
+      const fmt = iso => iso ? new Date(iso).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' }) : '—';
+      document.getElementById('oh-date-range').textContent = `${fmt(d.dateRange.earliest)} – ${fmt(d.dateRange.latest)}`;
+    } else {
+      document.getElementById('oh-date-range').textContent = 'No data yet';
+    }
+
+    const lgEl = document.getElementById('oh-by-league');
+    const leagues = Object.entries(d.byLeague || {}).sort((a,b) => b[1].total - a[1].total);
+    lgEl.innerHTML = leagues.map(([lg, v]) =>
+      `<span style="display:inline-block;margin-right:18px;margin-bottom:4px"><span style="color:var(--text1)">${lg}</span> <span style="color:var(--cyan)">${v.total}</span>${v.resolved ? `<span style="color:var(--muted)"> / ${v.resolved} resolved</span>` : ''}</span>`
+    ).join('');
+
+    pill.textContent = d.total > 0 ? `${d.total.toLocaleString()} RECORDS` : 'EMPTY';
+    pill.style.background = d.total > 0 ? 'rgba(0,229,160,.15)' : 'var(--surface3)';
+    pill.style.color = d.total > 0 ? 'var(--green)' : 'var(--muted)';
+  } catch {
+    pill.textContent = 'ERROR';
+    pill.style.color = 'var(--red)';
+  }
+}
+
+async function runOddsBackfill() {
+  const pill = document.getElementById('oh-status-pill');
+  pill.textContent = 'RUNNING…';
+  pill.style.background = 'rgba(0,212,255,.15)';
+  pill.style.color = 'var(--cyan)';
+  try {
+    await apiFetch('/api/backfill/odds-history', { method: 'POST' });
+    toast('Odds history backfill started — runs in background (~5–10 min). Refresh stats when done.', 'info');
+  } catch (e) {
+    toast('Failed to start odds backfill: ' + e.message, 'error');
+    pill.textContent = 'ERROR';
+    pill.style.color = 'var(--red)';
   }
 }
 

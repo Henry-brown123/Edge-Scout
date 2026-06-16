@@ -58,14 +58,16 @@ function getBankroll() {
   return readJSON('bankroll.json') || { initial: 1000, current: 1000, lastUpdated: null };
 }
 
-function getBets()        { return readJSON('bets.json')        || []; }
-function getWatching()    { return readJSON('watching.json')    || []; }
-function getCalibration() { return readJSON('calibration.json') || []; }
+function getBets()         { return readJSON('bets.json')         || []; }
+function getWatching()     { return readJSON('watching.json')     || []; }
+function getCalibration()  { return readJSON('calibration.json')  || []; }
+function getOddsHistory()  { return readJSON('odds-history.json') || []; }
 
 function saveBets(bets)         { writeJSON('bets.json', bets); }
 function saveWatching(list)     { writeJSON('watching.json', list); }
 function saveBankroll(br)       { writeJSON('bankroll.json', { ...br, lastUpdated: new Date().toISOString() }); }
 function saveCalibration(list)  { writeJSON('calibration.json', list); }
+function saveOddsHistory(list)  { writeJSON('odds-history.json', list); }
 
 // ─── API CLIENTS ─────────────────────────────────────────────────────────────
 
@@ -224,13 +226,18 @@ async function fetchWeather(lat, lon, kickoffISO) {
 
 // ─── ODDS FETCHING ───────────────────────────────────────────────────────────
 
+// Raw events cache keyed by sport — populated by fetchOddsForLeague, consumed by persistOddsSnapshot
+const _oddsRawCache = {};
+
 async function fetchOddsForLeague(sport) {
   try {
     const { data } = await oddsApi.get(`/sports/${sport}/odds`, {
       params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal' },
     });
+    const events = data || [];
+    _oddsRawCache[sport] = events;
     const map = {};
-    (data || []).forEach(ev => {
+    events.forEach(ev => {
       const bm = ev.bookmakers?.[0];
       const mkt = bm?.markets?.[0];
       if (mkt) {
@@ -240,6 +247,86 @@ async function fetchOddsForLeague(sport) {
     });
     return map;
   } catch { return {}; }
+}
+
+// Build the per-bookmaker market array for a fixture from cached raw events
+function _buildBookmakerMarket(sport, homeName, awayName) {
+  const events = _oddsRawCache[sport] || [];
+  const ev = events.find(e => e.home_team === homeName && e.away_team === awayName);
+  if (!ev) return [];
+  return (ev.bookmakers || []).slice(0, 8).map(bm => {
+    const mkt = bm.markets?.find(m => m.key === 'h2h');
+    if (!mkt) return null;
+    const get = name => mkt.outcomes?.find(o => o.name === name)?.price ?? null;
+    return { name: bm.title, homeOdds: get(homeName), drawOdds: get('Draw'), awayOdds: get(awayName) };
+  }).filter(Boolean);
+}
+
+function persistOddsSnapshot(fix, scored, sport, stage, leagueId, leagueName, settings) {
+  try {
+    const threshold = settings?.successThreshold || 40;
+    const results   = scored.results || [];
+    const best      = results.reduce((a, b) => a.successScore > b.successScore ? a : b, results[0]);
+    const get       = label => results.find(r => r.bet === label);
+    const hw = get('Home Win'), dr = get('Draw'), aw = get('Away Win');
+
+    const market = _buildBookmakerMarket(sport, scored.homeName, scored.awayName);
+    const bestBook = market[0] || { homeOdds: hw?.bookOdds ?? null, drawOdds: dr?.bookOdds ?? null, awayOdds: aw?.bookOdds ?? null };
+
+    const record = {
+      fixtureId:       fix.fixture.id,
+      home:            scored.homeName,
+      away:            scored.awayName,
+      league:          leagueName,
+      leagueId:        Number(leagueId),
+      kickoff:         fix.fixture?.date,
+      collectedAt:     new Date().toISOString(),
+      stage,
+      bookmakers: {
+        best:   { homeOdds: bestBook.homeOdds, drawOdds: bestBook.drawOdds, awayOdds: bestBook.awayOdds },
+        market,
+      },
+      impliedProbs: {
+        home: bestBook.homeOdds ? parseFloat((1 / bestBook.homeOdds).toFixed(4)) : null,
+        draw: bestBook.drawOdds ? parseFloat((1 / bestBook.drawOdds).toFixed(4)) : null,
+        away: bestBook.awayOdds ? parseFloat((1 / bestBook.awayOdds).toFixed(4)) : null,
+      },
+      modelProbs: {
+        home: hw?.modelProb ?? null,
+        draw: dr?.modelProb ?? null,
+        away: aw?.modelProb ?? null,
+      },
+      edge: {
+        home: hw?.edge ?? null,
+        draw: dr?.edge ?? null,
+        away: aw?.edge ?? null,
+      },
+      successScore:    best?.successScore ?? null,
+      recommendedBet:  (best?.successScore ?? 0) >= threshold ? best?.bet : null,
+      locked:          stage === 'pre_match_lock',
+      result:          null,
+      outcome:         null,
+      recommendedBetWon: null,
+      resolvedAt:      null,
+    };
+
+    const history = getOddsHistory();
+    const idx = history.findIndex(r => r.fixtureId === fix.fixture.id);
+    if (idx >= 0) {
+      // Preserve resolved fields; update everything else
+      history[idx] = { ...history[idx], ...record,
+        result:            history[idx].result,
+        outcome:           history[idx].outcome,
+        recommendedBetWon: history[idx].recommendedBetWon,
+        resolvedAt:        history[idx].resolvedAt,
+      };
+    } else {
+      history.push(record);
+    }
+    saveOddsHistory(history);
+  } catch (e) {
+    console.error('[OddsHistory] persist error:', e.message);
+  }
 }
 
 // ─── CORE FIXTURE SCORER ─────────────────────────────────────────────────────
@@ -447,6 +534,7 @@ async function runMorningScan(leagueIds) {
         try {
           const scored = await scoreOneFixture(fix, formFixtures, standings, {}, oddsMap, settings);
           const best   = scored.results.reduce((a, b) => a.successScore > b.successScore ? a : b);
+          persistOddsSnapshot(fix, scored, meta.sport || 'soccer_epl', 'morning', leagueId, meta.name, settings);
           const calEntry = {
             id:           uuidv4(),
             fixtureId:    fix.fixture.id,
@@ -562,6 +650,7 @@ async function runPreMatchScan(watchingEntry) {
 
     const scored = await scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap, settings);
     const best   = scored.results.reduce((a, b) => a.successScore > b.successScore ? a : b);
+    persistOddsSnapshot(fix, scored, meta.sport || 'soccer_epl', 'pre_match_lock', leagueId, meta.name, settings);
 
     if (best.successScore < threshold) {
       console.log(`[PreMatch] ${scored.homeName} vs ${scored.awayName} DROPPED (score ${best.successScore} < ${threshold})`);
@@ -721,6 +810,23 @@ async function checkAndResolve() {
         calChanged = true;
         console.log(`[Calibration] ${ce.fixture} → actual: ${actualOutcome}, predicted: ${ce.projectedBet} (${ce.topPickCorrect ? '✓' : '✗'})`);
       }
+
+      // Update odds history record with result
+      try {
+        const outcomeKey = hg > ag ? 'home' : hg < ag ? 'away' : 'draw';
+        const history = getOddsHistory();
+        const hi = history.findIndex(r => r.fixtureId === fid);
+        if (hi >= 0) {
+          const rec = history[hi];
+          rec.result     = { homeGoals: hg, awayGoals: ag };
+          rec.outcome    = outcomeKey;
+          rec.recommendedBetWon = rec.recommendedBet
+            ? (rec.recommendedBet === (outcomeKey === 'home' ? 'Home Win' : outcomeKey === 'away' ? 'Away Win' : 'Draw'))
+            : null;
+          rec.resolvedAt = resolvedAt;
+          saveOddsHistory(history);
+        }
+      } catch {}
 
       // Incremental team profile update
       const homeId   = fix.teams?.home?.id;
@@ -1209,6 +1315,130 @@ app.post('/api/backfill/historical/apply-weights', (req, res) => {
   settings.optimisedWeights = meta.optimisedWeights;
   writeJSON('settings.json', settings);
   res.json({ ok: true, optimisedWeights: meta.optimisedWeights });
+});
+
+// ─── ODDS HISTORY ENDPOINTS ──────────────────────────────────────────────────
+
+// Stats summary for Settings tab display
+app.get('/api/odds-history/stats', (req, res) => {
+  const history = getOddsHistory();
+  if (!history.length) return res.json({ total: 0, resolved: 0, dateRange: null, byLeague: {}, byStage: {} });
+
+  const dates = history.map(r => r.kickoff || r.collectedAt).filter(Boolean).sort();
+  const byLeague = {};
+  const byStage  = {};
+  let resolved   = 0;
+
+  for (const r of history) {
+    const lg = r.league || 'Unknown';
+    if (!byLeague[lg]) byLeague[lg] = { total: 0, resolved: 0 };
+    byLeague[lg].total++;
+    if (r.result) { byLeague[lg].resolved++; resolved++; }
+
+    const s = r.stage || 'unknown';
+    byStage[s] = (byStage[s] || 0) + 1;
+  }
+
+  res.json({
+    total:     history.length,
+    resolved,
+    dateRange: { earliest: dates[0], latest: dates[dates.length - 1] },
+    byLeague,
+    byStage,
+  });
+});
+
+// One-time historical backfill from The Odds API history endpoint
+// Hits weekly snapshots over the last 90 days for each active league sport
+let _oddsBackfillRunning = false;
+app.post('/api/backfill/odds-history', async (req, res) => {
+  if (_oddsBackfillRunning) return res.json({ error: 'already_running' });
+  _oddsBackfillRunning = true;
+  res.json({ started: true, message: 'Odds history backfill running in background' });
+
+  const sports = [
+    { sport: 'soccer_epl',                    league: 'Premier League',    leagueId: 39  },
+    { sport: 'soccer_spain_la_liga',           league: 'La Liga',           leagueId: 140 },
+    { sport: 'soccer_italy_serie_a',           league: 'Serie A',           leagueId: 135 },
+    { sport: 'soccer_germany_bundesliga',      league: 'Bundesliga',        leagueId: 78  },
+    { sport: 'soccer_france_ligue_one',        league: 'Ligue 1',           leagueId: 61  },
+    { sport: 'soccer_uefa_champs_league',      league: 'Champions League',  leagueId: 2   },
+    { sport: 'soccer_fifa_world_cup',          league: 'FIFA World Cup',    leagueId: 1   },
+  ];
+
+  // Weekly snapshots: Sunday at 12:00 UTC going back 13 weeks (~90 days)
+  const snapshots = [];
+  const now = new Date();
+  for (let w = 1; w <= 13; w++) {
+    const d = new Date(now);
+    d.setUTCDate(d.getUTCDate() - w * 7);
+    d.setUTCHours(12, 0, 0, 0);
+    snapshots.push(d.toISOString());
+  }
+
+  let added = 0;
+  const history = getOddsHistory();
+  const existingIds = new Set(history.map(r => `${r.home}|${r.away}|${r.kickoff?.slice(0,10)}`));
+
+  for (const { sport, league, leagueId } of sports) {
+    for (const dateStr of snapshots) {
+      try {
+        const { data } = await oddsApi.get(`/sports/${sport}/odds-history`, {
+          params: { apiKey: ODDS_API_KEY, regions: 'uk', markets: 'h2h', oddsFormat: 'decimal', date: dateStr },
+        });
+        const events = data?.data || data || [];
+        for (const ev of events) {
+          const kickoff = ev.commence_time;
+          const dedupeKey = `${ev.home_team}|${ev.away_team}|${kickoff?.slice(0,10)}`;
+          if (existingIds.has(dedupeKey)) continue;
+          existingIds.add(dedupeKey);
+
+          const market = (ev.bookmakers || []).slice(0, 8).map(bm => {
+            const mkt = bm.markets?.find(m => m.key === 'h2h');
+            if (!mkt) return null;
+            const get = name => mkt.outcomes?.find(o => o.name === name)?.price ?? null;
+            return { name: bm.title, homeOdds: get(ev.home_team), drawOdds: get('Draw'), awayOdds: get(ev.away_team) };
+          }).filter(Boolean);
+          const best = market[0] || {};
+
+          history.push({
+            fixtureId:    null, // no API-Sports ID available from odds-only backfill
+            home:         ev.home_team,
+            away:         ev.away_team,
+            league,
+            leagueId,
+            kickoff,
+            collectedAt:  dateStr,
+            stage:        'historical_backfill',
+            bookmakers:   { best: { homeOdds: best.homeOdds || null, drawOdds: best.drawOdds || null, awayOdds: best.awayOdds || null }, market },
+            impliedProbs: {
+              home: best.homeOdds ? parseFloat((1/best.homeOdds).toFixed(4)) : null,
+              draw: best.drawOdds ? parseFloat((1/best.drawOdds).toFixed(4)) : null,
+              away: best.awayOdds ? parseFloat((1/best.awayOdds).toFixed(4)) : null,
+            },
+            modelProbs:      null,
+            edge:            null,
+            successScore:    null,
+            recommendedBet:  null,
+            locked:          false,
+            result:          null,
+            outcome:         null,
+            recommendedBetWon: null,
+            resolvedAt:      null,
+          });
+          added++;
+        }
+        await new Promise(r => setTimeout(r, 300)); // gentle rate limit
+      } catch (e) {
+        console.error(`[OddsBackfill] ${sport} @ ${dateStr}: ${e.message}`);
+      }
+    }
+    saveOddsHistory(history);
+    console.log(`[OddsBackfill] ${league}: done (${added} total records so far)`);
+  }
+
+  console.log(`[OddsBackfill] Complete — ${added} new odds records`);
+  _oddsBackfillRunning = false;
 });
 
 // Calibration data from all historical scored records for Fix 3 chart

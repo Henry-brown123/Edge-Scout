@@ -9,4 +9,5 @@ data/team-profiles.json
 data/backfill-historical.json
 data/backfill-historical-meta.json
 data/calibration.json
+data/odds-history.json
 .claude/settings.local.json
