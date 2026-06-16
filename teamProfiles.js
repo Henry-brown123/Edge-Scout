@@ -250,7 +250,14 @@ function buildProfileFromFixtures(teamId, teamName, fixtures) {
     refereePatterns:    {},
     setPieceDependency: null, // Phase 3
     playerDependency:   null, // Phase 3
-    weatherSensitivity: null, // Phase 2
+    // Phase 2: weather sensitivity — builds incrementally as matches resolve.
+    // Cannot be backfilled (no historical weather data); starts at 0 for all teams.
+    weatherSensitivity: {
+      dry:        { wins: 0, matches: 0, winRate: null },
+      rain:       { wins: 0, matches: 0, winRate: null },
+      heavy_rain: { wins: 0, matches: 0, winRate: null },
+      wind:       { wins: 0, matches: 0, winRate: null },
+    },
   };
 }
 
@@ -302,7 +309,7 @@ function updateTeamProfiles(fixtures) {
 // Call after checkAndResolve for individual results.
 // Updates core stats without needing the full fixture history.
 
-function addResultToProfile(teamId, isHome, won, drawn, opponentId, opponentName, goalDiff) {
+function addResultToProfile(teamId, isHome, won, drawn, opponentId, opponentName, goalDiff, weatherCondition) {
   const profiles = readProfiles();
   const p = profiles[String(teamId)];
   if (!p) return; // profile doesn't exist yet — will be built at next morning scan
@@ -350,6 +357,16 @@ function addResultToProfile(teamId, isHome, won, drawn, opponentId, opponentName
   ['homeWinRate','awayWinRate','overallWinRate','homeWinRateMultiplier','homeConfidence','awayConfidence']
     .forEach(k => { if (typeof p[k] === 'number') p[k] = parseFloat(p[k].toFixed(3)); });
 
+  // Update weather sensitivity
+  const wsKey = weatherCondition && ['dry','rain','heavy_rain','wind'].includes(weatherCondition) ? weatherCondition : null;
+  if (wsKey && p.weatherSensitivity) {
+    if (!p.weatherSensitivity[wsKey]) p.weatherSensitivity[wsKey] = { wins: 0, matches: 0, winRate: null };
+    const ws = p.weatherSensitivity[wsKey];
+    ws.matches++;
+    if (won) ws.wins++;
+    ws.winRate = ws.matches > 0 ? parseFloat((ws.wins / ws.matches).toFixed(3)) : null;
+  }
+
   profiles[String(teamId)] = p;
   saveProfiles(profiles);
 }
@@ -358,7 +375,7 @@ function addResultToProfile(teamId, isHome, won, drawn, opponentId, opponentName
 // Apply team-profile-based adjustments to base model probabilities.
 // Returns { probs, applied, notes, teamIntel }.
 
-function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dataConf, homeDaysRest, awayDaysRest) {
+function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dataConf, homeDaysRest, awayDaysRest, weather) {
   const leagueAvg  = LEAGUE_AVG_HOME_WIN_RATE[context] || 0.463;
   const thresholds = CONTEXT_THRESHOLDS[context] || CONTEXT_THRESHOLDS.club_domestic;
 
@@ -454,6 +471,52 @@ function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dat
   if (Math.abs(aAdjFinal) > 0.005) {
     away += aAdjFinal;
     notes.push(`Away congestion ${aAdjFinal >= 0 ? '+' : ''}${(aAdjFinal * 100).toFixed(1)}pp (${awayDaysRest}d rest)`);
+  }
+
+  // 4. Weather sensitivity modifier
+  // Requires 8+ matches per condition AND a >10pp gap vs dry before applying.
+  const weatherCondition = weather?.condition;
+  const WEATHER_MIN = 8;
+  const WEATHER_GAP = 0.10;
+
+  if (weatherCondition && weatherCondition !== 'clear') {
+    const condKey = weatherCondition; // 'rain' | 'heavy_rain' | 'wind'
+
+    function weatherAdj(profile, side) {
+      const ws = profile?.weatherSensitivity;
+      if (!ws) return 0;
+      const dry  = ws.dry;
+      const cond = ws[condKey];
+      if (!dry || !cond) return 0;
+      if (dry.matches < WEATHER_MIN || cond.matches < WEATHER_MIN) return 0;
+      if (dry.winRate == null || cond.winRate == null) return 0;
+      const diff = cond.winRate - dry.winRate;
+      if (Math.abs(diff) < WEATHER_GAP) return 0;
+      return diff * 0.5 * intlSparsityDamp(profile); // dampen
+    }
+
+    const hWeather = weatherAdj(homeProfile, 'home');
+    const aWeather = weatherAdj(awayProfile, 'away');
+
+    if (Math.abs(hWeather) > 0.005) {
+      home += hWeather;
+      const ws = homeProfile.weatherSensitivity;
+      notes.push(`Home weather (${condKey}): ${hWeather >= 0 ? '+' : ''}${(hWeather * 100).toFixed(1)}pp (${(ws[condKey].winRate * 100).toFixed(0)}% vs ${(ws.dry.winRate * 100).toFixed(0)}% dry, ${ws[condKey].matches} matches)`);
+    }
+    if (Math.abs(aWeather) > 0.005) {
+      away += aWeather;
+      const ws = awayProfile.weatherSensitivity;
+      notes.push(`Away weather (${condKey}): ${aWeather >= 0 ? '+' : ''}${(aWeather * 100).toFixed(1)}pp (${(ws[condKey].winRate * 100).toFixed(0)}% vs ${(ws.dry.winRate * 100).toFixed(0)}% dry, ${ws[condKey].matches} matches)`);
+    }
+
+    teamIntel.weatherModifier = {
+      condition: condKey,
+      precipProbability: weather.precipProbability ?? null,
+      windSpeedKmh:      weather.windSpeedKmh ?? null,
+      homeAdj: parseFloat((hWeather * 100).toFixed(1)),
+      awayAdj: parseFloat((aWeather * 100).toFixed(1)),
+      applied: Math.abs(hWeather) > 0.005 || Math.abs(aWeather) > 0.005,
+    };
   }
 
   // Clamp and renormalise

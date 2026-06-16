@@ -162,58 +162,35 @@ function daysSinceLastMatch(formFixtures, teamId, kickoffDate) {
 }
 
 // ─── STADIUM COORDINATES ─────────────────────────────────────────────────────
-// Used for Open-Meteo weather fetches
+// Loaded from data/stadiums.json — add new venues there, not here.
 
-const VENUE_COORDS = {
-  // World Cup 2026
-  'SoFi Stadium':              { lat: 33.9535,  lon: -118.3392 },
-  'MetLife Stadium':           { lat: 40.8135,  lon: -74.0745  },
-  'AT&T Stadium':              { lat: 32.7480,  lon: -97.0929  },
-  'NRG Stadium':               { lat: 29.6847,  lon: -95.4107  },
-  "Levi's Stadium":            { lat: 37.4032,  lon: -121.9698 },
-  'Lincoln Financial Field':   { lat: 39.9008,  lon: -75.1675  },
-  'Arrowhead Stadium':         { lat: 39.0489,  lon: -94.4839  },
-  'BC Place':                  { lat: 49.2767,  lon: -123.1118 },
-  'Estadio Azteca':            { lat: 19.3030,  lon: -99.1503  },
-  'Estadio BBVA':              { lat: 25.6694,  lon: -100.2452 },
-  'Estadio Akron':             { lat: 20.7067,  lon: -103.4601 },
-  'BMO Field':                 { lat: 43.6332,  lon: -79.4187  },
-  'Hard Rock Stadium':         { lat: 25.9580,  lon: -80.2389  },
-  'Gillette Stadium':          { lat: 42.0909,  lon: -71.2643  },
-  // Premier League
-  'Anfield':                   { lat: 53.4308,  lon: -2.9608   },
-  'Old Trafford':              { lat: 53.4631,  lon: -2.2913   },
-  'Stamford Bridge':           { lat: 51.4816,  lon: -0.1910   },
-  'Emirates Stadium':          { lat: 51.5549,  lon: -0.1084   },
-  'Etihad Stadium':            { lat: 53.4831,  lon: -2.2004   },
-  'Tottenham Hotspur Stadium': { lat: 51.6044,  lon: -0.0665   },
-  'Villa Park':                { lat: 52.5090,  lon: -1.8847   },
-  'St. James\' Park':          { lat: 54.9756,  lon: -1.6218   },
-  'Goodison Park':             { lat: 53.4388,  lon: -2.9662   },
-  'Molineux Stadium':          { lat: 52.5902,  lon: -2.1302   },
-};
+const _stadiumsData = readJSON('stadiums.json') || { venues: {}, cities: {} };
+const VENUE_COORDS  = _stadiumsData.venues  || {};
+const CITY_COORDS   = _stadiumsData.cities  || {};
 
 function venueCoords(venueName, city) {
   if (venueName) {
-    const match = Object.keys(VENUE_COORDS).find(k => venueName.includes(k) || k.includes(venueName));
-    if (match) return VENUE_COORDS[match];
+    const vLower = venueName.toLowerCase();
+    const key = Object.keys(VENUE_COORDS).find(k =>
+      vLower.includes(k.toLowerCase()) || k.toLowerCase().includes(vLower)
+    );
+    if (key) return VENUE_COORDS[key];
   }
-  // Fallback city coords (rough)
-  const cityFallback = {
-    'Los Angeles': { lat: 34.0522, lon: -118.2437 }, 'New York': { lat: 40.7128, lon: -74.0060 },
-    'Dallas': { lat: 32.7767, lon: -96.7970 }, 'Houston': { lat: 29.7604, lon: -95.3698 },
-    'San Francisco': { lat: 37.7749, lon: -122.4194 }, 'Philadelphia': { lat: 39.9526, lon: -75.1652 },
-    'Kansas City': { lat: 39.0997, lon: -94.5786 }, 'Vancouver': { lat: 49.2827, lon: -123.1207 },
-    'Mexico City': { lat: 19.4326, lon: -99.1332 }, 'Toronto': { lat: 43.6532, lon: -79.3832 },
-    'Miami': { lat: 25.7617, lon: -80.1918 }, 'Boston': { lat: 42.3601, lon: -71.0589 },
-    'Liverpool': { lat: 53.4084, lon: -2.9916 }, 'Manchester': { lat: 53.4808, lon: -2.2426 },
-    'London': { lat: 51.5074, lon: -0.1278 },
-  };
   if (city) {
-    const found = Object.keys(cityFallback).find(c => city.includes(c));
-    if (found) return cityFallback[found];
+    const cLower = city.toLowerCase();
+    const key = Object.keys(CITY_COORDS).find(k => cLower.includes(k.toLowerCase()));
+    if (key) return CITY_COORDS[key];
   }
   return null;
+}
+
+// ─── WEATHER CLASSIFICATION ───────────────────────────────────────────────────
+
+function classifyWeather(precipProb, windSpeed) {
+  if ((precipProb ?? 0) >= 70) return 'heavy_rain';
+  if ((precipProb ?? 0) >= 40) return 'rain';
+  if ((windSpeed  ?? 0) >= 30) return 'wind';
+  return 'clear';
 }
 
 // ─── WEATHER ─────────────────────────────────────────────────────────────────
@@ -341,25 +318,31 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     };
   }
 
-  // Team profile modifiers
+  // Weather — fetch first so it can inform profile modifiers
   const kickoffDate = fix.fixture?.date;
+  const coords = venueCoords(fix.fixture?.venue?.name, fix.fixture?.venue?.city);
+  let weather = null;
+  if (coords && kickoffDate) {
+    weather = await fetchWeather(coords.lat, coords.lon, kickoffDate);
+  }
+  const weatherCondition    = classifyWeather(weather?.precipProb, weather?.windSpeed);
+  const wxMod               = weatherModifier(weather) / 100; // 0.6–1.0 multiplier
+
+  // Team profile modifiers (includes weather)
   const homeDays = kickoffDate ? daysSinceLastMatch(formFixtures, homeId, kickoffDate) : null;
   const awayDays = kickoffDate ? daysSinceLastMatch(formFixtures, awayId, kickoffDate) : null;
   const teamProfileMap = getTeamProfiles([homeId, awayId]);
   const homeProfile = teamProfileMap[homeId] || null;
   const awayProfile = teamProfileMap[awayId] || null;
+  const weatherForModifier = weather ? {
+    condition:         weatherCondition,
+    precipProbability: weather.precipProb,
+    windSpeedKmh:      weather.windSpeed,
+  } : null;
   const { probs: adjustedProbs, teamIntel } = applyTeamProfileModifiers(
-    probs, homeProfile, awayProfile, context, dataConf, homeDays, awayDays
+    probs, homeProfile, awayProfile, context, dataConf, homeDays, awayDays, weatherForModifier
   );
   probs = adjustedProbs;
-
-  // Weather
-  const coords = venueCoords(fix.fixture?.venue?.name, fix.fixture?.venue?.city);
-  let weather = null;
-  if (coords && fix.fixture?.date) {
-    weather = await fetchWeather(coords.lat, coords.lon, fix.fixture.date);
-  }
-  const wxMod = weatherModifier(weather) / 100; // 0.6–1.0 multiplier
 
   // Build results for H/D/A
   const oddsKey    = `${homeName}|${awayName}`;
@@ -397,7 +380,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   results.forEach(c => { c.lowConfidence = lowConfidence; });
 
   return {
-    fix, homeName, awayName, homeF, awayF, probs, weather, results,
+    fix, homeName, awayName, homeF, awayF, probs, weather, weatherCondition, results,
     kickoff: fix.fixture?.date,
     context, lowConfidence,
     homeDataConf, awayDataConf, dataConf,
@@ -470,10 +453,11 @@ async function runMorningScan(leagueIds) {
             candidates:   scored.results,
             betPlaced:    false,
             betId:        null,
-            resolved:     false,
-            resolvedAt:   null,
-            actualResult: null,
-            topPickCorrect: null,
+            resolved:         false,
+            resolvedAt:       null,
+            actualResult:     null,
+            topPickCorrect:   null,
+            weatherCondition: scored.weatherCondition,
           };
           calNow.push(calEntry);
 
@@ -500,11 +484,12 @@ async function runMorningScan(leagueIds) {
               homeF:           scored.homeF,
               awayF:           scored.awayF,
               calId:           calEntry.id,
-              lowConfidence:   scored.lowConfidence,
-              context:         scored.context,
-              homeDataConf:    scored.homeDataConf,
-              awayDataConf:    scored.awayDataConf,
-              teamIntel:       scored.teamIntel,
+              lowConfidence:    scored.lowConfidence,
+              context:          scored.context,
+              homeDataConf:     scored.homeDataConf,
+              awayDataConf:     scored.awayDataConf,
+              teamIntel:        scored.teamIntel,
+              weatherCondition: scored.weatherCondition,
             });
             console.log(`  [WATCHING] ${scored.homeName} vs ${scored.awayName} — score ${best.successScore}`);
           }
@@ -613,9 +598,10 @@ async function runPreMatchScan(watchingEntry) {
       result:       null,
       pnl:          null,
       resolvedAt:   null,
-      homeF:        scored.homeF,
-      awayF:        scored.awayF,
-      weather:      scored.weather,
+      homeF:            scored.homeF,
+      awayF:            scored.awayF,
+      weather:          scored.weather,
+      weatherCondition: scored.weatherCondition,
     };
 
     const bets = getBets();
@@ -714,8 +700,12 @@ async function checkAndResolve() {
       const homeWon  = actualOutcome === 'Home Win';
       const awayWon  = actualOutcome === 'Away Win';
       const isDraw   = actualOutcome === 'Draw';
-      if (homeId) addResultToProfile(homeId, true,  homeWon, isDraw, awayId, awayName, hg - ag);
-      if (awayId) addResultToProfile(awayId, false, awayWon, isDraw, homeId, homeName, ag - hg);
+      // Pull weatherCondition from the bet or calibration entry if available
+      const resolvedBet = pendingBets.find(b => b.fixtureId === fid);
+      const resolvedCe  = pendingCal.find(c => c.fixtureId === fid);
+      const wxCond = resolvedBet?.weatherCondition || resolvedCe?.weatherCondition || null;
+      if (homeId) addResultToProfile(homeId, true,  homeWon, isDraw, awayId, awayName, hg - ag, wxCond);
+      if (awayId) addResultToProfile(awayId, false, awayWon, isDraw, homeId, homeName, ag - hg, wxCond);
 
     } catch (e) { console.error(`[Resolve] error ${fid}: ${e.message}`); }
   }

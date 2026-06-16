@@ -708,6 +708,17 @@ function scoreBadge(n) {
 
 function scoreClass(n) { return n >= 80 ? 'c-green' : n >= 60 ? 'c-cyan' : n >= 40 ? 'c-amber' : ''; }
 
+function weatherBadge(condition) {
+  if (!condition || condition === 'clear') return '';
+  const map = {
+    rain:       ['🌧 Rain',       'badge-cyan'],
+    heavy_rain: ['⛈ Heavy Rain', 'badge-red'],
+    wind:       ['💨 Windy',      'badge-amber'],
+  };
+  const [label, cls] = map[condition] || ['', 'badge-muted'];
+  return label ? `<span class="badge ${cls}">${label}</span>` : '';
+}
+
 function contextBadge(ctx) {
   if (!ctx) return '';
   const map = {
@@ -819,6 +830,7 @@ function watchingCard(w) {
       <div class="fixture-right">
         <span class="stage-tag tag-watching">WATCHING</span>
         ${contextBadge(w.context)}
+        ${weatherBadge(w.weatherCondition)}
         ${w.lowConfidence ? '<span class="badge badge-red" title="Model diverges from bookmaker beyond data-confidence threshold — will not auto-lock">LOW CONF</span>' : ''}
         <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();forcePreMatch('${w.id}')">Lock now</button>
       </div>
@@ -1430,7 +1442,17 @@ function openDrawer(w) {
 
     <div class="drawer-section">
       <h4>Conditions</h4>
-      <div class="weather-strip"><span>${weatherDesc(w.weather)}</span></div>
+      <div class="weather-strip"><span>${weatherDesc(w.weather)}</span>${weatherBadge(w.weatherCondition)}</div>
+      ${(() => {
+        const wm = w.teamIntel?.weatherModifier;
+        if (!wm || !wm.applied) return '';
+        const lines = [];
+        if (Math.abs(wm.homeAdj) > 0) lines.push(`<span style="color:var(--cyan)">${w.fixture?.split(' vs ')?.[0]}</span> ${wm.homeAdj > 0 ? '+' : ''}${wm.homeAdj}pp`);
+        if (Math.abs(wm.awayAdj) > 0) lines.push(`<span style="color:var(--pink)">${w.fixture?.split(' vs ')?.[1]}</span> ${wm.awayAdj > 0 ? '+' : ''}${wm.awayAdj}pp`);
+        return `<div style="margin-top:6px;font-size:.75rem;color:var(--text2);background:var(--surface2);border-radius:6px;padding:6px 10px">
+          <span style="font-weight:600;color:var(--amber)">⚡ Weather modifier active</span> — ${lines.join(', ')}
+        </div>`;
+      })()}
     </div>
 
     ${teamIntelSection(w)}
