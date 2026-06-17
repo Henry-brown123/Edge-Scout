@@ -131,13 +131,24 @@ function defenseScore(fixtures, teamId, decay = 0.05) {
 }
 
 function momentumScore(fixtures, teamId) {
-  const rel = fixtures
-    .filter(f => (f.teams?.home?.id === teamId || f.teams?.away?.id === teamId) && f.fixture?.status?.short === 'FT')
-    .slice(0, 3);
-  if (!rel.length) return 50;
-  const pts = rel.map(f => outcomePoints(f, f.teams?.home?.id === teamId) ?? 1);
-  const w = pts[0] * 3 + (pts[1] ?? 1) * 2 + (pts[2] ?? 1);
-  return Math.round((w / 12) * 100);
+  const finished = fixtures
+    .filter(f => (f.teams?.home?.id === teamId || f.teams?.away?.id === teamId) && f.fixture?.status?.short === 'FT');
+
+  const recent = finished.slice(0, 3);
+  if (!recent.length) return 50;
+
+  const season = finished.slice(0, 15);
+  if (season.length < 5) return 50;
+
+  const recentPts = recent.map(f => outcomePoints(f, f.teams?.home?.id === teamId) ?? 1);
+  const recentRate = recentPts.reduce((a, b) => a + b, 0) / (recent.length * 3);
+
+  const seasonPts = season.map(f => outcomePoints(f, f.teams?.home?.id === teamId) ?? 1);
+  const seasonRate = seasonPts.reduce((a, b) => a + b, 0) / (season.length * 3);
+
+  // Positive diff = hot streak above season average; negative = slump
+  const diff = recentRate - seasonRate;
+  return Math.max(0, Math.min(100, Math.round(50 + diff * 150)));
 }
 
 function h2hScore(h2hFixtures, homeTeamId, window = 5, decay = 0.05) {
@@ -156,7 +167,7 @@ function standingsScore(standings, teamId) {
 }
 
 function injuryScore(injuries, teamId) {
-  if (!injuries?.length) return 75;
+  if (!injuries?.length) return 50;
   const team = injuries.filter(i => i.team?.id === teamId);
   if (!team.length) return 100;
   const posWeight = (pos = '') => {
@@ -170,24 +181,82 @@ function injuryScore(injuries, teamId) {
   return Math.max(0, Math.round(100 - impact));
 }
 
+// ─── LEAGUE CONFIG ────────────────────────────────────────────────────────────
+// Per-league baseline rates and market efficiency used to tune draw probability
+// and home advantage in computeModelProb, and to weight success scores.
+// PL avgDrawRate (0.243) is the baseline — other leagues are expressed relative.
+
+const LEAGUE_CONFIG = {
+  39:  { name: 'Premier League',   avgHomeWinRate: 0.456, avgDrawRate: 0.243, avgAwayWinRate: 0.301, avgGoalsPerGame: 2.68, marketEfficiency: 0.95, drawBaseWeight: 1.00, homeAdvBaseWeight: 1.00 },
+  140: { name: 'La Liga',          avgHomeWinRate: 0.461, avgDrawRate: 0.271, avgAwayWinRate: 0.268, avgGoalsPerGame: 2.58, marketEfficiency: 0.93, drawBaseWeight: 1.12, homeAdvBaseWeight: 1.02 },
+  135: { name: 'Serie A',          avgHomeWinRate: 0.449, avgDrawRate: 0.272, avgAwayWinRate: 0.279, avgGoalsPerGame: 2.52, marketEfficiency: 0.91, drawBaseWeight: 1.12, homeAdvBaseWeight: 0.98 },
+  78:  { name: 'Bundesliga',       avgHomeWinRate: 0.454, avgDrawRate: 0.234, avgAwayWinRate: 0.312, avgGoalsPerGame: 3.02, marketEfficiency: 0.92, drawBaseWeight: 0.96, homeAdvBaseWeight: 1.00 },
+  61:  { name: 'Ligue 1',          avgHomeWinRate: 0.443, avgDrawRate: 0.258, avgAwayWinRate: 0.299, avgGoalsPerGame: 2.52, marketEfficiency: 0.88, drawBaseWeight: 1.06, homeAdvBaseWeight: 0.96 },
+  2:   { name: 'Champions League', avgHomeWinRate: 0.432, avgDrawRate: 0.245, avgAwayWinRate: 0.323, avgGoalsPerGame: 2.87, marketEfficiency: 0.96, drawBaseWeight: 1.01, homeAdvBaseWeight: 0.94 },
+  1:   { name: 'World Cup',        avgHomeWinRate: 0.390, avgDrawRate: 0.224, avgAwayWinRate: 0.386, avgGoalsPerGame: 2.64, marketEfficiency: 0.94, drawBaseWeight: 0.92, homeAdvBaseWeight: 0.80 },
+};
+
+// ─── XG PROXY ─────────────────────────────────────────────────────────────────
+// Estimates expected goals from shot statistics when official xG isn't available.
+// Produces a value in the 0–5 range consistent with the xgScore() input scale.
+
+function computeXGProxy({ shotsOn = 0, totalShots = 0, possession = 0.5 }) {
+  return parseFloat(((shotsOn * 0.35) + (totalShots * 0.08) + (possession * 0.5)).toFixed(3));
+}
+
+// ─── COMPETITION PHASE ────────────────────────────────────────────────────────
+// Returns the phase of competition for a fixture. Used to tag calibration records
+// and (future) to adjust model behaviour per phase (knockout vs league mid-season).
+
+function classifyCompetitionPhase(fix, leagueId) {
+  const id    = parseInt(leagueId, 10);
+  const round = (fix.league?.round || '').toLowerCase();
+
+  // International tournaments — WC, Euros, Copa America, Nations League, AFCON, etc.
+  const TOURNAMENT = [1, 4, 5, 6, 7, 8, 9, 10, 960];
+  if (TOURNAMENT.includes(id)) {
+    if (round.includes('group')) return 'group_stage';
+    return 'knockout';
+  }
+
+  // European club competitions (CL, EL, Conference)
+  if ([2, 3, 848].includes(id)) {
+    if (round.includes('group') || round.includes('league phase')) return 'group_stage';
+    return 'knockout';
+  }
+
+  // Domestic leagues — classify by gameweek number (assumes 38-game season)
+  const gw = parseInt((round.match(/\d+/) || [])[0] || '0', 10);
+  if (!gw) return 'league_mid';
+  if (gw <= 8)  return 'league_early';
+  if (gw >= 31) return 'league_late';
+  return 'league_mid';
+}
+
 // ─── MODEL PROBABILITY ────────────────────────────────────────────────────────
 
-function computeModelProb(homeFactors, awayFactors, weights, context = 'club_domestic') {
+function computeModelProb(homeFactors, awayFactors, weights, context = 'club_domestic', leagueConfig = null) {
   const cfg   = CONTEXT_CONFIG[context] || CONTEXT_CONFIG.club_domestic;
   const total = Object.values(weights).reduce((a, b) => a + b, 0) || 100;
 
-  const score = f => (
-    f.form * weights.form + f.homeAdv * weights.homeAdv + f.xg * weights.xg +
-    f.h2h * weights.h2h + f.defense * weights.defense + f.momentum * weights.momentum +
-    f.injuries * weights.injuries + f.standings * weights.standings
+  // League-specific home advantage weight (default 1.0 = no adjustment)
+  const homeAdvMult = leagueConfig?.homeAdvBaseWeight ?? 1.0;
+
+  const score = (f, isHome) => (
+    f.form * weights.form +
+    (isHome ? f.homeAdv * weights.homeAdv * homeAdvMult : f.homeAdv * weights.homeAdv) +
+    f.xg * weights.xg + f.h2h * weights.h2h + f.defense * weights.defense +
+    f.momentum * weights.momentum + f.injuries * weights.injuries + f.standings * weights.standings
   ) / total;
 
-  const homeScore = score(homeFactors);
-  const awayAdj   = score(awayFactors) * cfg.awayMult;
+  const homeScore = score(homeFactors, true);
+  const awayAdj   = score(awayFactors, false) * cfg.awayMult;
 
-  // Draw probability shrinks for mismatched teams, varies by context
-  const qualityGap = Math.abs(homeScore - awayAdj);
-  const drawScore  = Math.max(20, 35 - qualityGap * 0.3);
+  // Draw base scaled by league's historical draw rate relative to PL baseline (0.243)
+  const drawRateRatio = (leagueConfig?.avgDrawRate ?? 0.243) / 0.243;
+  const qualityGap    = Math.abs(homeScore - awayAdj);
+  const drawBase      = 35 * drawRateRatio;
+  const drawScore     = Math.max(20 * drawRateRatio, drawBase - qualityGap * 0.3);
 
   const raw = homeScore + awayAdj + drawScore;
   return { home: homeScore / raw, draw: drawScore / raw, away: awayAdj / raw };
@@ -245,10 +314,12 @@ module.exports = {
   classifyFixture,
   WEIGHTS_BY_CONTEXT,
   CONTEXT_CONFIG,
+  LEAGUE_CONFIG,
   DEFAULT_WEIGHTS,
   recencyAvg, outcomePoints,
   formScore, homeAdvScore, xgScore, defenseScore,
   momentumScore, h2hScore, standingsScore, injuryScore,
-  computeModelProb, kelly, computeSuccessScore,
+  computeModelProb, computeXGProxy, classifyCompetitionPhase,
+  kelly, computeSuccessScore,
   historicalWeight, weatherModifier,
 };

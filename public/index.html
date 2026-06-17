@@ -505,7 +505,10 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
   <div class="card" style="margin-bottom:16px" id="cal-health-card">
     <div class="card-header">
       <span class="card-title">Calibration Health</span>
-      <div id="cal-health-light" style="display:flex;align-items:center;gap:8px;font-family:'DM Mono',monospace;font-size:.75rem"></div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <div id="cal-health-light" style="display:flex;align-items:center;gap:8px;font-family:'DM Mono',monospace;font-size:.75rem"></div>
+        <button class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:.65rem" onclick="renderCalibrationHealth()">↻ Refresh</button>
+      </div>
     </div>
     <div id="cal-health-body" style="font-family:'DM Mono',monospace;font-size:.75rem;color:var(--text2)">Loading…</div>
   </div>
@@ -1522,6 +1525,29 @@ function teamIntelSection(w) {
     ? `<div style="margin-top:10px;font-size:.72rem;color:var(--text2);line-height:1.6">${notes.map(n => `• ${n}`).join('<br>')}</div>`
     : '';
 
+  // WOWY key player signals
+  function wowyHtml(profile, label) {
+    const kp = profile?.keyPlayers;
+    if (!kp?.length) return '';
+    const rows = kp.map(p => {
+      const name  = p.name || `Player ${p.playerId}`;
+      const sign  = p.delta >= 0 ? '+' : '';
+      const color = p.delta >= 0 ? 'var(--green)' : 'var(--red)';
+      const flag  = p.confidence === 'low' ? ' <span title="Low sample size" style="color:var(--amber)">⚠</span>' : '';
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px solid var(--border)">
+        <span style="color:var(--text1);font-weight:600">${name}${flag}</span>
+        <span style="color:${color};font-size:.8rem">${sign}${(p.delta*100).toFixed(0)}pp <span style="color:var(--text2);font-size:.68rem">(${(p.withRate*100).toFixed(0)}% with / ${(p.withoutRate*100).toFixed(0)}% without · n=${p.wTotal}/${p.woTotal})</span></span>
+      </div>`;
+    }).join('');
+    return `<div style="margin-top:8px;padding:8px 10px;background:var(--surface2);border-radius:8px">
+      <div style="font-size:.68rem;font-weight:700;color:var(--cyan);text-transform:uppercase;margin-bottom:6px">⚡ ${label} Key Players (WOWY)</div>
+      ${rows}
+    </div>`;
+  }
+
+  const homeWowy = wowyHtml(ti.home, w.fixture?.split(' vs ')?.[0] || 'Home');
+  const awayWowy = wowyHtml(ti.away, w.fixture?.split(' vs ')?.[1] || 'Away');
+
   return `
     <div class="drawer-section">
       <h4>Team Intelligence</h4>
@@ -1537,6 +1563,7 @@ function teamIntelSection(w) {
       </div>
       ${anomalyHtml}
       ${notesHtml}
+      ${homeWowy}${awayWowy}
     </div>`;
 }
 

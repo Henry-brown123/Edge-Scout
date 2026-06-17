@@ -535,6 +535,77 @@ function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dat
   return { probs: adjusted, applied: notes.length > 0, notes, teamIntel };
 }
 
+// ─── WOWY (WITH OR WITHOUT YOU) ───────────────────────────────────────────────
+// Tracks per-player win rates with/without that player in the starting XI.
+// starterIds: player IDs who started the match for this team.
+// nonStarterIds: squad members who did NOT start (bench/squad).
+// result: 'win' | 'draw' | 'loss' from this team's perspective.
+
+// starters / nonStarters accept either plain IDs or {id, name} objects.
+function updateWOWY(teamId, starters, nonStarters, result) {
+  if (!teamId || !starters?.length) return;
+  const profiles = readProfiles();
+  const p = profiles[String(teamId)];
+  if (!p) return;
+
+  if (!p.playerDependency) p.playerDependency = { players: {} };
+  if (!p.playerDependency.players) p.playerDependency.players = {};
+
+  const players = p.playerDependency.players;
+  const normalize = entry => typeof entry === 'object' && entry !== null
+    ? { id: entry.id, name: entry.name || null }
+    : { id: entry, name: null };
+
+  const recordOutcome = (entry, isStarter) => {
+    const { id, name } = normalize(entry);
+    const key = String(id);
+    if (!players[key]) players[key] = { name: null, with: { w: 0, d: 0, l: 0 }, without: { w: 0, d: 0, l: 0 } };
+    // Backfill name if we now have it
+    if (name && !players[key].name) players[key].name = name;
+    const rec = isStarter ? players[key].with : players[key].without;
+    if (result === 'win')       rec.w++;
+    else if (result === 'draw') rec.d++;
+    else                        rec.l++;
+  };
+
+  (starters    || []).forEach(e => recordOutcome(e, true));
+  (nonStarters || []).forEach(e => recordOutcome(e, false));
+
+  profiles[String(teamId)] = p;
+  saveProfiles(profiles);
+}
+
+// Returns a map of playerId → WOWY delta (withWinRate - withoutWinRate).
+// Returns null for players with insufficient data (< 5 with, < 3 without appearances).
+
+// Returns map of playerId → { name, delta, withRate, withoutRate, wTotal, woTotal, confidence }
+// confidence: 'high' (8+ with, 5+ without), 'low' (5+ with, 3+ without), omitted below threshold.
+function getWOWYDeltas(teamId) {
+  const profile = readProfiles()[String(teamId)];
+  const players = profile?.playerDependency?.players;
+  if (!players) return {};
+
+  const result = {};
+  for (const [playerId, rec] of Object.entries(players)) {
+    const w  = rec.with;
+    const wo = rec.without;
+    const wTotal  = w.w + w.d + w.l;
+    const woTotal = wo.w + wo.d + wo.l;
+    if (wTotal < 5 || woTotal < 3) continue; // below minimum — exclude entirely
+    const withRate    = (w.w + 0.5 * w.d) / wTotal;
+    const withoutRate = (wo.w + 0.5 * wo.d) / woTotal;
+    result[playerId] = {
+      name:        rec.name || null,
+      delta:       parseFloat((withRate - withoutRate).toFixed(3)),
+      withRate:    parseFloat(withRate.toFixed(3)),
+      withoutRate: parseFloat(withoutRate.toFixed(3)),
+      wTotal, woTotal,
+      confidence:  (wTotal >= 8 && woTotal >= 5) ? 'high' : 'low',
+    };
+  }
+  return result;
+}
+
 module.exports = {
   readProfiles,
   saveProfiles,
@@ -544,6 +615,8 @@ module.exports = {
   updateTeamProfiles,
   addResultToProfile,
   applyTeamProfileModifiers,
+  updateWOWY,
+  getWOWYDeltas,
   LEAGUE_AVG_HOME_WIN_RATE,
   CONTEXT_THRESHOLDS,
   THRESHOLDS,

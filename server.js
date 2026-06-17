@@ -9,21 +9,27 @@ const cron     = require('node-cron');
 const { v4: uuidv4 } = require('uuid');
 
 const {
-  classifyFixture, WEIGHTS_BY_CONTEXT, CONTEXT_CONFIG,
+  classifyFixture, WEIGHTS_BY_CONTEXT, CONTEXT_CONFIG, LEAGUE_CONFIG,
   formScore, homeAdvScore, xgScore, defenseScore, momentumScore,
   h2hScore, standingsScore, injuryScore,
-  computeModelProb, kelly, computeSuccessScore, weatherModifier,
+  computeModelProb, computeXGProxy, classifyCompetitionPhase,
+  kelly, computeSuccessScore, weatherModifier,
 } = require('./scoring');
+
+const model = require('./models/interface');
 
 const {
   getTeamProfiles,
   updateTeamProfiles,
   addResultToProfile,
   applyTeamProfileModifiers,
+  updateWOWY,
+  getWOWYDeltas,
 } = require('./teamProfiles');
 
 const {
   buildTeamIndex,
+  buildStandingsIndex,
   scoreFixtureFromPool,
   optimiseWeights: optimiseModelWeights,
 } = require('./weightOptimiser');
@@ -72,6 +78,24 @@ function saveWatching(list)     { writeJSON('watching.json', list); }
 function saveBankroll(br)       { writeJSON('bankroll.json', { ...br, lastUpdated: new Date().toISOString() }); }
 function saveCalibration(list)  { writeJSON('calibration.json', list); }
 function saveOddsHistory(list)  { writeJSON('odds-history.json', list); }
+
+// Fixture stats: keyed by fixture ID (string). Each entry: { home: {xg, shotsOn, totalShots, possession}, away: {...} }
+function getFixtureStats() { return readJSON('fixture-stats.json') || {}; }
+function saveFixtureStats(data) { writeJSON('fixture-stats.json', data); }
+
+// Lineups: keyed by fixture ID. Each entry: { home: {teamId, starters:[{id,name}], substitutes:[{id,name}], formation}, away: {...}, fetchedAt }
+function getLineups() { return readJSON('lineups.json') || {}; }
+function saveLineups(data) { writeJSON('lineups.json', data); }
+
+// Shared lineup parser — stores {id, name} objects so WOWY can use player names.
+function parseApiLineup(teamEntry) {
+  return {
+    teamId:     teamEntry.team?.id,
+    starters:   (teamEntry.startXI     || []).map(p => ({ id: p.player?.id, name: p.player?.name || null })).filter(p => p.id),
+    substitutes:(teamEntry.substitutes || []).map(p => ({ id: p.player?.id, name: p.player?.name || null })).filter(p => p.id),
+    formation:  teamEntry.formation || null,
+  };
+}
 
 // ─── API CLIENTS ─────────────────────────────────────────────────────────────
 
@@ -342,16 +366,19 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   const awayName = fix.teams?.away?.name;
 
   // Determine fixture context once — drives weights, ranking scale, thresholds
-  const leagueId = fix.league?.id || settings._leagueId;
-  const context  = classifyFixture(leagueId);
-  const cfg      = CONTEXT_CONFIG[context];
+  const leagueId    = fix.league?.id || settings._leagueId;
+  const context     = classifyFixture(leagueId);
+  const cfg         = CONTEXT_CONFIG[context];
+  const leagueConfig = LEAGUE_CONFIG[parseInt(leagueId, 10)] || null;
   // Use optimised weights if available in settings, otherwise fall back to hand-tuned defaults
   const weights  = settings.optimisedWeights?.[context] || WEIGHTS_BY_CONTEXT[context];
+  const competitionPhase = classifyCompetitionPhase(fix, leagueId);
 
-  // H2H + injuries in parallel
+  // H2H + injuries in parallel (injuries skipped if pre-fetched at T-60)
   const [h2hRes, injRes] = await Promise.allSettled([
     apiSports.get('/fixtures/headtohead', { params: { h2h: `${homeId}-${awayId}`, last: 5 } }),
-    apiSports.get('/injuries',            { params: { fixture: fix.fixture.id } }),
+    fix._injuries ? Promise.resolve({ data: { response: fix._injuries } })
+      : apiSports.get('/injuries', { params: { fixture: fix.fixture.id } }),
   ]);
   const h2hFixtures = h2hRes.status === 'fulfilled' ? h2hRes.value.data?.response || [] : [];
   const injuries    = injRes.status  === 'fulfilled' ? injRes.value.data?.response  || [] : [];
@@ -392,7 +419,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   const awayDataConf = Math.min(awayFormCount / 15, 1);
   const dataConf     = Math.min(homeDataConf, awayDataConf); // use the weaker team's confidence
 
-  let probs = computeModelProb(homeF, awayF, weights, context);
+  let probs = model.predict(homeF, awayF, weights, context, leagueConfig);
 
   // FIFA ranking quality adjustment — anchors model when historical data is thin.
   // scale=0 for club_domestic means rankings have no effect there.
@@ -456,6 +483,9 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   // Scale probs by calFactor for edge/EV/kelly/score calculations only.
   // Raw probs are preserved in modelProb for display.
   const calFactor = settings.calibrationFactor ?? 1.08;
+  // Market efficiency: less efficient markets (Ligue 1 0.88) get a slight score boost vs
+  // highly efficient markets (CL 0.96). Applied as 1/efficiency so range is ×1.04–×1.14.
+  const effMult = 1 / (leagueConfig?.marketEfficiency ?? 1.0);
 
   const results = [];
   for (const c of candidates) {
@@ -464,7 +494,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     const calProb   = Math.min(0.97, c.prob * calFactor); // corrected prob for value calculations
     const edge      = calProb - impliedP;
     const rawScore  = computeSuccessScore(calProb, odds, homeFormCount, dataConf);
-    const finalScore = Math.round(rawScore * wxMod);
+    const finalScore = Math.round(rawScore * wxMod * effMult);
     const k         = kelly(calProb, odds, settings.kellyFraction, getBankroll().current);
 
     results.push({
@@ -482,10 +512,31 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   const lowConfidence    = maxModelBookGap > gapThreshold;
   results.forEach(c => { c.lowConfidence = lowConfidence; });
 
+  // WOWY key player signals — top movers by |delta| for each team, with confidence flag
+  const wowyToKeyPlayers = (teamId, isHome) => {
+    const deltas = getWOWYDeltas(teamId);
+    return Object.entries(deltas)
+      .filter(([, d]) => Math.abs(d.delta) >= 0.10) // only meaningful signals
+      .sort((a, b) => Math.abs(b[1].delta) - Math.abs(a[1].delta))
+      .slice(0, 3)
+      .map(([pid, d]) => ({
+        playerId: parseInt(pid, 10),
+        name: d.name,
+        delta: d.delta,
+        withRate: d.withRate,
+        withoutRate: d.withoutRate,
+        wTotal: d.wTotal,
+        woTotal: d.woTotal,
+        confidence: d.confidence,
+      }));
+  };
+  if (teamIntel.home) teamIntel.home.keyPlayers = wowyToKeyPlayers(homeId, true);
+  if (teamIntel.away) teamIntel.away.keyPlayers = wowyToKeyPlayers(awayId, false);
+
   return {
     fix, homeName, awayName, homeF, awayF, probs, weather, weatherCondition, results,
     kickoff: fix.fixture?.date,
-    context, lowConfidence,
+    context, competitionPhase, lowConfidence,
     homeDataConf, awayDataConf, dataConf,
     teamIntel,
   };
@@ -535,13 +586,21 @@ async function runMorningScan(leagueIds) {
       // Odds
       const oddsMap = await fetchOddsForLeague(meta.sport || 'soccer_epl');
 
+      // Pre-load fixture stats cache from disk (populated by pre-match lock and stats backfill)
+      const fixtureStatsDb = getFixtureStats();
+      const statsCache = {};
+      for (const f of formFixtures) {
+        const s = fixtureStatsDb[String(f.fixture?.id)];
+        if (s) statsCache[f.fixture.id] = s;
+      }
+
       // Existing calibration entries for today (avoid dupes on re-scan)
       const todayStr  = new Date().toISOString().split('T')[0];
       const calNow    = getCalibration().filter(c => !c.scoredAt?.startsWith(todayStr));
 
       for (const fix of fixtures) {
         try {
-          const scored = await scoreOneFixture(fix, formFixtures, standings, {}, oddsMap, settings);
+          const scored = await scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap, settings);
           const best   = scored.results.reduce((a, b) => a.successScore > b.successScore ? a : b);
           persistOddsSnapshot(fix, scored, meta.sport || 'soccer_epl', 'morning', leagueId, meta.name, settings);
           const calEntry = {
@@ -557,11 +616,13 @@ async function runMorningScan(leagueIds) {
             candidates:   scored.results,
             betPlaced:    false,
             betId:        null,
-            resolved:         false,
-            resolvedAt:       null,
-            actualResult:     null,
-            topPickCorrect:   null,
-            weatherCondition: scored.weatherCondition,
+            resolved:          false,
+            resolvedAt:        null,
+            actualResult:      null,
+            topPickCorrect:    null,
+            weatherCondition:  scored.weatherCondition,
+            context:           scored.context,
+            competitionPhase:  scored.competitionPhase,
           };
           calNow.push(calEntry);
 
@@ -637,21 +698,64 @@ async function runPreMatchScan(watchingEntry) {
       .filter(f => f.fixture?.status?.short === 'FT')
       .sort((a, b) => new Date(b.fixture?.date) - new Date(a.fixture?.date));
 
-    // Stats cache for recent 15 fixtures
+    // Stats cache: load from disk first, then fetch any missing from recent 15 fixtures
+    const fixtureStatsDb = getFixtureStats();
     const statsCache = {};
+    for (const f of formFixtures) {
+      const s = fixtureStatsDb[String(f.fixture?.id)];
+      if (s) statsCache[f.fixture.id] = s;
+    }
+
+    const parseStats = ts => {
+      const find   = t => ts.statistics?.find(s => s.type === t)?.value;
+      const xgRaw  = find('expected_goals') ?? find('Expected Goals');
+      const shotsOn    = parseInt(find('Shots on Goal') ?? 0) || 0;
+      const totalShots = parseInt(find('Total Shots') ?? 0) || 0;
+      const possession = parseFloat(String(find('Ball Possession') ?? '50%').replace('%', '')) / 100;
+      const xg = xgRaw != null ? parseFloat(xgRaw) || null
+        : (shotsOn || totalShots) ? computeXGProxy({ shotsOn, totalShots, possession }) : null;
+      return { xg, shotsOn, totalShots, possession };
+    };
+
+    const statsToSave = {};
     for (const f of formFixtures.slice(0, 15)) {
+      if (statsCache[f.fixture.id]) continue; // already loaded from disk
       try {
         const { data: st } = await apiSports.get('/fixtures/statistics', { params: { fixture: f.fixture.id } });
         if (st?.response?.length >= 2) {
-          const parse = ts => {
-            const find = t => ts.statistics?.find(s => s.type === t)?.value;
-            const xgRaw = find('expected_goals') ?? find('Expected Goals');
-            return { xg: xgRaw != null ? parseFloat(xgRaw) || null : null, shotsOn: parseInt(find('Shots on Goal') ?? 0) || 0 };
-          };
-          statsCache[f.fixture.id] = { home: parse(st.response[0]), away: parse(st.response[1]) };
+          const entry = { home: parseStats(st.response[0]), away: parseStats(st.response[1]) };
+          statsCache[f.fixture.id] = entry;
+          statsToSave[f.fixture.id] = entry;
         }
       } catch {}
     }
+    // Persist newly fetched stats so morning scan can use them without re-fetching
+    if (Object.keys(statsToSave).length > 0) {
+      saveFixtureStats({ ...fixtureStatsDb, ...statsToSave });
+    }
+
+    // Fetch lineups for the target fixture (available T-60 if teams submit early)
+    try {
+      const { data: lu } = await apiSports.get('/fixtures/lineups', { params: { fixture: fix.fixture.id } });
+      if (lu?.response?.length >= 2) {
+        const lineupEntry = {
+          home:      parseApiLineup(lu.response[0]),
+          away:      parseApiLineup(lu.response[1]),
+          fetchedAt: new Date().toISOString(),
+        };
+        const lineups = getLineups();
+        lineups[String(fix.fixture.id)] = lineupEntry;
+        saveLineups(lineups);
+      }
+    } catch {}
+
+    // Fetch confirmed injury/suspension list for this fixture
+    try {
+      const { data: injData } = await apiSports.get('/injuries', { params: { fixture: fix.fixture.id } });
+      if (injData?.response?.length) {
+        fix._injuries = injData.response;
+      }
+    } catch {}
 
     const { data: std } = await apiSports.get('/standings', { params: { league: leagueId, season: meta.season } });
     const standings = std?.response?.[0]?.league?.standings || [];
@@ -852,6 +956,22 @@ async function checkAndResolve() {
       if (homeId) addResultToProfile(homeId, true,  homeWon, isDraw, awayId, awayName, hg - ag, wxCond);
       if (awayId) addResultToProfile(awayId, false, awayWon, isDraw, homeId, homeName, ag - hg, wxCond);
 
+      // WOWY update — if lineups were captured for this fixture, record player outcomes
+      try {
+        const lineups = getLineups();
+        const fixLineup = lineups[String(fid)];
+        if (fixLineup) {
+          const homeResult = homeWon ? 'win' : isDraw ? 'draw' : 'loss';
+          const awayResult = awayWon ? 'win' : isDraw ? 'draw' : 'loss';
+          if (fixLineup.home?.starters?.length && homeId) {
+            updateWOWY(homeId, fixLineup.home.starters, fixLineup.home.substitutes || [], homeResult);
+          }
+          if (fixLineup.away?.starters?.length && awayId) {
+            updateWOWY(awayId, fixLineup.away.starters, fixLineup.away.substitutes || [], awayResult);
+          }
+        }
+      } catch {}
+
     } catch (e) { console.error(`[Resolve] error ${fid}: ${e.message}`); }
   }
 
@@ -987,7 +1107,7 @@ function stripFixture(f) {
 let _historicalBackfillRunning = false;
 let _historicalBackfillStatus  = null; // in-progress status for polling
 
-async function runHistoricalBackfill(onProgress) {
+async function runHistoricalBackfill({ rescore = false, onProgress } = {}) {
   if (_historicalBackfillRunning) return { error: 'already_running' };
   _historicalBackfillRunning = true;
   _historicalBackfillStatus  = { phase: 'fetching', leaguesDone: 0, totalLeagues: 0, fixturesFetched: 0, scored: 0, startedAt: new Date().toISOString() };
@@ -1001,6 +1121,13 @@ async function runHistoricalBackfill(onProgress) {
       optimisedWeights: null,
       accuracy:         null,
     };
+
+    if (rescore) {
+      existing.scoredRecords  = [];
+      existing.optimisedWeights = null;
+      existing.accuracy         = null;
+      console.log('[HistoricalBackfill] rescore=true — cleared scored records, will re-score all fixtures');
+    }
 
     const fixtureMap = new Map(existing.fixtures.map(f => [f.fixture?.id, f]));
     const scoredMap  = new Map(existing.scoredRecords.map(r => [r.fixtureId, r]));
@@ -1043,15 +1170,16 @@ async function runHistoricalBackfill(onProgress) {
     const unscoredCount = [...fixtureMap.values()].filter(f => !scoredMap.has(f.fixture?.id)).length;
     if (newCount > 0 || unscoredCount > 0) {
       _historicalBackfillStatus.phase = 'scoring';
-      const allFixtures = [...fixtureMap.values()];
-      const teamIndex   = buildTeamIndex(allFixtures);
-      let   scored      = 0;
+      const allFixtures    = [...fixtureMap.values()];
+      const teamIndex      = buildTeamIndex(allFixtures);
+      const standingsIndex = buildStandingsIndex(allFixtures);
+      let   scored         = 0;
       let   nextOptimiseAt = Math.ceil(scoredMap.size / OPTIMISE_EVERY) * OPTIMISE_EVERY;
       if (nextOptimiseAt <= scoredMap.size) nextOptimiseAt += OPTIMISE_EVERY;
 
       for (const fix of allFixtures) {
         if (scoredMap.has(fix.fixture?.id)) continue;
-        const record = scoreFixtureFromPool(fix, teamIndex);
+        const record = scoreFixtureFromPool(fix, teamIndex, standingsIndex);
         if (record) {
           scoredMap.set(record.fixtureId, record);
           scored++;
@@ -1299,12 +1427,14 @@ app.get('/api/backfill/status', (_req, res) => {
 });
 
 // Historical backfill — full 3-season fetch, factor scoring, weight optimisation
+// ?rescore=true clears all scored records and re-scores from the fixture pool (needed after factor function changes)
 app.post('/api/backfill/historical', async (req, res) => {
   if (_historicalBackfillRunning) {
     return res.json({ started: false, message: 'Already running', status: _historicalBackfillStatus });
   }
-  res.json({ started: true, message: 'Historical backfill running — poll /api/backfill/historical/status' });
-  runHistoricalBackfill().catch(e => console.error('[HistoricalBackfill]', e.message));
+  const rescore = req.query.rescore === 'true';
+  res.json({ started: true, rescore, message: `Historical backfill running (rescore=${rescore}) — poll /api/backfill/historical/status` });
+  runHistoricalBackfill({ rescore }).catch(e => console.error('[HistoricalBackfill]', e.message));
 });
 
 app.get('/api/backfill/historical/status', (_req, res) => {
@@ -1468,7 +1598,8 @@ app.get('/api/backfill/historical/calibration', (req, res) => {
   for (const r of data.scoredRecords) {
     try {
       const weights = (settings.optimisedWeights?.[r.context]) || WEIGHTS_BY_CONTEXT[r.context] || WEIGHTS_BY_CONTEXT.club_domestic;
-      const probs   = computeModelProb(r.homeFactors, r.awayFactors, weights, r.context);
+      const lc      = LEAGUE_CONFIG[parseInt(r.leagueId, 10)] || null;
+      const probs   = computeModelProb(r.homeFactors, r.awayFactors, weights, r.context, lc);
       const predP   = probs[r.actualOutcome]; // probability assigned to the outcome that actually happened
       const topKey  = Object.entries(probs).sort((a,b) => b[1]-a[1])[0][0];
       const topProb = probs[topKey];
@@ -1493,6 +1624,168 @@ app.get('/api/backfill/historical/calibration', (req, res) => {
   res.json({ bands: result, total: data.scoredRecords.length });
 });
 
+// ── Fixture stats backfill ─────────────────────────────────────────────────────
+// Fetches /fixtures/statistics for each PL/CL fixture in backfill-historical.json
+// that doesn't already have an entry in fixture-stats.json. Resumes on re-call.
+
+let _statsBackfillRunning = false;
+
+app.post('/api/backfill/fixture-stats', async (req, res) => {
+  if (_statsBackfillRunning) return res.json({ error: 'already_running' });
+  _statsBackfillRunning = true;
+  res.json({ started: true });
+
+  const STATS_LEAGUES  = new Set([39, 2, 140, 135, 78, 61]);  // PL, CL, La Liga, Serie A, Bundesliga, Ligue 1
+  const STATS_SEASONS  = new Set([2023, 2024]);
+
+  try {
+    const historical = readJSON('backfill-historical.json');
+    if (!historical?.fixtures?.length) {
+      console.log('[StatsBackfill] No historical fixtures found — run historical backfill first');
+      return;
+    }
+
+    const targets = historical.fixtures.filter(f => {
+      const lid = f.league?.id;
+      const sid = f.league?.season;
+      return STATS_LEAGUES.has(lid) && STATS_SEASONS.has(sid);
+    });
+
+    const statsDb    = getFixtureStats();
+    const parseStats = ts => {
+      const find   = t => ts.statistics?.find(s => s.type === t)?.value;
+      const xgRaw  = find('expected_goals') ?? find('Expected Goals');
+      const shotsOn    = parseInt(find('Shots on Goal') ?? 0) || 0;
+      const totalShots = parseInt(find('Total Shots') ?? 0) || 0;
+      const possession = parseFloat(String(find('Ball Possession') ?? '50%').replace('%', '')) / 100;
+      const xg = xgRaw != null ? parseFloat(xgRaw) || null
+        : (shotsOn || totalShots) ? computeXGProxy({ shotsOn, totalShots, possession }) : null;
+      return { xg, shotsOn, totalShots, possession };
+    };
+
+    let fetched = 0, skipped = 0, errors = 0;
+    for (const fix of targets) {
+      const fid = String(fix.fixture?.id);
+      if (statsDb[fid]) { skipped++; continue; }
+      try {
+        const { data } = await apiSports.get('/fixtures/statistics', { params: { fixture: fid } });
+        if (data?.response?.length >= 2) {
+          statsDb[fid] = { home: parseStats(data.response[0]), away: parseStats(data.response[1]) };
+          fetched++;
+        }
+      } catch { errors++; }
+      if (fetched % 50 === 0 && fetched > 0) {
+        saveFixtureStats(statsDb);
+        console.log(`[StatsBackfill] ${fetched} fetched, ${skipped} skipped, ${errors} errors`);
+      }
+      await new Promise(r => setTimeout(r, 600));
+    }
+    saveFixtureStats(statsDb);
+    console.log(`[StatsBackfill] Done — ${fetched} new, ${skipped} cached, ${errors} errors. Total: ${Object.keys(statsDb).length}`);
+  } catch (e) {
+    console.error('[StatsBackfill] Fatal:', e.message);
+  } finally {
+    _statsBackfillRunning = false;
+  }
+});
+
+app.get('/api/backfill/fixture-stats/status', (_req, res) => {
+  const statsDb = getFixtureStats();
+  res.json({ running: _statsBackfillRunning, count: Object.keys(statsDb).length });
+});
+
+// ── Lineups backfill + WOWY ───────────────────────────────────────────────────
+// Fetches /fixtures/lineups for PL/CL historical fixtures and runs WOWY updates.
+
+let _lineupsBackfillRunning = false;
+
+app.post('/api/backfill/lineups', async (req, res) => {
+  if (_lineupsBackfillRunning) return res.json({ error: 'already_running' });
+  _lineupsBackfillRunning = true;
+
+  // ?rebuild=true clears existing lineups + WOWY data so a clean re-run can add player names
+  const rebuild = req.query.rebuild === 'true' || req.body?.rebuild === true;
+  res.json({ started: true, rebuild });
+
+  const LINEUP_LEAGUES = new Set([39, 2, 140, 135, 78, 61]);
+  const LINEUP_SEASONS = new Set([2023, 2024]);
+
+  try {
+    const historical = readJSON('backfill-historical.json');
+    if (!historical?.fixtures?.length) {
+      console.log('[LineupsBackfill] No historical fixtures — run historical backfill first');
+      return;
+    }
+
+    const targets = historical.fixtures.filter(f =>
+      LINEUP_LEAGUES.has(f.league?.id) && LINEUP_SEASONS.has(f.league?.season)
+    );
+
+    // Rebuild mode: wipe lineups.json and clear playerDependency from all team profiles
+    if (rebuild) {
+      saveLineups({});
+      const profiles = require('./teamProfiles').readProfiles();
+      let cleared = 0;
+      for (const p of Object.values(profiles)) {
+        if (p.playerDependency) { p.playerDependency = null; cleared++; }
+      }
+      require('./teamProfiles').saveProfiles(profiles);
+      console.log(`[LineupsBackfill] Rebuild mode — cleared lineups.json and ${cleared} team WOWY records`);
+    }
+
+    const lineupsDb = getLineups();
+    let fetched = 0, skipped = 0, errors = 0, wowied = 0;
+    for (const fix of targets) {
+      const fid = String(fix.fixture?.id);
+      if (lineupsDb[fid]) { skipped++; continue; }
+      try {
+        const { data } = await apiSports.get('/fixtures/lineups', { params: { fixture: fid } });
+        if (data?.response?.length >= 2) {
+          const entry = {
+            home:      parseApiLineup(data.response[0]),
+            away:      parseApiLineup(data.response[1]),
+            fetchedAt: new Date().toISOString(),
+          };
+          lineupsDb[fid] = entry;
+          fetched++;
+
+          const hg = fix.goals?.home ?? 0;
+          const ag = fix.goals?.away ?? 0;
+          const outcome = hg > ag ? 'win' : hg < ag ? 'loss' : 'draw';
+          const homeId = fix.teams?.home?.id;
+          const awayId = fix.teams?.away?.id;
+          if (homeId && entry.home?.starters?.length) {
+            updateWOWY(homeId, entry.home.starters, entry.home.substitutes || [],
+              outcome === 'win' ? 'win' : outcome === 'draw' ? 'draw' : 'loss');
+            wowied++;
+          }
+          if (awayId && entry.away?.starters?.length) {
+            updateWOWY(awayId, entry.away.starters, entry.away.substitutes || [],
+              outcome === 'loss' ? 'win' : outcome === 'draw' ? 'draw' : 'loss');
+            wowied++;
+          }
+        }
+      } catch { errors++; }
+      if (fetched % 50 === 0 && fetched > 0) {
+        saveLineups(lineupsDb);
+        console.log(`[LineupsBackfill] ${fetched} fetched, ${skipped} skipped, ${errors} errors, ${wowied} WOWY updates`);
+      }
+      await new Promise(r => setTimeout(r, 650));
+    }
+    saveLineups(lineupsDb);
+    console.log(`[LineupsBackfill] Done — ${fetched} new, ${skipped} cached, ${errors} errors, ${wowied} WOWY updates. Total: ${Object.keys(lineupsDb).length}`);
+  } catch (e) {
+    console.error('[LineupsBackfill] Fatal:', e.message);
+  } finally {
+    _lineupsBackfillRunning = false;
+  }
+});
+
+app.get('/api/backfill/lineups/status', (_req, res) => {
+  const lineupsDb = getLineups();
+  res.json({ running: _lineupsBackfillRunning, count: Object.keys(lineupsDb).length });
+});
+
 // Trigger pre-match scan for a specific watching entry
 app.post('/api/scan/prematch/:watchId', async (req, res) => {
   const watching = getWatching();
@@ -1515,6 +1808,46 @@ app.post('/api/resolve/check', async (_req, res) => {
 
 // Health
 app.get('/health', (_req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
+
+// ─── FACTOR DISTRIBUTION DIAGNOSTIC ─────────────────────────────────────────
+
+app.get('/api/diagnostics/factor-distribution', (req, res) => {
+  const { computeModelProb: _unused, WEIGHTS_BY_CONTEXT: WBC } = require('./scoring');
+  const data = readJSON('backfill-historical.json');
+  if (!data?.scoredRecords?.length) return res.json({ error: 'No historical data' });
+
+  const FACTORS = ['form', 'homeAdv', 'xg', 'h2h', 'defense', 'momentum', 'injuries', 'standings'];
+  const acc = {};
+  for (const f of FACTORS) acc[f] = { home: [], away: [] };
+
+  for (const r of data.scoredRecords) {
+    if (!r.homeFactors || !r.awayFactors) continue;
+    for (const f of FACTORS) {
+      if (r.homeFactors[f] != null) acc[f].home.push(r.homeFactors[f]);
+      if (r.awayFactors[f] != null) acc[f].away.push(r.awayFactors[f]);
+    }
+  }
+
+  const stats = (arr) => {
+    if (!arr.length) return { mean: null, std: null, min: null, max: null, n: 0 };
+    const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+    const std  = Math.sqrt(arr.reduce((s, v) => s + (v - mean) ** 2, 0) / arr.length);
+    return { mean: parseFloat(mean.toFixed(2)), std: parseFloat(std.toFixed(2)), min: Math.min(...arr), max: Math.max(...arr), n: arr.length };
+  };
+
+  const result = {};
+  for (const f of FACTORS) {
+    const combined = [...acc[f].home, ...acc[f].away];
+    result[f] = {
+      home: stats(acc[f].home),
+      away: stats(acc[f].away),
+      combined: stats(combined),
+      discriminating: stats(combined).std >= 10,
+    };
+  }
+
+  res.json({ factors: result, totalRecords: data.scoredRecords.length });
+});
 
 // ─── START ───────────────────────────────────────────────────────────────────
 

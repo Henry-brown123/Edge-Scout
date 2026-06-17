@@ -32,15 +32,80 @@ function buildTeamIndex(fixtures) {
   return idx;
 }
 
+// ─── STANDING INDEX ───────────────────────────────────────────────────────────
+// Pre-builds a per-league-season-date standings snapshot used by scoreFixtureFromPool.
+// For each fixture date, a team's rank is its cumulative points position among all
+// teams in that league/season using only fixtures completed before that date.
+// This avoids look-ahead bias and gives a genuine standings-based factor.
+
+function buildStandingsIndex(fixtures) {
+  // Group fixtures by league+season key
+  const groups = {};
+  for (const f of fixtures) {
+    const lid = f.league?.id;
+    const sea = f.league?.season;
+    if (!lid || !sea) continue;
+    const key = `${lid}_${sea}`;
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(f);
+  }
+
+  // For each fixture, compute standings as of that date using prior results
+  // Returns Map: fixtureId -> { homeRank, awayRank, leagueSize }
+  const index = new Map();
+
+  for (const [, leagueFixtures] of Object.entries(groups)) {
+    // Sort ascending for chronological processing
+    const sorted = [...leagueFixtures].sort((a, b) => new Date(a.fixture?.date) - new Date(b.fixture?.date));
+
+    // Rolling points accumulator
+    const pts = {}; // teamId -> points
+    const played = {}; // teamId -> games played
+
+    for (const f of sorted) {
+      const hid = f.teams?.home?.id;
+      const aid = f.teams?.away?.id;
+      const fid = f.fixture?.id;
+      if (!hid || !aid || !fid) continue;
+
+      // Compute standings BEFORE this match
+      const allTeams = Object.keys(pts);
+      // Include this match's teams even if no points yet
+      const teamSet = new Set([...allTeams, String(hid), String(aid)]);
+      const teamList = [...teamSet];
+
+      // Rank by points descending
+      teamList.sort((a, b) => (pts[b] || 0) - (pts[a] || 0));
+      const leagueSize = teamList.length;
+
+      const homeRank = teamList.indexOf(String(hid)) + 1;
+      const awayRank = teamList.indexOf(String(aid)) + 1;
+      index.set(fid, { homeRank, awayRank, leagueSize });
+
+      // Update points AFTER recording standings (no look-ahead)
+      const hg = Number(f.goals?.home ?? f.score?.fulltime?.home);
+      const ag = Number(f.goals?.away ?? f.score?.fulltime?.away);
+      if (!Number.isFinite(hg) || !Number.isFinite(ag)) continue;
+
+      if (!pts[String(hid)]) pts[String(hid)] = 0;
+      if (!pts[String(aid)]) pts[String(aid)] = 0;
+      if (hg > ag) { pts[String(hid)] += 3; }
+      else if (hg < ag) { pts[String(aid)] += 3; }
+      else { pts[String(hid)] += 1; pts[String(aid)] += 1; }
+    }
+  }
+
+  return index;
+}
+
 // ─── HISTORICAL FIXTURE SCORER ────────────────────────────────────────────────
 // Computes factor scores for a single completed fixture using the full fixture
 // pool as each team's form history. Excludes the match itself to avoid
 // self-referential scoring. Uses goals as xg proxy (no stats API).
 //
-// Note: uses all-time pool data per team, not a rolling window prior to the
-// match date. Introduces mild look-ahead bias acceptable for hyperparameter tuning.
+// Note: standings computed from in-pool rolling points (no look-ahead).
 
-function scoreFixtureFromPool(fix, teamIndex) {
+function scoreFixtureFromPool(fix, teamIndex, standingsIndex) {
   const homeId = fix.teams?.home?.id;
   const awayId = fix.teams?.away?.id;
   if (!homeId || !awayId) return null;
@@ -50,11 +115,8 @@ function scoreFixtureFromPool(fix, teamIndex) {
   if (!Number.isFinite(hg) || !Number.isFinite(ag)) return null;
 
   const fid     = fix.fixture?.id;
-  const fixDate = fix.fixture?.date; // ISO string — lexicographic comparison is safe for dates
+  const fixDate = fix.fixture?.date;
 
-  // Only use fixtures completed BEFORE this match. teamIndex is sorted descending,
-  // so filtering by date < fixDate preserves that order (most recent prior match first).
-  // This eliminates look-ahead bias: a match from Aug 2024 only sees pre-Aug-2024 form.
   const homeFixtures = (teamIndex[homeId] || [])
     .filter(f => f.fixture?.id !== fid && f.fixture?.date < fixDate);
   const awayFixtures = (teamIndex[awayId] || [])
@@ -64,6 +126,15 @@ function scoreFixtureFromPool(fix, teamIndex) {
     f.teams?.home?.id === awayId || f.teams?.away?.id === awayId
   ).slice(0, 5);
 
+  // Derive standings score from rolling in-pool points rank (no look-ahead)
+  const standSnap = standingsIndex?.get(fid);
+  const homeStandings = standSnap
+    ? Math.round(((standSnap.leagueSize - standSnap.homeRank + 1) / standSnap.leagueSize) * 100)
+    : 50;
+  const awayStandings = standSnap
+    ? Math.round(((standSnap.leagueSize - standSnap.awayRank + 1) / standSnap.leagueSize) * 100)
+    : 50;
+
   const homeFactors = {
     form:      formScore(homeFixtures, homeId, 6, 0.05),
     homeAdv:   homeAdvScore(homeFixtures, homeId, 0.05),
@@ -71,8 +142,8 @@ function scoreFixtureFromPool(fix, teamIndex) {
     h2h:       h2hScore(h2h, homeId, 5, 0.05),
     defense:   defenseScore(homeFixtures, homeId, 0.05),
     momentum:  momentumScore(homeFixtures, homeId),
-    injuries:  75,
-    standings: 50,
+    injuries:  50,
+    standings: homeStandings,
   };
   const h2hAway = 100 - homeFactors.h2h;
   const awayFactors = {
@@ -82,8 +153,8 @@ function scoreFixtureFromPool(fix, teamIndex) {
     h2h:       h2hAway,
     defense:   defenseScore(awayFixtures, awayId, 0.05),
     momentum:  momentumScore(awayFixtures, awayId),
-    injuries:  75,
-    standings: 50,
+    injuries:  50,
+    standings: awayStandings,
   };
 
   const context = classifyFixture(fix.league?.id);
@@ -202,6 +273,7 @@ function optimiseWeights(records, context, iterations = 200) {
 
 module.exports = {
   buildTeamIndex,
+  buildStandingsIndex,
   scoreFixtureFromPool,
   optimiseWeights,
   computeLogLoss,
