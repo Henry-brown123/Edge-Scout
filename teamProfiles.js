@@ -375,7 +375,8 @@ function addResultToProfile(teamId, isHome, won, drawn, opponentId, opponentName
 // Apply team-profile-based adjustments to base model probabilities.
 // Returns { probs, applied, notes, teamIntel }.
 
-function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dataConf, homeDaysRest, awayDaysRest, weather) {
+function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dataConf, homeDaysRest, awayDaysRest, weather, opts = {}) {
+  const wowyActive = opts.wowyActive ?? true; // default true for backwards compat in tests
   const leagueAvg  = LEAGUE_AVG_HOME_WIN_RATE[context] || 0.463;
   const thresholds = CONTEXT_THRESHOLDS[context] || CONTEXT_THRESHOLDS.club_domestic;
 

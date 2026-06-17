@@ -57,6 +57,7 @@ const SETTINGS_DEFAULTS = {
   decay: 0.05, formWindow: 6, h2hWindow: 5, kellyFraction: 0.5,
   activeLeagues: ['1','39','140','78','135','61','2'], successThreshold: 40,
   calibrationFactor: 1.08,
+  wowyActive: false,
 };
 
 function getSettings() {
@@ -464,8 +465,10 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     precipProbability: weather.precipProb,
     windSpeedKmh:      weather.windSpeed,
   } : null;
+  const wowyActive = settings.wowyActive ?? false;
   const { probs: adjustedProbs, teamIntel } = applyTeamProfileModifiers(
-    probs, homeProfile, awayProfile, context, dataConf, homeDays, awayDays, weatherForModifier
+    probs, homeProfile, awayProfile, context, dataConf, homeDays, awayDays, weatherForModifier,
+    { wowyActive }
   );
   probs = adjustedProbs;
 
@@ -1636,7 +1639,7 @@ app.post('/api/backfill/fixture-stats', async (req, res) => {
   res.json({ started: true });
 
   const STATS_LEAGUES  = new Set([39, 2, 140, 135, 78, 61]);  // PL, CL, La Liga, Serie A, Bundesliga, Ligue 1
-  const STATS_SEASONS  = new Set([2023, 2024]);
+  const STATS_SEASONS  = new Set([2022, 2023, 2024]);
 
   try {
     const historical = readJSON('backfill-historical.json');
@@ -1708,7 +1711,7 @@ app.post('/api/backfill/lineups', async (req, res) => {
   res.json({ started: true, rebuild });
 
   const LINEUP_LEAGUES = new Set([39, 2, 140, 135, 78, 61]);
-  const LINEUP_SEASONS = new Set([2023, 2024]);
+  const LINEUP_SEASONS = new Set([2022, 2023, 2024]);
 
   try {
     const historical = readJSON('backfill-historical.json');
@@ -1810,6 +1813,58 @@ app.post('/api/resolve/check', async (_req, res) => {
 app.get('/health', (_req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 
 // ─── FACTOR DISTRIBUTION DIAGNOSTIC ─────────────────────────────────────────
+
+app.get('/api/diagnostics/data-coverage', (req, res) => {
+  const data     = readJSON('backfill-historical.json');
+  const lineups  = readJSON('lineups.json') || {};
+  const stats    = readJSON('fixture-stats.json') || {};
+  const profiles = require('./teamProfiles').readProfiles();
+
+  if (!data?.fixtures?.length) return res.json({ totalFixtures: 0, byLeague: {}, gaps: ['No historical data — run backfill first'] });
+
+  const LEAGUE_NAMES = { 39:'Premier League', 140:'La Liga', 135:'Serie A', 78:'Bundesliga', 61:'Ligue 1', 2:'Champions League', 1:'World Cup' };
+
+  const byLeague = {};
+  let withLineups = 0, withStats = 0;
+
+  for (const f of data.fixtures) {
+    const lid  = f.league?.id;
+    const sea  = f.league?.season;
+    const fid  = String(f.fixture?.id);
+    const name = LEAGUE_NAMES[lid] || `League ${lid}`;
+
+    if (!byLeague[name]) byLeague[name] = { fixtures: 0, withLineups: 0, withStats: 0, seasons: new Set() };
+    byLeague[name].fixtures++;
+    byLeague[name].seasons.add(sea);
+    if (lineups[fid]) { byLeague[name].withLineups++; withLineups++; }
+    if (stats[fid])   { byLeague[name].withStats++;   withStats++; }
+  }
+
+  // Serialise season Sets
+  for (const v of Object.values(byLeague)) v.seasons = [...v.seasons].sort();
+
+  // WOWY high-confidence count
+  let wowyHighConf = 0;
+  for (const prof of Object.values(profiles)) {
+    const players = prof.playerDependency?.players || {};
+    for (const pd of Object.values(players)) {
+      const wTotal  = (pd.with?.w||0) + (pd.with?.d||0) + (pd.with?.l||0);
+      const woTotal = (pd.without?.w||0) + (pd.without?.d||0) + (pd.without?.l||0);
+      if (wTotal >= 8 && woTotal >= 5) wowyHighConf++;
+    }
+  }
+
+  // Identify gaps
+  const gaps = [];
+  for (const [name, v] of Object.entries(byLeague)) {
+    const lineupPct = v.fixtures ? v.withLineups / v.fixtures : 0;
+    const statsPct  = v.fixtures ? v.withStats   / v.fixtures : 0;
+    if (lineupPct < 0.5) gaps.push(`${name} lineups ${Math.round(lineupPct*100)}%`);
+    if (statsPct  < 0.3) gaps.push(`${name} xG stats ${Math.round(statsPct*100)}%`);
+  }
+
+  res.json({ totalFixtures: data.fixtures.length, withLineups, withStats, wowyHighConf, byLeague, gaps });
+});
 
 app.get('/api/diagnostics/factor-distribution', (req, res) => {
   const { computeModelProb: _unused, WEIGHTS_BY_CONTEXT: WBC } = require('./scoring');

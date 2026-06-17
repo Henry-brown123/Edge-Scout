@@ -710,9 +710,28 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
             <input type="number" id="cal-factor-input" value="1.08" step="0.01" min="1.00" max="1.30" style="width:80px">
             <div style="font-size:10px;color:var(--muted);margin-top:3px">Scales model probs before edge calc. 1.00 = off. Adjust as calibration data accumulates.</div>
           </div>
+          <div class="field">
+            <label>WOWY probability modifiers</label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+              <input type="checkbox" id="wowy-active-input">
+              <span style="font-size:12px">Active (apply WOWY deltas to live scoring)</span>
+            </label>
+            <div id="wowy-warning" style="display:none;font-size:11px;margin-top:6px;padding:7px 10px;border-radius:6px;background:rgba(255,170,0,0.12);border:1px solid rgba(255,170,0,0.35);color:#ffaa00">
+              ⚠ WOWY signals disabled — lineup backfill in progress. Re-enable after rebuild completes.
+            </div>
+          </div>
           <button class="btn btn-cyan btn-sm" onclick="saveSettings()" style="align-self:flex-start">Save Settings</button>
         </div>
       </div>
+      <!-- Data Coverage card -->
+      <div class="card" id="data-coverage-card">
+        <div class="card-header">
+          <span class="card-title">Data Coverage</span>
+          <button class="btn btn-ghost btn-sm" onclick="loadDataCoverage()">Refresh</button>
+        </div>
+        <div id="data-coverage-content" style="font-size:12px;color:var(--muted)">Loading…</div>
+      </div>
+
       <div class="card">
         <div class="card-header"><span class="card-title">Paper Trading</span></div>
         <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
@@ -1387,6 +1406,14 @@ function renderSettings() {
   if (s.kellyFraction!=null) document.getElementById('kelly-frac-input').value      = s.kellyFraction;
   if (s.successThreshold!=null) document.getElementById('threshold-settings').value = s.successThreshold;
   if (s.calibrationFactor!=null) document.getElementById('cal-factor-input').value  = s.calibrationFactor;
+  const wowyChk = document.getElementById('wowy-active-input');
+  const wowyWarn = document.getElementById('wowy-warning');
+  if (wowyChk) {
+    wowyChk.checked = s.wowyActive ?? false;
+    if (wowyWarn) wowyWarn.style.display = wowyChk.checked ? 'none' : 'block';
+    wowyChk.onchange = () => { if (wowyWarn) wowyWarn.style.display = wowyChk.checked ? 'none' : 'block'; };
+  }
+  loadDataCoverage();
 }
 
 function updateWeightTotal() {
@@ -1433,6 +1460,7 @@ async function saveSettings() {
     kellyFraction:    parseFloat(document.getElementById('kelly-frac-input').value),
     successThreshold:  parseInt(document.getElementById('threshold-settings').value),
     calibrationFactor: parseFloat(document.getElementById('cal-factor-input').value),
+    wowyActive:        document.getElementById('wowy-active-input')?.checked ?? false,
   };
   await apiFetch('/api/settings', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -1440,6 +1468,52 @@ async function saveSettings() {
   });
   Object.assign(STATE.settings, patch);
   toast('Settings saved!', 'success');
+}
+
+async function loadDataCoverage() {
+  const el = document.getElementById('data-coverage-content');
+  if (!el) return;
+  try {
+    const d = await apiFetch('/api/diagnostics/data-coverage');
+    const s = STATE.settings || {};
+    const wowyActive = s.wowyActive ?? false;
+
+    const pct = (n, t) => t ? Math.round(n / t * 100) + '%' : '—';
+    const pill = (ok, label) => `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:${ok ? 'rgba(0,200,120,0.15)' : 'rgba(255,80,80,0.15)'};color:${ok ? 'var(--green)' : 'var(--red)'}">${label}</span>`;
+
+    const leagueRows = Object.entries(d.byLeague || {}).map(([name, v]) => `
+      <tr>
+        <td style="padding:3px 8px 3px 0;color:var(--text)">${name}</td>
+        <td style="padding:3px 8px;text-align:center">${v.seasons?.join(', ') || '—'}</td>
+        <td style="padding:3px 8px;text-align:center">${v.fixtures ?? '—'}</td>
+        <td style="padding:3px 8px;text-align:center">${pct(v.withLineups, v.fixtures)}</td>
+        <td style="padding:3px 8px;text-align:center">${pct(v.withStats, v.fixtures)}</td>
+      </tr>`).join('');
+
+    el.innerHTML = `
+      <div style="margin-bottom:12px;display:flex;flex-wrap:wrap;gap:16px">
+        <div><span style="color:var(--muted)">Total fixtures:</span> <strong>${d.totalFixtures ?? '—'}</strong></div>
+        <div><span style="color:var(--muted)">With lineups:</span> <strong>${pct(d.withLineups, d.totalFixtures)}</strong> (${d.withLineups ?? 0})</div>
+        <div><span style="color:var(--muted)">With xG stats:</span> <strong>${pct(d.withStats, d.totalFixtures)}</strong> (${d.withStats ?? 0})</div>
+        <div><span style="color:var(--muted)">WOWY high-conf players:</span> <strong>${d.wowyHighConf ?? 0}</strong></div>
+        <div><span style="color:var(--muted)">WOWY status:</span> ${wowyActive ? pill(true, 'ACTIVE') : pill(false, 'DISABLED')}</div>
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:11px">
+        <thead>
+          <tr style="color:var(--muted);text-transform:uppercase;font-size:10px;letter-spacing:.5px">
+            <th style="text-align:left;padding:3px 8px 6px 0">League</th>
+            <th style="padding:3px 8px 6px;text-align:center">Seasons</th>
+            <th style="padding:3px 8px 6px;text-align:center">Fixtures</th>
+            <th style="padding:3px 8px 6px;text-align:center">Lineup %</th>
+            <th style="padding:3px 8px 6px;text-align:center">xG %</th>
+          </tr>
+        </thead>
+        <tbody>${leagueRows}</tbody>
+      </table>
+      ${d.gaps?.length ? `<div style="margin-top:10px;padding:7px 10px;border-radius:6px;background:rgba(255,170,0,0.1);border:1px solid rgba(255,170,0,0.3);font-size:11px;color:#ffaa00">⚠ Coverage gaps: ${d.gaps.join(' · ')}</div>` : ''}`;
+  } catch(e) {
+    el.textContent = 'Failed to load coverage data';
+  }
 }
 
 async function confirmReset() {
