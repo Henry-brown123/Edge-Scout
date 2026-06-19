@@ -43,12 +43,40 @@ const DATA_DIR       = process.env.DATA_DIR || path.join(__dirname, 'data');
 
 // ─── DATA PERSISTENCE ────────────────────────────────────────────────────────
 
+// Ensure DATA_DIR exists on startup (handles fresh disk or missing local dir)
+fs.mkdirSync(DATA_DIR, { recursive: true });
+console.log(`[Data] Using DATA_DIR: ${DATA_DIR}`);
+
+// Seed static lookup files from repo if not already on disk
+(function seedStaticFiles() {
+  const seedDir = path.join(__dirname, 'seed');
+  for (const file of ['stadiums.json', 'weights.json']) {
+    const dest = path.join(DATA_DIR, file);
+    const src  = path.join(seedDir, file);
+    if (!fs.existsSync(dest) && fs.existsSync(src)) {
+      fs.copyFileSync(src, dest);
+      console.log(`[Data] Seeded ${file} from repo`);
+    }
+  }
+  // Seed settings.json with safe defaults if missing
+  const settingsDest = path.join(DATA_DIR, 'settings.json');
+  if (!fs.existsSync(settingsDest)) {
+    const defaults = { calibrationFactor: 1.11, wowyActive: false,
+      activeLeagues: ['1','39','140','78','135','61','2'], successThreshold: 40,
+      decay: 0.05, formWindow: 6, h2hWindow: 5, kellyFraction: 0.5,
+      weights: { form:18, homeAdv:12, xg:16, h2h:10, defense:14, momentum:10, injuries:8, standings:12 } };
+    fs.writeFileSync(settingsDest, JSON.stringify(defaults, null, 2));
+    console.log('[Data] Seeded settings.json with defaults');
+  }
+})();
+
 function readJSON(file) {
   try { return JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), 'utf8')); }
   catch { return null; }
 }
 
 function writeJSON(file, data) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.writeFileSync(path.join(DATA_DIR, file), JSON.stringify(data, null, 2));
 }
 
