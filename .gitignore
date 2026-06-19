@@ -1,15 +1,5 @@
 node_modules/
 .env
 .env.local
-data/bets.json
-data/watching.json
-data/bankroll.json
-data/scan-meta.json
-data/team-profiles.json
-data/backfill-historical.json
-data/backfill-historical-meta.json
-data/calibration.json
-data/odds-history.json
-data/fixture-stats.json
-data/lineups.json
+data/
 .claude/settings.local.json

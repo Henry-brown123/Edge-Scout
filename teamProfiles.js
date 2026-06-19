@@ -3,7 +3,8 @@
 const fs   = require('fs');
 const path = require('path');
 
-const PROFILES_PATH = path.join(__dirname, 'data', 'team-profiles.json');
+const DATA_DIR      = process.env.DATA_DIR || path.join(__dirname, 'data');
+const PROFILES_PATH = path.join(DATA_DIR, 'team-profiles.json');
 
 // Global league average home win rates by fixture context
 const LEAGUE_AVG_HOME_WIN_RATE = {

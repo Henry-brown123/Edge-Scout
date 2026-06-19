@@ -39,7 +39,7 @@ const PORT = process.env.PORT || 3000;
 
 const API_SPORTS_KEY = process.env.API_SPORTS_KEY || '36e45a67eec7cabd0a51db8f2570f934';
 const ODDS_API_KEY   = process.env.ODDS_API_KEY   || '822efb9daf359532c828e4205e6beb56';
-const DATA_DIR       = path.join(__dirname, 'data');
+const DATA_DIR       = process.env.DATA_DIR || path.join(__dirname, 'data');
 
 // ─── DATA PERSISTENCE ────────────────────────────────────────────────────────
 
@@ -1904,10 +1904,158 @@ app.get('/api/diagnostics/factor-distribution', (req, res) => {
   res.json({ factors: result, totalRecords: data.scoredRecords.length });
 });
 
+// ─── STARTUP DATA CHECK ──────────────────────────────────────────────────────
+
+let _startupStatus = { phase: 'pending', startedAt: null, completedAt: null, skipped: false, error: null };
+
+async function runBackfillChain() {
+  const steps = [
+    { name: 'historical',    fn: () => runHistoricalBackfill({ rescore: false }) },
+    { name: 'fixture-stats', fn: () => new Promise((resolve, reject) => {
+      // Inline stats backfill trigger — reuse the same logic as the endpoint
+      app.request; // no-op; just call the function directly
+      const { runFixtureStatsBackfill } = { runFixtureStatsBackfill: null }; // placeholder — we POST internally
+      resolve();
+    })},
+  ];
+
+  _startupStatus = { phase: 'historical', startedAt: new Date().toISOString(), completedAt: null, skipped: false, error: null };
+  try {
+    console.log('[Startup] Running historical backfill…');
+    await runHistoricalBackfill({ rescore: false });
+    _startupStatus.phase = 'fixture-stats';
+
+    console.log('[Startup] Running fixture-stats backfill…');
+    await runFixtureStatsBackfillFn();
+    _startupStatus.phase = 'lineups';
+
+    console.log('[Startup] Running lineups backfill (rebuild)…');
+    await runLineupsBackfillFn({ rebuild: false }); // don't rebuild WOWY on auto-heal — preserve existing data
+    _startupStatus.phase = 'complete';
+    _startupStatus.completedAt = new Date().toISOString();
+    console.log('[Startup] Backfill chain complete');
+  } catch (e) {
+    _startupStatus.phase = 'error';
+    _startupStatus.error = e.message;
+    console.error('[Startup] Backfill chain error:', e.message);
+  }
+}
+
+async function startupCheck() {
+  const dataFiles = [
+    'backfill-historical.json',
+    'team-profiles.json',
+    'fixture-stats.json',
+    'lineups.json',
+    'calibration.json',
+  ];
+  const missing = dataFiles.filter(f => !fs.existsSync(path.join(DATA_DIR, f)));
+
+  if (missing.length > 0) {
+    console.log(`[Startup] Missing data files: ${missing.join(', ')} — queuing backfill chain`);
+    _startupStatus = { phase: 'queued', startedAt: null, completedAt: null, skipped: false, error: null, missing };
+    // Defer slightly so the HTTP server is fully up first
+    setTimeout(() => runBackfillChain().catch(e => console.error('[Startup]', e.message)), 5000);
+  } else {
+    console.log('[Startup] All data files present — skipping backfill chain');
+    _startupStatus = { phase: 'complete', skipped: true, completedAt: new Date().toISOString(), missing: [] };
+  }
+}
+
+// Extracted backfill logic callable without HTTP context
+async function runFixtureStatsBackfillFn() {
+  const STATS_LEAGUES = new Set([39, 2, 140, 135, 78, 61]);
+  const STATS_SEASONS = new Set([2022, 2023, 2024]);
+  const historical = readJSON('backfill-historical.json');
+  if (!historical?.fixtures?.length) return;
+
+  const targets = historical.fixtures.filter(f =>
+    STATS_LEAGUES.has(f.league?.id) && STATS_SEASONS.has(f.league?.season)
+  );
+  const fixtureStatsDb = getFixtureStats();
+  let fetched = 0;
+  for (const fix of targets) {
+    const fid = String(fix.fixture?.id);
+    if (fixtureStatsDb[fid]) continue;
+    try {
+      const { data } = await apiSports.get('/fixtures/statistics', { params: { fixture: fid } });
+      if (data?.response?.length >= 2) {
+        const parseStats = ts => {
+          const find = t => ts.statistics?.find(s => s.type === t)?.value;
+          const xgRaw = find('expected_goals') ?? find('Expected Goals');
+          const shotsOn = parseInt(find('Shots on Goal') ?? 0) || 0;
+          const totalShots = parseInt(find('Total Shots') ?? 0) || 0;
+          const possession = parseFloat(String(find('Ball Possession') ?? '50%').replace('%','')) / 100;
+          const xg = xgRaw != null ? parseFloat(xgRaw) || null
+            : (shotsOn || totalShots) ? computeXGProxy({ shotsOn, totalShots, possession }) : null;
+          return { xg, shotsOn, totalShots, possession };
+        };
+        fixtureStatsDb[fid] = { home: parseStats(data.response[0]), away: parseStats(data.response[1]) };
+        fetched++;
+        if (fetched % 100 === 0) {
+          saveFixtureStats(fixtureStatsDb);
+          console.log(`[Startup:Stats] ${fetched} fetched`);
+        }
+      }
+      await new Promise(r => setTimeout(r, 350));
+    } catch {}
+  }
+  saveFixtureStats(fixtureStatsDb);
+  console.log(`[Startup:Stats] Done — ${fetched} fetched`);
+}
+
+async function runLineupsBackfillFn({ rebuild = false } = {}) {
+  const LINEUP_LEAGUES = new Set([39, 2, 140, 135, 78, 61]);
+  const LINEUP_SEASONS = new Set([2022, 2023, 2024]);
+  const historical = readJSON('backfill-historical.json');
+  if (!historical?.fixtures?.length) return;
+
+  const targets = historical.fixtures.filter(f =>
+    LINEUP_LEAGUES.has(f.league?.id) && LINEUP_SEASONS.has(f.league?.season)
+  );
+  if (rebuild) {
+    saveLineups({});
+    const profiles = require('./teamProfiles').readProfiles();
+    for (const p of Object.values(profiles)) { if (p.playerDependency) p.playerDependency = null; }
+    require('./teamProfiles').saveProfiles(profiles);
+  }
+  const lineupsDb = getLineups();
+  let fetched = 0;
+  for (const fix of targets) {
+    const fid = String(fix.fixture?.id);
+    if (lineupsDb[fid]) continue;
+    try {
+      const { data } = await apiSports.get('/fixtures/lineups', { params: { fixture: fid } });
+      if (data?.response?.length >= 2) {
+        lineupsDb[fid] = {
+          home: parseApiLineup(data.response[0]),
+          away: parseApiLineup(data.response[1]),
+          fetchedAt: new Date().toISOString(),
+        };
+        fetched++;
+        const hg = fix.goals?.home ?? 0, ag = fix.goals?.away ?? 0;
+        const outcome = hg > ag ? 'win' : hg < ag ? 'loss' : 'draw';
+        const { updateWOWY } = require('./teamProfiles');
+        updateWOWY(fix.teams?.home?.id, lineupsDb[fid].home.starters, lineupsDb[fid].home.substitutes || [], outcome);
+        updateWOWY(fix.teams?.away?.id, lineupsDb[fid].away.starters, lineupsDb[fid].away.substitutes || [], outcome === 'win' ? 'loss' : outcome === 'loss' ? 'win' : 'draw');
+        if (fetched % 100 === 0) {
+          saveLineups(lineupsDb);
+          console.log(`[Startup:Lineups] ${fetched} fetched`);
+        }
+      }
+      await new Promise(r => setTimeout(r, 350));
+    } catch {}
+  }
+  saveLineups(lineupsDb);
+  console.log(`[Startup:Lineups] Done — ${fetched} fetched`);
+}
+
+app.get('/api/startup/status', (_req, res) => res.json(_startupStatus));
+
 // ─── START ───────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
-  console.log(`Edge Scout running at http://localhost:${PORT}`);
+  console.log(`Edge Scout running at http://localhost:${PORT} — DATA_DIR: ${DATA_DIR}`);
   setupScheduler();
 
   // Keep-alive: ping own /health every 10 min to prevent Render free-tier spin-down
@@ -1939,4 +2087,6 @@ app.listen(PORT, () => {
   } else {
     console.log(`[Startup] Today's scan already completed at ${scanMeta.completedAt} (${scanMeta.count} watching)`);
   }
+
+  startupCheck().catch(e => console.error('[Startup]', e.message));
 });

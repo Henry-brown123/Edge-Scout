@@ -2,6 +2,7 @@ services:
   - type: web
     name: edge-scout
     runtime: node
+    plan: starter
     buildCommand: npm install
     startCommand: node server.js
     envVars:
@@ -11,7 +12,9 @@ services:
         sync: false
       - key: NODE_ENV
         value: production
+      - key: DATA_DIR
+        value: /data
     disk:
-      name: data
-      mountPath: /app/data
+      name: edge-scout-data
+      mountPath: /data
       sizeGB: 1
