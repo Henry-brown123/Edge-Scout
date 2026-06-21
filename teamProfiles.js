@@ -294,6 +294,10 @@ function updateTeamProfiles(fixtures) {
   for (const [teamId, { name, fixes }] of Object.entries(teamData)) {
     const profile = buildProfileFromFixtures(teamId, name, fixes);
     if (profile) {
+      // Preserve WOWY data built from lineups — not derivable from fixture history alone
+      if (profiles[teamId]?.playerDependency) {
+        profile.playerDependency = profiles[teamId].playerDependency;
+      }
       profiles[teamId] = profile;
       updated++;
     }
