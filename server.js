@@ -1154,6 +1154,15 @@ async function runHistoricalBackfill({ rescore = false, onProgress } = {}) {
       accuracy:         null,
     };
 
+    // Detect corrupt state: league cache says fetched but fixture pool is empty.
+    // This happens when the process is killed mid-write and JSON is truncated.
+    // Clear the fetch cache so Phase 1 re-fetches everything from the API.
+    if (existing.fixtures.length === 0 && Object.keys(existing.fetchedLeagues || {}).length > 0) {
+      console.log('[HistoricalBackfill] Detected empty fixtures with stale fetch cache — clearing cache to force re-fetch');
+      existing.fetchedLeagues = {};
+      existing.scoredRecords  = [];
+    }
+
     if (rescore) {
       existing.scoredRecords  = [];
       existing.optimisedWeights = null;
@@ -1246,8 +1255,11 @@ async function runHistoricalBackfill({ rescore = false, onProgress } = {}) {
     existing.totalFixtures = fixtureMap.size;
     existing.scoredCount   = scoredMap.size;
     existing.lastUpdated   = new Date().toISOString();
-    // Compact JSON for large file
-    fs.writeFileSync(path.join(DATA_DIR, 'backfill-historical.json'), JSON.stringify(existing));
+    // Atomic write — temp file then rename so a mid-write kill can't corrupt the data
+    const histPath = path.join(DATA_DIR, 'backfill-historical.json');
+    const histTmp  = histPath + '.tmp';
+    fs.writeFileSync(histTmp, JSON.stringify(existing));
+    fs.renameSync(histTmp, histPath);
 
     // ── Phase 5: Rebuild team profiles ─────────────────────────────────────
     const profileCount = updateTeamProfiles(existing.fixtures);
