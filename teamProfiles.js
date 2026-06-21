@@ -600,6 +600,10 @@ function getWOWYDeltas(teamId) {
     if (wTotal < 5 || woTotal < 3) continue; // below minimum — exclude entirely
     const withRate    = (w.w + 0.5 * w.d) / wTotal;
     const withoutRate = (wo.w + 0.5 * wo.d) / woTotal;
+    // Flag likely selection-bias artifact: small without-sample with implausibly high win rate
+    // suggests player was only rested in already-won or low-risk fixtures
+    const selectionBias = withoutRate > 0.85 && woTotal < 15 && (withRate - withoutRate) < 0;
+
     result[playerId] = {
       name:        rec.name || null,
       delta:       parseFloat((withRate - withoutRate).toFixed(3)),
@@ -607,6 +611,7 @@ function getWOWYDeltas(teamId) {
       withoutRate: parseFloat(withoutRate.toFixed(3)),
       wTotal, woTotal,
       confidence:  (wTotal >= 8 && woTotal >= 5) ? 'high' : 'low',
+      selectionBias: selectionBias || undefined,
     };
   }
   return result;

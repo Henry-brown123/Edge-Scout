@@ -559,6 +559,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
         wTotal: d.wTotal,
         woTotal: d.woTotal,
         confidence: d.confidence,
+        selectionBias: d.selectionBias || false,
       }));
   };
   if (teamIntel.home) teamIntel.home.keyPlayers = wowyToKeyPlayers(homeId, true);
