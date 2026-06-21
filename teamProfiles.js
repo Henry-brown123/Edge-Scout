@@ -52,7 +52,9 @@ function readProfiles() {
 }
 
 function saveProfiles(profiles) {
-  fs.writeFileSync(PROFILES_PATH, JSON.stringify(profiles, null, 2));
+  const tmp = PROFILES_PATH + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(profiles, null, 2));
+  fs.renameSync(tmp, PROFILES_PATH);
 }
 
 function getTeamProfile(teamId) {

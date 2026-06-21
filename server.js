@@ -65,7 +65,9 @@ console.log(`[Data] Using DATA_DIR: ${DATA_DIR}`);
       activeLeagues: ['1','39','140','78','135','61','2'], successThreshold: 40,
       decay: 0.05, formWindow: 6, h2hWindow: 5, kellyFraction: 0.5,
       weights: { form:18, homeAdv:12, xg:16, h2h:10, defense:14, momentum:10, injuries:8, standings:12 } };
-    fs.writeFileSync(settingsDest, JSON.stringify(defaults, null, 2));
+    const settingsTmp = settingsDest + '.tmp';
+    fs.writeFileSync(settingsTmp, JSON.stringify(defaults, null, 2));
+    fs.renameSync(settingsTmp, settingsDest);
     console.log('[Data] Seeded settings.json with defaults');
   }
 })();
@@ -77,7 +79,10 @@ function readJSON(file) {
 
 function writeJSON(file, data) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(path.join(DATA_DIR, file), JSON.stringify(data, null, 2));
+  const dest = path.join(DATA_DIR, file);
+  const tmp  = dest + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+  fs.renameSync(tmp, dest);
 }
 
 const SETTINGS_DEFAULTS = {
@@ -1190,11 +1195,34 @@ async function runHistoricalBackfill({ rescore = false, onProgress } = {}) {
           const { data } = await apiSports.get('/fixtures', {
             params: { league: entry.leagueId, season: entry.season, status: 'FT' },
           });
+
+          // Detect rate limit — treat as a hard stop so the fetch cache isn't marked
+          // complete and the next startup will retry rather than silently skip.
+          if (data?.errors?.requests) {
+            const msg = `[RateLimit] API daily limit reached — stopping Phase 1. Will resume on next startup.`;
+            console.warn(msg); onProgress?.(msg);
+            // Flush whatever we have so far so it's not lost
+            existing.fixtures = [...fixtureMap.values()];
+            const histPath = path.join(DATA_DIR, 'backfill-historical.json');
+            const histTmp  = histPath + '.tmp';
+            fs.writeFileSync(histTmp, JSON.stringify(existing));
+            fs.renameSync(histTmp, histPath);
+            break; // stop processing further leagues
+          }
+
           const raw      = data?.response || [];
           const fixtures = raw.filter(f => ['FT','AET','PEN'].includes(f.fixture?.status?.short));
           fixtures.forEach(f => { fixtureMap.set(f.fixture.id, stripFixture(f)); });
           newCount += fixtures.length;
           existing.fetchedLeagues[key] = { count: fixtures.length, fetchedAt: new Date().toISOString() };
+
+          // Incremental save after each league — a kill now loses at most one league's data
+          existing.fixtures = [...fixtureMap.values()];
+          const histPath = path.join(DATA_DIR, 'backfill-historical.json');
+          const histTmp  = histPath + '.tmp';
+          fs.writeFileSync(histTmp, JSON.stringify(existing));
+          fs.renameSync(histTmp, histPath);
+
           const msg = `[Fetch] ${entry.name} ${entry.season}: ${fixtures.length} fixtures (pool: ${fixtureMap.size})`;
           console.log(msg); onProgress?.(msg);
           await new Promise(r => setTimeout(r, 350));
@@ -1950,27 +1978,32 @@ app.get('/api/diagnostics/factor-distribution', (req, res) => {
 let _startupStatus = { phase: 'pending', startedAt: null, completedAt: null, skipped: false, error: null };
 
 async function runBackfillChain() {
-  const steps = [
-    { name: 'historical',    fn: () => runHistoricalBackfill({ rescore: false }) },
-    { name: 'fixture-stats', fn: () => new Promise((resolve, reject) => {
-      // Inline stats backfill trigger — reuse the same logic as the endpoint
-      app.request; // no-op; just call the function directly
-      const { runFixtureStatsBackfill } = { runFixtureStatsBackfill: null }; // placeholder — we POST internally
-      resolve();
-    })},
-  ];
-
   _startupStatus = { phase: 'historical', startedAt: new Date().toISOString(), completedAt: null, skipped: false, error: null };
   try {
     console.log('[Startup] Running historical backfill…');
     await runHistoricalBackfill({ rescore: false });
-    _startupStatus.phase = 'fixture-stats';
 
+    // If fixtures came back empty the API rate limit was hit mid-Phase-1.
+    // Schedule a retry in 90 minutes rather than marking complete with no data.
+    const hist = readJSON('backfill-historical.json');
+    if (!hist?.fixtures?.length) {
+      const retryIn = 90 * 60 * 1000;
+      console.warn(`[Startup] Historical backfill returned 0 fixtures — likely rate-limited. Retrying in 90 min.`);
+      _startupStatus.phase = 'rate-limited';
+      _startupStatus.retryAt = new Date(Date.now() + retryIn).toISOString();
+      setTimeout(() => {
+        console.log('[Startup] Retry: re-running backfill chain after rate-limit delay');
+        runBackfillChain().catch(e => console.error('[Startup retry]', e.message));
+      }, retryIn);
+      return;
+    }
+
+    _startupStatus.phase = 'fixture-stats';
     console.log('[Startup] Running fixture-stats backfill…');
     await runFixtureStatsBackfillFn();
     _startupStatus.phase = 'lineups';
 
-    console.log('[Startup] Running lineups backfill (rebuild)…');
+    console.log('[Startup] Running lineups backfill…');
     await runLineupsBackfillFn({ rebuild: false }); // don't rebuild WOWY on auto-heal — preserve existing data
     _startupStatus.phase = 'complete';
     _startupStatus.completedAt = new Date().toISOString();
@@ -1992,10 +2025,16 @@ async function startupCheck() {
   ];
   const missing = dataFiles.filter(f => !fs.existsSync(path.join(DATA_DIR, f)));
 
-  if (missing.length > 0) {
-    console.log(`[Startup] Missing data files: ${missing.join(', ')} — queuing backfill chain`);
+  // Also trigger if historical file exists but has no fixtures (post-corrupt-write state)
+  const hist = missing.includes('backfill-historical.json') ? null : readJSON('backfill-historical.json');
+  const emptyFixtures = !missing.includes('backfill-historical.json') && !hist?.fixtures?.length;
+
+  if (missing.length > 0 || emptyFixtures) {
+    const reason = missing.length > 0
+      ? `Missing: ${missing.join(', ')}`
+      : 'backfill-historical.json has 0 fixtures (corrupt/incomplete)';
+    console.log(`[Startup] ${reason} — queuing backfill chain`);
     _startupStatus = { phase: 'queued', startedAt: null, completedAt: null, skipped: false, error: null, missing };
-    // Defer slightly so the HTTP server is fully up first
     setTimeout(() => runBackfillChain().catch(e => console.error('[Startup]', e.message)), 5000);
   } else {
     console.log('[Startup] All data files present — skipping backfill chain');
