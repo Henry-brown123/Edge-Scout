@@ -49,3 +49,33 @@ Rationale: players rested only in already-won or low-risk fixtures inflate the "
 The flag is surfaced in `teamIntel.keyPlayers` display but does not suppress any probability modifier (WOWY does not yet affect live scoring probabilities — the `wowyActive` flag was wired up but the modifier was never implemented).
 
 **For July:** If WOWY probability modifiers are implemented, the `selectionBias` flag must gate them — flagged players should not apply a negative dependency adjustment.
+
+---
+
+## 3. WOWY modifier implementation status (as of 2026-06-21)
+
+**Important:** WOWY currently has NO effect on live scoring probabilities. `wowyActive` is read from settings and passed to `applyTeamProfileModifiers()` but is declared and never consumed — no modifier block exists. WOWY data is only surfaced in `teamIntel.keyPlayers` for UI display.
+
+This means the "test the WOWY modifier with a real example" request cannot be demonstrated until the modifier is built. The full implementation plan for July:
+
+1. In `applyTeamProfileModifiers()`, after weather modifier block, add:
+   ```
+   if (wowyActive) {
+     for each team (home/away):
+       get high-confidence WOWY deltas (confidence='high', !selectionBias)
+       check today's confirmed lineups for absent players
+       if key positive-dependency player is absent: apply damped negative adj to that team's win prob
+       if key negative-dependency player is present: apply small positive adj
+   }
+   ```
+2. Damping: multiply delta by 0.3 (WOWY is club-form signal, not match-level) and cap at ±5pp
+3. Only fire when lineups are confirmed (T-60 or later)
+4. Never fire on `selectionBias: true` players
+
+**Corrected WC squad WOWY figures** (pending lineup rebuild completion — stale pre-2022 data shown):
+- Højbjerg (Denmark): predicted ~-21pp post-rebuild (was -50.8pp artifact from missing 2022/23 data)
+- Rodri (Spain): -22.9pp flagged `selectionBias: true` — not a reliable signal
+- Walker (England): -35.9pp flagged `selectionBias: true` — not a reliable signal
+- Yıldız (Turkey): +52.6pp HIGH confidence — genuine signal, small club sample
+- Alexander-Arnold (England): +45.7pp HIGH confidence — 53 with / 9 without, strongest large-sample signal
+- Saka (England): +25.5pp HIGH confidence — 55 with / 5 without
