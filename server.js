@@ -61,7 +61,7 @@ console.log(`[Data] Using DATA_DIR: ${DATA_DIR}`);
   // Seed settings.json with safe defaults if missing
   const settingsDest = path.join(DATA_DIR, 'settings.json');
   if (!fs.existsSync(settingsDest)) {
-    const defaults = { calibrationFactor: 1.11, wowyActive: false,
+    const defaults = { calibrationFactor: 1.11, wowyActive: true,
       activeLeagues: ['1','39','140','78','135','61','2'], successThreshold: 40,
       decay: 0.05, formWindow: 6, h2hWindow: 5, kellyFraction: 0.5,
       weights: { form:18, homeAdv:12, xg:16, h2h:10, defense:14, momentum:10, injuries:8, standings:12 } };
@@ -90,13 +90,34 @@ const SETTINGS_DEFAULTS = {
   decay: 0.05, formWindow: 6, h2hWindow: 5, kellyFraction: 0.5,
   activeLeagues: ['1','39','140','78','135','61','2'], successThreshold: 40,
   calibrationFactor: 1.08,
-  wowyActive: false,
+  wowyActive: true,
 };
 
 function getSettings() {
   const stored = readJSON('settings.json');
   return stored ? { ...SETTINGS_DEFAULTS, ...stored } : { ...SETTINGS_DEFAULTS };
 }
+
+// ── API rate-limit guard ──────────────────────────────────────────────────────
+// Set when any call returns the daily-limit error. Auto-clears at midnight UTC.
+let _apiRateLimited = false;
+let _rateLimitClearTimer = null;
+
+function setRateLimited() {
+  if (_apiRateLimited) return;
+  _apiRateLimited = true;
+  const now = new Date();
+  const midnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+  const msUntilMidnight = midnight - now;
+  console.warn(`[API] Rate limit hit — backing off until midnight UTC (${midnight.toISOString()})`);
+  if (_rateLimitClearTimer) clearTimeout(_rateLimitClearTimer);
+  _rateLimitClearTimer = setTimeout(() => {
+    _apiRateLimited = false;
+    console.log('[API] Rate limit cleared — resuming API calls');
+  }, msUntilMidnight);
+}
+
+function isRateLimited() { return _apiRateLimited; }
 
 function getBankroll() {
   return readJSON('bankroll.json') || { initial: 1000, current: 1000, lastUpdated: null };
@@ -1053,6 +1074,7 @@ function setupScheduler() {
 
   // 07:00 UTC every day — morning scan
   cron.schedule('0 7 * * *', () => {
+    if (isRateLimited()) { console.log('[Cron] Morning scan skipped — API rate limited'); return; }
     console.log(`[Cron] 07:00 tick — running morning scan at ${new Date().toISOString()}`);
     const leagues = getSettings().activeLeagues || ['1','39','140','78','135','61','2'];
     runMorningScan(leagues).catch(e => console.error('[Cron:MorningScan]', e.message));
@@ -1060,6 +1082,7 @@ function setupScheduler() {
 
   // Every minute — check for T-60 fixtures
   cron.schedule('* * * * *', () => {
+    if (isRateLimited()) return; // silent — fires every minute so no need to log
     const watching = getWatching();
     const now      = Date.now();
     const locked   = [];
@@ -1081,6 +1104,7 @@ function setupScheduler() {
 
   // Every 5 minutes — auto-resolve finished matches
   cron.schedule('*/5 * * * *', () => {
+    if (isRateLimited()) return;
     checkAndResolve().catch(e => console.error('[Cron:Resolve]', e.message));
   });
 
@@ -1221,6 +1245,7 @@ async function runHistoricalBackfill({ rescore = false, onProgress } = {}) {
           if (data?.errors?.requests) {
             const msg = `[RateLimit] API daily limit reached — stopping Phase 1. Will resume on next startup.`;
             console.warn(msg); onProgress?.(msg);
+            setRateLimited();
             // Only flush if we fetched something new — if fixtureMap is empty we have nothing
             // to write, and flushing would overwrite a valid on-disk file with an empty array.
             if (fixtureMap.size > 0) {
@@ -1837,6 +1862,7 @@ app.post('/api/backfill/lineups', async (req, res) => {
         const { data } = await apiSports.get('/fixtures/lineups', { params: { fixture: fid } });
         if (data?.errors?.requests) {
           console.warn('[LineupsBackfill] API rate limit reached — saving progress and stopping');
+          setRateLimited();
           saveLineups(lineupsDb);
           break;
         }
@@ -2176,7 +2202,7 @@ async function runLineupsBackfillFn({ rebuild = false } = {}) {
   console.log(`[Startup:Lineups] Done — ${fetched} fetched`);
 }
 
-app.get('/api/startup/status', (_req, res) => res.json(_startupStatus));
+app.get('/api/startup/status', (_req, res) => res.json({ ..._startupStatus, apiRateLimited: isRateLimited() }));
 
 // ─── START ───────────────────────────────────────────────────────────────────
 
