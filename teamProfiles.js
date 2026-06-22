@@ -530,6 +530,40 @@ function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dat
     };
   }
 
+  // 5. WOWY modifier — only fires when wowyActive and confirmed lineups are available
+  // Applies a dampened (30%) version of the delta for high-confidence, non-biased players
+  // who are confirmed absent from today's lineup. Capped at ±5pp per team.
+  if (wowyActive) {
+    const wowyAdj = (profile, isHome) => {
+      const deltas = getWOWYDeltas(profile.teamId);
+      let adj = 0;
+      const absentPlayers = profile.confirmedAbsent || []; // set by pre-match lineup check
+      for (const [, d] of Object.entries(deltas)) {
+        if (d.confidence !== 'high') continue;
+        if (d.selectionBias) continue;
+        if (Math.abs(d.delta) < 0.10) continue;
+        const isAbsent = absentPlayers.some(id => String(id) === String(d.playerId));
+        if (!isAbsent) continue;
+        // Player is confirmed absent: dampen delta by 30%, cap contribution at ±5pp
+        const contribution = Math.max(-0.05, Math.min(0.05, d.delta * 0.3));
+        adj += contribution;
+      }
+      return Math.max(-0.08, Math.min(0.08, adj)); // total cap ±8pp across all absent players
+    };
+
+    const hWowy = homeProfile ? wowyAdj(homeProfile, true)  : 0;
+    const aWowy = awayProfile ? wowyAdj(awayProfile, false) : 0;
+
+    if (Math.abs(hWowy) > 0.005) {
+      home += hWowy;
+      notes.push(`Home WOWY ${hWowy >= 0 ? '+' : ''}${(hWowy * 100).toFixed(1)}pp (confirmed absent key player)`);
+    }
+    if (Math.abs(aWowy) > 0.005) {
+      away += aWowy;
+      notes.push(`Away WOWY ${aWowy >= 0 ? '+' : ''}${(aWowy * 100).toFixed(1)}pp (confirmed absent key player)`);
+    }
+  }
+
   // Clamp and renormalise
   home = Math.max(0.01, home);
   draw = Math.max(0.01, draw);

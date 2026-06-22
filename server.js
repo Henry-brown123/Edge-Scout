@@ -498,7 +498,27 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     precipProbability: weather.precipProb,
     windSpeedKmh:      weather.windSpeed,
   } : null;
+  // Attach confirmed-absent WOWY players to profiles before modifier runs.
+  // Compares today's confirmed lineup (from lineups.json) against WOWY-tracked player IDs.
   const wowyActive = settings.wowyActive ?? false;
+  if (wowyActive && (homeProfile || awayProfile)) {
+    const fixtureLineup = getLineups()[String(fix.fixture?.id)];
+    if (fixtureLineup) {
+      const presentIds = side => new Set([
+        ...(fixtureLineup[side]?.starters  || []).map(p => String(p.id ?? p)),
+        ...(fixtureLineup[side]?.substitutes || []).map(p => String(p.id ?? p)),
+      ]);
+      const homePresent = presentIds('home');
+      const awayPresent = presentIds('away');
+      const absentFrom = (profile, present) => {
+        const deltas = getWOWYDeltas(profile.teamId);
+        return Object.keys(deltas).filter(pid => !present.has(String(pid)));
+      };
+      if (homeProfile) homeProfile.confirmedAbsent = absentFrom(homeProfile, homePresent);
+      if (awayProfile) awayProfile.confirmedAbsent = absentFrom(awayProfile, awayPresent);
+    }
+  }
+
   const { probs: adjustedProbs, teamIntel } = applyTeamProfileModifiers(
     probs, homeProfile, awayProfile, context, dataConf, homeDays, awayDays, weatherForModifier,
     { wowyActive }
@@ -1201,12 +1221,15 @@ async function runHistoricalBackfill({ rescore = false, onProgress } = {}) {
           if (data?.errors?.requests) {
             const msg = `[RateLimit] API daily limit reached — stopping Phase 1. Will resume on next startup.`;
             console.warn(msg); onProgress?.(msg);
-            // Flush whatever we have so far so it's not lost
-            existing.fixtures = [...fixtureMap.values()];
-            const histPath = path.join(DATA_DIR, 'backfill-historical.json');
-            const histTmp  = histPath + '.tmp';
-            fs.writeFileSync(histTmp, JSON.stringify(existing));
-            fs.renameSync(histTmp, histPath);
+            // Only flush if we fetched something new — if fixtureMap is empty we have nothing
+            // to write, and flushing would overwrite a valid on-disk file with an empty array.
+            if (fixtureMap.size > 0) {
+              existing.fixtures = [...fixtureMap.values()];
+              const histPath = path.join(DATA_DIR, 'backfill-historical.json');
+              const histTmp  = histPath + '.tmp';
+              fs.writeFileSync(histTmp, JSON.stringify(existing));
+              fs.renameSync(histTmp, histPath);
+            }
             break; // stop processing further leagues
           }
 
