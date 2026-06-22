@@ -2156,7 +2156,7 @@ async function runFixtureStatsBackfillFn() {
   console.log(`[Startup:Stats] Done — ${fetched} fetched`);
 }
 
-async function runLineupsBackfillFn({ rebuild = false } = {}) {
+async function runLineupsBackfillFn({ rebuild = false, budget = 7000 } = {}) {
   const LINEUP_LEAGUES = new Set([39, 2, 140, 135, 78, 61]);
   const LINEUP_SEASONS = new Set([2022, 2023, 2024]);
   const historical = readJSON('backfill-historical.json');
@@ -2172,12 +2172,24 @@ async function runLineupsBackfillFn({ rebuild = false } = {}) {
     require('./teamProfiles').saveProfiles(profiles);
   }
   const lineupsDb = getLineups();
-  let fetched = 0;
+  let fetched = 0, apiCalls = 0;
   for (const fix of targets) {
+    if (apiCalls >= budget) {
+      saveLineups(lineupsDb);
+      console.log(`[Startup:Lineups] Budget of ${budget} API calls reached — stopping. ${fetched} fetched this run.`);
+      return;
+    }
     const fid = String(fix.fixture?.id);
     if (lineupsDb[fid]) continue;
     try {
       const { data } = await apiSports.get('/fixtures/lineups', { params: { fixture: fid } });
+      apiCalls++;
+      if (data?.errors?.requests) {
+        console.warn('[Startup:Lineups] API rate limit reached — saving progress and stopping');
+        setRateLimited();
+        saveLineups(lineupsDb);
+        return;
+      }
       if (data?.response?.length >= 2) {
         lineupsDb[fid] = {
           home: parseApiLineup(data.response[0]),
@@ -2192,17 +2204,53 @@ async function runLineupsBackfillFn({ rebuild = false } = {}) {
         updateWOWY(fix.teams?.away?.id, lineupsDb[fid].away.starters, lineupsDb[fid].away.substitutes || [], outcome === 'win' ? 'loss' : outcome === 'loss' ? 'win' : 'draw');
         if (fetched % 100 === 0) {
           saveLineups(lineupsDb);
-          console.log(`[Startup:Lineups] ${fetched} fetched`);
+          console.log(`[Startup:Lineups] ${fetched} fetched, ${apiCalls} API calls used`);
         }
       }
       await new Promise(r => setTimeout(r, 350));
     } catch {}
   }
   saveLineups(lineupsDb);
-  console.log(`[Startup:Lineups] Done — ${fetched} fetched`);
+  console.log(`[Startup:Lineups] Done — ${fetched} fetched, ${apiCalls} API calls used`);
 }
 
-app.get('/api/startup/status', (_req, res) => res.json({ ..._startupStatus, apiRateLimited: isRateLimited() }));
+app.get('/api/startup/status', (_req, res) => {
+  const hist     = readJSON('backfill-historical.json');
+  const stats    = readJSON('fixture-stats.json') || {};
+  const lineups  = readJSON('lineups.json') || {};
+  const profiles = require('./teamProfiles').readProfiles();
+  const { getWOWYDeltas } = require('./teamProfiles');
+
+  let wowyHighConf = 0;
+  for (const p of Object.values(profiles)) {
+    if (!p.playerDependency?.players) continue;
+    const deltas = getWOWYDeltas(p.teamId);
+    for (const d of Object.values(deltas)) {
+      if (d.confidence === 'high' && !d.selectionBias) wowyHighConf++;
+    }
+  }
+
+  const fixtureCount  = hist?.fixtures?.length ?? 0;
+  const statsCount    = Object.keys(stats).length;
+  const lineupsCount  = Object.keys(lineups).length;
+  const lineupsTarget = hist?.fixtures?.filter(f =>
+    [39, 2, 140, 135, 78, 61].includes(f.league?.id) &&
+    [2022, 2023, 2024].includes(f.league?.season)
+  ).length ?? 0;
+
+  res.json({
+    ..._startupStatus,
+    apiRateLimited: isRateLimited(),
+    counts: {
+      historicalFixtures: fixtureCount,
+      stats: statsCount,
+      lineups: lineupsCount,
+      lineupsTarget,
+      lineupsRemaining: Math.max(0, lineupsTarget - lineupsCount),
+      wowyHighConfidence: wowyHighConf,
+    },
+  });
+});
 
 // ─── START ───────────────────────────────────────────────────────────────────
 
