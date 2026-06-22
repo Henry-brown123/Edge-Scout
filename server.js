@@ -1812,6 +1812,11 @@ app.post('/api/backfill/lineups', async (req, res) => {
       if (lineupsDb[fid]) { skipped++; continue; }
       try {
         const { data } = await apiSports.get('/fixtures/lineups', { params: { fixture: fid } });
+        if (data?.errors?.requests) {
+          console.warn('[LineupsBackfill] API rate limit reached — saving progress and stopping');
+          saveLineups(lineupsDb);
+          break;
+        }
         if (data?.response?.length >= 2) {
           const entry = {
             home:      parseApiLineup(data.response[0]),
@@ -2005,6 +2010,21 @@ async function runBackfillChain() {
 
     console.log('[Startup] Running lineups backfill…');
     await runLineupsBackfillFn({ rebuild: false }); // don't rebuild WOWY on auto-heal — preserve existing data
+
+    // If lineups still empty after the run, API was rate-limited — schedule retry
+    const lineupsAfter = readJSON('lineups.json');
+    if (!lineupsAfter || Object.keys(lineupsAfter).length === 0) {
+      const retryIn = 90 * 60 * 1000;
+      console.warn('[Startup] Lineups backfill returned 0 entries — likely rate-limited. Retrying in 90 min.');
+      _startupStatus.phase = 'rate-limited';
+      _startupStatus.retryAt = new Date(Date.now() + retryIn).toISOString();
+      setTimeout(() => {
+        console.log('[Startup] Retry: re-running backfill chain after rate-limit delay');
+        runBackfillChain().catch(e => console.error('[Startup retry]', e.message));
+      }, retryIn);
+      return;
+    }
+
     _startupStatus.phase = 'complete';
     _startupStatus.completedAt = new Date().toISOString();
     console.log('[Startup] Backfill chain complete');
@@ -2026,13 +2046,16 @@ async function startupCheck() {
   const missing = dataFiles.filter(f => !fs.existsSync(path.join(DATA_DIR, f)));
 
   // Also trigger if historical file exists but has no fixtures (post-corrupt-write state)
-  const hist = missing.includes('backfill-historical.json') ? null : readJSON('backfill-historical.json');
+  const hist    = missing.includes('backfill-historical.json') ? null : readJSON('backfill-historical.json');
+  const lineups = missing.includes('lineups.json') ? null : readJSON('lineups.json');
   const emptyFixtures = !missing.includes('backfill-historical.json') && !hist?.fixtures?.length;
+  const emptyLineups  = !missing.includes('lineups.json') && Object.keys(lineups || {}).length === 0;
 
-  if (missing.length > 0 || emptyFixtures) {
+  if (missing.length > 0 || emptyFixtures || emptyLineups) {
     const reason = missing.length > 0
       ? `Missing: ${missing.join(', ')}`
-      : 'backfill-historical.json has 0 fixtures (corrupt/incomplete)';
+      : emptyFixtures ? 'backfill-historical.json has 0 fixtures (corrupt/incomplete)'
+      : 'lineups.json is empty — lineup/WOWY rebuild needed';
     console.log(`[Startup] ${reason} — queuing backfill chain`);
     _startupStatus = { phase: 'queued', startedAt: null, completedAt: null, skipped: false, error: null, missing };
     setTimeout(() => runBackfillChain().catch(e => console.error('[Startup]', e.message)), 5000);
