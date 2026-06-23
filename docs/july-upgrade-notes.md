@@ -69,3 +69,58 @@ The modifier fires when `wowyActive=true` (now the default) and confirmed lineup
 - Yıldız (Turkey): +52.6pp HIGH confidence — genuine signal, small club sample
 - Alexander-Arnold (England): +45.7pp HIGH confidence — 53 with / 9 without, strongest large-sample signal
 - Saka (England): +25.5pp HIGH confidence — 55 with / 5 without
+
+---
+
+## 4. International factor weight calibration (Option B — July upgrade)
+
+**Finding date:** 2026-06-23  
+**Status:** Known limitation, documented — not addressed in current codebase
+
+### What was attempted
+
+Four adjustments were implemented to reduce model–market gap on WC 2026 group stage fixtures:
+
+1. `dataConf` cap at 0.70 for international context — anchor always contributes ≥30% weight  
+2. `rankScale` raised from 0.010 → 0.018 in `CONTEXT_CONFIG.international`  
+3. Neutral venue base probs lowered to 0.34/0.34 for `group_stage` and `knockout` (was 0.30/0.45)  
+4. Host nation +8pp boost for USA/Canada/Mexico at WC 2026
+
+### Results (diagnostic on 5 June 16-19 fixtures)
+
+| Fixture | Gap before | Gap after |
+|---|---|---|
+| France vs Senegal | +15.7pp | +23.3pp ✗ |
+| England vs Croatia | +9.7pp | +14.4pp ✗ |
+| Ghana vs Panama | +9.5pp | +3.5pp ✓ |
+| Scotland vs Morocco | +10.8pp | −6.1pp ✓ |
+| USA vs Australia | +24.1pp | +17.4pp ✓ |
+| **Average** | **14.0pp** | **12.9pp** |
+
+### Root cause of residual gap
+
+The international historical pool (Nations League, qualifying, continental tournaments) does not distinguish performance quality by opponent strength. Senegal (FIFA rank 18) scores form=85/def=84 in the pool due to dominance in AFCON and CONCACAF qualifiers against weaker opposition — this inflates their form signal relative to WC group stage relevance. At 70% form weight, the model underestimates strong European/South American sides against well-formed African/Asian opponents.
+
+France vs Senegal: model outputs 48% vs 71.4% market implied. The model is reading real data (France's defense=48 from Nations League concessions is genuine), but that signal applies differently at WC group stage.
+
+England vs Croatia: model 46.2% vs 60.6% implied. The 38-point form advantage (83 vs 45) doesn't translate to 60%+ under current international factor weights — those weights were designed for club football where a 38-point form gap is a much stronger predictor.
+
+### What July needs
+
+- **Calibrate international factor weights** against WC 2022 and Euros 2020/2024 results. Current weights (`WEIGHTS_BY_CONTEXT.international`) were inherited from club context and produce near-50/50 outputs even for large quality gaps at full data confidence.
+- **Opponent-weighted form score** for international pool: discount form points earned against teams ranked > 60 by a factor proportional to opponent quality. This stops Senegal's AFCON record inflating their WC group stage form score.
+- **Platt scaling per competition phase**: separate calibration factors for `group_stage` vs `league_mid` — the current 1.11 factor was derived from club league data and may not apply to tournament football.
+
+The four structural fixes (dataConf cap, rankScale, neutral venue base, host boost) are implemented and directionally correct. The residual gap is not a bug in those fixes — it is the underlying weight calibration problem that requires tournament result training data to solve properly.
+
+### Specific fix for France/England gap — confederation strength adjustment
+
+Build an **opponent-quality-weighted form score** for the international pool:
+
+- For each result in a team's form history, compute the FIFA ranking quality of the opponent (using `rankToQuality`)
+- Scale the points contribution by `opponentQuality / 100` — so a win against a rank-1 team counts fully, a win against a rank-100 team counts at 5%
+- Replace `formScore()` with `weightedFormScore()` for international context
+
+This directly addresses the Senegal problem: Senegal's form=85 is built on AFCON qualifying wins against opponents ranked 60-120. Weighted by opponent quality, their score drops significantly. France's form=65 from Nations League A (vs Netherlands rank 8, Germany rank 10, Portugal rank 6) would barely change. The quality-weighted scores will reflect tournament-level form rather than confederation-level dominance.
+
+Implementation: add `opponentQualityWeight` parameter to `formScore` in `scoring.js`, pass `true` when `context === 'international'`. Requires building a team-id → FIFA rank index from `FIFA_RANK_FALLBACK` during scoring.

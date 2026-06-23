@@ -442,36 +442,63 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   const fw = settings.formWindow;
   const hw = settings.h2hWindow;
 
+  // Fix 1: for international fixtures, supplement the current-competition form pool with
+  // all international-league data from the historical backfill. WC 2026 fixtures have no
+  // historical pool of their own, but every WC team has qualifying, Nations League, and
+  // continental tournament data that should feed form, xG, defense, and momentum scores.
+  const INTERNATIONAL_LEAGUE_IDS = new Set([1, 4, 5, 6, 7, 8, 9, 10, 32, 33, 34, 31, 960]);
+  let scoringPool = formFixtures;
+  if (context === 'international') {
+    const hist = readJSON('backfill-historical.json');
+    if (hist?.fixtures?.length) {
+      const intlHistorical = hist.fixtures.filter(f =>
+        INTERNATIONAL_LEAGUE_IDS.has(f.league?.id) &&
+        f.fixture?.status?.short === 'FT'
+      );
+      // Merge: deduplicate by fixture id, prefer the live-fetch version if present
+      const poolMap = new Map(intlHistorical.map(f => [f.fixture.id, f]));
+      for (const f of formFixtures) poolMap.set(f.fixture.id, f);
+      scoringPool = [...poolMap.values()]
+        .sort((a, b) => new Date(b.fixture?.date) - new Date(a.fixture?.date));
+    }
+  }
+
   const homeF = {
-    form:      formScore(formFixtures, homeId, fw, d),
-    homeAdv:   homeAdvScore(formFixtures, homeId, d),
-    xg:        xgScore(formFixtures, homeId, statsCache, d),
+    form:      formScore(scoringPool, homeId, fw, d),
+    homeAdv:   homeAdvScore(scoringPool, homeId, d),
+    xg:        xgScore(scoringPool, homeId, statsCache, d),
     h2h:       h2hScore(h2hFixtures, homeId, hw, d),
-    defense:   defenseScore(formFixtures, homeId, d),
-    momentum:  momentumScore(formFixtures, homeId),
+    defense:   defenseScore(scoringPool, homeId, d),
+    momentum:  momentumScore(scoringPool, homeId),
     injuries:  injuryScore(injuries, homeId),
     standings: standingsScore(standings, homeId),
   };
   const awayF = {
-    form:      formScore(formFixtures, awayId, fw, d),
+    form:      formScore(scoringPool, awayId, fw, d),
     homeAdv:   50,
-    xg:        xgScore(formFixtures, awayId, statsCache, d),
+    xg:        xgScore(scoringPool, awayId, statsCache, d),
     h2h:       100 - h2hScore(h2hFixtures, homeId, hw, d),
-    defense:   defenseScore(formFixtures, awayId, d),
-    momentum:  momentumScore(formFixtures, awayId),
+    defense:   defenseScore(scoringPool, awayId, d),
+    momentum:  momentumScore(scoringPool, awayId),
     injuries:  injuryScore(injuries, awayId),
     standings: standingsScore(standings, awayId),
   };
 
-  // Data confidence per team (capped at 1 when ≥15 fixtures available)
-  const homeFormCount = formFixtures.filter(f =>
+  // Data confidence per team (capped at 1 when ≥15 fixtures available).
+  // For international fixtures, count from the full international scoring pool so that
+  // qualifying and Nations League data contributes confidence, not just WC group stage.
+  const homeFormCount = scoringPool.filter(f =>
     f.teams?.home?.id === homeId || f.teams?.away?.id === homeId
   ).length;
-  const awayFormCount = formFixtures.filter(f =>
+  const awayFormCount = scoringPool.filter(f =>
     f.teams?.home?.id === awayId || f.teams?.away?.id === awayId
   ).length;
-  const homeDataConf = Math.min(homeFormCount / 15, 1);
-  const awayDataConf = Math.min(awayFormCount / 15, 1);
+  // Adjustment 1: for international fixtures, cap dataConf at 0.70 so the ranking anchor
+  // always contributes at least 30% weight. Form data informs but quality signal is never
+  // fully overridden — WC teams have thin cross-competition comparability.
+  const confCap      = context === 'international' ? 0.70 : 1;
+  const homeDataConf = Math.min(homeFormCount / 15, confCap);
+  const awayDataConf = Math.min(awayFormCount / 15, confCap);
   const dataConf     = Math.min(homeDataConf, awayDataConf); // use the weaker team's confidence
 
   let probs = model.predict(homeF, awayF, weights, context, leagueConfig);
@@ -485,8 +512,16 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     const awayQ    = rankToQuality(awayRank);
     const rankDiff = homeQ - awayQ; // positive = home ranked stronger
 
-    const rH = Math.max(0.05, Math.min(0.85, cfg.homeBase + rankDiff * cfg.rankScale));
-    const rA = Math.max(0.05, Math.min(0.85, cfg.awayBase - rankDiff * cfg.rankScale));
+    // Adjustment 3: WC group stage and knockout fixtures are played at neutral venues.
+    // Symmetric base at 0.34/0.34 (no home advantage); quality and form do the differentiation.
+    // Lower than 0.38 so genuine underdogs can still be suppressed by the rank correction.
+    const neutralVenue = context === 'international' &&
+      (competitionPhase === 'group_stage' || competitionPhase === 'knockout');
+    const anchorHomeBase = neutralVenue ? 0.34 : cfg.homeBase;
+    const anchorAwayBase = neutralVenue ? 0.34 : cfg.awayBase;
+
+    const rH = Math.max(0.05, Math.min(0.85, anchorHomeBase + rankDiff * cfg.rankScale));
+    const rA = Math.max(0.05, Math.min(0.85, anchorAwayBase - rankDiff * cfg.rankScale));
     const rD = Math.max(0.05, 1 - rH - rA);
     const rSum   = rH + rD + rA;
     const rankAdj = { home: rH / rSum, draw: rD / rSum, away: rA / rSum };
@@ -496,6 +531,38 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
       draw: dataConf * probs.draw + (1 - dataConf) * rankAdj.draw,
       away: dataConf * probs.away + (1 - dataConf) * rankAdj.away,
     };
+  }
+
+  // Adjustment 4: host nation tournament boost.
+  // USA/Canada/Mexico are co-hosting WC 2026; host nations consistently outperform FIFA
+  // ranking at major tournaments. Apply +8pp to host, redistributed from draw and opponent.
+  // Only applies to international group stage and knockout, not qualifying.
+  const HOST_NATIONS_2026 = new Set([2384, 5529, 16]); // USA, Canada, Mexico
+  if (context === 'international' &&
+      (competitionPhase === 'group_stage' || competitionPhase === 'knockout')) {
+    const homeIsHost = HOST_NATIONS_2026.has(homeId);
+    const awayIsHost = HOST_NATIONS_2026.has(awayId);
+    if (homeIsHost || awayIsHost) {
+      const BOOST = 0.08;
+      if (homeIsHost) {
+        const take = BOOST * 0.6; // 60% from draw, 40% from away
+        probs = {
+          home: Math.min(0.90, probs.home + BOOST),
+          draw: Math.max(0.03, probs.draw - take),
+          away: Math.max(0.03, probs.away - (BOOST - take)),
+        };
+      } else {
+        const take = BOOST * 0.6;
+        probs = {
+          home: Math.max(0.03, probs.home - (BOOST - take)),
+          draw: Math.max(0.03, probs.draw - take),
+          away: Math.min(0.90, probs.away + BOOST),
+        };
+      }
+      // Re-normalise after boost
+      const bSum = probs.home + probs.draw + probs.away;
+      probs = { home: probs.home / bSum, draw: probs.draw / bSum, away: probs.away / bSum };
+    }
   }
 
   // Weather — fetch first so it can inform profile modifiers

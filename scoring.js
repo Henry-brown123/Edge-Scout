@@ -54,7 +54,7 @@ const CONTEXT_CONFIG = {
   },
   international: {
     awayMult:      0.97,   // near-neutral venues, minimal home advantage
-    rankScale:     0.010,
+    rankScale:     0.018,  // raised from 0.010 — anchor guaranteed 30% weight so needs more differentiation
     homeBase:      0.30,
     awayBase:      0.45,
     dataConfMin:   0.0,    // no min data requirement — use stricter gap threshold
