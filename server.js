@@ -2119,13 +2119,16 @@ async function runBackfillChain() {
       return;
     }
 
+    // Chain order: lineups first (primary WOWY signal, has budget cap),
+    // stats second (secondary xG signal, also budgeted). Lineups are the
+    // bottleneck; stats exhausting the quota first blocked lineups 3 nights.
+    _startupStatus.phase = 'lineups';
+    console.log('[Startup] Running lineups backfill…');
+    await runLineupsBackfillFn({ rebuild: false });
+
     _startupStatus.phase = 'fixture-stats';
     console.log('[Startup] Running fixture-stats backfill…');
-    await runFixtureStatsBackfillFn();
-    _startupStatus.phase = 'lineups';
-
-    console.log('[Startup] Running lineups backfill…');
-    await runLineupsBackfillFn({ rebuild: false }); // don't rebuild WOWY on auto-heal — preserve existing data
+    await runFixtureStatsBackfillFn({ budget: 2000 });
 
     // If lineups still empty after the run, API was rate-limited — schedule retry
     const lineupsAfter = readJSON('lineups.json');
@@ -2182,7 +2185,7 @@ async function startupCheck() {
 }
 
 // Extracted backfill logic callable without HTTP context
-async function runFixtureStatsBackfillFn() {
+async function runFixtureStatsBackfillFn({ budget = 2000 } = {}) {
   const STATS_LEAGUES = new Set([39, 2, 140, 135, 78, 61]);
   const STATS_SEASONS = new Set([2022, 2023, 2024]);
   const historical = readJSON('backfill-historical.json');
@@ -2192,12 +2195,24 @@ async function runFixtureStatsBackfillFn() {
     STATS_LEAGUES.has(f.league?.id) && STATS_SEASONS.has(f.league?.season)
   );
   const fixtureStatsDb = getFixtureStats();
-  let fetched = 0;
+  let fetched = 0, apiCalls = 0;
   for (const fix of targets) {
+    if (apiCalls >= budget) {
+      saveFixtureStats(fixtureStatsDb);
+      console.log(`[Startup:Stats] Budget of ${budget} API calls reached — stopping. ${fetched} fetched this run.`);
+      return;
+    }
     const fid = String(fix.fixture?.id);
     if (fixtureStatsDb[fid]) continue;
     try {
       const { data } = await apiSports.get('/fixtures/statistics', { params: { fixture: fid } });
+      apiCalls++;
+      if (data?.errors?.requests) {
+        console.warn('[Startup:Stats] API rate limit reached — saving progress and stopping');
+        setRateLimited();
+        saveFixtureStats(fixtureStatsDb);
+        return;
+      }
       if (data?.response?.length >= 2) {
         const parseStats = ts => {
           const find = t => ts.statistics?.find(s => s.type === t)?.value;
@@ -2213,14 +2228,14 @@ async function runFixtureStatsBackfillFn() {
         fetched++;
         if (fetched % 100 === 0) {
           saveFixtureStats(fixtureStatsDb);
-          console.log(`[Startup:Stats] ${fetched} fetched`);
+          console.log(`[Startup:Stats] ${fetched} fetched, ${apiCalls} API calls used`);
         }
       }
       await new Promise(r => setTimeout(r, 350));
     } catch {}
   }
   saveFixtureStats(fixtureStatsDb);
-  console.log(`[Startup:Stats] Done — ${fetched} fetched`);
+  console.log(`[Startup:Stats] Done — ${fetched} fetched, ${apiCalls} API calls used`);
 }
 
 async function runLineupsBackfillFn({ rebuild = false, budget = 7000 } = {}) {
@@ -2280,6 +2295,20 @@ async function runLineupsBackfillFn({ rebuild = false, budget = 7000 } = {}) {
   saveLineups(lineupsDb);
   console.log(`[Startup:Lineups] Done — ${fetched} fetched, ${apiCalls} API calls used`);
 }
+
+// Raw file sizes — lets us verify disk contents without parsing the full JSON
+app.get('/api/data/sizes', (_req, res) => {
+  const files = [
+    'backfill-historical.json', 'fixture-stats.json', 'lineups.json',
+    'team-profiles.json', 'calibration.json', 'settings.json',
+  ];
+  const result = {};
+  for (const f of files) {
+    const p = path.join(DATA_DIR, f);
+    try { result[f] = fs.statSync(p).size; } catch { result[f] = null; }
+  }
+  res.json(result);
+});
 
 app.get('/api/startup/status', (_req, res) => {
   const hist     = readJSON('backfill-historical.json');
