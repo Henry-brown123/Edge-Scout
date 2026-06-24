@@ -268,6 +268,31 @@ function buildProfileFromFixtures(teamId, teamName, fixtures) {
 // Call during morning scan, passing all deduplicated formFixtures across leagues.
 // Rebuilds every team profile from scratch from the available history.
 
+// International league IDs — same set used by server.js scoring pool
+const INTERNATIONAL_LEAGUE_IDS = new Set([1, 4, 5, 6, 7, 8, 9, 10, 32, 33, 34, 31, 960]);
+
+// Lazy-load the full international historical pool from disk.
+// Used to enrich international team profiles regardless of what fixture set
+// was passed to updateTeamProfiles (morning scan passes only the current
+// season's form fetch, which overwrites historical profiles with 1-2 data points).
+let _intlPoolCache = null;
+let _intlPoolCachedAt = 0;
+function getIntlHistoricalPool() {
+  // Refresh cache at most once per 60 seconds to avoid redundant disk reads
+  if (_intlPoolCache && Date.now() - _intlPoolCachedAt < 60000) return _intlPoolCache;
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'backfill-historical.json'), 'utf8'));
+    _intlPoolCache = (raw?.fixtures || []).filter(f =>
+      INTERNATIONAL_LEAGUE_IDS.has(f.league?.id) &&
+      ['FT', 'AET', 'PEN'].includes(f.fixture?.status?.short)
+    );
+    _intlPoolCachedAt = Date.now();
+  } catch {
+    _intlPoolCache = [];
+  }
+  return _intlPoolCache;
+}
+
 function updateTeamProfiles(fixtures) {
   if (!fixtures || !fixtures.length) return 0;
 
@@ -292,9 +317,30 @@ function updateTeamProfiles(fixtures) {
 
   const profiles = readProfiles();
   let updated = 0;
+  let intlPool = null; // loaded lazily only if international teams are found
 
   for (const [teamId, { name, fixes }] of Object.entries(teamData)) {
-    const profile = buildProfileFromFixtures(teamId, name, fixes);
+    // Fix 1: for international context teams, build the profile from the full
+    // international historical pool rather than the passed-in fixtures (which
+    // may be only the current season's form fetch from the morning scan).
+    // The morning scan overwrites profiles with 1-2 WC group stage games
+    // and destroys the correct profiles built by the historical backfill.
+    const inferredContext = deriveContext(fixes);
+    let buildFixtures = fixes;
+    if (inferredContext === 'international') {
+      if (!intlPool) intlPool = getIntlHistoricalPool();
+      if (intlPool.length > 0) {
+        const tid = parseInt(teamId, 10);
+        const fromPool = intlPool.filter(f =>
+          f.teams?.home?.id === tid || f.teams?.away?.id === tid
+        );
+        if (fromPool.length > fixes.length) {
+          buildFixtures = fromPool;
+        }
+      }
+    }
+
+    const profile = buildProfileFromFixtures(teamId, name, buildFixtures);
     if (profile) {
       // Preserve WOWY data built from lineups — not derivable from fixture history alone
       if (profiles[teamId]?.playerDependency) {
