@@ -45,7 +45,7 @@ const DATA_DIR       = process.env.DATA_DIR || path.join(__dirname, 'data');
 
 // Ensure DATA_DIR exists on startup (handles fresh disk or missing local dir)
 fs.mkdirSync(DATA_DIR, { recursive: true });
-console.log(`[Data] Using DATA_DIR: ${DATA_DIR}`);
+console.log(`[Data] process.env.DATA_DIR=${process.env.DATA_DIR ?? '(unset)'} → resolved DATA_DIR=${DATA_DIR}`);
 
 // Seed static lookup files from repo if not already on disk
 (function seedStaticFiles() {
