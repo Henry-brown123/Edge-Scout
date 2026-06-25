@@ -119,6 +119,13 @@ function setRateLimited() {
 
 function isRateLimited() { return _apiRateLimited; }
 
+// Returns true at or after 05:00 UTC — hard cutoff that guarantees quota headroom
+// for the 07:00 UTC morning scan, T-60 locks, and auto-resolution.
+function backfillCutoffReached() {
+  const now = new Date();
+  return now.getUTCHours() >= 5;
+}
+
 function getBankroll() {
   return readJSON('bankroll.json') || { initial: 1000, current: 1000, lastUpdated: null };
 }
@@ -690,6 +697,15 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
 // ─── MORNING SCAN ────────────────────────────────────────────────────────────
 
 async function runMorningScan(leagueIds) {
+  // Log current API quota usage so we can see how many calls remain at scan time
+  try {
+    const { data: statusData } = await apiSports.get('/status');
+    const sub = statusData?.response?.subscription;
+    const req = statusData?.response?.requests;
+    if (req) {
+      console.log(`[MorningScan] API quota — used: ${req.current}/${req.limit_day} (${Math.round((req.current/req.limit_day)*100)}%) | plan: ${sub?.plan || 'unknown'}`);
+    }
+  } catch { /* non-fatal — proceed even if status check fails */ }
   console.log(`[MorningScan] Starting for leagues: ${leagueIds.join(', ')}`);
   const settings  = getSettings();
   const today     = new Date().toISOString().split('T')[0];
@@ -2122,13 +2138,26 @@ async function runBackfillChain() {
     // Chain order: lineups first (primary WOWY signal, has budget cap),
     // stats second (secondary xG signal, also budgeted). Lineups are the
     // bottleneck; stats exhausting the quota first blocked lineups 3 nights.
+    // Hard cutoff at 05:00 UTC reserves quota for live operations.
+    if (backfillCutoffReached()) {
+      console.log('[Startup] Backfill cutoff (05:00 UTC) reached before lineups phase — skipping to preserve morning scan quota');
+      _startupStatus.phase = 'complete';
+      _startupStatus.completedAt = new Date().toISOString();
+      return;
+    }
     _startupStatus.phase = 'lineups';
     console.log('[Startup] Running lineups backfill…');
     await runLineupsBackfillFn({ rebuild: false });
 
+    if (backfillCutoffReached()) {
+      console.log('[Startup] Backfill cutoff (05:00 UTC) reached after lineups — skipping stats to preserve morning scan quota');
+      _startupStatus.phase = 'complete';
+      _startupStatus.completedAt = new Date().toISOString();
+      return;
+    }
     _startupStatus.phase = 'fixture-stats';
     console.log('[Startup] Running fixture-stats backfill…');
-    await runFixtureStatsBackfillFn({ budget: 2000 });
+    await runFixtureStatsBackfillFn({ budget: 1500 });
 
     // If lineups still empty after the run, API was rate-limited — schedule retry
     const lineupsAfter = readJSON('lineups.json');
@@ -2197,6 +2226,11 @@ async function runFixtureStatsBackfillFn({ budget = 2000 } = {}) {
   const fixtureStatsDb = getFixtureStats();
   let fetched = 0, apiCalls = 0;
   for (const fix of targets) {
+    if (backfillCutoffReached()) {
+      saveFixtureStats(fixtureStatsDb);
+      console.log(`[Startup:Stats] 05:00 UTC cutoff reached — stopping to preserve morning scan quota. ${fetched} fetched this run.`);
+      return;
+    }
     if (apiCalls >= budget) {
       saveFixtureStats(fixtureStatsDb);
       console.log(`[Startup:Stats] Budget of ${budget} API calls reached — stopping. ${fetched} fetched this run.`);
@@ -2256,6 +2290,11 @@ async function runLineupsBackfillFn({ rebuild = false, budget = 7000 } = {}) {
   const lineupsDb = getLineups();
   let fetched = 0, apiCalls = 0;
   for (const fix of targets) {
+    if (backfillCutoffReached()) {
+      saveLineups(lineupsDb);
+      console.log(`[Startup:Lineups] 05:00 UTC cutoff reached — stopping to preserve morning scan quota. ${fetched} fetched this run.`);
+      return;
+    }
     if (apiCalls >= budget) {
       saveLineups(lineupsDb);
       console.log(`[Startup:Lineups] Budget of ${budget} API calls reached — stopping. ${fetched} fetched this run.`);
