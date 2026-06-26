@@ -1155,13 +1155,28 @@ async function checkAndResolve() {
 function setupScheduler() {
   const settings = getSettings();
 
+  // 00:05 UTC every day — nightly backfill chain (after API quota resets at midnight)
+  // Runs independent of startup so it fires every night even on a stable long-running server.
+  cron.schedule('5 0 * * *', () => {
+    if (isRateLimited()) {
+      console.log('[Cron:Backfill] Skipped — API still rate limited at 00:05 UTC');
+      return;
+    }
+    if (_historicalBackfillRunning) {
+      console.log('[Cron:Backfill] Skipped — backfill already in progress');
+      return;
+    }
+    console.log(`[Cron:Backfill] 00:05 UTC — starting nightly backfill chain`);
+    runBackfillChain().catch(e => console.error('[Cron:Backfill]', e.message));
+  }, { timezone: 'UTC' });
+
   // 07:00 UTC every day — morning scan
   cron.schedule('0 7 * * *', () => {
     if (isRateLimited()) { console.log('[Cron] Morning scan skipped — API rate limited'); return; }
     console.log(`[Cron] 07:00 tick — running morning scan at ${new Date().toISOString()}`);
     const leagues = getSettings().activeLeagues || ['1','39','140','78','135','61','2'];
     runMorningScan(leagues).catch(e => console.error('[Cron:MorningScan]', e.message));
-  });
+  }, { timezone: 'UTC' });
 
   // Every minute — check for T-60 fixtures
   cron.schedule('* * * * *', () => {
@@ -2393,14 +2408,10 @@ app.listen(PORT, () => {
   console.log(`Edge Scout running at http://localhost:${PORT} — DATA_DIR: ${DATA_DIR}`);
   setupScheduler();
 
-  // Keep-alive: ping own /health every 10 min to prevent Render free-tier spin-down
-  if (process.env.NODE_ENV === 'production') {
-    const SELF = `https://edge-scout.onrender.com`;
-    setInterval(() => {
-      axios.get(`${SELF}/health`).catch(() => {});
-    }, 10 * 60 * 1000);
-    console.log('[KeepAlive] Self-ping every 10 min enabled');
-  }
+  // Note: Render Starter plan does not spin down — no keepalive needed.
+  // Self-pings are excluded from Render's activity detection and do not prevent spin-down
+  // on free-tier services anyway. The nightly backfill cron at 00:05 UTC is the
+  // mechanism that ensures overnight work runs reliably.
 
   // On startup, strip any watching entries whose kickoff has already passed,
   // then rescan if we have no scan for today.
