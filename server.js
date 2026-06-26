@@ -806,6 +806,8 @@ async function runMorningScan(leagueIds) {
             weatherCondition:  scored.weatherCondition,
             context:           scored.context,
             competitionPhase:  scored.competitionPhase,
+            neutralVenue:      scored.teamIntel?.neutralVenue ?? false,
+            modifierNotes:     scored.teamIntel?.modifierNotes ?? [],
           };
           calNow.push(calEntry);
 
