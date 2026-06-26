@@ -638,7 +638,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
 
   const { probs: adjustedProbs, teamIntel } = applyTeamProfileModifiers(
     probs, homeProfile, awayProfile, context, dataConf, homeDays, awayDays, weatherForModifier,
-    { wowyActive }
+    { wowyActive, competitionPhase }
   );
   probs = adjustedProbs;
 

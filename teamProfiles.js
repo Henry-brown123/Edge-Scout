@@ -429,7 +429,9 @@ function addResultToProfile(teamId, isHome, won, drawn, opponentId, opponentName
 // Returns { probs, applied, notes, teamIntel }.
 
 function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dataConf, homeDaysRest, awayDaysRest, weather, opts = {}) {
-  const wowyActive = opts.wowyActive ?? true; // default true for backwards compat in tests
+  const wowyActive       = opts.wowyActive ?? true; // default true for backwards compat in tests
+  const competitionPhase = opts.competitionPhase ?? null;
+  const neutralVenue     = competitionPhase === 'group_stage' || competitionPhase === 'knockout';
   const leagueAvg  = LEAGUE_AVG_HOME_WIN_RATE[context] || 0.463;
   const thresholds = CONTEXT_THRESHOLDS[context] || CONTEXT_THRESHOLDS.club_domestic;
 
@@ -468,6 +470,7 @@ function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dat
     oppositionAnomaly: null,
     modifierNotes: [],
     modifierApplied: false,
+    neutralVenue,
     leagueAvgHomeWinRate: leagueAvg,
   };
 
@@ -478,10 +481,10 @@ function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dat
   let { home, draw, away } = probs;
   const notes = [];
 
-  // 1. Home advantage multiplier — dampened by the profile's own homeConfidence, not
-  //    the pipeline dataConf (which is near-zero for teams in their first tournament match
-  //    even though they have qualifying history in the profile).
-  if (homeProfile.homeRecord?.played >= thresholds.homeMultiplier) {
+  // 1. Home advantage multiplier — skipped at neutral WC venues (group_stage / knockout).
+  //    At neutral venues the 0.34/0.34 symmetric base already removes home advantage;
+  //    applying a team's home win rate multiplier on top would incorrectly re-introduce it.
+  if (!neutralVenue && homeProfile.homeRecord?.played >= thresholds.homeMultiplier) {
     const mult     = homeProfile.homeWinRateMultiplier || 1.0;
     const profConf = Math.max(homeProfile.homeConfidence, dataConf); // use whichever is higher
     const blended  = profConf * mult + (1 - profConf);
