@@ -72,17 +72,50 @@ console.log(`[Data] process.env.DATA_DIR=${process.env.DATA_DIR ?? '(unset)'} �
   }
 })();
 
+const MIN_VALID_BYTES = 100;
+
 function readJSON(file) {
-  try { return JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), 'utf8')); }
-  catch { return null; }
+  const fullPath = path.join(DATA_DIR, file);
+  try {
+    const size = fs.statSync(fullPath).size;
+    if (size < MIN_VALID_BYTES) {
+      console.warn(`[Data] readJSON(${file}): ${size} bytes — possibly corrupt, treating as missing`);
+      return null;
+    }
+    return JSON.parse(fs.readFileSync(fullPath, 'utf8'));
+  } catch (e) {
+    if (e.code !== 'ENOENT') console.warn(`[Data] readJSON(${file}): ${e.message}`);
+    return null;
+  }
 }
 
 function writeJSON(file, data) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const dest = path.join(DATA_DIR, file);
   const tmp  = dest + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
-  fs.renameSync(tmp, dest);
+  try {
+    const serialised = JSON.stringify(data, null, 2);
+    // Guard: never overwrite a substantial file with an empty structure
+    if (serialised.length < 10) {
+      let existingSize = 0;
+      try { existingSize = fs.statSync(dest).size; } catch {}
+      if (existingSize >= MIN_VALID_BYTES) {
+        console.error(`[Data] writeJSON(${file}): refused — would overwrite ${existingSize}b file with empty structure`);
+        return;
+      }
+    }
+    fs.writeFileSync(tmp, serialised);
+    // Verify tmp is valid JSON before committing
+    try { JSON.parse(fs.readFileSync(tmp, 'utf8')); } catch (verifyErr) {
+      fs.unlinkSync(tmp);
+      console.error(`[Data] writeJSON(${file}): tmp file failed JSON parse — keeping existing`);
+      return;
+    }
+    fs.renameSync(tmp, dest);
+  } catch (e) {
+    console.error(`[Data] writeJSON(${file}): ${e.message}`);
+    try { fs.unlinkSync(tmp); } catch {}
+  }
 }
 
 const SETTINGS_DEFAULTS = {
@@ -98,33 +131,8 @@ function getSettings() {
   return stored ? { ...SETTINGS_DEFAULTS, ...stored } : { ...SETTINGS_DEFAULTS };
 }
 
-// ── API rate-limit guard ──────────────────────────────────────────────────────
-// Set when any call returns the daily-limit error. Auto-clears at midnight UTC.
-let _apiRateLimited = false;
-let _rateLimitClearTimer = null;
-
-function setRateLimited() {
-  if (_apiRateLimited) return;
-  _apiRateLimited = true;
-  const now = new Date();
-  const midnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
-  const msUntilMidnight = midnight - now;
-  console.warn(`[API] Rate limit hit — backing off until midnight UTC (${midnight.toISOString()})`);
-  if (_rateLimitClearTimer) clearTimeout(_rateLimitClearTimer);
-  _rateLimitClearTimer = setTimeout(() => {
-    _apiRateLimited = false;
-    console.log('[API] Rate limit cleared — resuming API calls');
-  }, msUntilMidnight);
-}
-
-function isRateLimited() { return _apiRateLimited; }
-
-// Returns true at or after 05:00 UTC — hard cutoff that guarantees quota headroom
-// for the 07:00 UTC morning scan, T-60 locks, and auto-resolution.
-function backfillCutoffReached() {
-  const now = new Date();
-  return now.getUTCHours() >= 5;
-}
+// ── Rate limit — single source of truth ──────────────────────────────────────
+const { setRateLimited, isRateLimited, getRateLimitState, backfillCutoffReached } = require('./rateLimit');
 
 function getBankroll() {
   return readJSON('bankroll.json') || { initial: 1000, current: 1000, lastUpdated: null };
@@ -171,6 +179,20 @@ const oddsApi = axios.create({
   baseURL: 'https://api.the-odds-api.com/v4',
   timeout: 15000,
 });
+
+// Wire rate-limit detection into all API-Sports calls via interceptors.
+// Response interceptor: detect quota error → setRateLimited() centrally.
+// No request interceptor — existing loop guards handle early exit correctly.
+apiSports.interceptors.response.use(
+  response => {
+    if (response.data?.errors?.requests) setRateLimited();
+    return response;
+  },
+  error => {
+    if (error.response?.status === 429) setRateLimited();
+    return Promise.reject(error);
+  }
+);
 
 // ─── LEAGUE METADATA ─────────────────────────────────────────────────────────
 
@@ -1152,61 +1174,82 @@ async function checkAndResolve() {
 
 // ─── SCHEDULER ───────────────────────────────────────────────────────────────
 
+const _cronRunning = { backfill: false, morningScan: false, preMatch: false, resolve: false };
+const _cronLastRan = { backfill: null,  morningScan: null,  resolve: null };
+
 function setupScheduler() {
-  const settings = getSettings();
-
-  // 00:05 UTC every day — nightly backfill chain (after API quota resets at midnight)
-  // Runs independent of startup so it fires every night even on a stable long-running server.
-  cron.schedule('5 0 * * *', () => {
-    if (isRateLimited()) {
-      console.log('[Cron:Backfill] Skipped — API still rate limited at 00:05 UTC');
-      return;
+  // 1. 00:05 UTC — nightly backfill chain
+  cron.schedule('5 0 * * *', async () => {
+    if (isRateLimited()) { console.log('[Cron:Backfill] Skipped — rate limited'); return; }
+    if (_cronRunning.backfill) { console.log('[Cron:Backfill] Skipped — already running'); return; }
+    _cronRunning.backfill = true;
+    const t0 = Date.now();
+    console.log('[Cron:Backfill] 00:05 UTC — starting nightly backfill chain');
+    try {
+      await runBackfillChain();
+      console.log(`[Cron:Backfill] Complete in ${Math.round((Date.now() - t0) / 1000)}s`);
+    } catch (e) {
+      console.error(`[Cron:Backfill] Error: ${e.message}`);
+    } finally {
+      _cronRunning.backfill = false;
+      _cronLastRan.backfill = new Date().toISOString();
     }
-    if (_historicalBackfillRunning) {
-      console.log('[Cron:Backfill] Skipped — backfill already in progress');
-      return;
-    }
-    console.log(`[Cron:Backfill] 00:05 UTC — starting nightly backfill chain`);
-    runBackfillChain().catch(e => console.error('[Cron:Backfill]', e.message));
   }, { timezone: 'UTC' });
 
-  // 07:00 UTC every day — morning scan
-  cron.schedule('0 7 * * *', () => {
-    if (isRateLimited()) { console.log('[Cron] Morning scan skipped — API rate limited'); return; }
-    console.log(`[Cron] 07:00 tick — running morning scan at ${new Date().toISOString()}`);
-    const leagues = getSettings().activeLeagues || ['1','39','140','78','135','61','2'];
-    runMorningScan(leagues).catch(e => console.error('[Cron:MorningScan]', e.message));
+  // 2. 07:00 UTC — morning scan
+  cron.schedule('0 7 * * *', async () => {
+    if (isRateLimited()) { console.log('[Cron:MorningScan] Skipped — rate limited'); return; }
+    if (_cronRunning.morningScan) { console.log('[Cron:MorningScan] Skipped — already running'); return; }
+    _cronRunning.morningScan = true;
+    const t0 = Date.now();
+    console.log('[Cron:MorningScan] 07:00 UTC — starting morning scan');
+    try {
+      const leagues = getSettings().activeLeagues || ['1','39','140','78','135','61','2'];
+      await runMorningScan(leagues);
+      console.log(`[Cron:MorningScan] Complete in ${Math.round((Date.now() - t0) / 1000)}s`);
+    } catch (e) {
+      console.error(`[Cron:MorningScan] Error: ${e.message}`);
+    } finally {
+      _cronRunning.morningScan = false;
+      _cronLastRan.morningScan = new Date().toISOString();
+    }
   }, { timezone: 'UTC' });
 
-  // Every minute — check for T-60 fixtures
-  cron.schedule('* * * * *', () => {
-    if (isRateLimited()) return; // silent — fires every minute so no need to log
+  // 3. Every minute — T-60 pre-match locks
+  cron.schedule('* * * * *', async () => {
+    if (isRateLimited() || _cronRunning.preMatch) return;
     const watching = getWatching();
-    const now      = Date.now();
-    const locked   = [];
-    const toScan   = [];
-
-    watching.forEach(w => {
-      const kickoff  = new Date(w.kickoff).getTime();
-      const minsOut  = (kickoff - now) / 60000;
-      if (minsOut <= 60 && minsOut > 55) toScan.push(w); // T-60 window
-      else if (minsOut > 55)             locked.push(w);  // keep watching
-    });
-
-    if (toScan.length) {
-      console.log(`[Cron] T-60 tick — ${toScan.length} fixture(s) entering pre-match scan`);
-      Promise.all(toScan.map(w => runPreMatchScan(w))).catch(e => console.error('[Cron:PreMatch]', e.message));
+    const now = Date.now();
+    const toScan = watching.filter(w => { const m = (new Date(w.kickoff).getTime() - now) / 60000; return m <= 60 && m > 55; });
+    const locked  = watching.filter(w => (new Date(w.kickoff).getTime() - now) / 60000 > 55);
+    if (!toScan.length) return;
+    _cronRunning.preMatch = true;
+    console.log(`[Cron:PreMatch] T-60 — ${toScan.length} fixture(s) entering pre-match scan`);
+    try {
+      await Promise.all(toScan.map(w => runPreMatchScan(w)));
       saveWatching(locked);
+    } catch (e) {
+      console.error(`[Cron:PreMatch] Error: ${e.message}`);
+    } finally {
+      _cronRunning.preMatch = false;
     }
   });
 
-  // Every 5 minutes — auto-resolve finished matches
-  cron.schedule('*/5 * * * *', () => {
-    if (isRateLimited()) return;
-    checkAndResolve().catch(e => console.error('[Cron:Resolve]', e.message));
+  // 4. Every 5 minutes — auto-resolve finished matches
+  cron.schedule('*/5 * * * *', async () => {
+    if (isRateLimited() || _cronRunning.resolve) return;
+    _cronRunning.resolve = true;
+    try {
+      await checkAndResolve();
+    } catch (e) {
+      console.error(`[Cron:Resolve] Error: ${e.message}`);
+    } finally {
+      _cronRunning.resolve = false;
+      _cronLastRan.resolve = new Date().toISOString();
+    }
   });
 
-  console.log('[Scheduler] Cron jobs active (07:00 morning scan, T-60 pre-match, 5-min resolution)');
+  console.log('[Scheduler] Crons active: backfill@00:05UTC · scan@07:00UTC · T-60@every-min · resolve@every-5min');
 }
 
 // ─── PROFILE BACKFILL ────────────────────────────────────────────────────────
@@ -2125,105 +2168,94 @@ app.get('/api/diagnostics/factor-distribution', (req, res) => {
   res.json({ factors: result, totalRecords: data.scoredRecords.length });
 });
 
-// ─── STARTUP DATA CHECK ──────────────────────────────────────────────────────
+// ─── BACKFILL CHAIN ──────────────────────────────────────────────────────────
 
-let _startupStatus = { phase: 'pending', startedAt: null, completedAt: null, skipped: false, error: null };
+let _startupStatus = { phase: 'idle', startedAt: null, completedAt: null, skipped: false, error: null };
 
 async function runBackfillChain() {
+  if (_cronRunning.backfill && _startupStatus.phase !== 'queued') {
+    console.log('[Backfill] Already running — skipping duplicate invocation');
+    return;
+  }
   _startupStatus = { phase: 'historical', startedAt: new Date().toISOString(), completedAt: null, skipped: false, error: null };
+
   try {
-    console.log('[Startup] Running historical backfill…');
+    // Phase 1: historical fixture fetch + scoring (~30 API calls, always runs first)
+    console.log('[Backfill] Phase 1/3: historical fixtures…');
     await runHistoricalBackfill({ rescore: false });
 
-    // If fixtures came back empty the API rate limit was hit mid-Phase-1.
-    // Schedule a retry in 90 minutes rather than marking complete with no data.
     const hist = readJSON('backfill-historical.json');
     if (!hist?.fixtures?.length) {
-      const retryIn = 90 * 60 * 1000;
-      console.warn(`[Startup] Historical backfill returned 0 fixtures — likely rate-limited. Retrying in 90 min.`);
+      console.warn('[Backfill] Historical returned 0 fixtures — rate-limited. The nightly 00:05 cron will retry tomorrow.');
       _startupStatus.phase = 'rate-limited';
-      _startupStatus.retryAt = new Date(Date.now() + retryIn).toISOString();
-      setTimeout(() => {
-        console.log('[Startup] Retry: re-running backfill chain after rate-limit delay');
-        runBackfillChain().catch(e => console.error('[Startup retry]', e.message));
-      }, retryIn);
+      _startupStatus.retryAt = new Date(Date.now() + 90 * 60 * 1000).toISOString();
       return;
     }
+    console.log(`[Backfill] Phase 1 complete — ${hist.fixtures.length} fixtures in pool`);
 
-    // Chain order: lineups first (primary WOWY signal, has budget cap),
-    // stats second (secondary xG signal, also budgeted). Lineups are the
-    // bottleneck; stats exhausting the quota first blocked lineups 3 nights.
-    // Hard cutoff at 05:00 UTC reserves quota for live operations.
+    // Phase 2: lineups (~5,000 budget, hard stop at 05:00 UTC)
     if (backfillCutoffReached()) {
-      console.log('[Startup] Backfill cutoff (05:00 UTC) reached before lineups phase — skipping to preserve morning scan quota');
+      console.log('[Backfill] 05:00 UTC cutoff — skipping lineups/stats to reserve quota for morning scan');
       _startupStatus.phase = 'complete';
       _startupStatus.completedAt = new Date().toISOString();
       return;
     }
     _startupStatus.phase = 'lineups';
-    console.log('[Startup] Running lineups backfill…');
-    await runLineupsBackfillFn({ rebuild: false });
+    console.log('[Backfill] Phase 2/3: lineups + WOWY (budget: 5,000 calls)…');
+    await runLineupsBackfillFn({ rebuild: false, budget: 5000 });
+    const lineupsAfter = readJSON('lineups.json');
+    const lineupsCount = lineupsAfter ? Object.keys(lineupsAfter).length : 0;
+    console.log(`[Backfill] Phase 2 complete — ${lineupsCount} lineups on disk`);
 
+    // Phase 3: fixture stats (~1,000 budget, hard stop at 05:00 UTC)
     if (backfillCutoffReached()) {
-      console.log('[Startup] Backfill cutoff (05:00 UTC) reached after lineups — skipping stats to preserve morning scan quota');
+      console.log('[Backfill] 05:00 UTC cutoff — skipping stats to reserve quota for morning scan');
       _startupStatus.phase = 'complete';
       _startupStatus.completedAt = new Date().toISOString();
       return;
     }
     _startupStatus.phase = 'fixture-stats';
-    console.log('[Startup] Running fixture-stats backfill…');
-    await runFixtureStatsBackfillFn({ budget: 1500 });
-
-    // If lineups still empty after the run, API was rate-limited — schedule retry
-    const lineupsAfter = readJSON('lineups.json');
-    if (!lineupsAfter || Object.keys(lineupsAfter).length === 0) {
-      const retryIn = 90 * 60 * 1000;
-      console.warn('[Startup] Lineups backfill returned 0 entries — likely rate-limited. Retrying in 90 min.');
-      _startupStatus.phase = 'rate-limited';
-      _startupStatus.retryAt = new Date(Date.now() + retryIn).toISOString();
-      setTimeout(() => {
-        console.log('[Startup] Retry: re-running backfill chain after rate-limit delay');
-        runBackfillChain().catch(e => console.error('[Startup retry]', e.message));
-      }, retryIn);
-      return;
-    }
+    console.log('[Backfill] Phase 3/3: fixture stats (budget: 1,000 calls)…');
+    await runFixtureStatsBackfillFn({ budget: 1000 });
+    const statsAfter = readJSON('fixture-stats.json') || {};
+    console.log(`[Backfill] Phase 3 complete — ${Object.keys(statsAfter).length} stats on disk`);
 
     _startupStatus.phase = 'complete';
     _startupStatus.completedAt = new Date().toISOString();
-    console.log('[Startup] Backfill chain complete');
+    console.log('[Backfill] Chain complete ✓');
   } catch (e) {
     _startupStatus.phase = 'error';
     _startupStatus.error = e.message;
-    console.error('[Startup] Backfill chain error:', e.message);
+    console.error('[Backfill] Chain error:', e.message);
   }
 }
 
-async function startupCheck() {
-  const dataFiles = [
-    'backfill-historical.json',
-    'team-profiles.json',
-    'fixture-stats.json',
-    'lineups.json',
-    'calibration.json',
-  ];
-  const missing = dataFiles.filter(f => !fs.existsSync(path.join(DATA_DIR, f)));
+// Checks data files on startup. Corrupt = exists but < MIN_VALID_BYTES.
+// Queues backfill chain (30s delay) if any critical file is missing or corrupt.
+function startupCheck() {
+  const CRITICAL = ['backfill-historical.json', 'team-profiles.json', 'lineups.json'];
+  const rebuildQueue = [];
 
-  // Also trigger if historical file exists but has no fixtures (post-corrupt-write state)
-  const hist    = missing.includes('backfill-historical.json') ? null : readJSON('backfill-historical.json');
-  const lineups = missing.includes('lineups.json') ? null : readJSON('lineups.json');
-  const emptyFixtures = !missing.includes('backfill-historical.json') && !hist?.fixtures?.length;
-  const emptyLineups  = !missing.includes('lineups.json') && Object.keys(lineups || {}).length === 0;
+  for (const file of CRITICAL) {
+    const p = path.join(DATA_DIR, file);
+    try {
+      const size = fs.statSync(p).size;
+      if (size < MIN_VALID_BYTES) {
+        console.warn(`[Startup] ${file}: ${size} bytes — corrupt/empty shell, queuing rebuild`);
+        rebuildQueue.push(file);
+      }
+    } catch {
+      console.log(`[Startup] ${file}: not found — queuing rebuild`);
+      rebuildQueue.push(file);
+    }
+  }
 
-  if (missing.length > 0 || emptyFixtures || emptyLineups) {
-    const reason = missing.length > 0
-      ? `Missing: ${missing.join(', ')}`
-      : emptyFixtures ? 'backfill-historical.json has 0 fixtures (corrupt/incomplete)'
-      : 'lineups.json is empty — lineup/WOWY rebuild needed';
-    console.log(`[Startup] ${reason} — queuing backfill chain`);
-    _startupStatus = { phase: 'queued', startedAt: null, completedAt: null, skipped: false, error: null, missing };
-    setTimeout(() => runBackfillChain().catch(e => console.error('[Startup]', e.message)), 5000);
+  if (rebuildQueue.length > 0) {
+    console.log(`[Startup] Queuing backfill chain in 30s (needs: ${rebuildQueue.join(', ')})`);
+    _startupStatus = { phase: 'queued', startedAt: null, completedAt: null, skipped: false, error: null, missing: rebuildQueue };
+    setTimeout(() => runBackfillChain().catch(e => console.error('[Startup]', e.message)), 30000);
   } else {
-    console.log('[Startup] All data files present — skipping backfill chain');
+    console.log('[Startup] All critical data files present — no backfill needed');
     _startupStatus = { phase: 'complete', skipped: true, completedAt: new Date().toISOString(), missing: [] };
   }
 }
@@ -2275,7 +2307,7 @@ async function runFixtureStatsBackfillFn({ budget = 2000 } = {}) {
         };
         fixtureStatsDb[fid] = { home: parseStats(data.response[0]), away: parseStats(data.response[1]) };
         fetched++;
-        if (fetched % 100 === 0) {
+        if (fetched % 50 === 0) {
           saveFixtureStats(fixtureStatsDb);
           console.log(`[Startup:Stats] ${fetched} fetched, ${apiCalls} API calls used`);
         }
@@ -2338,7 +2370,7 @@ async function runLineupsBackfillFn({ rebuild = false, budget = 7000 } = {}) {
         const { updateWOWY } = require('./teamProfiles');
         updateWOWY(fix.teams?.home?.id, lineupsDb[fid].home.starters, lineupsDb[fid].home.substitutes || [], outcome);
         updateWOWY(fix.teams?.away?.id, lineupsDb[fid].away.starters, lineupsDb[fid].away.substitutes || [], outcome === 'win' ? 'loss' : outcome === 'loss' ? 'win' : 'draw');
-        if (fetched % 100 === 0) {
+        if (fetched % 50 === 0) {
           saveLineups(lineupsDb);
           console.log(`[Startup:Lineups] ${fetched} fetched, ${apiCalls} API calls used`);
         }
@@ -2362,6 +2394,64 @@ app.get('/api/data/sizes', (_req, res) => {
     try { result[f] = fs.statSync(p).size; } catch { result[f] = null; }
   }
   res.json(result);
+});
+
+const _serverStartedAt = new Date().toISOString();
+
+app.get('/api/server-status', async (_req, res) => {
+  // Disk writability check
+  const testFile = path.join(DATA_DIR, '.write-test');
+  let diskWritable = false;
+  try { fs.writeFileSync(testFile, 'ok'); fs.unlinkSync(testFile); diskWritable = true; } catch {}
+
+  // API quota — non-fatal if rate-limited or fails
+  let apiQuotaUsedToday = null;
+  if (!isRateLimited()) {
+    try {
+      const { data: sd } = await apiSports.get('/status');
+      apiQuotaUsedToday = sd?.response?.requests?.current ?? null;
+    } catch {}
+  }
+
+  const hist    = readJSON('backfill-historical.json');
+  const stats   = readJSON('fixture-stats.json') || {};
+  const lineups = readJSON('lineups.json') || {};
+  const profiles = require('./teamProfiles').readProfiles();
+  const { getWOWYDeltas: _gwd } = require('./teamProfiles');
+  let wowyHighConf = 0;
+  for (const p of Object.values(profiles)) {
+    if (!p.playerDependency?.players) continue;
+    for (const d of Object.values(_gwd(p.teamId))) {
+      if (d.confidence === 'high' && !d.selectionBias) wowyHighConf++;
+    }
+  }
+
+  const DATA_FILES = ['backfill-historical.json','fixture-stats.json','lineups.json','team-profiles.json','calibration.json','settings.json'];
+  const files = DATA_FILES.map(f => {
+    const p = path.join(DATA_DIR, f);
+    try { const s = fs.statSync(p); return { name: f, sizeBytes: s.size, exists: true, healthy: s.size >= MIN_VALID_BYTES }; }
+    catch { return { name: f, sizeBytes: null, exists: false, healthy: false }; }
+  });
+
+  const lineupsTarget = (hist?.fixtures || []).filter(f =>
+    [39, 2, 140, 135, 78, 61].includes(f.league?.id) && [2022, 2023, 2024].includes(f.league?.season)
+  ).length;
+
+  res.json({
+    server: { uptime: Math.floor(process.uptime()), startedAt: _serverStartedAt, nodeVersion: process.version },
+    disk:   { dataDir: DATA_DIR, writable: diskWritable, files },
+    data:   {
+      historicalFixtures: hist?.fixtures?.length ?? 0,
+      lineups:            Object.keys(lineups).length,
+      lineupsTarget,
+      stats:              Object.keys(stats).length,
+      wowyHighConfidence: wowyHighConf,
+    },
+    rateLimit:          getRateLimitState(),
+    backfill:           { phase: _startupStatus.phase, startedAt: _startupStatus.startedAt, completedAt: _startupStatus.completedAt, lastRan: _cronLastRan.backfill },
+    crons:              { backfill: { lastRan: _cronLastRan.backfill, schedule: '00:05 UTC daily' }, morningScan: { lastRan: _cronLastRan.morningScan, schedule: '07:00 UTC daily' } },
+    apiQuotaUsedToday,
+  });
 });
 
 app.get('/api/startup/status', (_req, res) => {
@@ -2405,34 +2495,68 @@ app.get('/api/startup/status', (_req, res) => {
 // ─── START ───────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
-  console.log(`Edge Scout running at http://localhost:${PORT} — DATA_DIR: ${DATA_DIR}`);
-  setupScheduler();
+  const startTs = new Date().toISOString();
+  console.log(`[Startup] ── Edge Scout ── ${startTs}`);
+  console.log(`[Startup] DATA_DIR: ${DATA_DIR}  (env DATA_DIR=${process.env.DATA_DIR ?? '(unset)'})`);
 
-  // Note: Render Starter plan does not spin down — no keepalive needed.
-  // Self-pings are excluded from Render's activity detection and do not prevent spin-down
-  // on free-tier services anyway. The nightly backfill cron at 00:05 UTC is the
-  // mechanism that ensures overnight work runs reliably.
-
-  // On startup, strip any watching entries whose kickoff has already passed,
-  // then rescan if we have no scan for today.
-  const settings    = getSettings();
-  const today       = new Date().toISOString().split('T')[0];
-  const nowMs       = Date.now();
-  const rawWatching = getWatching();
-  const future      = rawWatching.filter(w => new Date(w.kickoff).getTime() > nowMs);
-  if (future.length < rawWatching.length) {
-    saveWatching(future);
-    console.log(`[Startup] Removed ${rawWatching.length - future.length} past-kickoff entries from watching list`);
+  // 1. Confirm disk is writable
+  const testFile = path.join(DATA_DIR, '.write-test');
+  try {
+    fs.writeFileSync(testFile, 'ok');
+    fs.unlinkSync(testFile);
+    console.log('[Startup] Disk writable ✓');
+  } catch (e) {
+    console.error(`[Startup] Disk NOT writable: ${e.message}`);
   }
 
+  // 2. Log data file state
+  const DATA_FILES = ['backfill-historical.json','fixture-stats.json','lineups.json','team-profiles.json'];
+  for (const f of DATA_FILES) {
+    const p = path.join(DATA_DIR, f);
+    try {
+      const size = fs.statSync(p).size;
+      const status = size < MIN_VALID_BYTES ? `⚠ ${size}b (possibly corrupt)` : `${(size/1024).toFixed(0)}KB ✓`;
+      console.log(`[Startup] ${f}: ${status}`);
+    } catch {
+      console.log(`[Startup] ${f}: missing`);
+    }
+  }
+
+  // 3. Setup cron scheduler
+  setupScheduler();
+
+  // 4. Expire stale watching entries
+  const nowMs = Date.now();
+  const rawWatching = getWatching();
+  const future = rawWatching.filter(w => new Date(w.kickoff).getTime() > nowMs);
+  if (future.length < rawWatching.length) {
+    saveWatching(future);
+    console.log(`[Startup] Expired ${rawWatching.length - future.length} past-kickoff watching entries`);
+  }
+
+  // 5. Queue backfill chain if data is missing/corrupt
+  startupCheck();
+
+  // 6. Morning scan if today's has not completed (runs regardless of backfill state —
+  //    scan fetches its own form data from the API, doesn't depend on historical backfill)
+  const today = new Date().toISOString().split('T')[0];
   const scanMeta = readJSON('scan-meta.json');
-  const stale    = !scanMeta || scanMeta.date !== today || !scanMeta.completedAt;
-  if (stale) {
-    console.log('[Startup] No completed scan for today — running morning scan…');
-    runMorningScan(settings.activeLeagues).catch(e => console.error('[Startup:MorningScan]', e.message));
+  if (!scanMeta || scanMeta.date !== today || !scanMeta.completedAt) {
+    if (!isRateLimited()) {
+      console.log('[Startup] No completed scan for today — running morning scan…');
+      runMorningScan(getSettings().activeLeagues).catch(e => console.error('[Startup:MorningScan]', e.message));
+    } else {
+      console.log('[Startup] Morning scan deferred — API rate limited (quota resets midnight UTC)');
+    }
   } else {
     console.log(`[Startup] Today's scan already completed at ${scanMeta.completedAt} (${scanMeta.count} watching)`);
   }
 
-  startupCheck().catch(e => console.error('[Startup]', e.message));
+  // 7. Summary
+  const hist = readJSON('backfill-historical.json');
+  const lin  = readJSON('lineups.json') || {};
+  const st   = readJSON('fixture-stats.json') || {};
+  console.log(`[Startup] Data counts — fixtures: ${hist?.fixtures?.length ?? 0}, lineups: ${Object.keys(lin).length}, stats: ${Object.keys(st).length}`);
+  console.log(`[Startup] Next scheduled: backfill@00:05UTC · scan@07:00UTC`);
+  console.log(`[Startup] Ready on :${PORT}`);
 });
