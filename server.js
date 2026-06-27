@@ -643,13 +643,18 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   probs = adjustedProbs;
 
   // Build results for H/D/A
+  // Canonical bet keys ('Home Win'/'Away Win'/'Draw') are preserved for resolution matching.
+  // At neutral WC venues a display label is added so the UI shows team names instead of
+  // directional labels — "Panama Win" not "Home Win" when neither team is at home.
+  const neutralLabels = competitionPhase === 'group_stage' || competitionPhase === 'knockout';
+
   const oddsKey    = `${homeName}|${awayName}`;
   const bookOdds   = oddsMap[oddsKey] || {};
   const lookup     = { 'Home Win': homeName, Draw: 'Draw', 'Away Win': awayName };
   const candidates = [
-    { label: 'Home Win', prob: probs.home },
-    { label: 'Draw',     prob: probs.draw },
-    { label: 'Away Win', prob: probs.away },
+    { label: 'Home Win', displayLabel: neutralLabels ? `${homeName} Win` : null, prob: probs.home },
+    { label: 'Draw',     displayLabel: null,                                      prob: probs.draw },
+    { label: 'Away Win', displayLabel: neutralLabels ? `${awayName} Win` : null,  prob: probs.away },
   ];
 
   // Calibration correction: model consistently underpredicts top-pick outcomes by ~5pp.
@@ -670,11 +675,13 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     const finalScore = Math.round(rawScore * wxMod * effMult);
     const k         = kelly(calProb, odds, settings.kellyFraction, getBankroll().current);
 
-    results.push({
+    const entry = {
       bet: c.label, modelProb: c.prob, bookOdds: odds, impliedProb: impliedP,
       edge, successScore: finalScore, kelly: k,
       ev: calProb * (odds - 1) - (1 - calProb),
-    });
+    };
+    if (c.displayLabel) entry.displayLabel = c.displayLabel;
+    results.push(entry);
   }
 
   // Dynamic low-confidence sanity check (Fix 3):
@@ -794,8 +801,9 @@ async function runMorningScan(leagueIds) {
             leagueName:   meta.name,
             kickoff:      fix.fixture?.date,
             scoredAt:     new Date().toISOString(),
-            successScore: best.successScore,
-            projectedBet: best.bet,
+            successScore:    best.successScore,
+            projectedBet:    best.displayLabel || best.bet,
+            projectedBetKey: best.bet,
             candidates:   scored.results,
             betPlaced:    false,
             betId:        null,
@@ -1104,7 +1112,7 @@ async function checkAndResolve() {
         ce.resolvedAt     = resolvedAt;
         ce.actualResult   = actualOutcome;
         ce.finalScore     = finalScore;
-        ce.topPickCorrect = actualOutcome === ce.projectedBet;
+        ce.topPickCorrect = actualOutcome === (ce.projectedBetKey || ce.projectedBet);
         calChanged = true;
         console.log(`[Calibration] ${ce.fixture} → actual: ${actualOutcome}, predicted: ${ce.projectedBet} (${ce.topPickCorrect ? '✓' : '✗'})`);
       }
