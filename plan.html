@@ -8,281 +8,280 @@
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0a0a0f;color:#fff;padding:24px 16px;max-width:800px;margin:0 auto;line-height:1.6}
 h1{font-size:22px;font-weight:700;letter-spacing:-0.5px;margin-bottom:4px}
-.subtitle{color:rgba(255,255,255,0.4);font-size:12px;letter-spacing:2px;margin-bottom:32px}
-.section{margin-bottom:40px}
-.section-title{font-size:11px;letter-spacing:3px;color:rgba(255,255,255,0.4);margin-bottom:12px;text-transform:uppercase}
-.thesis{background:rgba(76,201,240,0.06);border:1px solid rgba(76,201,240,0.15);border-radius:12px;padding:20px 24px;margin-bottom:12px;font-size:14px;color:rgba(255,255,255,0.8);line-height:1.8}
-.principle{background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:14px 18px;margin-bottom:8px;font-size:13px;color:rgba(255,255,255,0.7);display:flex;gap:12px;align-items:flex-start}
-.principle-dot{width:6px;height:6px;border-radius:50%;background:#4cc9f0;flex-shrink:0;margin-top:6px}
-.phase{border:1px solid rgba(255,255,255,0.08);border-radius:12px;overflow:hidden;margin-bottom:10px}
-.phase-header{padding:14px 18px;display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none}
-.phase-header:hover{background:rgba(255,255,255,0.03)}
-.phase-title{font-size:14px;font-weight:600;flex:1}
-.phase-meta{font-size:11px;color:rgba(255,255,255,0.35)}
-.badge{font-size:10px;padding:2px 8px;border-radius:20px;font-weight:600;letter-spacing:0.5px}
-.badge-done{background:rgba(0,255,135,0.12);color:#00ff87;border:1px solid rgba(0,255,135,0.2)}
-.badge-active{background:rgba(76,201,240,0.12);color:#4cc9f0;border:1px solid rgba(76,201,240,0.2)}
-.badge-upcoming{background:rgba(255,255,255,0.05);color:rgba(255,255,255,0.4);border:1px solid rgba(255,255,255,0.1)}
-.chevron{color:rgba(255,255,255,0.3);font-size:12px;transition:transform 0.2s}
-.chevron.open{transform:rotate(180deg)}
+.sub{color:rgba(255,255,255,0.4);font-size:11px;letter-spacing:2px;margin-bottom:28px}
+.sec-label{font-size:10px;letter-spacing:2px;color:rgba(255,255,255,0.4);margin-bottom:10px;text-transform:uppercase}
+.section{margin-bottom:32px}
+.thesis{background:rgba(76,201,240,0.06);border:1px solid rgba(76,201,240,0.15);border-radius:12px;padding:16px 20px;margin-bottom:8px;font-size:13px;color:rgba(255,255,255,0.8);line-height:1.8}
+.principles{border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:4px 16px}
+.principle{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.05);font-size:13px;color:rgba(255,255,255,0.75)}
+.principle:last-child{border-bottom:none}
+.dot{width:5px;height:5px;border-radius:50%;background:#4cc9f0;flex-shrink:0;margin-top:6px}
+.data-card{background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:12px 16px;margin-bottom:8px;position:relative}
+.data-title{font-size:13px;font-weight:600;color:#fff;margin-bottom:4px;padding-right:80px}
+.data-desc{font-size:12px;color:rgba(255,255,255,0.55);line-height:1.5}
+.data-badge{font-size:10px;padding:2px 8px;border-radius:20px;position:absolute;top:12px;right:12px;font-weight:500}
+.b-now{background:rgba(0,255,135,0.12);color:#00ff87;border:1px solid rgba(0,255,135,0.2)}
+.b-july{background:rgba(76,201,240,0.12);color:#4cc9f0;border:1px solid rgba(76,201,240,0.2)}
+.b-pro{background:rgba(255,209,102,0.12);color:#ffd166;border:1px solid rgba(255,209,102,0.2)}
+.b-later{background:rgba(255,255,255,0.05);color:rgba(255,255,255,0.4);border:1px solid rgba(255,255,255,0.1)}
+.legend{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:16px}
+.leg{display:flex;align-items:center;gap:5px;font-size:11px;color:rgba(255,255,255,0.4)}
+.phase{border:1px solid rgba(255,255,255,0.08);border-radius:12px;overflow:hidden;margin-bottom:8px}
+.phase-hdr{padding:12px 16px;display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none}
+.phase-hdr:hover{background:rgba(255,255,255,0.02)}
+.p-title{font-size:13px;font-weight:600;flex:1;color:#fff}
+.p-meta{font-size:11px;color:rgba(255,255,255,0.3)}
+.p-badge{font-size:10px;padding:2px 7px;border-radius:20px;font-weight:500}
+.pb-done{background:rgba(0,255,135,0.12);color:#00ff87;border:1px solid rgba(0,255,135,0.2)}
+.pb-active{background:rgba(76,201,240,0.12);color:#4cc9f0;border:1px solid rgba(76,201,240,0.2)}
+.pb-up{background:rgba(255,255,255,0.05);color:rgba(255,255,255,0.4);border:1px solid rgba(255,255,255,0.1)}
+.chev{color:rgba(255,255,255,0.3);font-size:11px;transition:transform 0.2s}
+.chev.open{transform:rotate(180deg)}
+.prog{height:3px;background:rgba(255,255,255,0.06);overflow:hidden}
+.prog-fill{height:100%}
 .phase-body{border-top:1px solid rgba(255,255,255,0.06)}
-.progress{height:3px;background:rgba(255,255,255,0.06);overflow:hidden}
-.progress-fill{height:100%;transition:width 0.3s}
-.task{display:flex;align-items:flex-start;gap:10px;padding:10px 18px;border-bottom:1px solid rgba(255,255,255,0.04);font-size:12px}
+.task{display:flex;align-items:flex-start;gap:8px;padding:8px 16px;border-bottom:1px solid rgba(255,255,255,0.04);font-size:12px}
 .task:last-child{border-bottom:none}
-.task-icon{font-size:13px;flex-shrink:0;margin-top:1px}
-.task-done-icon{color:#00ff87}
-.task-active-icon{color:#4cc9f0}
-.task-blocked-icon{color:#ffd166}
-.task-upcoming-icon{color:rgba(255,255,255,0.25)}
-.task-text{color:rgba(255,255,255,0.75);line-height:1.5;flex:1}
-.task-text.done{color:rgba(255,255,255,0.3);text-decoration:line-through}
-.task-note{font-size:10px;color:rgba(255,255,255,0.3);margin-top:2px}
-.legend{display:flex;gap:16px;margin-bottom:20px;flex-wrap:wrap}
-.legend-item{display:flex;align-items:center;gap:5px;font-size:11px;color:rgba(255,255,255,0.4)}
-.updated{font-size:11px;color:rgba(255,255,255,0.25);text-align:right;margin-top:32px}
+.t-icon{flex-shrink:0;margin-top:2px;font-size:13px}
+.ic-done{color:#00ff87}
+.ic-active{color:#4cc9f0}
+.ic-blocked{color:#ffd166}
+.ic-up{color:rgba(255,255,255,0.25)}
+.t-text{color:rgba(255,255,255,0.75);line-height:1.5;flex:1}
+.t-text.done{color:rgba(255,255,255,0.3);text-decoration:line-through}
+.t-note{font-size:10px;color:rgba(255,255,255,0.3);margin-top:2px}
+.updated{font-size:11px;color:rgba(255,255,255,0.2);text-align:right;margin-top:28px}
 </style>
 </head>
 <body>
 
-<div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
-  <div style="width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#4cc9f0,#f72585);display:flex;align-items:center;justify-content:center;font-size:16px">⚡</div>
-  <h1>EDGE SCOUT</h1>
+<div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
+  <div style="width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#4cc9f0,#f72585);display:flex;align-items:center;justify-content:center;font-size:15px">⚡</div>
+  <h1>Edge Scout</h1>
 </div>
-<div class="subtitle">BETTING INTELLIGENCE PLATFORM — PROJECT PLAN</div>
+<div class="sub">BETTING INTELLIGENCE PLATFORM — PROJECT PLAN</div>
 
-<!-- CORE THESIS -->
 <div class="section">
-  <div class="section-title">Core thesis</div>
-  <div class="thesis">
-    The betting market is most efficient in the most watched competitions. The Premier League gets priced by teams of quant analysts. Lower divisions, less-covered competitions, and non-outcome markets (goals, cards, corners) receive far less sophisticated pricing. A well-calibrated model with good historical data finds genuine edge more consistently in these markets than in Premier League match outcomes. The strategy is to start where the model is strongest — major leagues, match outcomes — and systematically expand into less efficient markets as data and confidence grows. Simultaneously, the bookmaker management module ensures the operation remains sustainable — spreading activity across 20+ operators and exchanges so no single restriction event materially impacts returns.
-  </div>
-  <div class="thesis" style="margin-top:8px">
-    The ultimate goal is a self-improving, self-managing betting intelligence system that gets smarter with every match played and more operationally resilient with every bookmaker added.
-  </div>
+  <div class="sec-label">Core thesis</div>
+  <div class="thesis">The betting market is most efficient in the most watched competitions. Lower divisions, less-covered competitions, and non-outcome markets (goals, cards, corners) receive far less sophisticated pricing. A well-calibrated model finds genuine edge more consistently in these markets. Start where the model is strongest — major leagues, match outcomes — and expand into less efficient markets as data and confidence grows.</div>
+  <div class="thesis">The ultimate goal is a self-improving, self-managing betting intelligence system that gets smarter with every match played and more operationally resilient with every bookmaker added.</div>
 </div>
 
-<!-- KEY PRINCIPLES -->
 <div class="section">
-  <div class="section-title">Key principles</div>
-  <div class="principle"><div class="principle-dot"></div><div>Model logic and strategy discussions happen in Claude chat. Implementation happens in Claude Code.</div></div>
-  <div class="principle"><div class="principle-dot"></div><div>No real money until paper trading demonstrates genuine edge — positive ROI after 8 weeks AND calibration within ±5pp across all probability bands.</div></div>
-  <div class="principle"><div class="principle-dot"></div><div>No model changes while backfills are running. One clear brief at a time to Claude Code, wait for completion before the next.</div></div>
-  <div class="principle"><div class="principle-dot"></div><div>Every resolved fixture is training data — the model gets smarter continuously.</div></div>
-  <div class="principle"><div class="principle-dot"></div><div>API costs are trivial once the model is profitable — never let cost limit data access when edge is confirmed.</div></div>
-  <div class="principle"><div class="principle-dot"></div><div>Account management is as important as model quality — a profitable model with restricted accounts generates no returns.</div></div>
-  <div class="principle"><div class="principle-dot"></div><div>Sustainable long-term operation beats maximum short-term extraction.</div></div>
-  <div class="principle"><div class="principle-dot"></div><div>The model must be team-specific, not just league-specific. Every team has unique characteristics that override league averages as data accumulates.</div></div>
+  <div class="sec-label">Key principles</div>
+  <div class="principles">
+    <div class="principle"><div class="dot"></div><div>Model logic and strategy discussions happen in Claude chat. Implementation happens in Claude Code.</div></div>
+    <div class="principle"><div class="dot"></div><div>No real money until paper trading demonstrates genuine edge — positive ROI after 8 weeks AND calibration within ±5pp across all bands.</div></div>
+    <div class="principle"><div class="dot"></div><div>No model changes while backfills are running. One clear brief at a time to Claude Code, wait for completion before the next.</div></div>
+    <div class="principle"><div class="dot"></div><div>Every resolved fixture is training data — the model gets smarter continuously.</div></div>
+    <div class="principle"><div class="dot"></div><div>Buy data when it demonstrably improves the model's edge, not when the model is already profitable. Waiting until profitable to buy the tools that make you profitable is a false constraint.</div></div>
+    <div class="principle"><div class="dot"></div><div>Account management is as important as model quality — a profitable model with restricted accounts generates no returns.</div></div>
+    <div class="principle"><div class="dot"></div><div>Sustainable long-term operation beats maximum short-term extraction.</div></div>
+    <div class="principle"><div class="dot"></div><div>The model must be team-specific, not just league-specific. Team profiles override league averages as data accumulates.</div></div>
+    <div class="principle"><div class="dot"></div><div>Build properly, not reactively. Agree design in Claude chat first. Claude Code gets a complete specification, not a starting point for improvisation.</div></div>
+    <div class="principle"><div class="dot"></div><div>No patching. If a fix touches more than one file or core infrastructure, design discussion in Claude chat first.</div></div>
+    <div class="principle"><div class="dot"></div><div>Define done before starting. Every brief must specify what success looks like — tests, outputs, endpoints to verify.</div></div>
+    <div class="principle"><div class="dot"></div><div>Infrastructure is the foundation. Server, backfill, cron, and data integrity must be solid before adding features on top.</div></div>
+  </div>
 </div>
 
-<!-- LEGEND -->
+<div class="section">
+  <div class="sec-label">Data strategy</div>
+  <div class="data-card">
+    <span class="data-badge b-now">Integrate now — free</span>
+    <div class="data-title">Understat xG</div>
+    <div class="data-desc">Historical xG for PL, La Liga, Serie A, Bundesliga, Ligue 1 back to 2014/15 — ~11,000 matches. Far more predictive than shots-on-target proxy.</div>
+  </div>
+  <div class="data-card">
+    <span class="data-badge b-now">Integrate now — free</span>
+    <div class="data-title">StatsBomb open data</div>
+    <div class="data-desc">Event-level xG for World Cup 2022 and selected CL seasons. Public GitHub repo. Valuable for international model calibration and future PIR player scoring.</div>
+  </div>
+  <div class="data-card">
+    <span class="data-badge b-july">Buy before going live — $30/mo</span>
+    <div class="data-title">The Odds API historical data</div>
+    <div class="data-desc">6 years of historical odds across all 7 leagues including goals markets. Cannot confirm genuine edge without it. Buy in July before August live betting.</div>
+  </div>
+  <div class="data-card">
+    <span class="data-badge b-pro">Already on Pro tier</span>
+    <div class="data-title">API-Sports player statistics</div>
+    <div class="data-desc">Per-90 stats for every player — goals, assists, key passes, dribbles, defensive actions. Enables full PIR system. Already included in $19/month plan.</div>
+  </div>
+  <div class="data-card">
+    <span class="data-badge b-later">When returns justify</span>
+    <div class="data-title">Opta / StatsBomb Pro</div>
+    <div class="data-desc">Industry-standard data used by professional operations and Premier League clubs. Significant cost — justifiable once the model is generating returns at scale.</div>
+  </div>
+</div>
+
 <div class="legend">
-  <div class="legend-item"><span class="task-icon task-done-icon">✓</span> Complete</div>
-  <div class="legend-item"><span class="task-icon task-active-icon">▶</span> In progress</div>
-  <div class="legend-item"><span class="task-icon task-blocked-icon">⏳</span> Blocked / waiting</div>
-  <div class="legend-item"><span class="task-icon task-upcoming-icon">○</span> Upcoming</div>
+  <div class="leg"><span style="color:#00ff87">✓</span> Complete</div>
+  <div class="leg"><span style="color:#4cc9f0">▶</span> In progress</div>
+  <div class="leg"><span style="color:#ffd166">⏳</span> Blocked</div>
+  <div class="leg"><span style="color:rgba(255,255,255,0.25)">○</span> Upcoming</div>
 </div>
 
-<!-- PHASES -->
 <div id="phases"></div>
 
-<div class="updated">Last updated: 24 June 2026</div>
+<div class="updated">Last updated: 28 June 2026</div>
 
 <script>
-const phases = [
-  {
-    title:"Phase 1 — Core infrastructure",
-    badge:"done",label:"Complete",progress:100,
-    tasks:[
-      {s:"done",t:"Node.js + Express backend deployed on Render"},
-      {s:"done",t:"GitHub repo connected, auto-deploy on push"},
-      {s:"done",t:"Persistent disk provisioned at /data (Render Starter)"},
-      {s:"done",t:"DATA_DIR=/data environment variable confirmed in Render dashboard"},
-      {s:"done",t:"Atomic file writes across all 10 data files"},
-      {s:"done",t:"Startup self-heal chain: historical → lineups → stats"},
-      {s:"done",t:"API rate-limit guard with midnight auto-retry and 90-min backoff"},
-      {s:"done",t:"API-Sports Pro plan active (7,500 calls/day)"},
-      {s:"done",t:"The Odds API connected (UK markets, h2h odds)"},
-    ]
-  },
-  {
-    title:"Phase 2 — Scoring model",
-    badge:"done",label:"Complete",progress:100,
-    tasks:[
-      {s:"done",t:"8-factor linear model: form, homeAdv, xG, H2H, defense, momentum, injuries, standings"},
-      {s:"done",t:"Context classifier: international / club European / club domestic"},
-      {s:"done",t:"Context-aware weights per competition type (WEIGHTS_BY_CONTEXT)"},
-      {s:"done",t:"League-specific base rates for 7 leagues (draw rate, home advantage, market efficiency)"},
-      {s:"done",t:"Kelly criterion half-Kelly stake sizing"},
-      {s:"done",t:"Success score (0–99) formula with dataConf multiplier"},
-      {s:"done",t:"Calibration correction factor 1.11 (adjustable in settings)"},
-      {s:"done",t:"FIFA ranking quality anchor for thin-data international fixtures"},
-      {s:"done",t:"Neutral venue base probabilities (0.34/0.34) for World Cup group stage and knockouts"},
-      {s:"done",t:"International dataConf uses all international league IDs — not just current competition"},
-      {s:"done",t:"Host nation modifier (+8pp) for USA, Canada, Mexico fixtures"},
-      {s:"done",t:"models/linear.js + models/interface.js ready for July non-linear swap"},
-      {s:"done",t:"Competition phase classifier: group_stage, knockout, league_early, league_mid, league_late"},
-    ]
-  },
-  {
-    title:"Phase 3 — Data backfill",
-    badge:"active",label:"In progress",progress:55,
-    tasks:[
-      {s:"done",t:"Historical fixtures: 8,305 across 12 league/season combos"},
-      {s:"done",t:"WC qualifying backfill fixed (leagues 32, 34, 31 with correct seasons)"},
-      {s:"done",t:"Weight optimiser: gradient descent on 8,305 records"},
-      {s:"done",t:"Historical calibration bands established (50–60% band +12pp structural bias documented)"},
-      {s:"active",t:"Lineups backfill: running tonight — first night on correct persistent disk",n:"DATA_DIR=/data confirmed 24 June"},
-      {s:"active",t:"xG stats: 1,560 of 8,305 — 2,000/night budget",n:"Continues automatically each night after lineups complete"},
-      {s:"blocked",t:"WOWY calculation: populates automatically once lineups complete",n:"Expected: 2,880+ high-confidence players once lineups done"},
-      {s:"upcoming",t:"Confederation strength adjustment for international form scores",n:"Discount form vs weaker regional opponents — July work"},
-    ]
-  },
-  {
-    title:"Phase 4 — Team intelligence",
-    badge:"active",label:"In progress",progress:70,
-    tasks:[
-      {s:"done",t:"589 team profiles built (home/away win rates, opposition anomalies, momentum patterns)"},
-      {s:"done",t:"Profile builder fixed — no longer overwritten by morning scan"},
-      {s:"done",t:"International profiles use full international pool (37–46 datapoints per WC team)"},
-      {s:"done",t:"Fixture congestion sensitivity per team"},
-      {s:"done",t:"Weather integration via Open-Meteo (55 stadium coordinates including all WC 2026 venues)"},
-      {s:"done",t:"Weather sensitivity per team (builds from resolved fixtures)"},
-      {s:"done",t:"WOWY player dependency system — 747 high-confidence players (pre-DATA_DIR fix)"},
-      {s:"done",t:"WOWY modifier wired into scoring pipeline with 30% dampening and ±8pp cap"},
-      {s:"done",t:"Selection bias flag for small without-samples in winning contexts"},
-      {s:"active",t:"WOWY rebuilding with correct data after lineup backfill completes"},
-      {s:"upcoming",t:"Team Intelligence UI page — searchable profiles per team with AI summary"},
-      {s:"upcoming",t:"Referee tendency profiles (cards, penalties, home bias)"},
-    ]
-  },
-  {
-    title:"Phase 5 — Live scanning",
-    badge:"active",label:"In progress",progress:80,
-    tasks:[
-      {s:"done",t:"Morning scan at 07:00 UTC across all 7 leagues"},
-      {s:"done",t:"T-60 pre-match lock with confirmed lineups and fresh weather"},
-      {s:"done",t:"5-minute auto-resolution poller after expected finish time"},
-      {s:"done",t:"Two-stage flow: WATCHING → RECOMMENDED → DROPPED"},
-      {s:"done",t:"40-point success score threshold for bet locking"},
-      {s:"done",t:"Kelly stake calculation in £ per recommendation"},
-      {s:"done",t:"Low-confidence guard: dynamic gap threshold based on dataConf"},
-      {s:"done",t:"Rate-limit guard on all three cron jobs"},
-      {s:"active",t:"First meaningful WC scores expected tomorrow morning",n:"After tonight's lineup rebuild and profile rebuild"},
-      {s:"upcoming",t:"First locked bet and auto-resolution"},
-    ]
-  },
-  {
-    title:"Phase 6 — Paper trading validation",
-    badge:"active",label:"In progress",progress:10,
-    tasks:[
-      {s:"done",t:"£1,000 paper bankroll configured"},
-      {s:"done",t:"P&L tracking per bet with full audit log and Export CSV"},
-      {s:"done",t:"Calibration data collected on all scored fixtures — not just placed bets"},
-      {s:"done",t:"Odds history passive collection active (every morning scan and pre-match lock)"},
-      {s:"done",t:"Calibration health card with traffic light (green/amber/red) and suggested factor"},
-      {s:"active",t:"World Cup group stage validation (now → June 26)",n:"0 resolved bets — data issues being resolved"},
-      {s:"upcoming",t:"World Cup knockout validation (July 1–19)"},
-      {s:"upcoming",t:"Review calibration data at end of tournament"},
-      {s:"upcoming",t:"Assess whether real money criteria are met"},
-    ]
-  },
-  {
-    title:"Phase 7 — July upgrade window (July 19 – Aug 8)",
-    badge:"upcoming",label:"Upcoming",progress:0,
-    tasks:[
-      {s:"upcoming",t:"Review World Cup calibration data — identify systematic weaknesses"},
-      {s:"upcoming",t:"Write non-linear model brief based on real findings (not theory)"},
-      {s:"upcoming",t:"Upgrade The Odds API ($30/month) — backfill 6 years of historical odds"},
-      {s:"upcoming",t:"EV optimiser — validate edge estimates against real historical odds"},
-      {s:"upcoming",t:"Non-linear model upgrade (models/nonlinear.js) — target 56–58% accuracy"},
-      {s:"upcoming",t:"Address 50–60% band structural bias (Platt scaling or isotonic regression)"},
-      {s:"upcoming",t:"Goals market expansion: over/under 2.5 goals, BTTS"},
-      {s:"upcoming",t:"League expansion: Eredivisie, Primeira Liga, Scottish Premiership, Europa League, Conference League"},
-      {s:"upcoming",t:"Per-league weight optimisation when sufficient resolved predictions exist"},
-      {s:"upcoming",t:"International factor weight calibration against WC 2026 and Euros results"},
-      {s:"upcoming",t:"Confederation strength adjustment for international form pool"},
-      {s:"upcoming",t:"Bookmaker management module — account database, restriction detection, rotation logic"},
-      {s:"upcoming",t:"Betfair Exchange API integration — restriction-proof channel"},
-      {s:"upcoming",t:"Camouflage logic — recreational bet pattern per bookmaker account"},
-    ]
-  },
-  {
-    title:"Phase 8 — Premier League season (from Aug 8)",
-    badge:"upcoming",label:"Upcoming",progress:0,
-    tasks:[
-      {s:"upcoming",t:"All 7 leagues live simultaneously from day one of the season"},
-      {s:"upcoming",t:"Club team profiles fully populated with 3 seasons of domestic data"},
-      {s:"upcoming",t:"WOWY scores for all regular starters across major leagues"},
-      {s:"upcoming",t:"Non-linear model trained on World Cup calibration data"},
-      {s:"upcoming",t:"Goals markets running alongside match outcomes"},
-      {s:"upcoming",t:"Bookmaker management module operational"},
-      {s:"upcoming",t:"Paper trading target: positive ROI after 8 weeks (~60–80 resolved bets per league)"},
-      {s:"upcoming",t:"Real money trigger: positive ROI + calibration within ±5pp across all bands"},
-      {s:"upcoming",t:"Starting real money bankroll: £500–700, £50/day, spread across 5+ bookmakers from day one"},
-    ]
-  },
-  {
-    title:"Phase 9 — Scale and expand (Oct 2026+)",
-    badge:"upcoming",label:"Upcoming",progress:0,
-    tasks:[
-      {s:"upcoming",t:"Player props: first scorer, anytime scorer using PIR and WOWY data"},
-      {s:"upcoming",t:"Cards markets using referee tendency data already in team profiles"},
-      {s:"upcoming",t:"Corners markets using possession and pressing style data"},
-      {s:"upcoming",t:"Additional leagues: Championship, Bundesliga 2, Serie B, La Liga 2, Belgian Pro League"},
-      {s:"upcoming",t:"Full wallet management across 20+ bookmakers and exchanges"},
-      {s:"upcoming",t:"Tactical style fingerprinting — predict matchup effects without H2H history"},
-      {s:"upcoming",t:"Lineup combination WOWY — player pairs whose combined presence predicts outcomes"},
-      {s:"upcoming",t:"Real-time odds movement tracking — significant line movement signals market intelligence"},
-      {s:"upcoming",t:"Automated daily reporting — notification when high-score opportunities are locked"},
-    ]
-  },
+const phases=[
+  {title:"Phase 1 — Core infrastructure",badge:"done",label:"Complete",pct:100,tasks:[
+    {s:"done",t:"Node.js + Express backend deployed on Render Starter"},
+    {s:"done",t:"Persistent disk at /data — DATA_DIR=/data confirmed in Render dashboard and logs"},
+    {s:"done",t:"Atomic file writes across all 10 data files (temp-then-rename pattern)"},
+    {s:"done",t:"Startup self-heal chain: historical → lineups → stats"},
+    {s:"done",t:"API rate-limit guard with midnight auto-retry and 90-min backoff"},
+    {s:"done",t:"05:00 UTC hard stop on all backfill phases — guarantees morning scan always has quota"},
+    {s:"done",t:"Midnight backfill cron (00:05 UTC) — runs nightly regardless of server restarts"},
+    {s:"done",t:"rateLimit.js — single source of truth for rate limit state across all API calls"},
+    {s:"done",t:"API-Sports Pro plan active (7,500 calls/day)"},
+    {s:"done",t:"The Odds API connected"},
+  ]},
+  {title:"Phase 2 — Scoring model",badge:"done",label:"Complete",pct:100,tasks:[
+    {s:"done",t:"8-factor linear model: form, homeAdv, xG, H2H, defense, momentum, injuries, standings"},
+    {s:"done",t:"Context classifier: international / club European / club domestic"},
+    {s:"done",t:"Context-aware weights and league-specific base rates for 7 leagues"},
+    {s:"done",t:"Kelly criterion half-Kelly stake sizing"},
+    {s:"done",t:"Success score (0–99) with dataConf multiplier and calibration factor 1.11"},
+    {s:"done",t:"FIFA ranking quality anchor for thin-data international fixtures (rankScale=0.018)"},
+    {s:"done",t:"Neutral venue base probabilities (0.34/0.34) for WC group stage and knockouts"},
+    {s:"done",t:"International dataConf capped at 0.70 — anchor always contributes 30% weight"},
+    {s:"done",t:"Host nation modifier (+8pp) for USA, Canada, Mexico fixtures"},
+    {s:"done",t:"models/linear.js + models/interface.js ready for July non-linear swap"},
+    {s:"done",t:"Competition phase classifier: group_stage, knockout, league_early, league_mid, league_late"},
+    {s:"done",t:"Home win rate multiplier suppressed at neutral venues"},
+    {s:"done",t:"Bet display labels corrected: team names not Home/Away Win at neutral venues"},
+  ]},
+  {title:"Phase 3 — Data backfill",badge:"active",label:"In progress",pct:70,tasks:[
+    {s:"done",t:"Historical fixtures: 8,305 across 12 league/season combos — persisting correctly on disk"},
+    {s:"done",t:"WC qualifying backfill: leagues 32, 34, 31 with correct seasons"},
+    {s:"done",t:"Weight optimiser: gradient descent on 8,305 records"},
+    {s:"done",t:"Lineups: 6,011 of 6,012 complete"},
+    {s:"done",t:"WOWY: 2,880 high-confidence players built from lineup data"},
+    {s:"active",t:"xG stats: ~1,500 of 8,305 — 1,000/night budget",n:"Improving incrementally each night"},
+    {s:"upcoming",t:"Understat xG integration — ~11,000 matches of real xG data"},
+    {s:"upcoming",t:"StatsBomb open data integration — World Cup 2022 and CL xG"},
+    {s:"upcoming",t:"Confederation strength adjustment for international form scores",n:"July work"},
+  ]},
+  {title:"Phase 4 — Team intelligence",badge:"active",label:"In progress",pct:75,tasks:[
+    {s:"done",t:"589 team profiles built (home/away win rates, opposition anomalies, momentum patterns)"},
+    {s:"done",t:"Profile builder fixed — no longer overwritten by morning scan"},
+    {s:"done",t:"International profiles use full international pool (37–46 datapoints per WC team)"},
+    {s:"done",t:"Fixture congestion sensitivity per team"},
+    {s:"done",t:"Weather integration via Open-Meteo (55 stadium coordinates)"},
+    {s:"done",t:"WOWY: 2,880 high-confidence players, modifier wired into scoring pipeline"},
+    {s:"done",t:"Selection bias flag for small without-samples in winning contexts"},
+    {s:"done",t:"confirmedAbsent wiring: T-60 lineup diff fed into WOWY modifier"},
+    {s:"upcoming",t:"Full PIR (Player Impact Rating) using API-Sports per-90 player stats"},
+    {s:"upcoming",t:"Team Intelligence UI page with AI summary"},
+    {s:"upcoming",t:"Referee tendency profiles"},
+  ]},
+  {title:"Phase 5 — Live scanning",badge:"active",label:"In progress",pct:90,tasks:[
+    {s:"done",t:"Morning scan at 07:00 UTC across all 7 leagues"},
+    {s:"done",t:"T-60 pre-match lock with confirmed lineups and fresh weather"},
+    {s:"done",t:"5-minute auto-resolution poller"},
+    {s:"done",t:"Two-stage flow: WATCHING → RECOMMENDED → DROPPED"},
+    {s:"done",t:"40-point success score threshold for bet locking"},
+    {s:"done",t:"Low-confidence guard: dynamic gap threshold based on dataConf"},
+    {s:"done",t:"WC R32 fixtures scoring correctly — neutralVenue, knockout phase, corrected labels"},
+    {s:"done",t:"Model vs Market divergence report active"},
+    {s:"active",t:"Awaiting first locked bet",n:"All fixtures currently lowConfidence on sparse international data"},
+    {s:"upcoming",t:"First locked bet and auto-resolution"},
+  ]},
+  {title:"Phase 6 — Paper trading validation",badge:"active",label:"In progress",pct:20,tasks:[
+    {s:"done",t:"£1,000 paper bankroll configured"},
+    {s:"done",t:"P&L tracking per bet with full audit log and Export CSV"},
+    {s:"done",t:"Calibration data collected on all scored fixtures"},
+    {s:"done",t:"Odds history passive collection active"},
+    {s:"done",t:"Calibration health card with traffic light and suggested factor"},
+    {s:"done",t:"Model vs Market divergence report — tracks all 8pp+ divergences against outcomes"},
+    {s:"active",t:"World Cup knockout validation (June 28 – July 19)",n:"R32 fixtures scoring. Model correctly suppressing lowConfidence bets on sparse international data."},
+    {s:"upcoming",t:"Review calibration data and divergence report at end of tournament"},
+    {s:"upcoming",t:"Assess whether real money criteria are met"},
+  ]},
+  {title:"Phase 7 — July upgrade window (July 19 – Aug 8)",badge:"upcoming",label:"Upcoming",pct:0,tasks:[
+    {s:"upcoming",t:"Review World Cup calibration data and divergence report"},
+    {s:"upcoming",t:"Write non-linear model brief based on real findings"},
+    {s:"upcoming",t:"Buy The Odds API paid tier ($30/month) — 6 years of historical odds",n:"Validation infrastructure. Buy before going live with real money."},
+    {s:"upcoming",t:"EV optimiser — validate edge estimates against real historical odds"},
+    {s:"upcoming",t:"Build full PIR system using API-Sports player statistics"},
+    {s:"upcoming",t:"Non-linear model upgrade — target 56–58% accuracy"},
+    {s:"upcoming",t:"Address 50–60% band structural bias"},
+    {s:"upcoming",t:"Goals market expansion: over/under 2.5 goals, BTTS"},
+    {s:"upcoming",t:"League expansion: Eredivisie, Primeira Liga, Scottish Premiership, Europa League, Conference League"},
+    {s:"upcoming",t:"International factor weight calibration against WC 2026 results"},
+    {s:"upcoming",t:"Bookmaker management module — account database, restriction detection, rotation"},
+    {s:"upcoming",t:"Betfair Exchange API integration"},
+    {s:"upcoming",t:"Camouflage logic — recreational bet pattern per bookmaker account"},
+    {s:"upcoming",t:"Extend historical lineup backfill to 5 seasons"},
+  ]},
+  {title:"Phase 8 — Premier League season (from Aug 8)",badge:"upcoming",label:"Upcoming",pct:0,tasks:[
+    {s:"upcoming",t:"All 7 leagues live simultaneously from day one"},
+    {s:"upcoming",t:"Club team profiles fully populated with 3 seasons of domestic data"},
+    {s:"upcoming",t:"Non-linear model trained on World Cup calibration data"},
+    {s:"upcoming",t:"Goals markets running alongside match outcomes"},
+    {s:"upcoming",t:"Bookmaker management module operational"},
+    {s:"upcoming",t:"Paper trading target: positive ROI after 8 weeks"},
+    {s:"upcoming",t:"Real money trigger: positive ROI + calibration within ±5pp across all bands"},
+    {s:"upcoming",t:"Starting bankroll: £500–700, £50/day, spread across 5+ bookmakers from day one"},
+  ]},
+  {title:"Phase 9 — Scale and expand (Oct 2026+)",badge:"upcoming",label:"Upcoming",pct:0,tasks:[
+    {s:"upcoming",t:"Player props: first scorer, anytime scorer using PIR and WOWY"},
+    {s:"upcoming",t:"Cards markets using referee tendency data"},
+    {s:"upcoming",t:"Corners markets using possession and pressing style data"},
+    {s:"upcoming",t:"Additional leagues: Championship, Bundesliga 2, Serie B, La Liga 2, Belgian Pro League"},
+    {s:"upcoming",t:"Full wallet management across 20+ bookmakers and exchanges"},
+    {s:"upcoming",t:"Tactical style fingerprinting"},
+    {s:"upcoming",t:"Lineup combination WOWY — player pairs"},
+    {s:"upcoming",t:"Real-time odds movement tracking"},
+    {s:"upcoming",t:"Automated daily reporting — notification when high-score opportunities are locked"},
+  ]},
 ];
 
-const iconMap = {done:"✓",active:"▶",blocked:"⏳",upcoming:"○"};
-const iconClass = {done:"task-done-icon",active:"task-active-icon",blocked:"task-blocked-icon",upcoming:"task-upcoming-icon"};
-const progressColor = {done:"#00ff87",active:"#4cc9f0",upcoming:"rgba(255,255,255,0.15)"};
-const container = document.getElementById("phases");
+const iMap={done:"✓",active:"▶",blocked:"⏳",upcoming:"○"};
+const iClass={done:"ic-done",active:"ic-active",blocked:"ic-blocked",upcoming:"ic-up"};
+const pColor={done:"#00ff87",active:"#4cc9f0",upcoming:"rgba(255,255,255,0.1)"};
+const bClass={done:"pb-done",active:"pb-active",upcoming:"pb-up"};
+const cont=document.getElementById("phases");
 
-phases.forEach((phase,idx)=>{
-  const open = phase.badge==="active" || (phase.badge==="done" && idx<2);
-  const done = phase.tasks.filter(t=>t.s==="done").length;
-  const total = phase.tasks.length;
-  const div = document.createElement("div");
-  div.className="phase";
-  div.innerHTML=`
-    <div class="phase-header" onclick="toggle(${idx})">
-      <span class="badge badge-${phase.badge}">${phase.label}</span>
-      <span class="phase-title">${phase.title}</span>
-      <span class="phase-meta">${done}/${total}</span>
-      <span class="chevron ${open?'open':''}" id="chev-${idx}">▼</span>
+phases.forEach((ph,i)=>{
+  const open=ph.badge==="active"||(ph.badge==="done"&&i<2);
+  const dn=ph.tasks.filter(t=>t.s==="done").length;
+  const d=document.createElement("div");
+  d.className="phase";
+  d.innerHTML=`
+    <div class="phase-hdr" onclick="tog(${i})">
+      <span class="p-badge ${bClass[ph.badge]}">${ph.label}</span>
+      <span class="p-title">${ph.title}</span>
+      <span class="p-meta">${dn}/${ph.tasks.length}</span>
+      <span class="chev ${open?"open":""}" id="c${i}">▼</span>
     </div>
-    <div class="progress" style="display:${open?'block':'none'}" id="prog-${idx}">
-      <div class="progress-fill" style="width:${phase.progress}%;background:${progressColor[phase.badge]}"></div>
+    <div class="prog" style="display:${open?"block":"none"}" id="p${i}">
+      <div class="prog-fill" style="width:${ph.pct}%;background:${pColor[ph.badge]}"></div>
     </div>
-    <div class="phase-body" id="body-${idx}" style="display:${open?'block':'none'}">
-      ${phase.tasks.map(t=>`
+    <div class="phase-body" id="b${i}" style="display:${open?"block":"none"}">
+      ${ph.tasks.map(t=>`
         <div class="task">
-          <span class="task-icon ${iconClass[t.s]}">${iconMap[t.s]}</span>
+          <span class="t-icon ${iClass[t.s]}">${iMap[t.s]}</span>
           <div>
-            <div class="task-text ${t.s==='done'?'done':''}">${t.t}</div>
-            ${t.n?`<div class="task-note">${t.n}</div>`:''}
+            <div class="t-text ${t.s==="done"?"done":""}">${t.t}</div>
+            ${t.n?`<div class="t-note">${t.n}</div>`:""}
           </div>
         </div>
-      `).join('')}
+      `).join("")}
     </div>
   `;
-  container.appendChild(div);
+  cont.appendChild(d);
 });
 
-function toggle(idx){
-  const body=document.getElementById(`body-${idx}`);
-  const prog=document.getElementById(`prog-${idx}`);
-  const chev=document.getElementById(`chev-${idx}`);
-  const open=body.style.display!=="none";
-  body.style.display=open?"none":"block";
-  prog.style.display=open?"none":"block";
-  chev.classList.toggle("open",!open);
+function tog(i){
+  const b=document.getElementById("b"+i),p=document.getElementById("p"+i),c=document.getElementById("c"+i);
+  const o=b.style.display!=="none";
+  b.style.display=o?"none":"block";
+  p.style.display=o?"none":"block";
+  c.classList.toggle("open",!o);
 }
 </script>
 </body>
