@@ -339,6 +339,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
   <nav>
     <button class="nav-btn active" data-tab="scout">Scout</button>
     <button class="nav-btn" data-tab="performance">Performance</button>
+    <button class="nav-btn" data-tab="divergence">Model vs Market</button>
     <button class="nav-btn" data-tab="settings">Settings</button>
   </nav>
   <div class="status-pill">
@@ -553,6 +554,72 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
         <tbody id="bets-body"></tbody>
       </table>
       <div class="empty" id="bets-empty"><div class="empty-icon">📋</div><p>No resolved bets yet.</p></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════ MODEL VS MARKET ═══════════════════════════ -->
+<div class="tab-panel" id="tab-divergence">
+
+  <div class="grid-4" style="margin-bottom:16px">
+    <div class="stat-tile">
+      <div class="stat-label">Tracked Divergences</div>
+      <div class="stat-value" id="div-tracked">—</div>
+      <div class="stat-sub" id="div-pending">— pending</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Model Accuracy</div>
+      <div class="stat-value" id="div-model-acc">—</div>
+      <div class="stat-sub" id="div-model-record">— correct</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Market Accuracy</div>
+      <div class="stat-value" id="div-market-acc">—</div>
+      <div class="stat-sub" id="div-market-record">— correct</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Avg Gap (Model Wins)</div>
+      <div class="stat-value c-cyan" id="div-avg-gap">—</div>
+      <div class="stat-sub" id="div-avg-gap-loss">vs — on misses</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Model vs Market Divergence Log</span>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-family:'DM Mono',monospace;font-size:.7rem;color:var(--text2)">≥8pp gap on model's top pick</span>
+        <button class="btn btn-ghost btn-sm" onclick="renderDivergence()">↻ Refresh</button>
+      </div>
+    </div>
+    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 14px">
+      Every fixture where the model's highest-probability outcome differs from the market by more than 8 percentage points.
+      Tracks whether the model or market was closer to truth as results come in.
+    </p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Fixture</th>
+            <th>Date</th>
+            <th>Phase</th>
+            <th>Model Pick</th>
+            <th style="text-align:right">Model %</th>
+            <th style="text-align:right">Market %</th>
+            <th style="text-align:right">Gap</th>
+            <th>Score</th>
+            <th>Result</th>
+            <th>Model</th>
+            <th>Market</th>
+          </tr>
+        </thead>
+        <tbody id="div-tbody"></tbody>
+      </table>
+      <div class="empty" id="div-empty" style="display:none">
+        <div class="empty-icon">📊</div>
+        <p>No divergences tracked yet — fixtures appear here as they are scored.</p>
+      </div>
     </div>
   </div>
 
@@ -783,6 +850,7 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.classList.add('active');
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
     if (btn.dataset.tab === 'performance') renderPerformance();
+    if (btn.dataset.tab === 'divergence') renderDivergence();
     if (btn.dataset.tab === 'settings')  { renderSettings(); loadBackfillStatus(); loadOddsHistoryStats(); loadStartupStatus(); }
   });
 });
@@ -1118,6 +1186,75 @@ function renderPerformance() {
       <td class="mono ${pnlCls}">${pnlStr}</td>
       <td>${resultBadge}</td>
       <td><button class="btn btn-ghost btn-sm" onclick="deleteBet('${b.id}')" style="padding:2px 8px;color:var(--muted)">✕</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+async function renderDivergence() {
+  let report;
+  try { report = await apiFetch('/api/divergence-report'); } catch { return; }
+  const { summary, rows } = report;
+
+  // Summary tiles
+  document.getElementById('div-tracked').textContent  = summary.tracked;
+  document.getElementById('div-pending').textContent  = `${summary.pending} pending`;
+  const modelAcc = summary.modelAccuracy != null ? `${summary.modelAccuracy}%` : '—';
+  const marketAcc = summary.resolved ? `${((summary.marketCorrect / summary.resolved) * 100).toFixed(1)}%` : '—';
+  document.getElementById('div-model-acc').textContent   = modelAcc;
+  document.getElementById('div-model-acc').className     = `stat-value ${summary.modelAccuracy >= 50 ? 'c-green' : summary.modelAccuracy != null ? 'c-red' : ''}`;
+  document.getElementById('div-model-record').textContent = summary.resolved ? `${summary.modelCorrect}/${summary.resolved} correct` : '— correct';
+  document.getElementById('div-market-acc').textContent  = marketAcc;
+  document.getElementById('div-market-record').textContent = summary.resolved ? `${summary.marketCorrect}/${summary.resolved} correct` : '— correct';
+  document.getElementById('div-avg-gap').textContent     = summary.avgGapOnModelWins != null ? `${summary.avgGapOnModelWins}pp` : '—';
+  document.getElementById('div-avg-gap-loss').textContent = summary.avgGapOnModelLoss != null ? `vs ${summary.avgGapOnModelLoss}pp on misses` : 'vs — on misses';
+
+  const tbody = document.getElementById('div-tbody');
+  const empty = document.getElementById('div-empty');
+  tbody.innerHTML = '';
+
+  if (!rows.length) { empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+
+  rows.forEach(r => {
+    const phaseBadge = r.competitionPhase === 'knockout'
+      ? '<span class="badge badge-cyan">KO</span>'
+      : r.competitionPhase === 'group_stage'
+      ? '<span class="badge badge-muted">GS</span>'
+      : `<span class="badge badge-muted">${r.competitionPhase || '—'}</span>`;
+
+    const gapColor = r.gapPP >= 15 ? 'var(--amber)' : 'var(--cyan)';
+    const gapStr   = `<span style="color:${gapColor};font-family:'DM Mono',monospace">${r.gapPP > 0 ? '+' : ''}${r.gapPP}pp</span>`;
+
+    const lowConfBadge = r.lowConfidence ? ' <span style="color:var(--muted);font-size:.65rem">lowConf</span>' : '';
+
+    let resultCell = '<span style="color:var(--muted)">—</span>';
+    if (r.resolved && r.actualResult) {
+      resultCell = `<span class="mono" style="font-size:.75rem">${r.actualResult.replace('Home Win','H').replace('Away Win','A').replace(' Win',' ✓')}</span>`;
+    }
+
+    const tick   = '✓';
+    const cross  = '✗';
+    const modelCell  = r.resolved ? (r.modelWon
+      ? `<span style="color:var(--green);font-weight:600">${tick}</span>`
+      : `<span style="color:var(--red)">${cross}</span>`) : '—';
+    const marketCell = r.resolved ? (r.marketWon
+      ? `<span style="color:var(--green);font-weight:600">${tick}</span>`
+      : `<span style="color:var(--red)">${cross}</span>`) : '—';
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="mono" style="font-size:.78rem">${r.fixture}</td>
+      <td class="mono" style="color:var(--text2);font-size:.75rem">${r.date}</td>
+      <td>${phaseBadge}</td>
+      <td style="font-size:.78rem">${r.modelPick}${lowConfBadge}</td>
+      <td class="mono" style="text-align:right">${r.modelProb}%</td>
+      <td class="mono" style="text-align:right;color:var(--text2)">${r.marketImplied}%</td>
+      <td style="text-align:right">${gapStr}</td>
+      <td>${scoreBadge(r.successScore)}</td>
+      <td style="font-size:.75rem">${resultCell}</td>
+      <td style="text-align:center;font-size:1rem">${modelCell}</td>
+      <td style="text-align:center;font-size:1rem">${marketCell}</td>
     `;
     tbody.appendChild(tr);
   });

@@ -1592,6 +1592,85 @@ app.get('/api/odds/events', async (req, res) => {
 
 // ── App state API ─────────────────────────────────────────────────────────────
 
+// GET divergence report — fixtures where model and market disagree by >8pp
+app.get('/api/divergence-report', (_req, res) => {
+  const MIN_GAP_PP = 8;
+  const cal = getCalibration();
+
+  const rows = [];
+  for (const entry of cal) {
+    const candidates = entry.candidates || [];
+    if (!candidates.length) continue;
+
+    // Find top model pick
+    const topModel = candidates.reduce((a, b) => a.modelProb > b.modelProb ? a : b);
+    const gap = (topModel.modelProb - topModel.impliedProb) * 100;
+
+    // Only track fixtures where model diverges from market by >8pp on the top pick
+    if (Math.abs(gap) < MIN_GAP_PP) continue;
+
+    // Determine who the market most preferred
+    const topMarket = candidates.reduce((a, b) => a.impliedProb > b.impliedProb ? a : b);
+    const modelHigherThanMarket = topModel.modelProb > topModel.impliedProb;
+
+    // On resolved entries, did the model's top pick win?
+    let modelWon = null;
+    let marketWon = null;
+    if (entry.resolved) {
+      const resolveKey = entry.projectedBetKey || entry.projectedBet;
+      modelWon  = entry.actualResult === resolveKey;
+      marketWon = entry.actualResult === topMarket.bet;
+    }
+
+    rows.push({
+      fixtureId:       entry.fixtureId,
+      fixture:         entry.fixture,
+      kickoff:         entry.kickoff,
+      date:            (entry.kickoff || entry.scoredAt || '').slice(0, 10),
+      competitionPhase: entry.competitionPhase,
+      context:         entry.context,
+      lowConfidence:   entry.candidates?.[0]?.lowConfidence ?? false,
+      modelPick:       topModel.displayLabel || topModel.bet,
+      modelPickKey:    topModel.bet,
+      modelProb:       parseFloat((topModel.modelProb * 100).toFixed(1)),
+      marketImplied:   parseFloat((topModel.impliedProb * 100).toFixed(1)),
+      gapPP:           parseFloat(gap.toFixed(1)),
+      marketTopPick:   topMarket.displayLabel || topMarket.bet,
+      marketTopProb:   parseFloat((topMarket.impliedProb * 100).toFixed(1)),
+      successScore:    topModel.successScore,
+      resolved:        entry.resolved,
+      actualResult:    entry.actualResult || null,
+      modelWon,
+      marketWon,
+    });
+  }
+
+  rows.sort((a, b) => new Date(b.kickoff) - new Date(a.kickoff));
+
+  // Summary stats (resolved only)
+  const resolved = rows.filter(r => r.resolved);
+  const modelCorrect  = resolved.filter(r => r.modelWon).length;
+  const marketCorrect = resolved.filter(r => r.marketWon).length;
+
+  const avgGap = (arr) => arr.length
+    ? parseFloat((arr.reduce((s, r) => s + Math.abs(r.gapPP), 0) / arr.length).toFixed(1))
+    : null;
+
+  const summary = {
+    tracked:           rows.length,
+    resolved:          resolved.length,
+    pending:           rows.length - resolved.length,
+    modelCorrect,
+    marketCorrect,
+    neitherCorrect:    resolved.length - modelCorrect - marketCorrect + resolved.filter(r => r.modelWon && r.marketWon).length,
+    avgGapOnModelWins: avgGap(resolved.filter(r => r.modelWon)),
+    avgGapOnModelLoss: avgGap(resolved.filter(r => !r.modelWon && r.resolved)),
+    modelAccuracy:     resolved.length ? parseFloat(((modelCorrect / resolved.length) * 100).toFixed(1)) : null,
+  };
+
+  res.json({ summary, rows });
+});
+
 // GET full state (bets, watching, bankroll)
 app.get('/api/state', (_req, res) => {
   const scanMeta = readJSON('scan-meta.json') || {};
