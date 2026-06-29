@@ -14,6 +14,7 @@ const {
   h2hScore, standingsScore, injuryScore,
   computeModelProb, computeXGProxy, classifyCompetitionPhase,
   kelly, computeSuccessScore, weatherModifier,
+  reloadXgStore, getXgStore,
 } = require('./scoring');
 
 const model = require('./models/interface');
@@ -2142,6 +2143,29 @@ app.get('/api/backfill/lineups/status', (_req, res) => {
   res.json({ running: _lineupsBackfillRunning, count: Object.keys(lineupsDb).length });
 });
 
+// StatsBomb xG import — runs scripts/import-statsbomb.js server-side
+let _xgImportRunning = false;
+app.post('/api/backfill/xg', async (req, res) => {
+  if (_xgImportRunning) return res.json({ running: true, message: 'Import already in progress' });
+  _xgImportRunning = true;
+  res.json({ started: true, message: 'StatsBomb xG import running — check /api/server-status for count when complete' });
+  const { execFile } = require('child_process');
+  const scriptPath   = path.join(__dirname, 'scripts', 'import-statsbomb.js');
+  execFile(process.execPath, [scriptPath], { env: { ...process.env, DATA_DIR } }, (err, stdout, stderr) => {
+    _xgImportRunning = false;
+    if (err) { console.error('[XgImport] Error:', err.message, stderr); return; }
+    reloadXgStore();
+    const store = getXgStore();
+    console.log(`[XgImport] Complete — ${Object.keys(store).length} entries in xg-data.json`);
+    console.log('[XgImport]', stdout.trim().split('\n').slice(-2).join(' | '));
+  });
+});
+
+app.get('/api/backfill/xg/status', (_req, res) => {
+  const store = getXgStore();
+  res.json({ running: _xgImportRunning, count: Object.keys(store).length });
+});
+
 // Trigger pre-match scan for a specific watching entry
 app.post('/api/scan/prematch/:watchId', async (req, res) => {
   const watching = getWatching();
@@ -2535,6 +2559,7 @@ app.get('/api/server-status', async (_req, res) => {
       lineupsTarget,
       stats:              Object.keys(stats).length,
       wowyHighConfidence: wowyHighConf,
+      xgData:             { count: Object.keys(getXgStore()).length },
     },
     rateLimit:          getRateLimitState(),
     backfill:           { phase: _startupStatus.phase, startedAt: _startupStatus.startedAt, completedAt: _startupStatus.completedAt, lastRan: _cronLastRan.backfill },

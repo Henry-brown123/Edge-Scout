@@ -1,5 +1,44 @@
 'use strict';
 
+const fs   = require('fs');
+const path = require('path');
+
+// ─── XG STORE (StatsBomb + future sources) ───────────────────────────────────
+// Keyed as "{homeTeam}|{awayTeam}|{YYYY-MM-DD}". Loaded once at startup;
+// reloaded on demand via reloadXgStore() after an import run.
+const XG_STORE_PATH = path.join(process.env.DATA_DIR || path.join(__dirname, 'data'), 'xg-data.json');
+let _xgStore = null;
+
+function getXgStore() {
+  if (_xgStore) return _xgStore;
+  try { _xgStore = JSON.parse(fs.readFileSync(XG_STORE_PATH, 'utf8')); }
+  catch { _xgStore = {}; }
+  return _xgStore;
+}
+
+function reloadXgStore() { _xgStore = null; }
+
+// Look up StatsBomb xG for a fixture. Tries exact date then ±1 day for timezone drift.
+function lookupXg(homeName, awayName, dateStr) {
+  const store = getXgStore();
+  if (!homeName || !awayName || !dateStr) return null;
+  const d = new Date(dateStr);
+  for (let offset = 0; offset <= 1; offset++) {
+    const candidate = new Date(d);
+    candidate.setUTCDate(d.getUTCDate() + offset);
+    const ds = candidate.toISOString().slice(0, 10);
+    const entry = store[`${homeName}|${awayName}|${ds}`];
+    if (entry) return entry;
+    // Also try previous day
+    const prev = new Date(d);
+    prev.setUTCDate(d.getUTCDate() - offset);
+    const ps = prev.toISOString().slice(0, 10);
+    const prev_entry = store[`${homeName}|${awayName}|${ps}`];
+    if (prev_entry) return prev_entry;
+  }
+  return null;
+}
+
 // ─── FIXTURE CONTEXT ─────────────────────────────────────────────────────────
 
 function classifyFixture(leagueId) {
@@ -106,13 +145,18 @@ function xgScore(fixtures, teamId, statsCache = {}, decay = 0.05) {
     .slice(0, 8);
   if (!rel.length) return 50;
   const vals = rel.map(f => {
-    const isHome = f.teams?.home?.id === teamId;
+    const isHome   = f.teams?.home?.id === teamId;
+    // Tier 1: StatsBomb / imported xG store (keyed by team name + date)
+    const sbEntry = lookupXg(f.teams?.home?.name, f.teams?.away?.name, f.fixture?.date);
+    if (sbEntry) return isHome ? sbEntry.home : sbEntry.away;
+    // Tier 2: API-Sports fixture stats (real xG or shots proxy)
     const c = statsCache[f.fixture?.id];
     if (c) {
       const s = isHome ? c.home : c.away;
       if (s?.xg != null) return s.xg;
       if (s?.shotsOn != null) return s.shotsOn * 0.33;
     }
+    // Tier 3: goals as last-resort proxy
     return isHome ? (f.goals?.home ?? 0) : (f.goals?.away ?? 0);
   });
   return Math.min(100, Math.round((recencyAvg(vals, decay) / 3) * 100));
@@ -322,4 +366,5 @@ module.exports = {
   computeModelProb, computeXGProxy, classifyCompetitionPhase,
   kelly, computeSuccessScore,
   historicalWeight, weatherModifier,
+  reloadXgStore, getXgStore,
 };
