@@ -124,3 +124,57 @@ Build an **opponent-quality-weighted form score** for the international pool:
 This directly addresses the Senegal problem: Senegal's form=85 is built on AFCON qualifying wins against opponents ranked 60-120. Weighted by opponent quality, their score drops significantly. France's form=65 from Nations League A (vs Netherlands rank 8, Germany rank 10, Portugal rank 6) would barely change. The quality-weighted scores will reflect tournament-level form rather than confederation-level dominance.
 
 Implementation: add `opponentQualityWeight` parameter to `formScore` in `scoring.js`, pass `true` when `context === 'international'`. Requires building a team-id → FIFA rank index from `FIFA_RANK_FALLBACK` during scoring.
+
+---
+
+## 5. Systematic underdog bias — WC 2026 knockout round (documented 2026-06-30)
+
+**Finding date:** 2026-06-30  
+**Status:** Documented. No code changes. Full investigation deferred to July upgrade.
+
+### The Pattern
+
+7 of 7 tracked WC 2026 fixtures had the model's top pick be the underdog (the side with lower market-implied probability). This is not noise.
+
+| Fixture | Model top pick | Market implied | Gap | Actual result |
+|---|---|---|---|---|
+| Senegal vs Iraq | Iraq Win | 7.4% | +17.3pp | Home Win (Senegal) ✗ |
+| Norway vs France | Norway Win | 20.0% | +10.8pp | Away Win (France) ✗ |
+| Panama vs England | Panama Win | 6.7% | +18.0pp | Away Win (England) ✗ |
+| Colombia vs Portugal | Colombia Win | 29.4% | +9.6pp | Draw ✗ |
+| South Africa vs Canada | South Africa Win | 16.7% | +16.3pp | Away Win (Canada) ✗ |
+| Brazil vs Japan | Japan Win | 20.0% | +11.1pp | Home Win (Brazil) ✗ |
+| Germany vs Paraguay | Paraguay Win | 10.5% | +18.6pp | Draw ✗ |
+
+Market correct in 4 of 6 resolved fixtures. 2 draws (neither model nor market correct). **Model accuracy on divergent fixtures: 0/6.**
+
+### Data Sparsity Is Not the Sole Cause
+
+The tiered fixture-count gate (deployed 2026-06-30) correctly blocks data-sparse calls (Iraq: 8 fixtures, South Africa: 13, Japan: 15). But the underdog bias persists in data-rich fixtures:
+
+- Norway (37 backfill fixtures) vs France (40): model picked Norway at 30.8% vs market 20.0%
+- Colombia (52) vs Portugal (36): model picked Colombia at 39.0% vs market 29.4%
+- Germany (50) vs Paraguay (48): model picked Paraguay at 29.1% vs market 10.5%
+
+These teams have genuine form data. The bias is in the model logic, not the data pool.
+
+### Likely Culprits to Investigate in July
+
+1. **FIFA ranking anchor (`rankScale=0.018`)** — the anchor blends model output with a FIFA-rank-based probability at `(1 - dataConf)` weight. At the international dataConf cap of 0.70, the anchor contributes 30% to all outputs regardless of form data quality. If the FIFA rank distribution is flatter than the market's actual pricing of quality gaps, this systematically pulls probabilities toward the weaker team and compresses the favourite's edge on every international fixture.
+
+2. **Calibration factor (1.11) applied uniformly** — derived from the club domestic calibration dataset (see section 1 above). If tournament football has different probability distributions, applying the same 1.11 factor to international fixtures may over-inflate minority probabilities specifically in the ranges the market prices as <25%.
+
+3. **Neutral venue base (0.34/0.34) interaction with ranking anchor** — at neutral venues, both teams start from equal base probabilities. The ranking anchor then pulls toward the FIFA-rank-implied split. If FIFA rankings systematically underestimate the true quality gap between strong and weak WC teams (a known issue — FIFA rankings are points-based not ELO), the anchor compounds the underdog bias: the model starts equal, then anchors to a flatter-than-reality distribution, then the calibration factor amplifies it.
+
+### What to Do in July
+
+- **Segment calibration data by "model favoured underdog vs model favoured favourite"** as a standalone diagnostic category, not just probability bands. This will show whether the directional bias is consistent across all confidence levels.
+- **Backtest the ranking anchor in isolation**: compute what probabilities look like at `rankScale=0` for these 7 fixtures and compare to the market. If removing the anchor reduces the underdog bias, that is strong evidence the anchor is the root cause.
+- **Check calibration factor derivation**: confirm whether 1.11 was computed on club or international data. If club, derive a separate `calibrationFactor` per context as part of the Platt scaling work (section 1).
+- **Consider ELO or SPI ratings as an anchor replacement** for international context — club-level Elo (e.g. club Elo from clubelo.com) is known to better capture true team strength at international level than FIFA rankings.
+
+### What Is Already Live
+
+The tiered fixture-count gate (deployed 2026-06-30) correctly blocks the worst data-sparse cases and remains active for the rest of the tournament. It is a genuine improvement but does not address the directional bias.
+
+**The underdog bias requires the full non-linear recalibration planned for July — not a parameter nudge now.** Do not touch `rankScale`, the calibration factor, or the neutral venue bases before that work is complete. A parameter nudge risks masking the structural problem rather than solving it.
