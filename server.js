@@ -690,7 +690,13 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   // any >10pp divergence from the market is flagged.
   const maxModelBookGap  = Math.max(...results.map(c => Math.abs(c.modelProb - c.impliedProb)));
   const gapThreshold     = Math.max(0, cfg.gapThresholdBase - (1 - dataConf) * 0.15);
-  const lowConfidence    = maxModelBookGap > gapThreshold;
+
+  // Tiered fixture-count gate: lowConfidence threshold scales with the weaker team's
+  // raw backfill count. Under 20 fixtures = near-guess territory; 35+ = real signal.
+  // This is an ADDITIONAL gate — both must pass for a bet to unlock.
+  const minFormCount   = Math.min(homeFormCount, awayFormCount);
+  const tierThreshold  = minFormCount < 20 ? 0.08 : minFormCount < 35 ? 0.12 : 0.18;
+  const lowConfidence  = maxModelBookGap > gapThreshold || maxModelBookGap > tierThreshold;
   results.forEach(c => { c.lowConfidence = lowConfidence; });
 
   // WOWY key player signals — top movers by |delta| for each team, with confidence flag
@@ -720,6 +726,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     kickoff: fix.fixture?.date,
     context, competitionPhase, lowConfidence,
     homeDataConf, awayDataConf, dataConf,
+    homeFormCount, awayFormCount, minFormCount, tierThreshold,
     teamIntel,
   };
 }
@@ -817,6 +824,8 @@ async function runMorningScan(leagueIds) {
             competitionPhase:  scored.competitionPhase,
             neutralVenue:      scored.teamIntel?.neutralVenue ?? false,
             modifierNotes:     scored.teamIntel?.modifierNotes ?? [],
+            minFormCount:      scored.minFormCount ?? null,
+            tierThreshold:     scored.tierThreshold ?? null,
           };
           calNow.push(calEntry);
 
@@ -2343,6 +2352,28 @@ async function runBackfillChain() {
   }
 }
 
+// One-time migration: backfill projectedBetKey on calibration entries that predate it.
+// Safe to re-run — skips entries that already have the field.
+function migrateCalibrationProjectedBetKey() {
+  const CANONICAL = new Set(['Home Win', 'Away Win', 'Draw']);
+  const cal = getCalibration();
+  let patched = 0;
+  for (const e of cal) {
+    if (e.projectedBetKey) continue;
+    if (e.projectedBet && CANONICAL.has(e.projectedBet)) {
+      e.projectedBetKey = e.projectedBet;
+      if (e.resolved && e.actualResult) {
+        e.topPickCorrect = e.actualResult === e.projectedBetKey;
+      }
+      patched++;
+    }
+  }
+  if (patched > 0) {
+    writeJSON('calibration.json', cal);
+    console.log(`[Migration] projectedBetKey backfilled on ${patched} calibration entries`);
+  }
+}
+
 // Checks data files on startup. Corrupt = exists but < MIN_VALID_BYTES.
 // Queues backfill chain (30s delay) if any critical file is missing or corrupt.
 function startupCheck() {
@@ -2648,7 +2679,10 @@ app.listen(PORT, () => {
     console.log(`[Startup] Expired ${rawWatching.length - future.length} past-kickoff watching entries`);
   }
 
-  // 5. Queue backfill chain if data is missing/corrupt
+  // 5. Migrate stale calibration entries (idempotent — skips already-patched entries)
+  migrateCalibrationProjectedBetKey();
+
+  // 6. Queue backfill chain if data is missing/corrupt
   startupCheck();
 
   // 6. Morning scan if today's has not completed (runs regardless of backfill state —

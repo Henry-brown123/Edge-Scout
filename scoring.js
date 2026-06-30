@@ -97,7 +97,7 @@ const CONTEXT_CONFIG = {
     homeBase:      0.30,
     awayBase:      0.45,
     dataConfMin:   0.0,    // no min data requirement — use stricter gap threshold
-    gapThresholdBase: 0.10, // 10pp at full data confidence; formula clamps to 0 at dataConf=0
+    gapThresholdBase: 0.25, // raised — tiered fixture-count gate is now the binding constraint for international
   },
 };
 
