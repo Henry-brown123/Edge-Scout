@@ -178,3 +178,15 @@ These teams have genuine form data. The bias is in the model logic, not the data
 The tiered fixture-count gate (deployed 2026-06-30) correctly blocks the worst data-sparse cases and remains active for the rest of the tournament. It is a genuine improvement but does not address the directional bias.
 
 **The underdog bias requires the full non-linear recalibration planned for July — not a parameter nudge now.** Do not touch `rankScale`, the calibration factor, or the neutral venue bases before that work is complete. A parameter nudge risks masking the structural problem rather than solving it.
+
+### Addendum — 2026-07-01
+
+**England vs Congo DR resolved correctly (England Win, 2-1).** Model 58.1% vs market 54.9% — gap 3.3pp, no `lowConfidence`, score 52. First WC fixture where the model closely agreed with the market and was correct.
+
+**This refines the section 5 hypothesis significantly.** The underdog bias does not appear to be a global calibration error affecting all international fixtures. It specifically manifests when the model diverges from the market by more than ~10pp. Below that threshold the model performs correctly.
+
+**The more precise finding:** the model's large divergences from the market on international fixtures are systematically wrong — the market is right in these cases. Small divergences (under ~10pp) appear reliable.
+
+**July investigation priority update:** the primary focus should be understanding what causes large divergences specifically — why does the model produce 30% for Japan when the market says 20%, or 29% for Paraguay when the market says 10.5%? The answer likely lies in the FIFA ranking anchor being too weak to suppress these probability estimates when the form model produces high scores for teams from weaker confederations. A confederation strength adjustment applied to form scores (already proposed in section 4) would directly address this: if Senegal's form score is inflated by AFCON results against weak opposition, the ranking anchor at 30% weight is not strong enough to pull the final probability back to the market's assessment. The fix is to reduce the form signal going in, not to increase the anchor weight.
+
+**Belgium vs Senegal (Jul 1, 17:00 UTC) — to track:** scored at 41 with Belgium 48.8% vs market 47.6%, gap 1.2pp, no `lowConfidence`. If Belgium win, this is another small-divergence correct call and further supports the threshold hypothesis. Currently in WATCHING.
