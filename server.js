@@ -1095,6 +1095,8 @@ async function checkAndResolve() {
       const actualOutcome = hg > ag ? 'Home Win' : hg < ag ? 'Away Win' : 'Draw';
       const resolvedAt    = new Date().toISOString();
       const finalScore    = `${hg}-${ag}`;
+      const homeName      = fix.teams?.home?.name;
+      const awayName      = fix.teams?.away?.name;
 
       // Resolve bet if exists
       const bet = pendingBets.find(b => b.fixtureId === fid);
@@ -1118,13 +1120,17 @@ async function checkAndResolve() {
       // Resolve calibration entry
       const ce = pendingCal.find(c => c.fixtureId === fid);
       if (ce) {
+        const neutralDisplay = ce.competitionPhase === 'group_stage' || ce.competitionPhase === 'knockout';
+        const displayResult  = neutralDisplay
+          ? (hg > ag ? `${homeName} Win` : hg < ag ? `${awayName} Win` : 'Draw')
+          : actualOutcome;
         ce.resolved       = true;
         ce.resolvedAt     = resolvedAt;
-        ce.actualResult   = actualOutcome;
+        ce.actualResult   = displayResult;
         ce.finalScore     = finalScore;
         ce.topPickCorrect = actualOutcome === (ce.projectedBetKey || ce.projectedBet);
         calChanged = true;
-        console.log(`[Calibration] ${ce.fixture} → actual: ${actualOutcome}, predicted: ${ce.projectedBet} (${ce.topPickCorrect ? '✓' : '✗'})`);
+        console.log(`[Calibration] ${ce.fixture} → actual: ${displayResult}, predicted: ${ce.projectedBet} (${ce.topPickCorrect ? '✓' : '✗'})`);
       }
 
       // Update odds history record with result
