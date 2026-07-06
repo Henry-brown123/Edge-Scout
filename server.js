@@ -1153,8 +1153,6 @@ async function checkAndResolve() {
       // Incremental team profile update
       const homeId   = fix.teams?.home?.id;
       const awayId   = fix.teams?.away?.id;
-      const homeName = fix.teams?.home?.name;
-      const awayName = fix.teams?.away?.name;
       const homeWon  = actualOutcome === 'Home Win';
       const awayWon  = actualOutcome === 'Away Win';
       const isDraw   = actualOutcome === 'Draw';

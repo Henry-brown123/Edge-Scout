@@ -338,8 +338,8 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
   </div>
   <nav>
     <button class="nav-btn active" data-tab="scout">Scout</button>
+    <button class="nav-btn" data-tab="model">Model</button>
     <button class="nav-btn" data-tab="performance">Performance</button>
-    <button class="nav-btn" data-tab="divergence">Model vs Market</button>
     <button class="nav-btn" data-tab="settings">Settings</button>
   </nav>
   <div class="status-pill">
@@ -488,54 +488,9 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     </div>
   </div>
 
-  <div class="grid-2" style="margin-bottom:16px">
-    <div class="card">
-      <div class="card-header"><span class="card-title">P&L Curve</span></div>
-      <div class="chart-wrap"><canvas id="pnl-chart"></canvas></div>
-    </div>
-    <div class="card">
-      <div class="card-header"><span class="card-title">Calibration — Win Rate by Score (Placed Bets)</span></div>
-      <div id="calibration-chart" style="margin-top:4px"></div>
-      <div class="empty" id="cal-empty" style="padding:24px">
-        <p>Need 10+ resolved bets to show calibration.</p>
-      </div>
-    </div>
-  </div>
-
-  <!-- Calibration Health indicator -->
-  <div class="card" style="margin-bottom:16px" id="cal-health-card">
-    <div class="card-header">
-      <span class="card-title">Calibration Health</span>
-      <div style="display:flex;align-items:center;gap:12px">
-        <div id="cal-health-light" style="display:flex;align-items:center;gap:8px;font-family:'DM Mono',monospace;font-size:.75rem"></div>
-        <button class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:.65rem" onclick="renderCalibrationHealth()">↻ Refresh</button>
-      </div>
-    </div>
-    <div id="cal-health-body" style="font-family:'DM Mono',monospace;font-size:.75rem;color:var(--text2)">Loading…</div>
-  </div>
-
-  <!-- Full model calibration across all scored fixtures -->
   <div class="card" style="margin-bottom:16px">
-    <div class="card-header">
-      <span class="card-title">Model Calibration — All Scored Fixtures</span>
-      <span id="cal-counts" style="font-family:'DM Mono',monospace;font-size:.75rem;color:var(--text2)"></span>
-    </div>
-    <p style="font-size:.78rem;color:var(--text2);font-family:'DM Mono',monospace;margin:0 0 14px">
-      Win rate of model's top pick across every scored fixture — regardless of whether a bet was placed.
-      A well-calibrated model shows win rate ≈ predicted probability.
-    </p>
-
-    <div style="margin-bottom:20px">
-      <div style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Score Bucket Performance</div>
-      <div id="cal-score-buckets"></div>
-      <div class="empty" id="cal-score-empty" style="padding:16px;display:none"><p>No resolved fixtures yet.</p></div>
-    </div>
-
-    <div>
-      <div style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--text2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Probability Band Accuracy</div>
-      <div id="cal-prob-bands"></div>
-      <div class="empty" id="cal-prob-empty" style="padding:16px;display:none"><p>No resolved fixtures yet.</p></div>
-    </div>
+    <div class="card-header"><span class="card-title">P&L Curve</span><span style="font-family:'DM Mono',monospace;font-size:.72rem;color:var(--text2)">placed bets only</span></div>
+    <div class="chart-wrap"><canvas id="pnl-chart"></canvas></div>
   </div>
 
   <div class="card">
@@ -559,9 +514,69 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
 
 </div>
 
-<!-- ═══════════════════════════ MODEL VS MARKET ═══════════════════════════ -->
-<div class="tab-panel" id="tab-divergence">
+<!-- ═══════════════════════════ MODEL ═══════════════════════════ -->
+<div class="tab-panel" id="tab-model">
 
+  <!-- Key findings -->
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header"><span class="card-title">Key Findings — WC 2026 Validation</span><span style="font-family:'DM Mono',monospace;font-size:.7rem;color:var(--text2)">documented findings, not live data</span></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-family:'DM Mono',monospace;font-size:.74rem">
+      <div style="background:var(--surface2);border-radius:8px;padding:12px;border-left:3px solid var(--red)">
+        <div style="color:var(--red);font-weight:700;margin-bottom:6px;font-size:.7rem;text-transform:uppercase;letter-spacing:.06em">Underdog Bias</div>
+        <div style="color:var(--text1);line-height:1.5">Model has picked the underdog in 12/12 large-divergence international fixtures. All wrong. Small-divergence calls (under ~10pp gap) are reliable.</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:8px;padding:12px;border-left:3px solid var(--amber)">
+        <div style="color:var(--amber);font-weight:700;margin-bottom:6px;font-size:.7rem;text-transform:uppercase;letter-spacing:.06em">Score Band Inversion</div>
+        <div style="color:var(--text1);line-height:1.5">60–79 band scores 0% directional accuracy. 40–59 scores 42% overall (placed bets: 3W 0L). High-conviction international underdog calls are the worst performers.</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:8px;padding:12px;border-left:3px solid var(--green)">
+        <div style="color:var(--green);font-weight:700;margin-bottom:6px;font-size:.7rem;text-transform:uppercase;letter-spacing:.06em">lowConfidence Gate</div>
+        <div style="color:var(--text1);line-height:1.5">Blocked 17 losing bets during WC validation. One placed bet (Portugal vs Croatia, score 61) slipped through. Gate is working as intended.</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:8px;padding:12px;border-left:3px solid var(--cyan)">
+        <div style="color:var(--cyan);font-weight:700;margin-bottom:6px;font-size:.7rem;text-transform:uppercase;letter-spacing:.06em">Placed Bet Record</div>
+        <div style="color:var(--text1);line-height:1.5">3W 1L (75%). All wins were small-divergence fixtures where model and market agreed closely. The one loss was a large-divergence underdog call that passed the gate.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Directional accuracy by score band — all scored fixtures -->
+  <div class="grid-2" style="margin-bottom:16px">
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Directional Accuracy by Score Band</span>
+        <span style="font-family:'DM Mono',monospace;font-size:.7rem;color:var(--text2)">all scored fixtures</span>
+      </div>
+      <p style="font-family:'DM Mono',monospace;font-size:.72rem;color:var(--text2);margin:0 0 12px">
+        Win rate of model's top pick across every resolved fixture — includes non-placed bets.
+      </p>
+      <div id="cal-score-buckets"></div>
+      <div class="empty" id="cal-score-empty" style="padding:16px;display:none"><p>No resolved fixtures yet.</p></div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Probability Band Accuracy</span>
+        <span style="font-family:'DM Mono',monospace;font-size:.7rem;color:var(--text2)">all scored fixtures</span>
+      </div>
+      <div id="cal-prob-bands"></div>
+      <div class="empty" id="cal-prob-empty" style="padding:16px;display:none"><p>No resolved fixtures yet.</p></div>
+    </div>
+  </div>
+
+  <!-- Calibration health -->
+  <div class="card" style="margin-bottom:16px" id="cal-health-card">
+    <div class="card-header">
+      <span class="card-title">Calibration Health</span>
+      <div style="display:flex;align-items:center;gap:12px">
+        <div id="cal-health-light" style="display:flex;align-items:center;gap:8px;font-family:'DM Mono',monospace;font-size:.75rem"></div>
+        <button class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:.65rem" onclick="renderCalibrationHealth()">↻ Refresh</button>
+      </div>
+    </div>
+    <div id="cal-health-body" style="font-family:'DM Mono',monospace;font-size:.75rem;color:var(--text2)">Loading…</div>
+  </div>
+
+  <!-- Model vs Market divergence -->
   <div class="grid-4" style="margin-bottom:16px">
     <div class="stat-tile">
       <div class="stat-label">Tracked Divergences</div>
@@ -590,7 +605,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       <span class="card-title">Model vs Market Divergence Log</span>
       <div style="display:flex;align-items:center;gap:10px">
         <span style="font-family:'DM Mono',monospace;font-size:.7rem;color:var(--text2)">≥8pp gap on model's top pick</span>
-        <button class="btn btn-ghost btn-sm" onclick="renderDivergence()">↻ Refresh</button>
+        <button class="btn btn-ghost btn-sm" onclick="renderModel()">↻ Refresh</button>
       </div>
     </div>
     <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 14px">
@@ -849,8 +864,8 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'model')       renderModel();
     if (btn.dataset.tab === 'performance') renderPerformance();
-    if (btn.dataset.tab === 'divergence') renderDivergence();
     if (btn.dataset.tab === 'settings')  { renderSettings(); loadBackfillStatus(); loadOddsHistoryStats(); loadStartupStatus(); }
   });
 });
@@ -1154,13 +1169,6 @@ function renderPerformance() {
   });
   drawPnlChart(curve, bankroll.initial);
 
-  // Placed-bets calibration (existing)
-  renderCalibration(resolved);
-
-  // Full model calibration across all scored fixtures
-  renderFullCalibration();
-  renderCalibrationHealth();
-
   // Bet log
   const tbody = document.getElementById('bets-body');
   const empty = document.getElementById('bets-empty');
@@ -1189,6 +1197,12 @@ function renderPerformance() {
     `;
     tbody.appendChild(tr);
   });
+}
+
+async function renderModel() {
+  renderFullCalibration();
+  renderCalibrationHealth();
+  renderDivergence();
 }
 
 async function renderDivergence() {
