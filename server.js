@@ -136,7 +136,20 @@ function getSettings() {
 const { setRateLimited, isRateLimited, getRateLimitState, backfillCutoffReached } = require('./rateLimit');
 
 function getBankroll() {
-  return readJSON('bankroll.json') || { initial: 1000, current: 1000, lastUpdated: null };
+  const stored  = readJSON('bankroll.json') || { initial: 1000, lastUpdated: null };
+  const initial = stored.initial || 1000;
+  // Compute current from resolved bets (deduplicated by fixtureId) so cached value can never be stale
+  const bets    = readJSON('bets.json') || [];
+  const seen    = new Set();
+  let computed  = initial;
+  for (const b of bets) {
+    if (b.result && b.pnl != null && !seen.has(b.fixtureId)) {
+      seen.add(b.fixtureId);
+      computed += b.pnl;
+    }
+  }
+  const current = parseFloat(computed.toFixed(2));
+  return { ...stored, initial, current };
 }
 
 function getBets()         { return readJSON('bets.json')         || []; }
