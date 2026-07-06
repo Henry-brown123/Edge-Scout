@@ -1142,7 +1142,11 @@ async function manualResolve(id, result) {
 // ─── PERFORMANCE ─────────────────────────────────────────────────────────────
 function renderPerformance() {
   const { bankroll, bets } = STATE;
-  const resolved = bets.filter(b => b.stage === 'RESOLVED');
+  // Deduplicate by fixtureId — keep only the first (canonical) bet per fixture
+  const seen = new Set();
+  const placedBets = bets.filter(b => b.suggestedStake > 0 && (b.result || b.stage === 'RECOMMENDED'))
+    .filter(b => { if (seen.has(b.fixtureId)) return false; seen.add(b.fixtureId); return true; });
+  const resolved = placedBets.filter(b => b.stage === 'RESOLVED');
   const wins     = resolved.filter(b => b.result === 'win').length;
   const losses   = resolved.filter(b => b.result === 'loss').length;
   const staked   = resolved.reduce((s, b) => s + b.suggestedStake, 0);
@@ -1153,30 +1157,29 @@ function renderPerformance() {
   document.getElementById('p-bankroll').textContent  = `£${bankroll.current.toFixed(2)}`;
   document.getElementById('p-bankroll').className    = `stat-value ${pnl >= 0 ? 'c-green' : 'c-red'}`;
   document.getElementById('p-pnl-sub').textContent   = `${pnl >= 0 ? '+' : ''}£${pnl.toFixed(2)} (${pnlPct}%)`;
-  document.getElementById('p-total').textContent     = bets.length;
+  document.getElementById('p-total').textContent     = placedBets.length;
   document.getElementById('p-record').textContent    = `${wins}W / ${losses}L`;
   document.getElementById('p-winrate').textContent   = resolved.length ? `${((wins/(wins+losses||1))*100).toFixed(0)}%` : '—';
   document.getElementById('p-winrate').className     = `stat-value ${wins >= losses ? 'c-green' : 'c-red'}`;
   document.getElementById('p-roi').textContent       = roi !== '—' ? `${roi}%` : '—';
   document.getElementById('p-roi').className         = `stat-value ${parseFloat(roi) >= 0 ? 'c-green' : 'c-red'}`;
 
-  // P&L chart
+  // P&L chart — placed bets only, deduplicated
   const curve = [];
   let running = 0;
-  bets.filter(b => b.result).slice().reverse().forEach(b => {
+  resolved.slice().reverse().forEach(b => {
     running += b.pnl || 0;
     curve.push(running);
   });
   drawPnlChart(curve, bankroll.initial);
 
-  // Bet log
+  // Bet log — placed bets only, deduplicated
   const tbody = document.getElementById('bets-body');
   const empty = document.getElementById('bets-empty');
   tbody.innerHTML = '';
-  const allBets = bets.filter(b => b.stage !== 'WATCHING');
-  empty.style.display = allBets.length ? 'none' : 'block';
+  empty.style.display = placedBets.length ? 'none' : 'block';
 
-  allBets.forEach(b => {
+  placedBets.forEach(b => {
     const pnlStr = b.pnl != null ? `${b.pnl >= 0 ? '+' : ''}£${b.pnl.toFixed(2)}` : '—';
     const pnlCls = b.pnl > 0 ? 'c-green' : b.pnl < 0 ? 'c-red' : '';
     const resultBadge = b.result === 'win' ? '<span class="badge badge-green">WIN</span>'

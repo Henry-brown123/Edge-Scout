@@ -1040,6 +1040,10 @@ async function runPreMatchScan(watchingEntry) {
     };
 
     const bets = getBets();
+    if (bets.some(b => b.fixtureId === fix.fixture.id)) {
+      console.log(`[PreMatch] Bet already exists for fixture ${fix.fixture.id} (${scored.homeName} vs ${scored.awayName}) — skipping duplicate`);
+      return null;
+    }
     bets.unshift(bet);
     saveBets(bets);
 
@@ -1098,23 +1102,27 @@ async function checkAndResolve() {
       const homeName      = fix.teams?.home?.name;
       const awayName      = fix.teams?.away?.name;
 
-      // Resolve bet if exists
-      const bet = pendingBets.find(b => b.fixtureId === fid);
-      if (bet) {
-        const won = actualOutcome === bet.bet;
+      // Resolve all pending bets for this fixture, but credit P&L only once (first/canonical)
+      const matchingBets = pendingBets.filter(b => b.fixtureId === fid);
+      if (matchingBets.length) {
+        const canonical = matchingBets[0];
+        const won = actualOutcome === canonical.bet;
         const pnl = won
-          ? parseFloat(((bet.bookOdds - 1) * bet.suggestedStake).toFixed(2))
-          : -bet.suggestedStake;
-        bet.result     = won ? 'win' : 'loss';
-        bet.pnl        = pnl;
-        bet.stage      = 'RESOLVED';
-        bet.resolvedAt = resolvedAt;
-        bet.finalScore = finalScore;
+          ? parseFloat(((canonical.bookOdds - 1) * canonical.suggestedStake).toFixed(2))
+          : -canonical.suggestedStake;
+        matchingBets.forEach(b => {
+          b.result     = won ? 'win' : 'loss';
+          b.pnl        = b === canonical ? pnl : 0; // duplicates get 0 pnl, canonical gets real pnl
+          b.stage      = 'RESOLVED';
+          b.resolvedAt = resolvedAt;
+          b.finalScore = finalScore;
+        });
         const br = getBankroll();
         br.current = parseFloat((br.current + pnl).toFixed(2));
         saveBankroll(br);
         betsChanged = true;
-        console.log(`[Resolve] ${bet.fixture} — ${bet.bet} → ${bet.result} (${finalScore}), P&L: £${pnl}, Bankroll: £${br.current}`);
+        const dupNote = matchingBets.length > 1 ? ` (${matchingBets.length - 1} duplicates voided)` : '';
+        console.log(`[Resolve] ${canonical.fixture} — ${canonical.bet} → ${canonical.result} (${finalScore}), P&L: £${pnl}, Bankroll: £${br.current}${dupNote}`);
       }
 
       // Resolve calibration entry
@@ -2378,6 +2386,46 @@ function migrateCalibrationProjectedBetKey() {
   }
 }
 
+// Recalculate bankroll from unique resolved bets (one per fixtureId, first resolved wins).
+// Runs at startup to recover from duplicate-bet inflation or missing bankroll.json.
+function recalculateBankroll() {
+  const bets     = getBets();
+  const resolved = bets.filter(b => b.result && b.pnl != null);
+  if (!resolved.length) return;
+
+  // Deduplicate: keep only the first resolved bet per fixtureId
+  const seen = new Set();
+  const unique = [];
+  for (const b of resolved) {
+    if (!seen.has(b.fixtureId)) {
+      seen.add(b.fixtureId);
+      unique.push(b);
+    }
+  }
+
+  const initial = getBankroll().initial || 1000;
+  const current = parseFloat((initial + unique.reduce((sum, b) => sum + b.pnl, 0)).toFixed(2));
+  const br = getBankroll();
+  if (br.current !== current) {
+    saveBankroll({ ...br, current, initial });
+    console.log(`[Migration] Bankroll recalculated from ${unique.length} unique resolved bets: £${br.current} → £${current}`);
+  }
+
+  // Remove duplicate bets (keep first per fixtureId, remove remaining)
+  if (resolved.length > unique.length || bets.some(b => !b.result && unique.some(u => u.fixtureId === b.fixtureId))) {
+    const keepIds = new Set(unique.map(b => b.id));
+    // Keep all unresolved bets that are NOT duplicates of a resolved fixture, plus the one canonical resolved bet per fixture
+    const deduped = bets.filter(b => {
+      if (!b.result) return !seen.has(b.fixtureId); // drop pending duplicates of resolved fixtures
+      return keepIds.has(b.id); // keep only canonical resolved bet
+    });
+    if (deduped.length < bets.length) {
+      saveBets(deduped);
+      console.log(`[Migration] Removed ${bets.length - deduped.length} duplicate bet entries`);
+    }
+  }
+}
+
 // Checks data files on startup. Corrupt = exists but < MIN_VALID_BYTES.
 // Queues backfill chain (30s delay) if any critical file is missing or corrupt.
 function startupCheck() {
@@ -2685,6 +2733,8 @@ app.listen(PORT, () => {
 
   // 5. Migrate stale calibration entries (idempotent — skips already-patched entries)
   migrateCalibrationProjectedBetKey();
+  // 5b. Recalculate bankroll from unique resolved bets (fixes duplicate-bet inflation)
+  recalculateBankroll();
 
   // 6. Queue backfill chain if data is missing/corrupt
   startupCheck();
