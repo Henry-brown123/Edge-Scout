@@ -867,6 +867,7 @@ async function runMorningScan(leagueIds) {
               calId:           calEntry.id,
               lowConfidence:    scored.lowConfidence,
               context:          scored.context,
+              competitionPhase: scored.competitionPhase,
               homeDataConf:     scored.homeDataConf,
               awayDataConf:     scored.awayDataConf,
               teamIntel:        scored.teamIntel,
@@ -1709,10 +1710,19 @@ app.get('/api/divergence-report', (_req, res) => {
 // GET full state (bets, watching, bankroll)
 app.get('/api/state', (_req, res) => {
   const scanMeta = readJSON('scan-meta.json') || {};
+  const cal      = getCalibration();
+  // Backfill competitionPhase on watching entries that predate the field being stored
+  const watching = getWatching().map(w => {
+    if (!w.competitionPhase && w.calId) {
+      const ce = cal.find(c => c.id === w.calId);
+      if (ce?.competitionPhase) return { ...w, competitionPhase: ce.competitionPhase };
+    }
+    return w;
+  });
   res.json({
     bankroll:    getBankroll(),
     bets:        getBets(),
-    watching:    getWatching(),
+    watching,
     settings:    getSettings(),
     leagues:     LEAGUES,
     phase2Ready: !!scanMeta.phase2Ready,

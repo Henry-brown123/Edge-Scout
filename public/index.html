@@ -1056,6 +1056,11 @@ function recommendedCard(b) {
 function watchingCard(w) {
   const kickoff = w.kickoff ? new Date(w.kickoff).toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' }) : '—';
   const minsOut = w.kickoff ? Math.round((new Date(w.kickoff) - Date.now()) / 60000) : null;
+  const neutral  = w.competitionPhase === 'group_stage' || w.competitionPhase === 'knockout';
+  const [home, away] = (w.fixture || '').split(' vs ');
+  const projLabel = neutral
+    ? (w.projectedBet === 'Home Win' ? `${home} Win` : w.projectedBet === 'Away Win' ? `${away} Win` : w.projectedBet)
+    : w.projectedBet;
   return `
     <div class="fixture-card watching" onclick="openDrawerById('${w.id}')">
       ${scoreBadge(w.projectedScore)}
@@ -1065,7 +1070,7 @@ function watchingCard(w) {
           <span>${w.leagueName}</span>
           <span>🇬🇧 KO ${kickoff}</span>
           ${minsOut != null ? `<span style="color:var(--amber)">T-${minsOut}m</span>` : ''}
-          <span class="badge badge-amber">Projected: ${w.projectedBet}</span>
+          <span class="badge badge-amber">Projected: ${projLabel}</span>
         </div>
       </div>
       <div class="fixture-right">
