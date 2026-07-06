@@ -123,7 +123,7 @@ h1{font-size:22px;font-weight:700;letter-spacing:-0.5px;margin-bottom:4px}
 
 <div id="phases"></div>
 
-<div class="updated">Last updated: 28 June 2026</div>
+<div class="updated">Last updated: 6 July 2026</div>
 
 <script>
 const phases=[
@@ -162,7 +162,7 @@ const phases=[
     {s:"done",t:"WOWY: 2,880 high-confidence players built from lineup data"},
     {s:"active",t:"xG stats: ~1,500 of 8,305 — 1,000/night budget",n:"Improving incrementally each night"},
     {s:"upcoming",t:"Understat xG integration — ~11,000 matches of real xG data"},
-    {s:"upcoming",t:"StatsBomb open data integration — World Cup 2022 and CL xG"},
+    {s:"done",t:"StatsBomb open data integration — 64 WC 2022 matches with real event-level xG"},
     {s:"upcoming",t:"Confederation strength adjustment for international form scores",n:"July work"},
   ]},
   {title:"Phase 4 — Team intelligence",badge:"active",label:"In progress",pct:75,tasks:[
@@ -187,17 +187,20 @@ const phases=[
     {s:"done",t:"Low-confidence guard: dynamic gap threshold based on dataConf"},
     {s:"done",t:"WC R32 fixtures scoring correctly — neutralVenue, knockout phase, corrected labels"},
     {s:"done",t:"Model vs Market divergence report active"},
-    {s:"active",t:"Awaiting first locked bet",n:"All fixtures currently lowConfidence on sparse international data"},
-    {s:"upcoming",t:"First locked bet and auto-resolution"},
+    {s:"done",t:"First locked bets and auto-resolution — 4 placed bets: Brazil vs Norway, Argentina vs Cape Verde, Portugal vs Croatia, England vs Congo DR"},
   ]},
-  {title:"Phase 6 — Paper trading validation",badge:"active",label:"In progress",pct:20,tasks:[
+  {title:"Phase 6 — Paper trading validation",badge:"active",label:"In progress",pct:45,tasks:[
     {s:"done",t:"£1,000 paper bankroll configured"},
     {s:"done",t:"P&L tracking per bet with full audit log and Export CSV"},
     {s:"done",t:"Calibration data collected on all scored fixtures"},
     {s:"done",t:"Odds history passive collection active"},
     {s:"done",t:"Calibration health card with traffic light and suggested factor"},
     {s:"done",t:"Model vs Market divergence report — tracks all 8pp+ divergences against outcomes"},
-    {s:"active",t:"World Cup knockout validation (June 28 – July 19)",n:"R32 fixtures scoring. Model correctly suppressing lowConfidence bets on sparse international data."},
+    {s:"active",t:"World Cup knockout validation (June 28 – July 19)",n:"4 placed bets: 3W 1L (75%). Bankroll £1,310.24 (+31%). lowConfidence gate blocked 17 losing bets."},
+    {s:"done",t:"Performance tab restructure — placed bets only"},
+    {s:"done",t:"Model tab created — directional accuracy, calibration health, divergence report, key findings"},
+    {s:"done",t:"Duplicate bet bug fixed — pre-match lock no longer creates multiple bets per fixture"},
+    {s:"done",t:"Tiered lowConfidence gate by team data richness (<20 fixtures: 8pp, 20-35: 12pp, 35+: 18pp)"},
     {s:"upcoming",t:"Review calibration data and divergence report at end of tournament"},
     {s:"upcoming",t:"Assess whether real money criteria are met"},
   ]},
@@ -211,6 +214,8 @@ const phases=[
     {s:"upcoming",t:"Address 50–60% band structural bias"},
     {s:"upcoming",t:"Goals market expansion: over/under 2.5 goals, BTTS"},
     {s:"upcoming",t:"League expansion: Eredivisie, Primeira Liga, Scottish Premiership, Europa League, Conference League"},
+    {s:"upcoming",t:"Investigate systematic underdog bias — model picked underdog in 12/12 large-divergence WC fixtures, all wrong. Small-divergence calls (<10pp) are reliable — 3W 0L.",n:"Score band inversion confirmed: 60-79 band scores 0% accuracy, 40-59 scores 93%. See docs/july-upgrade-notes.md"},
+    {s:"upcoming",t:"Fix score band inversion — success score formula rewards large market divergences as if they were genuine edge. In international context, large divergences are a warning sign not an opportunity"},
     {s:"upcoming",t:"International factor weight calibration against WC 2026 results"},
     {s:"upcoming",t:"Bookmaker management module — account database, restriction detection, rotation"},
     {s:"upcoming",t:"Betfair Exchange API integration"},
