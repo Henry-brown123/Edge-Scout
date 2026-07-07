@@ -155,6 +155,32 @@ function getBankroll() {
 function getBets()         { return readJSON('bets.json')         || []; }
 function getWatching()     { return readJSON('watching.json')     || []; }
 function getCalibration()  { return readJSON('calibration.json')  || []; }
+function getBookmakers()   { return readJSON('bookmakers.json')    || []; }
+function saveBookmakers(list) { writeJSON('bookmakers.json', list); }
+
+const DEFAULT_BOOKMAKERS = [
+  { id: 'betfair_exchange', name: 'Betfair Exchange', tier: 1, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Exchange — lay/back, ~2% commission. No restrictions ever.' },
+  { id: 'smarkets',         name: 'Smarkets',         tier: 1, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Exchange — ~2% commission. No restrictions ever.' },
+  { id: 'pinnacle',         name: 'Pinnacle',         tier: 2, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Sharp book. Highest limits, rarely restricts winners.' },
+  { id: 'unibet',           name: 'Unibet',           tier: 2, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'European book. Higher tolerance than UK soft.' },
+  { id: 'betsson',          name: 'Betsson',          tier: 2, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: 'nordicbet',        name: 'NordicBet',        tier: 2, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: 'bet365',           name: 'Bet365',           tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: 'william_hill',     name: 'William Hill',     tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: 'ladbrokes',        name: 'Ladbrokes',        tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: 'coral',            name: 'Coral',            tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: 'paddy_power',      name: 'Paddy Power',      tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: 'betfair_sb',       name: 'Betfair Sportsbook', tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Separate account from Betfair Exchange.' },
+  { id: 'skybet',           name: 'Sky Bet',          tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: 'betway',           name: 'Betway',           tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: '888sport',         name: '888sport',         tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: 'betvictor',        name: 'BetVictor',        tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: 'betfred',          name: 'Betfred',          tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: 'boylesports',      name: 'BoyleSports',      tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: 'quinnbet',         name: 'QuinnBet',         tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: '10bet',            name: '10Bet',            tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: 'matchbook',        name: 'Matchbook',        tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Exchange-style, low commission.' },
+];
 function getOddsHistory()  { return readJSON('odds-history.json') || []; }
 
 function saveBets(bets)         { writeJSON('bets.json', bets); }
@@ -1091,6 +1117,15 @@ async function runPreMatchScan(watchingEntry) {
       weather:             scored.weather,
       weatherCondition:    scored.weatherCondition,
       consistencyWarning:  consistencyWarning,
+      // Bookmaker routing recommendation at lock time
+      routingRecommendation: selectBookmaker(best.kelly.stake, best.edge),
+      // Placement confirmation fields (filled by user after manual placement)
+      placementConfirmed: false,
+      bookmakerUsed: null,
+      bookmakerId:   null,
+      actualOdds:    null,
+      actualStake:   null,
+      placedAt:      null,
     };
 
     const bets = getBets();
@@ -2273,6 +2308,154 @@ app.post('/api/resolve/check', async (_req, res) => {
 // Health
 app.get('/health', (_req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 
+// ─── BOOKMAKER ROUTING ────────────────────────────────────────────────────────
+
+function startOfWeek() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); // Monday
+  return d;
+}
+
+function selectBookmaker(stake, edge, oddsMap) {
+  const books = getBookmakers();
+  const now   = Date.now();
+  const weekStart = startOfWeek().getTime();
+  const yesterday = now - 86400000;
+
+  // Find best available price per book from the raw odds cache
+  const bestOddsFor = (name) => {
+    if (!oddsMap) return null;
+    for (const key of Object.keys(oddsMap)) {
+      const ev = oddsMap[key];
+      // oddsMap keys are "home|away" — we look in _pinnacleRaw or the market array stored on bets
+      // For routing purposes we just return null (live odds not always available here)
+    }
+    return null;
+  };
+
+  const active = books.filter(b =>
+    b.status === 'active' &&
+    (b.maxStake === null || b.maxStake >= stake)
+  );
+
+  // Count tier-1 usage this week
+  const t1WeeklyUse = active
+    .filter(b => b.tier === 1)
+    .reduce((sum, b) => sum + (b.betsThisWeek || 0), 0);
+
+  const skip = [];
+  const eligible = [];
+
+  for (const b of active) {
+    const usedYesterday = b.lastUsed && new Date(b.lastUsed).getTime() > yesterday;
+    const overweekly    = (b.betsThisWeek || 0) >= 3 && b.tier === 3;
+
+    // Tier ordering rules
+    if (b.tier === 3 && t1WeeklyUse < 3) {
+      // Prefer exchanges first when they haven't been saturated
+      skip.push({ ...b, skipReason: 'Prefer exchange first' });
+      continue;
+    }
+    if (b.tier === 3 && usedYesterday) {
+      skip.push({ ...b, skipReason: 'Used yesterday' });
+      continue;
+    }
+    if (overweekly) {
+      skip.push({ ...b, skipReason: 'Used 3x this week' });
+      continue;
+    }
+    eligible.push(b);
+  }
+
+  // Sort eligible: tier ASC (exchanges first if stake > 20), then least-recently-used
+  eligible.sort((a, b) => {
+    if (stake > 20 && a.tier !== b.tier) return a.tier - b.tier;
+    const aLast = a.lastUsed ? new Date(a.lastUsed).getTime() : 0;
+    const bLast = b.lastUsed ? new Date(b.lastUsed).getTime() : 0;
+    return aLast - bLast; // oldest-used first
+  });
+
+  const recommended = eligible[0] || null;
+
+  // Best price: find the book in the raw odds cache with highest odds for this bet
+  // (populated separately by the UI using the market data stored on the bet)
+  const bestPrice = eligible.find(b => b.id !== recommended?.id) || null;
+
+  return {
+    recommended,
+    bestPrice,
+    skip: skip.slice(0, 5),
+    eligible,
+  };
+}
+
+// GET bookmakers
+app.get('/api/bookmakers', (_req, res) => res.json(getBookmakers()));
+
+// PATCH bookmaker (update balance, status, notes, maxStake)
+app.patch('/api/bookmakers/:id', (req, res) => {
+  const books = getBookmakers();
+  const bm    = books.find(b => b.id === req.params.id);
+  if (!bm) return res.status(404).json({ error: 'Not found' });
+  const allowed = ['balance', 'status', 'maxStake', 'notes', 'restrictionSignals'];
+  allowed.forEach(k => { if (req.body[k] !== undefined) bm[k] = req.body[k]; });
+  saveBookmakers(books);
+  res.json(bm);
+});
+
+// POST confirm placement — updates bet record and bookmaker stats
+app.post('/api/bets/:id/confirm-placement', (req, res) => {
+  const bets = getBets();
+  const bet  = bets.find(b => b.id === req.params.id);
+  if (!bet) return res.status(404).json({ error: 'Not found' });
+
+  const { bookmakerId, bookmakerName, actualOdds, actualStake } = req.body;
+  if (!bookmakerId || !bookmakerName) return res.status(400).json({ error: 'bookmakerId and bookmakerName required' });
+
+  bet.bookmakerUsed = bookmakerName;
+  bet.bookmakerId   = bookmakerId;
+  bet.actualOdds    = parseFloat(actualOdds) || bet.bookOdds;
+  bet.actualStake   = parseFloat(actualStake) || bet.suggestedStake;
+  bet.placedAt      = new Date().toISOString();
+  bet.placementConfirmed = true;
+  saveBets(bets);
+
+  // Update bookmaker stats
+  const books = getBookmakers();
+  const bm    = books.find(b => b.id === bookmakerId);
+  if (bm) {
+    bm.lastUsed      = bet.placedAt;
+    bm.betsThisWeek  = (bm.betsThisWeek  || 0) + 1;
+    bm.betsThisMonth = (bm.betsThisMonth || 0) + 1;
+    bm.totalBets     = (bm.totalBets     || 0) + 1;
+    bm.totalStaked   = parseFloat(((bm.totalStaked || 0) + bet.actualStake).toFixed(2));
+    saveBookmakers(books);
+  }
+
+  res.json({ bet, bookmaker: bm || null });
+});
+
+// POST routing recommendation for a stake/edge pair
+app.post('/api/bookmakers/route', (req, res) => {
+  const { stake, edge } = req.body;
+  res.json(selectBookmaker(parseFloat(stake) || 0, parseFloat(edge) || 0));
+});
+
+// POST log restriction signal
+app.post('/api/bookmakers/:id/restriction', (req, res) => {
+  const books = getBookmakers();
+  const bm    = books.find(b => b.id === req.params.id);
+  if (!bm) return res.status(404).json({ error: 'Not found' });
+  const signal = { type: req.body.type || 'manual', note: req.body.note || '', date: new Date().toISOString() };
+  bm.restrictionSignals = [...(bm.restrictionSignals || []), signal];
+  if (req.body.type === 'stake_limited' || req.body.type === 'restricted') {
+    bm.status = req.body.type;
+  }
+  saveBookmakers(books);
+  res.json(bm);
+});
+
 // ─── FACTOR DISTRIBUTION DIAGNOSTIC ─────────────────────────────────────────
 
 app.get('/api/diagnostics/data-coverage', (req, res) => {
@@ -2798,6 +2981,11 @@ app.listen(PORT, () => {
   migrateCalibrationProjectedBetKey();
   // 5b. Recalculate bankroll from unique resolved bets (fixes duplicate-bet inflation)
   recalculateBankroll();
+  // 5c. Seed bookmakers.json if not yet on disk
+  if (!readJSON('bookmakers.json')) {
+    saveBookmakers(DEFAULT_BOOKMAKERS);
+    console.log('[Startup] Seeded bookmakers.json with', DEFAULT_BOOKMAKERS.length, 'accounts');
+  }
 
   // 6. Queue backfill chain if data is missing/corrupt
   startupCheck();

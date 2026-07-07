@@ -190,3 +190,31 @@ The tiered fixture-count gate (deployed 2026-06-30) correctly blocks the worst d
 **July investigation priority update:** the primary focus should be understanding what causes large divergences specifically — why does the model produce 30% for Japan when the market says 20%, or 29% for Paraguay when the market says 10.5%? The answer likely lies in the FIFA ranking anchor being too weak to suppress these probability estimates when the form model produces high scores for teams from weaker confederations. A confederation strength adjustment applied to form scores (already proposed in section 4) would directly address this: if Senegal's form score is inflated by AFCON results against weak opposition, the ranking anchor at 30% weight is not strong enough to pull the final probability back to the market's assessment. The fix is to reduce the form signal going in, not to increase the anchor weight.
 
 **Belgium vs Senegal (Jul 1, 17:00 UTC) — to track:** scored at 41 with Belgium 48.8% vs market 47.6%, gap 1.2pp, no `lowConfidence`. If Belgium win, this is another small-divergence correct call and further supports the threshold hypothesis. Currently in WATCHING.
+
+---
+
+## 7. Pre-Pinnacle edge overstatement (documented 2026-07-07)
+
+**Finding date:** 2026-07-07  
+**Commit:** 6399dbe — "Use Pinnacle margin-stripped odds as edge benchmark"  
+**Status:** Fixed going forward. Historical calibration data affected.
+
+### What was wrong
+
+Before commit 6399dbe, `fetchOddsForLeague` used `bookmakers[0]` — whichever bookmaker appeared first in The Odds API response — as the implied probability benchmark for edge calculation. This was typically a UK soft bookmaker (Betfred, Coral, Unibet UK) with an overround of 10–15%.
+
+Using a soft book's raw implied probability (`1 / odds`) as the market benchmark overstated edge by approximately **8–10pp on every fixture**. A £1.70 outcome at a soft book implies 58.8%, but Pinnacle's margin-stripped true probability for the same outcome might be 54.1%. The model was reporting 4.7pp of "edge" that was entirely bookmaker margin, not genuine model advantage.
+
+### What was fixed
+
+`fetchOddsForLeague` now identifies Pinnacle specifically and strips its margin (~3–4% overround across home/draw/away) to produce near-true implied probabilities. These are used for `impliedProb`, `edge`, and `maxModelBookGap` (the `lowConfidence` gate). UK bookmaker odds are retained separately for displayed `bookOdds` and Kelly sizing.
+
+### Impact on historical calibration data
+
+All World Cup calibration entries collected before 2026-07-07 have `pinnacleAvailable: false` (or the field absent). Their `edge` and `impliedProb` values are inflated by ~8–10pp and should not be used to train the EV optimiser.
+
+**Action required in July:**
+- Segment all calibration data by `pinnacleAvailable: true/false`
+- Only use `pinnacleAvailable: true` entries for EV optimiser training and edge distribution analysis
+- The WC paper trading P&L (£1,310.24) is not affected — P&L is computed from actual odds and stake, not from the model's edge estimate
+- The `lowConfidence` gate was also less accurate pre-fix: some bets that were blocked may have had genuine edge if Pinnacle agreed with the model; some placed bets may have had less edge than reported

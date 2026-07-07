@@ -847,11 +847,71 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       </div>
     </div>
   </div>
+
+  <!-- Accounts section -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-header">
+      <span class="card-title">Bookmaker Accounts</span>
+      <button class="btn btn-ghost btn-sm" onclick="loadAccounts()">Refresh</button>
+    </div>
+    <p style="font-size:11px;color:var(--muted);margin-bottom:14px">
+      Tier 1 = Exchanges (no restrictions). Tier 2 = Sharp/European. Tier 3 = UK soft books (rotate). Traffic light: green = fresh, amber = used recently, red = restricted/overused.
+    </p>
+    <div id="accounts-table-wrap">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead>
+          <tr style="color:var(--muted);font-size:10px;letter-spacing:.08em;text-transform:uppercase">
+            <th style="text-align:left;padding:6px 8px">Bookmaker</th>
+            <th style="text-align:center;padding:6px 4px">Tier</th>
+            <th style="text-align:center;padding:6px 4px">Status</th>
+            <th style="text-align:right;padding:6px 4px">This Week</th>
+            <th style="text-align:right;padding:6px 4px">Total Bets</th>
+            <th style="text-align:right;padding:6px 4px">Last Used</th>
+            <th style="text-align:right;padding:6px 4px">Balance</th>
+            <th style="padding:6px 4px"></th>
+          </tr>
+        </thead>
+        <tbody id="accounts-body">
+          <tr><td colspan="8" style="color:var(--muted);padding:12px 8px">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
 </div>
 
 </main>
 </div><!-- /.app -->
 <div id="toast"></div>
+
+<!-- Placement confirmation modal -->
+<div id="placement-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;align-items:center;justify-content:center">
+  <div style="background:var(--surface1);border:1px solid var(--border);border-radius:16px;padding:24px;width:min(420px,90vw);max-height:90vh;overflow-y:auto">
+    <div style="font-size:15px;font-weight:700;margin-bottom:4px" id="pm-title">Confirm Placement</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:20px" id="pm-subtitle"></div>
+    <div style="margin-bottom:14px">
+      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;letter-spacing:.06em;text-transform:uppercase">Where did you place it?</label>
+      <select id="pm-bookmaker" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:#fff;padding:8px 10px;font-size:13px">
+        <option value="">Select bookmaker…</option>
+      </select>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px">
+      <div>
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;letter-spacing:.06em;text-transform:uppercase">Actual odds</label>
+        <input id="pm-odds" type="number" step="0.01" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:#fff;padding:8px 10px;font-size:13px">
+      </div>
+      <div>
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;letter-spacing:.06em;text-transform:uppercase">Stake placed (£)</label>
+        <input id="pm-stake" type="number" step="0.01" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:#fff;padding:8px 10px;font-size:13px">
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn btn-ghost btn-sm" onclick="closePlacementModal()">Skip</button>
+      <button class="btn btn-cyan btn-sm" onclick="confirmPlacement()">Confirm</button>
+    </div>
+  </div>
+</div>
 
 <script>
 // ─── STATE ───────────────────────────────────────────────────────────────────
@@ -866,7 +926,7 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
     if (btn.dataset.tab === 'model')       renderModel();
     if (btn.dataset.tab === 'performance') renderPerformance();
-    if (btn.dataset.tab === 'settings')  { renderSettings(); loadBackfillStatus(); loadOddsHistoryStats(); loadStartupStatus(); }
+    if (btn.dataset.tab === 'settings')  { renderSettings(); loadBackfillStatus(); loadOddsHistoryStats(); loadStartupStatus(); loadAccounts(); }
   });
 });
 
@@ -1024,32 +1084,63 @@ function updateBankrollBadge() {
   el.style.color       = pnl >= 0 ? '#000' : '#fff';
 }
 
+function routingHTML(b) {
+  const r = b.routingRecommendation;
+  if (!r) return '';
+  const rec  = r.recommended;
+  const best = r.bestPrice;
+  const skips = (r.skip || []).slice(0, 3);
+  if (!rec) return '';
+
+  const confirmed = b.placementConfirmed;
+  if (confirmed) {
+    return `<div style="margin-top:10px;padding:10px 12px;background:rgba(0,255,135,.06);border:1px solid rgba(0,255,135,.15);border-radius:8px;font-size:11px">
+      <span style="color:var(--green);font-weight:600">✓ Placed</span>
+      <span style="color:var(--muted);margin-left:8px">${b.bookmakerUsed} @ ${b.actualOdds?.toFixed(2)} · £${b.actualStake?.toFixed(2)}</span>
+    </div>`;
+  }
+
+  const tierLabel = t => t === 1 ? 'Exchange' : t === 2 ? 'Sharp' : 'UK';
+  return `
+    <div style="margin-top:10px;padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;font-size:11px;line-height:2">
+      <div><span style="color:var(--muted);display:inline-block;width:80px">RECOMMENDED</span><span style="color:#fff;font-weight:600">${rec.name}</span><span style="color:var(--muted);margin-left:6px">${tierLabel(rec.tier)}${rec.lastUsed ? ' · last used ' + new Date(rec.lastUsed).toLocaleDateString('en-GB',{day:'numeric',month:'short'}) : ' · fresh'}</span></div>
+      ${best ? `<div><span style="color:var(--muted);display:inline-block;width:80px">ALTERNATIVE</span><span style="color:var(--text2)">${best.name}</span></div>` : ''}
+      ${skips.map(s => `<div><span style="color:var(--muted);display:inline-block;width:80px">SKIP</span><span style="color:var(--muted);text-decoration:line-through">${s.name}</span><span style="color:var(--muted);margin-left:6px">${s.skipReason}</span></div>`).join('')}
+      <div style="margin-top:8px">
+        <button class="btn btn-cyan btn-sm" onclick="openPlacementModal('${b.id}')">Confirm placement</button>
+      </div>
+    </div>`;
+}
+
 function recommendedCard(b) {
   const kickoff = b.kickoff ? new Date(b.kickoff).toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' }) : '—';
   const edgePct = (b.edge * 100).toFixed(1);
   return `
-    <div class="fixture-card recommended">
-      ${scoreBadge(b.successScore)}
-      <div class="fixture-meta">
-        <div class="fixture-name">${b.fixture}</div>
-        <div class="fixture-info">
-          <span>${b.leagueName}</span>
-          <span>🇬🇧 KO ${kickoff}</span>
-          <span class="badge badge-cyan">${b.bet}</span>
-          <span style="color:var(--cyan)">+${edgePct}% edge</span>
-          <span>@${b.bookOdds.toFixed(2)}</span>
-          ${b.weather ? `<span title="Weather">🌧 ${b.weather.precipProb}% rain, ${b.weather.windSpeed?.toFixed(0)}km/h</span>` : ''}
+    <div class="fixture-card recommended" style="flex-direction:column;align-items:stretch;padding-bottom:12px">
+      <div style="display:flex;align-items:flex-start;gap:10px">
+        ${scoreBadge(b.successScore)}
+        <div class="fixture-meta" style="flex:1">
+          <div class="fixture-name">${b.fixture}</div>
+          <div class="fixture-info">
+            <span>${b.leagueName}</span>
+            <span>🇬🇧 KO ${kickoff}</span>
+            <span class="badge badge-cyan">${b.bet}</span>
+            <span style="color:var(--cyan)">+${edgePct}% edge</span>
+            <span>@${b.bookOdds.toFixed(2)}</span>
+            ${b.weather ? `<span title="Weather">🌧 ${b.weather.precipProb}% rain, ${b.weather.windSpeed?.toFixed(0)}km/h</span>` : ''}
+          </div>
+        </div>
+        <div class="fixture-right" style="flex-shrink:0">
+          <div class="stake-box">
+            <div class="stake-amount">£${b.suggestedStake.toFixed(2)}</div>
+            <div class="stake-label">Half Kelly</div>
+          </div>
+          <span class="stage-tag tag-recommended">Locked</span>
+          <button class="btn btn-ghost btn-sm" onclick="manualResolve('${b.id}','win')" title="Mark Win" style="color:var(--green);border-color:var(--green)">W</button>
+          <button class="btn btn-ghost btn-sm" onclick="manualResolve('${b.id}','loss')" title="Mark Loss" style="color:var(--red);border-color:var(--red)">L</button>
         </div>
       </div>
-      <div class="fixture-right">
-        <div class="stake-box">
-          <div class="stake-amount">£${b.suggestedStake.toFixed(2)}</div>
-          <div class="stake-label">Half Kelly</div>
-        </div>
-        <span class="stage-tag tag-recommended">Locked</span>
-        <button class="btn btn-ghost btn-sm" onclick="manualResolve('${b.id}','win')" title="Mark Win" style="color:var(--green);border-color:var(--green)">W</button>
-        <button class="btn btn-ghost btn-sm" onclick="manualResolve('${b.id}','loss')" title="Mark Loss" style="color:var(--red);border-color:var(--red)">L</button>
-      </div>
+      ${routingHTML(b)}
     </div>`;
 }
 
@@ -2189,6 +2280,169 @@ async function runOddsBackfill() {
     pill.textContent = 'ERROR';
     pill.style.color = 'var(--red)';
   }
+}
+
+// ─── PLACEMENT CONFIRMATION MODAL ────────────────────────────────────────────
+
+let _placementBetId = null;
+
+async function openPlacementModal(betId) {
+  _placementBetId = betId;
+  const bet = STATE.bets.find(b => b.id === betId);
+  if (!bet) return;
+
+  // Title and subtitle
+  document.getElementById('pm-title').textContent = `Confirm placement — ${bet.fixture}`;
+  document.getElementById('pm-subtitle').textContent = `${bet.bet} · Kelly stake £${bet.suggestedStake?.toFixed(2)} · odds ${bet.bookOdds?.toFixed(2)}`;
+
+  // Pre-fill odds and stake
+  document.getElementById('pm-odds').value  = bet.bookOdds?.toFixed(2) || '';
+  document.getElementById('pm-stake').value = bet.suggestedStake?.toFixed(2) || '';
+
+  // Populate bookmaker dropdown from API
+  const sel = document.getElementById('pm-bookmaker');
+  sel.innerHTML = '<option value="">Select bookmaker…</option>';
+  try {
+    const books = await apiFetch('/api/bookmakers');
+    const rec   = bet.routingRecommendation?.recommended;
+    books.forEach(b => {
+      const opt = document.createElement('option');
+      opt.value       = b.id;
+      opt.textContent = `${b.name} (T${b.tier})${b.id === rec?.id ? ' ★ Recommended' : ''}`;
+      if (b.id === rec?.id) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    // Add Other
+    const other = document.createElement('option');
+    other.value = '__other__'; other.textContent = 'Other';
+    sel.appendChild(other);
+  } catch {}
+
+  const modal = document.getElementById('placement-modal');
+  modal.style.display = 'flex';
+}
+
+function closePlacementModal() {
+  document.getElementById('placement-modal').style.display = 'none';
+  _placementBetId = null;
+}
+
+async function confirmPlacement() {
+  if (!_placementBetId) return;
+  const sel   = document.getElementById('pm-bookmaker');
+  const bmId  = sel.value;
+  const bmName = sel.options[sel.selectedIndex]?.text?.replace(/ \(T\d\).*/, '').trim() || bmId;
+  const odds  = parseFloat(document.getElementById('pm-odds').value);
+  const stake = parseFloat(document.getElementById('pm-stake').value);
+
+  if (!bmId) { toast('Select a bookmaker', 'error'); return; }
+
+  try {
+    await apiFetch(`/api/bets/${_placementBetId}/confirm-placement`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bookmakerId: bmId === '__other__' ? 'other' : bmId, bookmakerName: bmName, actualOdds: odds, actualStake: stake }),
+    });
+    closePlacementModal();
+    await loadState();
+    renderScout();
+    toast(`Placement confirmed — ${bmName} @ ${odds}`, 'success');
+  } catch (e) {
+    toast('Failed to confirm: ' + e.message, 'error');
+  }
+}
+
+// ─── BOOKMAKER ACCOUNTS TABLE ─────────────────────────────────────────────────
+
+async function loadAccounts() {
+  const tbody = document.getElementById('accounts-body');
+  if (!tbody) return;
+  try {
+    const books = await apiFetch('/api/bookmakers');
+    const now   = Date.now();
+    const yesterday = now - 86400000;
+    const threedays = now - 3 * 86400000;
+
+    tbody.innerHTML = books.map(b => {
+      const usedRecently = b.lastUsed && new Date(b.lastUsed).getTime() > threedays;
+      const usedYesterday = b.lastUsed && new Date(b.lastUsed).getTime() > yesterday;
+      const overused = (b.betsThisWeek || 0) >= 3 && b.tier === 3;
+      const isRed    = b.status !== 'active' || overused;
+      const isAmber  = !isRed && (usedYesterday || (b.betsThisWeek || 0) >= 2);
+      const dot      = isRed ? '🔴' : isAmber ? '🟡' : '🟢';
+
+      const statusBadge = b.status === 'active' ? `<span style="color:var(--green)">Active</span>`
+        : b.status === 'stake_limited' ? `<span style="color:var(--amber)">Stake limited${b.maxStake ? ` £${b.maxStake}` : ''}</span>`
+        : b.status === 'restricted'    ? `<span style="color:var(--red)">Restricted</span>`
+        : `<span style="color:var(--muted)">${b.status}</span>`;
+
+      const tierLabel = b.tier === 1 ? '<span style="color:var(--cyan)">Exchange</span>'
+        : b.tier === 2 ? '<span style="color:var(--text2)">Sharp</span>'
+        : '<span style="color:var(--muted)">UK soft</span>';
+
+      const lastUsed = b.lastUsed
+        ? new Date(b.lastUsed).toLocaleDateString('en-GB', { day:'numeric', month:'short' })
+        : '—';
+
+      const balance = b.balance != null ? `£${b.balance.toFixed(2)}` : '—';
+
+      const totalPnl = ((b.totalReturned || 0) - (b.totalStaked || 0));
+      const pnlStr   = b.totalBets > 0
+        ? `<span style="color:${totalPnl >= 0 ? 'var(--green)' : 'var(--red)'}">${totalPnl >= 0 ? '+' : ''}£${totalPnl.toFixed(2)}</span>`
+        : '—';
+
+      return `<tr style="border-bottom:1px solid var(--border-subtle)">
+        <td style="padding:8px 8px;color:#fff">${dot} ${b.name}</td>
+        <td style="padding:8px 4px;text-align:center">${tierLabel}</td>
+        <td style="padding:8px 4px;text-align:center">${statusBadge}</td>
+        <td style="padding:8px 4px;text-align:right;color:var(--muted)">${b.betsThisWeek || 0}</td>
+        <td style="padding:8px 4px;text-align:right;color:var(--muted)">${b.totalBets || 0} <small style="color:var(--muted)">${pnlStr}</small></td>
+        <td style="padding:8px 4px;text-align:right;color:var(--muted)">${lastUsed}</td>
+        <td style="padding:8px 4px;text-align:right;color:var(--muted)">${balance}</td>
+        <td style="padding:8px 4px;text-align:right">
+          <div style="display:flex;gap:4px;justify-content:flex-end">
+            <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 6px" onclick="flagRestriction('${b.id}','${b.name}')">⚠ Flag</button>
+            <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 6px" onclick="updateBalance('${b.id}','${b.name}',${b.balance})">£ Balance</button>
+          </div>
+        </td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    if (tbody) tbody.innerHTML = `<tr><td colspan="8" style="color:var(--red);padding:12px 8px">Failed to load: ${e.message}</td></tr>`;
+  }
+}
+
+async function flagRestriction(bmId, bmName) {
+  const type = prompt(`Flag restriction type for ${bmName}:\n\n1 = stake_limited\n2 = restricted\n3 = manual note only\n\nEnter 1, 2, or 3:`);
+  if (!type) return;
+  const typeMap = { '1': 'stake_limited', '2': 'restricted', '3': 'manual' };
+  const rType = typeMap[type] || 'manual';
+  const note = prompt('Note (optional):') || '';
+  try {
+    await apiFetch(`/api/bookmakers/${bmId}/restriction`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: rType, note }),
+    });
+    toast(`${bmName} flagged as ${rType}`, rType === 'restricted' ? 'error' : 'info');
+    loadAccounts();
+  } catch (e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+async function updateBalance(bmId, bmName, current) {
+  const val = prompt(`Update balance for ${bmName} (current: ${current != null ? '£' + current : 'not set'}):\n\nEnter new balance (£):`);
+  if (val === null) return;
+  const balance = parseFloat(val);
+  if (isNaN(balance)) { toast('Invalid balance', 'error'); return; }
+  try {
+    await apiFetch(`/api/bookmakers/${bmId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ balance }),
+    });
+    toast(`${bmName} balance updated to £${balance.toFixed(2)}`, 'success');
+    loadAccounts();
+  } catch (e) { toast('Failed: ' + e.message, 'error'); }
 }
 
 </script>
