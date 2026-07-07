@@ -355,6 +355,30 @@ async function fetchWeather(lat, lon, kickoffISO) {
 // Raw events cache keyed by sport — populated by fetchOddsForLeague, consumed by persistOddsSnapshot
 const _oddsRawCache = {};
 
+// UK soft books preferred for displayed odds and Kelly sizing (accessible, reliable prices)
+const UK_BOOKS = new Set([
+  'William Hill', 'Betfair', 'Coral', 'Ladbrokes', 'Sky Bet', 'Paddy Power',
+  'Bet Victor', '888sport', 'Betfred (UK)', 'BoyleSports', 'Unibet (UK)',
+  'Marathon Bet', 'Betway', 'LiveScore Bet', 'Virgin Bet', 'Grosvenor',
+]);
+
+// Extract {teamName: price, Draw: price} from a bookmaker h2h market
+function _extractPrices(bm) {
+  const mkt = bm?.markets?.find(m => m.key === 'h2h');
+  if (!mkt) return null;
+  return mkt.outcomes.reduce((acc, o) => { acc[o.name] = o.price; return acc; }, {});
+}
+
+// Pinnacle margin-stripped implied probs. Pinnacle overround ~3-4%; stripping gives
+// near-true market probabilities — the sharpest available benchmark for edge calculation.
+function _pinnacleStripped(prices, home, away) {
+  if (!prices) return null;
+  const h = prices[home], d = prices['Draw'], a = prices[away];
+  if (!h || !d || !a) return null;
+  const total = 1/h + 1/d + 1/a;
+  return { [home]: (1/h)/total, Draw: (1/d)/total, [away]: (1/a)/total };
+}
+
 async function fetchOddsForLeague(sport) {
   try {
     const { data } = await oddsApi.get(`/sports/${sport}/odds`, {
@@ -364,11 +388,21 @@ async function fetchOddsForLeague(sport) {
     _oddsRawCache[sport] = events;
     const map = {};
     events.forEach(ev => {
-      const bm = ev.bookmakers?.[0];
-      const mkt = bm?.markets?.[0];
-      if (mkt) {
-        const key = `${ev.home_team}|${ev.away_team}`;
-        map[key] = mkt.outcomes?.reduce((acc, o) => { acc[o.name] = o.price; return acc; }, {});
+      const home = ev.home_team, away = ev.away_team;
+      const key  = `${home}|${away}`;
+
+      // Pinnacle: sharpest market — use for implied prob / edge signal
+      const pinnacle    = ev.bookmakers?.find(b => b.title === 'Pinnacle');
+      const pinnPrices  = _extractPrices(pinnacle);
+      const pinnStripped = _pinnacleStripped(pinnPrices, home, away); // margin-free true probs
+
+      // Best UK book: use for displayed odds and Kelly sizing
+      const ukBook   = ev.bookmakers?.find(b => UK_BOOKS.has(b.title)) || ev.bookmakers?.[0];
+      const ukPrices = _extractPrices(ukBook);
+
+      if (ukPrices) {
+        // Top-level keys stay as {teamName: price} for backward compat (UK book odds)
+        map[key] = { ...ukPrices, _pinnacleStripped: pinnStripped, _pinnacleRaw: pinnPrices };
       }
     });
     return map;
@@ -679,20 +713,26 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   // highly efficient markets (CL 0.96). Applied as 1/efficiency so range is ×1.04–×1.14.
   const effMult = 1 / (leagueConfig?.marketEfficiency ?? 1.0);
 
+  const pinnStripped = bookOdds._pinnacleStripped; // margin-free Pinnacle true probs (or null)
+
   const results = [];
   for (const c of candidates) {
-    const odds      = bookOdds[lookup[c.label]] || (1 / c.prob * 1.06);
-    const impliedP  = 1 / odds;
-    const calProb   = Math.min(0.97, c.prob * calFactor); // corrected prob for value calculations
+    const teamKey   = lookup[c.label];
+    const displayOdds = bookOdds[teamKey] || (1 / c.prob * 1.06); // UK book odds for Kelly + display
+    // Pinnacle margin-stripped probability is the sharpest available market benchmark.
+    // Fall back to implied from display odds when Pinnacle is not present (e.g. WC fixtures).
+    const impliedP  = pinnStripped?.[teamKey] ?? (1 / displayOdds);
+    const calProb   = Math.min(0.97, c.prob * calFactor);
     const edge      = calProb - impliedP;
-    const rawScore  = computeSuccessScore(calProb, odds, homeFormCount, dataConf);
+    const rawScore  = computeSuccessScore(calProb, displayOdds, homeFormCount, dataConf);
     const finalScore = Math.round(rawScore * wxMod * effMult);
-    const k         = kelly(calProb, odds, settings.kellyFraction, getBankroll().current);
+    const k         = kelly(calProb, displayOdds, settings.kellyFraction, getBankroll().current);
 
     const entry = {
-      bet: c.label, modelProb: c.prob, bookOdds: odds, impliedProb: impliedP,
+      bet: c.label, modelProb: c.prob, bookOdds: displayOdds, impliedProb: impliedP,
       edge, successScore: finalScore, kelly: k,
-      ev: calProb * (odds - 1) - (1 - calProb),
+      ev: calProb * (displayOdds - 1) - (1 - calProb),
+      pinnacleAvailable: !!pinnStripped,
     };
     if (c.displayLabel) entry.displayLabel = c.displayLabel;
     results.push(entry);
