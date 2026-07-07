@@ -123,7 +123,7 @@ h1{font-size:22px;font-weight:700;letter-spacing:-0.5px;margin-bottom:4px}
 
 <div id="phases"></div>
 
-<div class="updated">Last updated: 6 July 2026</div>
+<div class="updated">Last updated: 7 July 2026</div>
 
 <script>
 const phases=[
@@ -205,26 +205,34 @@ const phases=[
     {s:"upcoming",t:"Assess whether real money criteria are met"},
   ]},
   {title:"Phase 7 — July upgrade window (July 19 – Aug 8)",badge:"upcoming",label:"Upcoming",pct:0,tasks:[
-    {s:"upcoming",t:"Review World Cup calibration data and divergence report"},
-    {s:"upcoming",t:"Write non-linear model brief based on real findings"},
-    {s:"upcoming",t:"Buy The Odds API paid tier ($30/month) — 6 years of historical odds",n:"Validation infrastructure. Buy before going live with real money."},
-    {s:"upcoming",t:"EV optimiser — validate edge estimates against real historical odds"},
-    {s:"upcoming",t:"Build full PIR system using API-Sports player statistics"},
-    {s:"upcoming",t:"Non-linear model upgrade — target 56–58% accuracy"},
-    {s:"upcoming",t:"Address 50–60% band structural bias"},
-    {s:"upcoming",t:"Goals market expansion: over/under 2.5 goals, BTTS"},
-    {s:"upcoming",t:"League expansion: Eredivisie, Primeira Liga, Scottish Premiership, Europa League, Conference League"},
-    {s:"upcoming",t:"Investigate systematic underdog bias — model picked underdog in 12/12 large-divergence WC fixtures, all wrong. Small-divergence calls (<10pp) are reliable — 3W 0L.",n:"Score band inversion confirmed: 60-79 band scores 0% accuracy, 40-59 scores 93%. See docs/july-upgrade-notes.md"},
-    {s:"upcoming",t:"Fix score band inversion — success score formula rewards large market divergences as if they were genuine edge. In international context, large divergences are a warning sign not an opportunity"},
+    {s:"upcoming",t:"— Week 1 (Jul 19–26): Data foundations —",n:""},
+    {s:"upcoming",t:"Buy The Odds API paid tier ($30–60) — 6 years of historical odds across all leagues",n:"Validation infrastructure. Cannot confirm genuine edge without it."},
+    {s:"upcoming",t:"Run historical odds backfill — populate odds history for all 8,305 fixtures"},
+    {s:"upcoming",t:"Understat xG integration — ~11,000 matches of real xG data across 5 top leagues"},
+    {s:"upcoming",t:"Extend historical backfill to 5 seasons across all active leagues"},
+    {s:"upcoming",t:"Add and start backfilling new leagues: Eredivisie, Primeira Liga, Scottish Premiership, Europa League, Conference League"},
+    {s:"upcoming",t:"— Week 2 (Jul 26–Aug 1): Model fixes and validation —",n:""},
+    {s:"upcoming",t:"Review WC calibration data and divergence report — full post-tournament analysis"},
+    {s:"upcoming",t:"Fix score band inversion — add divergence penalty multiplier so large model-market gaps reduce success score rather than inflate it",n:"Score band inversion confirmed: 60-79 band 0% accuracy, 40-59 93%. Blocking correct but success score formula is broken for international context."},
+    {s:"upcoming",t:"EV optimiser — validate edge estimates against 6 years of real historical odds"},
+    {s:"upcoming",t:"Identify which leagues show strongest edge using historical odds backfill"},
+    {s:"upcoming",t:"Write and implement non-linear model upgrade — target 56–58% directional accuracy",n:"Platt scaling per probability band or isotonic regression layer on top of existing factor pipeline"},
     {s:"upcoming",t:"International factor weight calibration against WC 2026 results"},
+    {s:"upcoming",t:"— Week 3 (Aug 1–8): Markets, accounts, final calibration —",n:""},
+    {s:"upcoming",t:"Build full PIR system using API-Sports per-90 player statistics"},
+    {s:"upcoming",t:"Goals market expansion: over/under 2.5 goals, BTTS"},
     {s:"upcoming",t:"Bookmaker management module — account database, restriction detection, rotation"},
     {s:"upcoming",t:"Betfair Exchange API integration"},
     {s:"upcoming",t:"Camouflage logic — recreational bet pattern per bookmaker account"},
-    {s:"upcoming",t:"Extend historical lineup backfill to 5 seasons"},
+    {s:"upcoming",t:"Final calibration pass across all leagues before Aug 8 go-live"},
   ]},
   {title:"Phase 8 — Premier League season (from Aug 8)",badge:"upcoming",label:"Upcoming",pct:0,tasks:[
-    {s:"upcoming",t:"All 7 leagues live simultaneously from day one"},
-    {s:"upcoming",t:"Club team profiles fully populated with 3 seasons of domestic data"},
+    {s:"upcoming",t:"10–12 leagues live simultaneously from day one",n:"PL, La Liga, Serie A, Bundesliga, Ligue 1, Eredivisie, Primeira Liga, Scottish Prem, Europa League, Conference League + existing 2"},
+    {s:"upcoming",t:"Club team profiles fully populated with 5 seasons of domestic data"},
+    {s:"upcoming",t:"Real xG data across 11,000+ fixtures via Understat integration"},
+    {s:"upcoming",t:"PIR player quality scores for all regular starters"},
+    {s:"upcoming",t:"EV estimates validated against 6 years of historical odds before real money is placed"},
+    {s:"upcoming",t:"Less efficient markets prioritised — Eredivisie, Ligue 1, Primeira Liga expected to show strongest edge"},
     {s:"upcoming",t:"Non-linear model trained on World Cup calibration data"},
     {s:"upcoming",t:"Goals markets running alongside match outcomes"},
     {s:"upcoming",t:"Bookmaker management module operational"},
