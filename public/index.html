@@ -866,8 +866,14 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       <span class="card-title">Bookmaker Accounts</span>
       <button class="btn btn-ghost btn-sm" onclick="loadAccounts()">Refresh</button>
     </div>
+    <!-- Account health summary -->
+    <div id="accounts-health-summary" style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:14px;padding:10px 12px;background:var(--surface2);border-radius:8px;font-size:12px">
+      <span style="color:var(--muted)">Loading…</span>
+    </div>
     <p style="font-size:11px;color:var(--muted);margin-bottom:14px">
-      Tier 1 = Exchanges (no restrictions). Tier 2 = Sharp/European. Tier 3 = UK soft books (rotate). Traffic light: green = fresh, amber = used recently, red = restricted/overused.
+      Tier 1 = Exchanges (no restrictions ever). Tier 2 = Sharp/European. Tier 3 = UK soft (rotate).
+      Status: 🟢 Active · 🟡 Signal (early warning) · 🟠 Limited (stake cap) · 🔴 Restricted (retired).
+      <strong>Auto</strong> = tracked automatically. <strong>Manual</strong> = update via buttons.
     </p>
     <div id="accounts-table-wrap">
       <table style="width:100%;border-collapse:collapse;font-size:12px">
@@ -875,16 +881,17 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
           <tr style="color:var(--muted);font-size:10px;letter-spacing:.08em;text-transform:uppercase">
             <th style="text-align:left;padding:6px 8px">Bookmaker</th>
             <th style="text-align:center;padding:6px 4px">Tier</th>
-            <th style="text-align:center;padding:6px 4px">Status</th>
-            <th style="text-align:right;padding:6px 4px">This Week</th>
-            <th style="text-align:right;padding:6px 4px">Total Bets</th>
-            <th style="text-align:right;padding:6px 4px">Last Used</th>
-            <th style="text-align:right;padding:6px 4px">Balance</th>
+            <th style="text-align:center;padding:6px 4px"><span title="Manual">Status ✎</span></th>
+            <th style="text-align:right;padding:6px 4px"><span title="Auto-tracked">Wk <small style="opacity:.6">auto</small></span></th>
+            <th style="text-align:right;padding:6px 4px"><span title="Auto-tracked">Mo <small style="opacity:.6">auto</small></span></th>
+            <th style="text-align:right;padding:6px 4px"><span title="Auto-tracked">Total <small style="opacity:.6">auto</small></span></th>
+            <th style="text-align:right;padding:6px 4px"><span title="Auto-tracked">Last Used <small style="opacity:.6">auto</small></span></th>
+            <th style="text-align:right;padding:6px 4px"><span title="Manual">Balance ✎</span></th>
             <th style="padding:6px 4px"></th>
           </tr>
         </thead>
         <tbody id="accounts-body">
-          <tr><td colspan="8" style="color:var(--muted);padding:12px 8px">Loading…</td></tr>
+          <tr><td colspan="9" style="color:var(--muted);padding:12px 8px">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -1126,6 +1133,7 @@ function routingHTML(b) {
   return `
     <div style="margin-top:10px;padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;font-size:11px;line-height:2">
       <div><span style="color:var(--muted);display:inline-block;width:80px">RECOMMENDED</span><span style="color:#fff;font-weight:600">${rec.name}</span><span style="color:var(--muted);margin-left:6px">${tierLabel(rec.tier)}${rec.lastUsed ? ' · last used ' + new Date(rec.lastUsed).toLocaleDateString('en-GB',{day:'numeric',month:'short'}) : ' · fresh'}</span></div>
+      ${r.routingWarning ? `<div style="color:#f5a623;font-size:10px;margin-left:80px">${r.routingWarning}</div>` : ''}
       ${best ? `<div><span style="color:var(--muted);display:inline-block;width:80px">BEST PRICE</span><span style="color:var(--text2)">${best.name}</span></div>` : ''}
       ${exchangeRow}
       ${skips.map(s => `<div><span style="color:var(--muted);display:inline-block;width:80px">SKIP</span><span style="color:var(--muted);text-decoration:line-through">${s.name}</span><span style="color:var(--muted);margin-left:6px">${s.skipReason}</span></div>`).join('')}
@@ -1155,8 +1163,8 @@ function recommendedCard(b) {
         </div>
         <div class="fixture-right" style="flex-shrink:0">
           <div class="stake-box">
-            <div class="stake-amount">£${b.suggestedStake.toFixed(2)}</div>
-            <div class="stake-label">Half Kelly</div>
+            <div class="stake-amount">£${(b.displayStake ?? b.suggestedStake).toFixed(2)}</div>
+            <div class="stake-label">Half Kelly${b.kellStake && b.kellStake !== b.displayStake ? ` <span title="Exact Kelly: £${b.kellStake.toFixed(2)}" style="opacity:.55;font-size:9px">(exact £${b.kellStake.toFixed(2)})</span>` : ''}</div>
           </div>
           <span class="stage-tag tag-recommended">Locked</span>
           <button class="btn btn-ghost btn-sm" onclick="manualResolve('${b.id}','win')" title="Mark Win" style="color:var(--green);border-color:var(--green)">W</button>
@@ -2384,76 +2392,112 @@ async function confirmPlacement() {
 // ─── BOOKMAKER ACCOUNTS TABLE ─────────────────────────────────────────────────
 
 async function loadAccounts() {
-  const tbody = document.getElementById('accounts-body');
+  const tbody   = document.getElementById('accounts-body');
+  const summary = document.getElementById('accounts-health-summary');
   if (!tbody) return;
   try {
     const books = await apiFetch('/api/bookmakers');
-    const now   = Date.now();
-    const yesterday = now - 86400000;
-    const threedays = now - 3 * 86400000;
+
+    // Health summary
+    const counts = { active: 0, signal: 0, limited: 0, restricted: 0 };
+    for (const b of books) counts[b.status || 'active'] = (counts[b.status || 'active'] || 0) + 1;
+    if (summary) summary.innerHTML = `
+      <strong style="color:var(--muted);font-size:10px;letter-spacing:.08em;text-transform:uppercase;align-self:center">Account Health</strong>
+      <span>🟢 <strong>${counts.active}</strong> Active</span>
+      <span>🟡 <strong>${counts.signal || 0}</strong> Signal</span>
+      <span>🟠 <strong>${counts.limited || 0}</strong> Limited</span>
+      <span>🔴 <strong>${counts.restricted || 0}</strong> Restricted</span>
+      <span style="margin-left:auto;font-size:11px;color:var(--muted)">Weekly sweep: check max stake on test market at each Tier 3 book to detect early restriction signals</span>`;
+
+    const STATUS_DOT   = { active: '🟢', signal: '🟡', limited: '🟠', restricted: '🔴' };
+    const STATUS_LABEL = {
+      active:     `<span style="color:var(--green)">Active</span>`,
+      signal:     `<span style="color:#f5a623">Signal ⚠</span>`,
+      limited:    `<span style="color:#ff8c00">Limited</span>`,
+      restricted: `<span style="color:var(--red)">Restricted</span>`,
+    };
 
     tbody.innerHTML = books.map(b => {
-      const usedRecently = b.lastUsed && new Date(b.lastUsed).getTime() > threedays;
-      const usedYesterday = b.lastUsed && new Date(b.lastUsed).getTime() > yesterday;
-      const overused = (b.betsThisWeek || 0) >= 3 && b.tier === 3;
-      const isRed    = b.status !== 'active' || overused;
-      const isAmber  = !isRed && (usedYesterday || (b.betsThisWeek || 0) >= 2);
-      const dot      = isRed ? '🔴' : isAmber ? '🟡' : '🟢';
-
-      const statusBadge = b.status === 'active' ? `<span style="color:var(--green)">Active</span>`
-        : b.status === 'stake_limited' ? `<span style="color:var(--amber)">Stake limited${b.maxStake ? ` £${b.maxStake}` : ''}</span>`
-        : b.status === 'restricted'    ? `<span style="color:var(--red)">Restricted</span>`
-        : `<span style="color:var(--muted)">${b.status}</span>`;
+      const status   = b.status || 'active';
+      const dot      = STATUS_DOT[status]   || '🟢';
+      const statusBadge = STATUS_LABEL[status] || `<span style="color:var(--muted)">${status}</span>`;
+      const maxStakeLine = (b.maxStakeObserved != null)
+        ? `<div style="font-size:10px;color:#f5a623">Max stake obs: £${b.maxStakeObserved}</div>` : '';
 
       const tierLabel = b.tier === 1 ? '<span style="color:var(--cyan)">Exchange</span>'
         : b.tier === 2 ? '<span style="color:var(--text2)">Sharp</span>'
-        : '<span style="color:var(--muted)">UK soft</span>';
+        : '<span style="color:var(--muted)">UK</span>';
 
       const lastUsed = b.lastUsed
         ? new Date(b.lastUsed).toLocaleDateString('en-GB', { day:'numeric', month:'short' })
         : '—';
-
       const balance = b.balance != null ? `£${b.balance.toFixed(2)}` : '—';
 
-      const totalPnl = ((b.totalReturned || 0) - (b.totalStaked || 0));
-      const pnlStr   = b.totalBets > 0
-        ? `<span style="color:${totalPnl >= 0 ? 'var(--green)' : 'var(--red)'}">${totalPnl >= 0 ? '+' : ''}£${totalPnl.toFixed(2)}</span>`
-        : '—';
+      // Restriction signal timeline (latest 2)
+      const signals = (b.restrictionSignals || []).slice(-2).reverse();
+      const signalTimeline = signals.length
+        ? signals.map(s => `<div style="font-size:10px;color:var(--muted)">${new Date(s.detectedAt||s.date).toLocaleDateString('en-GB',{day:'numeric',month:'short'})} · ${s.type}${s.notes ? ': ' + s.notes : ''}</div>`).join('')
+        : '';
 
-      return `<tr style="border-bottom:1px solid var(--border-subtle)">
-        <td style="padding:8px 8px;color:#fff">${dot} ${b.name}</td>
+      const rowOpacity = status === 'restricted' ? 'opacity:.45;' : '';
+
+      return `<tr style="border-bottom:1px solid var(--border-subtle);${rowOpacity}">
+        <td style="padding:8px 8px;color:#fff">${dot} ${b.name}${signalTimeline ? `<div style="margin-top:2px">${signalTimeline}</div>` : ''}</td>
         <td style="padding:8px 4px;text-align:center">${tierLabel}</td>
-        <td style="padding:8px 4px;text-align:center">${statusBadge}</td>
+        <td style="padding:8px 4px;text-align:center">${statusBadge}${maxStakeLine}</td>
         <td style="padding:8px 4px;text-align:right;color:var(--muted)">${b.betsThisWeek || 0}</td>
-        <td style="padding:8px 4px;text-align:right;color:var(--muted)">${b.totalBets || 0} <small style="color:var(--muted)">${pnlStr}</small></td>
+        <td style="padding:8px 4px;text-align:right;color:var(--muted)">${b.betsThisMonth || 0}</td>
+        <td style="padding:8px 4px;text-align:right;color:var(--muted)">${b.totalBets || 0}</td>
         <td style="padding:8px 4px;text-align:right;color:var(--muted)">${lastUsed}</td>
         <td style="padding:8px 4px;text-align:right;color:var(--muted)">${balance}</td>
         <td style="padding:8px 4px;text-align:right">
-          <div style="display:flex;gap:4px;justify-content:flex-end">
+          <div style="display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap">
             <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 6px" onclick="flagRestriction('${b.id}','${b.name}')">⚠ Flag</button>
-            <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 6px" onclick="updateBalance('${b.id}','${b.name}',${b.balance})">£ Balance</button>
+            <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 6px" onclick="updateBalance('${b.id}','${b.name}',${b.balance ?? 'null'})">£</button>
+            <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 6px" onclick="updateMaxStake('${b.id}','${b.name}',${b.maxStakeObserved ?? 'null'})">Max£</button>
           </div>
         </td>
       </tr>`;
     }).join('');
   } catch (e) {
-    if (tbody) tbody.innerHTML = `<tr><td colspan="8" style="color:var(--red);padding:12px 8px">Failed to load: ${e.message}</td></tr>`;
+    if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="color:var(--red);padding:12px 8px">Failed to load: ${e.message}</td></tr>`;
   }
 }
 
 async function flagRestriction(bmId, bmName) {
-  const type = prompt(`Flag restriction type for ${bmName}:\n\n1 = stake_limited\n2 = restricted\n3 = manual note only\n\nEnter 1, 2, or 3:`);
-  if (!type) return;
-  const typeMap = { '1': 'stake_limited', '2': 'restricted', '3': 'manual' };
-  const rType = typeMap[type] || 'manual';
-  const note = prompt('Note (optional):') || '';
+  const SIGNAL_TYPES = {
+    '1': { type: 'stake_reduction',     label: 'Stake reduction detected' },
+    '2': { type: 'slow_acceptance',     label: 'Slow bet acceptance' },
+    '3': { type: 'market_unavailable',  label: 'Market unavailable' },
+    '4': { type: 'odds_mismatch',       label: 'Odds mismatch vs public display' },
+    '5': { type: 'kyc_request',         label: 'KYC/ID request received' },
+    '6': { type: 'other',               label: 'Other' },
+  };
+  const choice = prompt(
+    `Flag restriction signal for ${bmName}:\n\n` +
+    Object.entries(SIGNAL_TYPES).map(([k,v]) => `${k} = ${v.label}`).join('\n') +
+    `\n\nEnter 1–6:`
+  );
+  if (!choice || !SIGNAL_TYPES[choice]) return;
+  const { type, label } = SIGNAL_TYPES[choice];
+  const notes = prompt(`Notes for "${label}" (optional — e.g. "PL max stake £20"):`) || '';
+  const maxStakeObserved = type === 'stake_reduction'
+    ? parseFloat(prompt('What is the observed max stake (£)? (leave blank to skip):') || '') || null
+    : null;
+  // Suggest appropriate status escalation
+  const suggestedStatus = type === 'kyc_request' ? 'limited' : 'signal';
+  const statusOverride = prompt(
+    `Set account status to:\n1 = signal (⚠ early warning)\n2 = limited (🟠 stake capped)\n3 = restricted (🔴 retire)\n\n(default: ${suggestedStatus} — press Enter to accept):`
+  );
+  const statusMap = { '1': 'signal', '2': 'limited', '3': 'restricted' };
+  const newStatus = statusMap[statusOverride] || suggestedStatus;
   try {
     await apiFetch(`/api/bookmakers/${bmId}/restriction`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: rType, note }),
+      body: JSON.stringify({ type, notes, maxStakeObserved, newStatus }),
     });
-    toast(`${bmName} flagged as ${rType}`, rType === 'restricted' ? 'error' : 'info');
+    toast(`${bmName} → ${newStatus}: ${label}`, newStatus === 'restricted' ? 'error' : 'info');
     loadAccounts();
   } catch (e) { toast('Failed: ' + e.message, 'error'); }
 }
@@ -2465,11 +2509,25 @@ async function updateBalance(bmId, bmName, current) {
   if (isNaN(balance)) { toast('Invalid balance', 'error'); return; }
   try {
     await apiFetch(`/api/bookmakers/${bmId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ balance }),
     });
-    toast(`${bmName} balance updated to £${balance.toFixed(2)}`, 'success');
+    toast(`${bmName} balance → £${balance.toFixed(2)}`, 'success');
+    loadAccounts();
+  } catch (e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+async function updateMaxStake(bmId, bmName, current) {
+  const val = prompt(`Observed max stake for ${bmName} (current: ${current != null ? '£' + current : 'not set'}):\n\nEnter observed max stake (£):`);
+  if (val === null) return;
+  const maxStakeObserved = parseFloat(val);
+  if (isNaN(maxStakeObserved)) { toast('Invalid value', 'error'); return; }
+  try {
+    await apiFetch(`/api/bookmakers/${bmId}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ maxStakeObserved }),
+    });
+    toast(`${bmName} max stake → £${maxStakeObserved}`, 'success');
     loadAccounts();
   } catch (e) { toast('Failed: ' + e.message, 'error'); }
 }

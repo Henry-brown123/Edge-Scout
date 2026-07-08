@@ -154,6 +154,13 @@ function getBankroll() {
   return { ...stored, initial, current };
 }
 
+function roundStake(amount) {
+  if (amount < 10)  return Math.round(amount / 0.5)  * 0.5;
+  if (amount < 50)  return Math.round(amount / 5)    * 5;
+  if (amount < 200) return Math.round(amount / 10)   * 10;
+  return Math.round(amount / 25) * 25;
+}
+
 function getBets()         { return readJSON('bets.json')         || []; }
 function getWatching()     { return readJSON('watching.json')     || []; }
 function getCalibration()  { return readJSON('calibration.json')  || []; }
@@ -161,7 +168,7 @@ function getBookmakers()   { return readJSON('bookmakers.json')    || []; }
 function saveBookmakers(list) { writeJSON('bookmakers.json', list); }
 
 const DEFAULT_BOOKMAKERS = [
-  { id: 'betfair_exchange', name: 'Betfair Exchange', tier: 1, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Exchange — lay/back, ~2% commission. No restrictions ever.' },
+  { id: 'betfair_exchange', name: 'Betfair Exchange', tier: 1, balance: null, status: 'active', statusUpdatedAt: null, statusNotes: '', maxStake: null, maxStakeObserved: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Exchange — lay/back, ~2% commission. No restrictions ever.' },
   { id: 'smarkets',         name: 'Smarkets',         tier: 1, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Exchange — ~2% commission. No restrictions ever.' },
   { id: 'pinnacle',         name: 'Pinnacle',         tier: 2, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Sharp book. Highest limits, rarely restricts winners.' },
   { id: 'unibet',           name: 'Unibet',           tier: 2, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'European book. Higher tolerance than UK soft.' },
@@ -1125,7 +1132,9 @@ async function runPreMatchScan(watchingEntry) {
       edge:         best.edge,
       ev:           best.ev,
       kellyFraction: settings.kellyFraction,
-      suggestedStake: best.kelly.stake,
+      kellStake:     best.kelly.stake,
+      suggestedStake: roundStake(best.kelly.stake),
+      displayStake:  roundStake(best.kelly.stake),
       bankrollAtLock: br.current,
       stage:        'RECOMMENDED',
       lockedAt:     new Date().toISOString(),
@@ -1138,7 +1147,7 @@ async function runPreMatchScan(watchingEntry) {
       weatherCondition:    scored.weatherCondition,
       consistencyWarning:  consistencyWarning,
       // Bookmaker routing recommendation at lock time
-      routingRecommendation: selectBookmaker(best.kelly.stake, best.edge, {
+      routingRecommendation: selectBookmaker(roundStake(best.kelly.stake), best.edge, {
         exchangeOdds: (oddsMap[`${scored.homeName}|${scored.awayName}`] || {})._exchangeOdds || null,
         settings,
       }),
@@ -1359,16 +1368,29 @@ function setupScheduler() {
     }
   }, { timezone: 'UTC' });
 
-  // 3. Every minute — T-60 pre-match locks
+  // 3. Every minute — T-60 pre-match locks (±15 min random variation per fixture)
   cron.schedule('* * * * *', async () => {
     if (isRateLimited() || _cronRunning.preMatch) return;
     const watching = getWatching();
     const now = Date.now();
-    const toScan = watching.filter(w => { const m = (new Date(w.kickoff).getTime() - now) / 60000; return m <= 60 && m > 55; });
-    const locked  = watching.filter(w => (new Date(w.kickoff).getTime() - now) / 60000 > 55);
+    // Assign a stable per-fixture daily offset (seeded by fixtureId + today's date)
+    const today = new Date().toISOString().slice(0, 10);
+    const getOffset = w => {
+      if (w._lockOffset != null) return w._lockOffset;
+      // Deterministic-ish: hash fixtureId + date into ±15 range
+      const seed = (String(w.id || w.fixtureId || '') + today).split('').reduce((a, c) => a + c.charCodeAt(0), 0);
+      return (seed % 31) - 15; // -15 to +15 minutes
+    };
+    // Lock window: T-(60+offset) to T-(55+offset) — fires for 5 consecutive minutes
+    const toScan = watching.filter(w => {
+      const m = (new Date(w.kickoff).getTime() - now) / 60000;
+      const off = getOffset(w);
+      return m <= (60 + off) && m > (55 + off);
+    });
+    const locked = watching.filter(w => (new Date(w.kickoff).getTime() - now) / 60000 > (55 + getOffset(w)));
     if (!toScan.length) return;
     _cronRunning.preMatch = true;
-    console.log(`[Cron:PreMatch] T-60 — ${toScan.length} fixture(s) entering pre-match scan`);
+    console.log(`[Cron:PreMatch] ${toScan.length} fixture(s) entering pre-match lock (T-60 ±15 min variation)`);
     try {
       await Promise.all(toScan.map(w => runPreMatchScan(w)));
       saveWatching(locked);
@@ -2356,10 +2378,17 @@ function selectBookmaker(stake, edge, { exchangeOdds = null, settings = null } =
   const preferExchange       = settings?.preferExchange ?? true;
   const preferExchangeBuffer = (settings?.preferExchangeBuffer ?? 5) / 100; // default 5%
 
-  const active = books.filter(b =>
-    b.status === 'active' &&
-    (b.maxStake === null || b.maxStake >= stake)
-  );
+  // Four-state status filter
+  // restricted → never route; limited → only if no better option; signal → route with stake cap
+  const VALID_STATUSES = new Set(['active', 'signal', 'limited']);
+  const active = books.filter(b => {
+    if (!VALID_STATUSES.has(b.status || 'active')) return false;       // restricted = excluded
+    if (b.status === 'limited') {
+      const cap = b.maxStakeObserved ?? b.maxStake;
+      return cap == null || cap >= stake;                               // limited: honour observed cap
+    }
+    return b.maxStake == null || b.maxStake >= stake;
+  });
 
   // Count tier-1 usage this week
   const t1WeeklyUse = active
@@ -2388,8 +2417,11 @@ function selectBookmaker(stake, edge, { exchangeOdds = null, settings = null } =
     eligible.push(b);
   }
 
-  // Sort: tier ASC (exchanges first if stake > 20), then least-recently-used
+  // Deprioritise 'limited' accounts — push to end of eligible list
   eligible.sort((a, b) => {
+    const aLim = (a.status === 'limited') ? 1 : 0;
+    const bLim = (b.status === 'limited') ? 1 : 0;
+    if (aLim !== bLim) return aLim - bLim;
     if (stake > 20 && a.tier !== b.tier) return a.tier - b.tier;
     const aLast = a.lastUsed ? new Date(a.lastUsed).getTime() : 0;
     const bLast = b.lastUsed ? new Date(b.lastUsed).getTime() : 0;
@@ -2398,6 +2430,13 @@ function selectBookmaker(stake, edge, { exchangeOdds = null, settings = null } =
 
   let recommended = eligible[0] || null;
   const bestPrice = eligible.find(b => b.id !== recommended?.id) || null;
+
+  // Build routing warnings for signal/limited accounts
+  const routingWarning = recommended
+    ? (recommended.status === 'signal'  ? '⚠ Restriction signal — consider reduced stake'
+       : recommended.status === 'limited' ? '⚠ Account limited — use maxStakeObserved cap'
+       : null)
+    : null;
 
   // If preferExchange is on and the recommended book isn't an exchange, promote the
   // best exchange from eligible — as long as its net odds are within the buffer of the best book.
@@ -2413,7 +2452,8 @@ function selectBookmaker(stake, edge, { exchangeOdds = null, settings = null } =
   return {
     recommended,
     bestPrice,
-    exchangeOdds,           // { name, key, commission, raw, net } — always passed through
+    routingWarning,
+    exchangeOdds,
     skip: skip.slice(0, 5),
     eligible,
   };
@@ -2422,13 +2462,14 @@ function selectBookmaker(stake, edge, { exchangeOdds = null, settings = null } =
 // GET bookmakers
 app.get('/api/bookmakers', (_req, res) => res.json(getBookmakers()));
 
-// PATCH bookmaker (update balance, status, notes, maxStake)
+// PATCH bookmaker (update balance, status, notes, maxStake, maxStakeObserved, statusNotes)
 app.patch('/api/bookmakers/:id', (req, res) => {
   const books = getBookmakers();
   const bm    = books.find(b => b.id === req.params.id);
   if (!bm) return res.status(404).json({ error: 'Not found' });
-  const allowed = ['balance', 'status', 'maxStake', 'notes', 'restrictionSignals'];
+  const allowed = ['balance', 'status', 'maxStake', 'maxStakeObserved', 'notes', 'statusNotes', 'restrictionSignals'];
   allowed.forEach(k => { if (req.body[k] !== undefined) bm[k] = req.body[k]; });
+  if (req.body.status && req.body.status !== (bm._prevStatus)) bm.statusUpdatedAt = new Date().toISOString();
   saveBookmakers(books);
   res.json(bm);
 });
@@ -2472,16 +2513,37 @@ app.post('/api/bookmakers/route', (req, res) => {
   res.json(selectBookmaker(parseFloat(stake) || 0, parseFloat(edge) || 0, { settings }));
 });
 
-// POST log restriction signal
+// POST log restriction signal — updates status based on signal severity
 app.post('/api/bookmakers/:id/restriction', (req, res) => {
   const books = getBookmakers();
   const bm    = books.find(b => b.id === req.params.id);
   if (!bm) return res.status(404).json({ error: 'Not found' });
-  const signal = { type: req.body.type || 'manual', note: req.body.note || '', date: new Date().toISOString() };
+
+  const { type, notes, maxStakeObserved, newStatus } = req.body;
+  const signal = {
+    type:       type || 'other',
+    detectedAt: new Date().toISOString(),
+    notes:      notes || req.body.note || '',
+  };
   bm.restrictionSignals = [...(bm.restrictionSignals || []), signal];
-  if (req.body.type === 'stake_limited' || req.body.type === 'restricted') {
-    bm.status = req.body.type;
+
+  // Auto-escalate status based on signal type if not explicitly overridden
+  const prevStatus = bm.status || 'active';
+  const escalate = newStatus || (
+    type === 'stake_reduction'     ? 'signal'
+    : type === 'slow_acceptance'   ? 'signal'
+    : type === 'market_unavailable'? 'signal'
+    : type === 'odds_mismatch'     ? 'signal'
+    : type === 'kyc_request'       ? 'limited'
+    : prevStatus
+  );
+  if (escalate !== prevStatus) {
+    bm.status          = escalate;
+    bm.statusUpdatedAt = new Date().toISOString();
   }
+  if (notes)             bm.statusNotes       = notes;
+  if (maxStakeObserved)  bm.maxStakeObserved  = parseFloat(maxStakeObserved);
+
   saveBookmakers(books);
   res.json(bm);
 });
