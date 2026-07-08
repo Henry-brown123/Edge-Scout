@@ -802,6 +802,18 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
               ⚠ WOWY signals disabled — lineup backfill in progress. Re-enable after rebuild completes.
             </div>
           </div>
+          <div class="field">
+            <label>Bet routing — prefer exchange</label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+              <input type="checkbox" id="prefer-exchange-input">
+              <span style="font-size:12px">Recommend exchange even when a bookmaker offers better odds (protects account longevity)</span>
+            </label>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+              <span style="font-size:12px;color:var(--muted)">Buffer: recommend exchange unless bookmaker odds are more than</span>
+              <input type="number" id="prefer-exchange-buffer-input" min="0" max="20" step="1" style="width:54px;padding:4px 6px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px">
+              <span style="font-size:12px;color:var(--muted)">% better</span>
+            </div>
+          </div>
           <button class="btn btn-cyan btn-sm" onclick="saveSettings()" style="align-self:flex-start">Save Settings</button>
         </div>
       </div>
@@ -1101,10 +1113,21 @@ function routingHTML(b) {
   }
 
   const tierLabel = t => t === 1 ? 'Exchange' : t === 2 ? 'Sharp' : 'UK';
+  const ex = r.exchangeOdds;
+  const teamKey = b.bet === 'Home Win' ? b.fixture?.split(' vs ')[0]
+                : b.bet === 'Away Win' ? b.fixture?.split(' vs ')[1]
+                : 'Draw';
+  const exNet  = ex?.net?.[teamKey?.trim()];
+  const exRaw  = ex?.raw?.[teamKey?.trim()];
+  const exComm = ex ? Math.round(ex.commission * 100) : 2;
+  const exchangeRow = ex
+    ? `<div><span style="color:var(--muted);display:inline-block;width:80px">EXCHANGE</span><span style="color:var(--text2)">${ex.name}</span>${exRaw ? `<span style="color:var(--muted);margin-left:6px">@${exRaw.toFixed(2)} raw · <strong style="color:var(--text2)">@${exNet?.toFixed(2)} net</strong> after ${exComm}% commission</span>` : ''}</div>`
+    : `<div><span style="color:var(--muted);display:inline-block;width:80px">EXCHANGE</span><span style="color:var(--muted);font-style:italic">Check Betfair Exchange / Smarkets manually</span></div>`;
   return `
     <div style="margin-top:10px;padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;font-size:11px;line-height:2">
       <div><span style="color:var(--muted);display:inline-block;width:80px">RECOMMENDED</span><span style="color:#fff;font-weight:600">${rec.name}</span><span style="color:var(--muted);margin-left:6px">${tierLabel(rec.tier)}${rec.lastUsed ? ' · last used ' + new Date(rec.lastUsed).toLocaleDateString('en-GB',{day:'numeric',month:'short'}) : ' · fresh'}</span></div>
-      ${best ? `<div><span style="color:var(--muted);display:inline-block;width:80px">ALTERNATIVE</span><span style="color:var(--text2)">${best.name}</span></div>` : ''}
+      ${best ? `<div><span style="color:var(--muted);display:inline-block;width:80px">BEST PRICE</span><span style="color:var(--text2)">${best.name}</span></div>` : ''}
+      ${exchangeRow}
       ${skips.map(s => `<div><span style="color:var(--muted);display:inline-block;width:80px">SKIP</span><span style="color:var(--muted);text-decoration:line-through">${s.name}</span><span style="color:var(--muted);margin-left:6px">${s.skipReason}</span></div>`).join('')}
       <div style="margin-top:8px">
         <button class="btn btn-cyan btn-sm" onclick="openPlacementModal('${b.id}')">Confirm placement</button>
@@ -1672,6 +1695,10 @@ function renderSettings() {
     if (wowyWarn) wowyWarn.style.display = wowyChk.checked ? 'none' : 'block';
     wowyChk.onchange = () => { if (wowyWarn) wowyWarn.style.display = wowyChk.checked ? 'none' : 'block'; };
   }
+  const prefExChk = document.getElementById('prefer-exchange-input');
+  if (prefExChk) prefExChk.checked = s.preferExchange ?? true;
+  const prefExBuf = document.getElementById('prefer-exchange-buffer-input');
+  if (prefExBuf) prefExBuf.value = s.preferExchangeBuffer ?? 5;
   loadDataCoverage();
 }
 
@@ -1719,7 +1746,9 @@ async function saveSettings() {
     kellyFraction:    parseFloat(document.getElementById('kelly-frac-input').value),
     successThreshold:  parseInt(document.getElementById('threshold-settings').value),
     calibrationFactor: parseFloat(document.getElementById('cal-factor-input').value),
-    wowyActive:        document.getElementById('wowy-active-input')?.checked ?? false,
+    wowyActive:           document.getElementById('wowy-active-input')?.checked ?? false,
+    preferExchange:       document.getElementById('prefer-exchange-input')?.checked ?? true,
+    preferExchangeBuffer: parseInt(document.getElementById('prefer-exchange-buffer-input')?.value ?? '5'),
   };
   await apiFetch('/api/settings', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },

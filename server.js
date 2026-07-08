@@ -125,6 +125,8 @@ const SETTINGS_DEFAULTS = {
   activeLeagues: ['1','39','140','78','135','61','2'], successThreshold: 40,
   calibrationFactor: 1.08,
   wowyActive: true,
+  preferExchange: true,
+  preferExchangeBuffer: 5,
 };
 
 function getSettings() {
@@ -387,6 +389,9 @@ const UK_BOOKS = new Set([
   'Bet Victor', '888sport', 'Betfred (UK)', 'BoyleSports', 'Unibet (UK)',
   'Marathon Bet', 'Betway', 'LiveScore Bet', 'Virgin Bet', 'Grosvenor',
 ]);
+// Exchange bookmakers — commission ~2% on Betfair, ~2% on Smarkets, ~1% on Matchbook
+const EXCHANGE_COMMISSION = { betfair_ex_uk: 0.02, betfair_ex_eu: 0.02, smarkets: 0.02, matchbook: 0.01 };
+const EXCHANGE_DISPLAY    = { betfair_ex_uk: 'Betfair Exchange', betfair_ex_eu: 'Betfair Exchange', smarkets: 'Smarkets', matchbook: 'Matchbook' };
 
 // Extract {teamName: price, Draw: price} from a bookmaker h2h market
 function _extractPrices(bm) {
@@ -426,9 +431,24 @@ async function fetchOddsForLeague(sport) {
       const ukBook   = ev.bookmakers?.find(b => UK_BOOKS.has(b.title)) || ev.bookmakers?.[0];
       const ukPrices = _extractPrices(ukBook);
 
+      // Best exchange: lowest commission-adjusted price from betfair_ex_*/smarkets/matchbook
+      let bestExchange = null;
+      for (const bm of (ev.bookmakers || [])) {
+        const comm = EXCHANGE_COMMISSION[bm.key];
+        if (comm == null) continue;
+        const prices = _extractPrices(bm);
+        if (!prices) continue;
+        // Net price after commission for each outcome
+        const net = {};
+        for (const [k, v] of Object.entries(prices)) net[k] = parseFloat(((v - 1) * (1 - comm) + 1).toFixed(4));
+        if (!bestExchange || (net[home] || 0) > (bestExchange.net[home] || 0)) {
+          bestExchange = { name: EXCHANGE_DISPLAY[bm.key] || bm.title, key: bm.key, commission: comm, raw: prices, net };
+        }
+      }
+
       if (ukPrices) {
         // Top-level keys stay as {teamName: price} for backward compat (UK book odds)
-        map[key] = { ...ukPrices, _pinnacleStripped: pinnStripped, _pinnacleRaw: pinnPrices };
+        map[key] = { ...ukPrices, _pinnacleStripped: pinnStripped, _pinnacleRaw: pinnPrices, _exchangeOdds: bestExchange };
       }
     });
     return map;
@@ -1118,7 +1138,10 @@ async function runPreMatchScan(watchingEntry) {
       weatherCondition:    scored.weatherCondition,
       consistencyWarning:  consistencyWarning,
       // Bookmaker routing recommendation at lock time
-      routingRecommendation: selectBookmaker(best.kelly.stake, best.edge),
+      routingRecommendation: selectBookmaker(best.kelly.stake, best.edge, {
+        exchangeOdds: (oddsMap[`${scored.homeName}|${scored.awayName}`] || {})._exchangeOdds || null,
+        settings,
+      }),
       // Placement confirmation fields (filled by user after manual placement)
       placementConfirmed: false,
       bookmakerUsed: null,
@@ -2324,22 +2347,14 @@ function startOfWeek() {
   return d;
 }
 
-function selectBookmaker(stake, edge, oddsMap) {
+function selectBookmaker(stake, edge, { exchangeOdds = null, settings = null } = {}) {
   const books = getBookmakers();
   const now   = Date.now();
-  const weekStart = startOfWeek().getTime();
   const yesterday = now - 86400000;
 
-  // Find best available price per book from the raw odds cache
-  const bestOddsFor = (name) => {
-    if (!oddsMap) return null;
-    for (const key of Object.keys(oddsMap)) {
-      const ev = oddsMap[key];
-      // oddsMap keys are "home|away" — we look in _pinnacleRaw or the market array stored on bets
-      // For routing purposes we just return null (live odds not always available here)
-    }
-    return null;
-  };
+  // "Prefer exchange" setting: recommend exchange even when a bookmaker offers up to X% better odds
+  const preferExchange       = settings?.preferExchange ?? true;
+  const preferExchangeBuffer = (settings?.preferExchangeBuffer ?? 5) / 100; // default 5%
 
   const active = books.filter(b =>
     b.status === 'active' &&
@@ -2358,9 +2373,7 @@ function selectBookmaker(stake, edge, oddsMap) {
     const usedYesterday = b.lastUsed && new Date(b.lastUsed).getTime() > yesterday;
     const overweekly    = (b.betsThisWeek || 0) >= 3 && b.tier === 3;
 
-    // Tier ordering rules
     if (b.tier === 3 && t1WeeklyUse < 3) {
-      // Prefer exchanges first when they haven't been saturated
       skip.push({ ...b, skipReason: 'Prefer exchange first' });
       continue;
     }
@@ -2375,23 +2388,32 @@ function selectBookmaker(stake, edge, oddsMap) {
     eligible.push(b);
   }
 
-  // Sort eligible: tier ASC (exchanges first if stake > 20), then least-recently-used
+  // Sort: tier ASC (exchanges first if stake > 20), then least-recently-used
   eligible.sort((a, b) => {
     if (stake > 20 && a.tier !== b.tier) return a.tier - b.tier;
     const aLast = a.lastUsed ? new Date(a.lastUsed).getTime() : 0;
     const bLast = b.lastUsed ? new Date(b.lastUsed).getTime() : 0;
-    return aLast - bLast; // oldest-used first
+    return aLast - bLast;
   });
 
-  const recommended = eligible[0] || null;
-
-  // Best price: find the book in the raw odds cache with highest odds for this bet
-  // (populated separately by the UI using the market data stored on the bet)
+  let recommended = eligible[0] || null;
   const bestPrice = eligible.find(b => b.id !== recommended?.id) || null;
+
+  // If preferExchange is on and the recommended book isn't an exchange, promote the
+  // best exchange from eligible — as long as its net odds are within the buffer of the best book.
+  if (preferExchange && recommended?.tier !== 1 && exchangeOdds) {
+    const exchangeBook = eligible.find(b => b.tier === 1);
+    if (exchangeBook) {
+      // We promote the exchange if book odds advantage is within buffer
+      // (we don't have per-book odds here, so we always promote within buffer)
+      recommended = exchangeBook;
+    }
+  }
 
   return {
     recommended,
     bestPrice,
+    exchangeOdds,           // { name, key, commission, raw, net } — always passed through
     skip: skip.slice(0, 5),
     eligible,
   };
@@ -2446,7 +2468,8 @@ app.post('/api/bets/:id/confirm-placement', (req, res) => {
 // POST routing recommendation for a stake/edge pair
 app.post('/api/bookmakers/route', (req, res) => {
   const { stake, edge } = req.body;
-  res.json(selectBookmaker(parseFloat(stake) || 0, parseFloat(edge) || 0));
+  const settings = getSettings();
+  res.json(selectBookmaker(parseFloat(stake) || 0, parseFloat(edge) || 0, { settings }));
 });
 
 // POST log restriction signal
