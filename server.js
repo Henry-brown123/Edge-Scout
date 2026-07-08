@@ -1405,6 +1405,14 @@ function setupScheduler() {
   cron.schedule('*/5 * * * *', async () => {
     if (isRateLimited() || _cronRunning.resolve) return;
     _cronRunning.resolve = true;
+    // Expire past-kickoff watching entries (catches entries that survive server restarts)
+    const nowMs2 = Date.now();
+    const rawW = getWatching();
+    const futureW = rawW.filter(w => new Date(w.kickoff).getTime() > nowMs2);
+    if (futureW.length < rawW.length) {
+      saveWatching(futureW);
+      console.log(`[Cron:Resolve] Expired ${rawW.length - futureW.length} past-kickoff watching entries`);
+    }
     try {
       await checkAndResolve();
     } catch (e) {

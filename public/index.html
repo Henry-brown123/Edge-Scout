@@ -1068,7 +1068,9 @@ function renderScout() {
   document.getElementById('s-bankroll').textContent = `£${bankroll.current.toLocaleString('en-GB', {minimumFractionDigits:2,maximumFractionDigits:2})}`;
   document.getElementById('s-bankroll').className   = `stat-value ${pnl >= 0 ? 'c-green' : 'c-red'}`;
   document.getElementById('s-pnl').textContent      = `${pnl >= 0 ? '+' : ''}£${pnl.toFixed(2)} (${pnlPct}%)`;
-  document.getElementById('s-watching').textContent = watching.length;
+  const today  = new Date().toISOString().split('T')[0];
+  const todayW = watching.filter(w => w.kickoff?.startsWith(today));
+  document.getElementById('s-watching').textContent = todayW.length;
   document.getElementById('s-locked').textContent   = locked.length;
   document.getElementById('s-winrate').textContent  = resolved.length ? `${((wins/(wins+losses||1))*100).toFixed(0)}%` : '—';
   document.getElementById('s-record').textContent   = `${wins}W ${losses}L`;
@@ -1083,8 +1085,6 @@ function renderScout() {
 
   // Watching
   const watEl  = document.getElementById('watching-list');
-  const today  = new Date().toISOString().split('T')[0];
-  const todayW = watching.filter(w => w.kickoff?.startsWith(today));
   if (todayW.length) {
     watEl.innerHTML = todayW.map(w => watchingCard(w)).join('');
   } else {
