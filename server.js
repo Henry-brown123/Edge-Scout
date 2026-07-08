@@ -2115,11 +2115,18 @@ app.post('/api/backfill/fixture-stats', async (req, res) => {
       return;
     }
 
-    const targets = historical.fixtures.filter(f => {
-      const lid = f.league?.id;
-      const sid = f.league?.season;
-      return STATS_LEAGUES.has(lid) && STATS_SEASONS.has(sid);
-    });
+    const byLeague2 = {};
+    for (const f of historical.fixtures) {
+      const lid = f.league?.id, sid = f.league?.season;
+      if (!STATS_LEAGUES.has(lid) || !STATS_SEASONS.has(sid)) continue;
+      (byLeague2[lid] = byLeague2[lid] || []).push(f);
+    }
+    const buckets2 = Object.values(byLeague2);
+    const targets  = [];
+    const maxLen2  = Math.max(...buckets2.map(b => b.length));
+    for (let i = 0; i < maxLen2; i++) {
+      for (const b of buckets2) { if (i < b.length) targets.push(b[i]); }
+    }
 
     const statsDb    = getFixtureStats();
     const parseStats = ts => {
@@ -2466,7 +2473,11 @@ app.get('/api/diagnostics/data-coverage', (req, res) => {
 
   if (!data?.fixtures?.length) return res.json({ totalFixtures: 0, byLeague: {}, gaps: ['No historical data — run backfill first'] });
 
-  const LEAGUE_NAMES = { 39:'Premier League', 140:'La Liga', 135:'Serie A', 78:'Bundesliga', 61:'Ligue 1', 2:'Champions League', 1:'World Cup' };
+  const LEAGUE_NAMES = {
+    1:'World Cup', 32:'WC Qualifying (UEFA)', 34:'WC Qualifying (CONMEBOL)',
+    31:'WC Qualifying (CONCACAF)', 5:'Nations League', 10:'International Friendlies',
+    39:'Premier League', 140:'La Liga', 135:'Serie A', 78:'Bundesliga', 61:'Ligue 1', 2:'Champions League',
+  };
 
   const byLeague = {};
   let withLineups = 0, withStats = 0;
@@ -2709,9 +2720,20 @@ async function runFixtureStatsBackfillFn({ budget = 2000 } = {}) {
   const historical = readJSON('backfill-historical.json');
   if (!historical?.fixtures?.length) return;
 
-  const targets = historical.fixtures.filter(f =>
-    STATS_LEAGUES.has(f.league?.id) && STATS_SEASONS.has(f.league?.season)
-  );
+  // Interleave by league so budget runs give proportional coverage to all 6 leagues,
+  // not just whichever appears first in the historical array.
+  const byLeague = {};
+  for (const f of historical.fixtures) {
+    const lid = f.league?.id, sid = f.league?.season;
+    if (!STATS_LEAGUES.has(lid) || !STATS_SEASONS.has(sid)) continue;
+    (byLeague[lid] = byLeague[lid] || []).push(f);
+  }
+  const buckets = Object.values(byLeague);
+  const targets = [];
+  const maxLen  = Math.max(...buckets.map(b => b.length));
+  for (let i = 0; i < maxLen; i++) {
+    for (const bucket of buckets) { if (i < bucket.length) targets.push(bucket[i]); }
+  }
   const fixtureStatsDb = getFixtureStats();
   let fetched = 0, apiCalls = 0;
   for (const fix of targets) {
