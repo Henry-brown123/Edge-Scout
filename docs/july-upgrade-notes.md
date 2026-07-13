@@ -221,6 +221,50 @@ All World Cup calibration entries collected before 2026-07-07 have `pinnacleAvai
 
 ---
 
+## 9. Per-bookmaker bet breakdown and performance tracking (planned)
+
+**Status:** Planned — Week 3 July upgrade (Aug 1–8)
+
+### At bet lock — per-bookmaker breakdown table
+
+When a bet locks, the routing card will display a full breakdown table across all eligible bookmakers, showing:
+
+| Bookmaker | Tier | Odds | Edge at odds | Kelly stake | Display stake | % of total bets | Status |
+|---|---|---|---|---|---|---|---|
+
+- **Odds** — live odds for this outcome at each book (from `_buildBookmakerMarket` / The Odds API response)
+- **Edge** — recalculated as `calProb − (1/odds)` at that book's specific price, not the generic implied prob
+- **Kelly stake** — recomputed at those specific odds and current bankroll
+- **Display stake** — `roundStake()` output for those specific odds
+- **% of total bets** — `totalBets / sumAllBookmakerTotalBets × 100` across all accounts, recalculated live
+- **Status indicator** — 🟢/🟡/🟠/🔴 per current account status
+
+Sort order: exchanges first (tier 1), then by lowest `% of total bets` ascending within each tier. Any bookmaker at **≥15% of total bets** highlighted in red as a usage concentration warning.
+
+### After bet confirmation
+
+On `POST /api/bets/:id/confirm-placement`, update:
+- `bm.totalBets`, `bm.lastUsed`, `bm.totalStaked` on the confirmed bookmaker (already implemented)
+- Recalculate `usagePct` across all bookmakers and store as a derived field on `/api/bookmakers` response
+- Bet record stores `bookmakerUsed`, `bookmakerId`, `actualOdds`, `actualStake` (already stored)
+
+### Bookmaker Performance section — Performance tab
+
+New section below the P&L curve showing per-bookmaker stats across all confirmed bets:
+
+| Bookmaker | P&L | Staked | % of volume | Win rate | Days since used | Status |
+|---|---|---|---|---|---|---|
+
+- **P&L** — `totalReturned − totalStaked`, colour-coded green/red
+- **% of volume** — `totalStaked / sumAllStaked × 100`
+- **Win rate** — computed from `bets.json` entries filtered by `bookmakerId`
+- **Days since used** — `Math.floor((now − new Date(lastUsed)) / 86400000)`
+- **Status** — four-state indicator with tooltip showing latest restriction signal
+
+Ordered by total staked descending. Bookmakers with zero bets shown collapsed at the bottom.
+
+---
+
 ## 8. Model Probabilities display bug — display-only, data clean (fixed 2026-07-13)
 
 **Finding date:** 2026-07-13  
