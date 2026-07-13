@@ -2011,7 +2011,15 @@ async function openDrawerById(id) {
 }
 
 function openDrawer(w) {
-  const probs = computeProbs(w.homeF || {}, w.awayF || {});
+  // Prefer allCandidates model probs (server-calibrated) over the client-side
+  // computeProbs approximation, which lacks calibrationFactor and WOWY adjustments.
+  let probs;
+  if (w.allCandidates?.length >= 3) {
+    const get = label => (w.allCandidates.find(c => c.bet === label)?.modelProb ?? 0);
+    probs = { home: get('Home Win'), draw: get('Draw'), away: get('Away Win') };
+  } else {
+    probs = computeProbs(w.homeF || {}, w.awayF || {});
+  }
   const vsIdx = w.fixture.indexOf(' vs ');
   const home = vsIdx > -1 ? w.fixture.slice(0, vsIdx) : w.fixture;
   const away = vsIdx > -1 ? w.fixture.slice(vsIdx + 4) : '';
