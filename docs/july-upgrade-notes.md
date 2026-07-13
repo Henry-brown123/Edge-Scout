@@ -218,3 +218,31 @@ All World Cup calibration entries collected before 2026-07-07 have `pinnacleAvai
 - Only use `pinnacleAvailable: true` entries for EV optimiser training and edge distribution analysis
 - The WC paper trading P&L (£1,310.24) is not affected — P&L is computed from actual odds and stake, not from the model's edge estimate
 - The `lowConfidence` gate was also less accurate pre-fix: some bets that were blocked may have had genuine edge if Pinnacle agreed with the model; some placed bets may have had less edge than reported
+
+---
+
+## 8. Model Probabilities display bug — display-only, data clean (fixed 2026-07-13)
+
+**Finding date:** 2026-07-13  
+**Commit:** 0a9ce0f — "Fix Model Probabilities display to use server-calibrated allCandidates probs"  
+**Status:** Fixed. No data integrity impact.
+
+### What was wrong
+
+The fixture card drawer contained two probability displays:
+
+1. **Model Probabilities** (top section) — called `computeProbs(homeF, awayF)`, a client-side re-approximation using a hardcoded `× 0.88` away multiplier (a crude home advantage proxy) and the current `WEIGHTS` setting. Applied **no calibration factor**, **no WOWY modifiers**, **no international context adjustments**.
+
+2. **Value Analysis cards** (below) — read from `allCandidates[].modelProb`, the actual server-computed probabilities stored at scan time, which include all post-scoring adjustments.
+
+Example discrepancy observed on Norway vs England: top section showed Norway 39% / England 35%, Value Analysis correctly showed Norway 30% / England 55%. The 20pp gap on England is explained by the calibration factor (×1.08) amplifying a stronger underlying model signal, combined with the 0.88 away multiplier artificially compressing away probability.
+
+This affected every fixture card during the WC validation period.
+
+### Data integrity
+
+**Calibration data is clean.** The `calibration.json` entries store per-outcome probabilities in a `candidates[]` array (older schema name for `allCandidates`). These were written by the server at scan time and contain the correct calibrated `modelProb` values — they were never affected by the client-side display bug. The P&L, edge estimates, and all calibration metrics are computed from these server-side values.
+
+### Fix
+
+`openDrawer()` now reads probabilities from `allCandidates[].modelProb` (server-calibrated) when present, with `computeProbs` retained as a fallback for legacy entries that predate the `allCandidates` field being stored. Both the Model Probabilities section and the Value Analysis cards now show identical numbers.
