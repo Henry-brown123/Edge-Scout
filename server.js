@@ -461,24 +461,24 @@ async function fetchOddsForLeague(sport) {
       const ukBook   = ev.bookmakers?.find(b => UK_BOOKS.has(b.title)) || ev.bookmakers?.[0];
       const ukPrices = _extractPrices(ukBook);
 
-      // Best exchange: lowest commission-adjusted price from betfair_ex_*/smarkets/matchbook
-      let bestExchange = null;
+      // All exchanges: commission-adjusted prices from betfair_ex_*/smarkets/matchbook
+      const allExchanges = [];
       for (const bm of (ev.bookmakers || [])) {
         const comm = EXCHANGE_COMMISSION[bm.key];
         if (comm == null) continue;
         const prices = _extractPrices(bm);
         if (!prices) continue;
-        // Net price after commission for each outcome
         const net = {};
         for (const [k, v] of Object.entries(prices)) net[k] = parseFloat(((v - 1) * (1 - comm) + 1).toFixed(4));
-        if (!bestExchange || (net[home] || 0) > (bestExchange.net[home] || 0)) {
-          bestExchange = { name: EXCHANGE_DISPLAY[bm.key] || bm.title, key: bm.key, commission: comm, raw: prices, net };
-        }
+        allExchanges.push({ name: EXCHANGE_DISPLAY[bm.key] || bm.title, key: bm.key, commission: comm, raw: prices, net });
       }
+      // Best exchange by home-team net price (kept for display fallback when outcome unknown)
+      const bestExchange = allExchanges.reduce((best, ex) =>
+        !best || (ex.net[home] || 0) > (best.net[home] || 0) ? ex : best, null);
 
       if (ukPrices) {
         // Top-level keys stay as {teamName: price} for backward compat (UK book odds)
-        map[key] = { ...ukPrices, _pinnacleStripped: pinnStripped, _pinnacleRaw: pinnPrices, _exchangeOdds: bestExchange };
+        map[key] = { ...ukPrices, _pinnacleStripped: pinnStripped, _pinnacleRaw: pinnPrices, _exchangeOdds: bestExchange, _allExchangeOdds: allExchanges };
       }
     });
     return map;
@@ -1172,7 +1172,11 @@ async function runPreMatchScan(watchingEntry) {
       competitionPhase:    scored.competitionPhase,
       // Bookmaker routing recommendation at lock time
       routingRecommendation: selectBookmaker(roundStake(best.kelly.stake), best.edge, {
-        exchangeOdds: (oddsMap[`${scored.homeName}|${scored.awayName}`] || {})._exchangeOdds || null,
+        exchangeOdds:    (oddsMap[`${scored.homeName}|${scored.awayName}`] || {})._exchangeOdds    || null,
+        allExchangeOdds: (oddsMap[`${scored.homeName}|${scored.awayName}`] || {})._allExchangeOdds || [],
+        outcomeName: best.bet === 'Home Win' ? scored.homeName
+                   : best.bet === 'Away Win' ? scored.awayName
+                   : 'Draw',
         settings,
       }),
       // Placement confirmation fields (filled by user after manual placement)
@@ -2401,7 +2405,14 @@ function startOfWeek() {
   return d;
 }
 
-function selectBookmaker(stake, edge, { exchangeOdds = null, settings = null } = {}) {
+// Maps bookmakers.json exchange IDs to Odds API keys for net-price lookup
+const EXCHANGE_BM_KEYS = {
+  betfair_exchange: ['betfair_ex_uk', 'betfair_ex_eu'],
+  smarkets:         ['smarkets'],
+  matchbook:        ['matchbook'],
+};
+
+function selectBookmaker(stake, edge, { exchangeOdds = null, allExchangeOdds = [], outcomeName = null, settings = null } = {}) {
   const books = getBookmakers();
   const now   = Date.now();
   const yesterday = now - 86400000;
@@ -2449,12 +2460,29 @@ function selectBookmaker(stake, edge, { exchangeOdds = null, settings = null } =
     eligible.push(b);
   }
 
-  // Deprioritise 'limited' accounts — push to end of eligible list
+  // For tier-1 exchanges, compute best net price for the specific outcome being recommended.
+  // Falls back to 0 when exchange odds aren't available for this bookmaker.
+  const exchangeNetFor = (bm) => {
+    if (bm.tier !== 1 || !outcomeName || !allExchangeOdds.length) return 0;
+    const keys = EXCHANGE_BM_KEYS[bm.id] || [];
+    let best = 0;
+    for (const ex of allExchangeOdds) {
+      if (keys.includes(ex.key)) best = Math.max(best, ex.net[outcomeName] || 0);
+    }
+    return best;
+  };
+
+  // Sort: limited last → tier (high-stake) → for tier-1 use best net price desc → lastUsed asc
   eligible.sort((a, b) => {
     const aLim = (a.status === 'limited') ? 1 : 0;
     const bLim = (b.status === 'limited') ? 1 : 0;
     if (aLim !== bLim) return aLim - bLim;
     if (stake > 20 && a.tier !== b.tier) return a.tier - b.tier;
+    // Within tier 1: best net price wins
+    if (a.tier === 1 && b.tier === 1) {
+      const netDiff = exchangeNetFor(b) - exchangeNetFor(a);
+      if (Math.abs(netDiff) > 0.001) return netDiff;
+    }
     const aLast = a.lastUsed ? new Date(a.lastUsed).getTime() : 0;
     const bLast = b.lastUsed ? new Date(b.lastUsed).getTime() : 0;
     return aLast - bLast;
@@ -2481,11 +2509,29 @@ function selectBookmaker(stake, edge, { exchangeOdds = null, settings = null } =
     }
   }
 
+  // Resolve which specific exchange object corresponds to the recommended bookmaker,
+  // and build an array of all exchange alternatives with their net prices for the outcome.
+  const recommendedExchangeOdds = (() => {
+    if (!recommended || recommended.tier !== 1 || !allExchangeOdds.length) return exchangeOdds;
+    const keys = EXCHANGE_BM_KEYS[recommended.id] || [];
+    return allExchangeOdds
+      .filter(ex => keys.includes(ex.key))
+      .sort((a, b) => (b.net[outcomeName] || 0) - (a.net[outcomeName] || 0))[0]
+      || exchangeOdds;
+  })();
+
+  const alternativeExchanges = allExchangeOdds.filter(ex => {
+    const recKeys = EXCHANGE_BM_KEYS[recommended?.id] || [];
+    return !recKeys.includes(ex.key);
+  });
+
   return {
     recommended,
     bestPrice,
     routingWarning,
-    exchangeOdds,
+    exchangeOdds: recommendedExchangeOdds,
+    alternativeExchanges,
+    outcomeName,
     skip: skip.slice(0, 5),
     eligible,
   };

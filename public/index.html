@@ -1121,14 +1121,18 @@ function routingHTML(b) {
 
   const tierLabel = t => t === 1 ? 'Exchange' : t === 2 ? 'Sharp' : 'UK';
   const ex = r.exchangeOdds;
-  const teamKey = b.bet === 'Home Win' ? b.fixture?.split(' vs ')[0]
+  const teamKey = (r.outcomeName) || (b.bet === 'Home Win' ? b.fixture?.split(' vs ')[0]
                 : b.bet === 'Away Win' ? b.fixture?.split(' vs ')[1]
-                : 'Draw';
+                : 'Draw');
   const exNet  = ex?.net?.[teamKey?.trim()];
   const exRaw  = ex?.raw?.[teamKey?.trim()];
   const exComm = ex ? Math.round(ex.commission * 100) : 2;
+  const altExchanges = (r.alternativeExchanges || []).map(alt => {
+    const altNet = alt.net?.[teamKey?.trim()];
+    return altNet ? `${alt.name} @${altNet.toFixed(2)}` : alt.name;
+  }).join(' · ');
   const exchangeRow = ex
-    ? `<div><span style="color:var(--muted);display:inline-block;width:80px">EXCHANGE</span><span style="color:var(--text2)">${ex.name}</span>${exRaw ? `<span style="color:var(--muted);margin-left:6px">@${exRaw.toFixed(2)} raw · <strong style="color:var(--text2)">@${exNet?.toFixed(2)} net</strong> after ${exComm}% commission</span>` : ''}</div>`
+    ? `<div><span style="color:var(--muted);display:inline-block;width:80px">EXCHANGE</span><span style="color:var(--text2)">${ex.name}</span>${exRaw ? `<span style="color:var(--muted);margin-left:6px">@${exRaw.toFixed(2)} raw · <strong style="color:var(--text2)">@${exNet?.toFixed(2)} net</strong> after ${exComm}% commission</span>` : ''}${altExchanges ? `<span style="color:var(--muted);margin-left:8px;font-size:10px">alt: ${altExchanges}</span>` : ''}</div>`
     : `<div><span style="color:var(--muted);display:inline-block;width:80px">EXCHANGE</span><span style="color:var(--muted);font-style:italic">Check Betfair Exchange / Smarkets manually</span></div>`;
   return `
     <div style="margin-top:10px;padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;font-size:11px;line-height:2">
