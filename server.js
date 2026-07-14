@@ -191,6 +191,29 @@ const DEFAULT_BOOKMAKERS = [
   { id: 'matchbook',        name: 'Matchbook',        tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Exchange-style, low commission.' },
 ];
 function getOddsHistory()  { return readJSON('odds-history.json') || []; }
+function getTournamentSeeds() { return readJSON('tournament-seeds.json') || null; }
+function saveTournamentSeeds(data) { writeJSON('tournament-seeds.json', data); }
+
+const WC_2026_SEEDS = {
+  tournament: 'FIFA World Cup 2026',
+  seedingDate: '2025-12-01',
+  leagueId: 1,
+  season: 2026,
+  teams: {
+    'Argentina': 1, 'France': 2, 'England': 3, 'Brazil': 4,
+    'Belgium': 5, 'Portugal': 6, 'Spain': 7, 'Netherlands': 8,
+    'Colombia': 9, 'Italy': 10, 'Germany': 11, 'Croatia': 12,
+    'Morocco': 13, 'Switzerland': 14, 'Denmark': 15, 'USA': 16,
+    'Mexico': 17, 'Uruguay': 18, 'Japan': 19, 'Senegal': 20,
+    'Iran': 21, 'South Korea': 22, 'Australia': 23, 'Austria': 24,
+    'Sweden': 25, 'Turkey': 26, 'Poland': 27, 'Ukraine': 28,
+    'Wales': 29, 'Ecuador': 30, 'Canada': 31, 'Hungary': 32,
+    'Serbia': 33, 'Norway': 34, 'Algeria': 35, 'Egypt': 36,
+    'Tunisia': 37, 'Czechia': 38, 'Scotland': 39, 'Slovakia': 40,
+    'Ghana': 41, 'Romania': 42, 'Bolivia': 43, 'Venezuela': 44,
+    'Panama': 45, 'Paraguay': 46, 'South Africa': 47, 'Iraq': 48,
+  },
+};
 
 function saveBets(bets)         { writeJSON('bets.json', bets); }
 function saveWatching(list)     { writeJSON('watching.json', list); }
@@ -2470,6 +2493,12 @@ function selectBookmaker(stake, edge, { exchangeOdds = null, settings = null } =
 // GET bookmakers
 app.get('/api/bookmakers', (_req, res) => res.json(getBookmakers()));
 
+app.get('/api/tournament-seeds', (_req, res) => {
+  const data = getTournamentSeeds();
+  if (!data) return res.status(404).json({ error: 'tournament-seeds.json not found' });
+  res.json(data);
+});
+
 // PATCH bookmaker (update balance, status, notes, maxStake, maxStakeObserved, statusNotes)
 app.patch('/api/bookmakers/:id', (req, res) => {
   const books = getBookmakers();
@@ -3100,6 +3129,11 @@ app.listen(PORT, () => {
   if (!readJSON('bookmakers.json')) {
     saveBookmakers(DEFAULT_BOOKMAKERS);
     console.log('[Startup] Seeded bookmakers.json with', DEFAULT_BOOKMAKERS.length, 'accounts');
+  }
+  // 5d. Seed tournament-seeds.json if not yet on disk
+  if (!readJSON('tournament-seeds.json')) {
+    saveTournamentSeeds(WC_2026_SEEDS);
+    console.log('[Startup] Seeded tournament-seeds.json with WC 2026 seedings for', Object.keys(WC_2026_SEEDS.teams).length, 'teams');
   }
 
   // 6. Queue backfill chain if data is missing/corrupt
