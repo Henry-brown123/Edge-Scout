@@ -1141,8 +1141,9 @@ function routingHTML(b) {
       ${best ? `<div><span style="color:var(--muted);display:inline-block;width:80px">BEST PRICE</span><span style="color:var(--text2)">${best.name}</span></div>` : ''}
       ${exchangeRow}
       ${skips.map(s => `<div><span style="color:var(--muted);display:inline-block;width:80px">SKIP</span><span style="color:var(--muted);text-decoration:line-through">${s.name}</span><span style="color:var(--muted);margin-left:6px">${s.skipReason}</span></div>`).join('')}
-      <div style="margin-top:8px">
+      <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
         <button class="btn btn-cyan btn-sm" onclick="openPlacementModal('${b.id}')">Confirm placement</button>
+        <button class="btn btn-sm" style="opacity:.6;font-size:10px" onclick="rerouteBet('${b.id}', this)">↻ Refresh routing</button>
       </div>
     </div>`;
 }
@@ -1663,6 +1664,22 @@ function drawPnlChart(data, initial = 1000) {
   ctx.fillText(`+£${max.toFixed(0)}`, 2, pad.t + 10);
   ctx.fillText(`£${min.toFixed(0)}`, 2, pad.t + H);
   ctx.fillText('£0', 2, yp(0) + 4);
+}
+
+async function rerouteBet(id, btn) {
+  btn.disabled = true;
+  btn.textContent = '↻ Refreshing…';
+  try {
+    await apiFetch(`/api/bets/${id}/reroute`, { method: 'POST' });
+    await loadState();
+    renderScout();
+    toast('Routing refreshed', 'success');
+  } catch(e) {
+    toast('Reroute failed: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '↻ Refresh routing';
+  }
 }
 
 async function deleteBet(id) {

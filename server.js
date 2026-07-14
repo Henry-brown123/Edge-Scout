@@ -2559,6 +2559,36 @@ app.patch('/api/bookmakers/:id', (req, res) => {
 });
 
 // POST confirm placement — updates bet record and bookmaker stats
+// Re-run routing for a stored bet using fresh odds — updates routingRecommendation in-place
+app.post('/api/bets/:id/reroute', async (req, res) => {
+  const bets = getBets();
+  const bet  = bets.find(b => b.id === req.params.id);
+  if (!bet) return res.status(404).json({ error: 'Not found' });
+
+  const meta = LEAGUES[String(bet.leagueId)];
+  if (!meta) return res.status(400).json({ error: `No sport mapping for leagueId ${bet.leagueId}` });
+
+  try {
+    const oddsMap = await fetchOddsForLeague(meta.sport);
+    const [home, away] = (bet.fixture || '').split(' vs ');
+    const entry  = oddsMap[`${home}|${away}`] || {};
+    const outcomeName = bet.bet === 'Home Win' ? home
+                      : bet.bet === 'Away Win' ? away
+                      : 'Draw';
+    const routing = selectBookmaker(bet.suggestedStake || bet.displayStake || 0, bet.edge || 0, {
+      exchangeOdds:    entry._exchangeOdds    || null,
+      allExchangeOdds: entry._allExchangeOdds || [],
+      outcomeName,
+      settings: getSettings(),
+    });
+    bet.routingRecommendation = routing;
+    saveBets(bets);
+    res.json({ ok: true, routingRecommendation: routing });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/api/bets/:id/confirm-placement', (req, res) => {
   const bets = getBets();
   const bet  = bets.find(b => b.id === req.params.id);
