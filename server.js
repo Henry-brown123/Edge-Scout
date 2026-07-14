@@ -1169,6 +1169,7 @@ async function runPreMatchScan(watchingEntry) {
       weather:             scored.weather,
       weatherCondition:    scored.weatherCondition,
       consistencyWarning:  consistencyWarning,
+      competitionPhase:    scored.competitionPhase,
       // Bookmaker routing recommendation at lock time
       routingRecommendation: selectBookmaker(roundStake(best.kelly.stake), best.edge, {
         exchangeOdds: (oddsMap[`${scored.homeName}|${scored.awayName}`] || {})._exchangeOdds || null,
