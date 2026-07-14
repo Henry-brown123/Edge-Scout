@@ -975,6 +975,7 @@ async function loadState() {
     STATE = s;
     renderScout();
     updateBankrollBadge();
+    syncRerouteInterval();
 
     // Phase 2 readiness banner
     const p2banner = document.getElementById('phase2-banner');
@@ -1141,9 +1142,8 @@ function routingHTML(b) {
       ${best ? `<div><span style="color:var(--muted);display:inline-block;width:80px">BEST PRICE</span><span style="color:var(--text2)">${best.name}</span></div>` : ''}
       ${exchangeRow}
       ${skips.map(s => `<div><span style="color:var(--muted);display:inline-block;width:80px">SKIP</span><span style="color:var(--muted);text-decoration:line-through">${s.name}</span><span style="color:var(--muted);margin-left:6px">${s.skipReason}</span></div>`).join('')}
-      <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+      <div style="margin-top:8px">
         <button class="btn btn-cyan btn-sm" onclick="openPlacementModal('${b.id}')">Confirm placement</button>
-        <button class="btn btn-sm" style="opacity:.6;font-size:10px" onclick="rerouteBet('${b.id}', this)">↻ Refresh routing</button>
       </div>
     </div>`;
 }
@@ -1666,19 +1666,24 @@ function drawPnlChart(data, initial = 1000) {
   ctx.fillText('£0', 2, yp(0) + 4);
 }
 
-async function rerouteBet(id, btn) {
-  btn.disabled = true;
-  btn.textContent = '↻ Refreshing…';
-  try {
-    await apiFetch(`/api/bets/${id}/reroute`, { method: 'POST' });
-    await loadState();
-    renderScout();
-    toast('Routing refreshed', 'success');
-  } catch(e) {
-    toast('Reroute failed: ' + e.message, 'error');
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '↻ Refresh routing';
+// Auto-refresh routing every 60s for any unconfirmed locked bets.
+// Uses in-memory odds cache on the server — no Odds API cost per tick.
+let _rerouteInterval = null;
+function syncRerouteInterval() {
+  const unconfirmed = (STATE.bets || []).filter(b => b.stage === 'RECOMMENDED' && !b.placementConfirmed);
+  if (unconfirmed.length && !_rerouteInterval) {
+    _rerouteInterval = setInterval(async () => {
+      const active = (STATE.bets || []).filter(b => b.stage === 'RECOMMENDED' && !b.placementConfirmed);
+      if (!active.length) { clearInterval(_rerouteInterval); _rerouteInterval = null; return; }
+      for (const b of active) {
+        try { await apiFetch(`/api/bets/${b.id}/reroute`, { method: 'POST' }); } catch { /* silent */ }
+      }
+      await loadState();
+      renderScout();
+    }, 60000);
+  } else if (!unconfirmed.length && _rerouteInterval) {
+    clearInterval(_rerouteInterval);
+    _rerouteInterval = null;
   }
 }
 

@@ -440,6 +440,35 @@ function _pinnacleStripped(prices, home, away) {
   return { [home]: (1/h)/total, Draw: (1/d)/total, [away]: (1/a)/total };
 }
 
+function _buildOddsMap(events) {
+  const map = {};
+  (events || []).forEach(ev => {
+    const home = ev.home_team, away = ev.away_team;
+    const key  = `${home}|${away}`;
+    const pinnacle     = ev.bookmakers?.find(b => b.title === 'Pinnacle');
+    const pinnPrices   = _extractPrices(pinnacle);
+    const pinnStripped = _pinnacleStripped(pinnPrices, home, away);
+    const ukBook   = ev.bookmakers?.find(b => UK_BOOKS.has(b.title)) || ev.bookmakers?.[0];
+    const ukPrices = _extractPrices(ukBook);
+    const allExchanges = [];
+    for (const bm of (ev.bookmakers || [])) {
+      const comm = EXCHANGE_COMMISSION[bm.key];
+      if (comm == null) continue;
+      const prices = _extractPrices(bm);
+      if (!prices) continue;
+      const net = {};
+      for (const [k, v] of Object.entries(prices)) net[k] = parseFloat(((v - 1) * (1 - comm) + 1).toFixed(4));
+      allExchanges.push({ name: EXCHANGE_DISPLAY[bm.key] || bm.title, key: bm.key, commission: comm, raw: prices, net });
+    }
+    const bestExchange = allExchanges.reduce((best, ex) =>
+      !best || (ex.net[home] || 0) > (best.net[home] || 0) ? ex : best, null);
+    if (ukPrices) {
+      map[key] = { ...ukPrices, _pinnacleStripped: pinnStripped, _pinnacleRaw: pinnPrices, _exchangeOdds: bestExchange, _allExchangeOdds: allExchanges };
+    }
+  });
+  return map;
+}
+
 async function fetchOddsForLeague(sport) {
   try {
     const { data } = await oddsApi.get(`/sports/${sport}/odds`, {
@@ -447,41 +476,7 @@ async function fetchOddsForLeague(sport) {
     });
     const events = data || [];
     _oddsRawCache[sport] = events;
-    const map = {};
-    events.forEach(ev => {
-      const home = ev.home_team, away = ev.away_team;
-      const key  = `${home}|${away}`;
-
-      // Pinnacle: sharpest market — use for implied prob / edge signal
-      const pinnacle    = ev.bookmakers?.find(b => b.title === 'Pinnacle');
-      const pinnPrices  = _extractPrices(pinnacle);
-      const pinnStripped = _pinnacleStripped(pinnPrices, home, away); // margin-free true probs
-
-      // Best UK book: use for displayed odds and Kelly sizing
-      const ukBook   = ev.bookmakers?.find(b => UK_BOOKS.has(b.title)) || ev.bookmakers?.[0];
-      const ukPrices = _extractPrices(ukBook);
-
-      // All exchanges: commission-adjusted prices from betfair_ex_*/smarkets/matchbook
-      const allExchanges = [];
-      for (const bm of (ev.bookmakers || [])) {
-        const comm = EXCHANGE_COMMISSION[bm.key];
-        if (comm == null) continue;
-        const prices = _extractPrices(bm);
-        if (!prices) continue;
-        const net = {};
-        for (const [k, v] of Object.entries(prices)) net[k] = parseFloat(((v - 1) * (1 - comm) + 1).toFixed(4));
-        allExchanges.push({ name: EXCHANGE_DISPLAY[bm.key] || bm.title, key: bm.key, commission: comm, raw: prices, net });
-      }
-      // Best exchange by home-team net price (kept for display fallback when outcome unknown)
-      const bestExchange = allExchanges.reduce((best, ex) =>
-        !best || (ex.net[home] || 0) > (best.net[home] || 0) ? ex : best, null);
-
-      if (ukPrices) {
-        // Top-level keys stay as {teamName: price} for backward compat (UK book odds)
-        map[key] = { ...ukPrices, _pinnacleStripped: pinnStripped, _pinnacleRaw: pinnPrices, _exchangeOdds: bestExchange, _allExchangeOdds: allExchanges };
-      }
-    });
-    return map;
+    return _buildOddsMap(events);
   } catch { return {}; }
 }
 
@@ -2559,7 +2554,8 @@ app.patch('/api/bookmakers/:id', (req, res) => {
 });
 
 // POST confirm placement — updates bet record and bookmaker stats
-// Re-run routing for a stored bet using fresh odds — updates routingRecommendation in-place
+// Re-run routing for a stored bet — uses in-memory odds cache (no API cost),
+// falls back to a fresh fetch only if the cache is cold for this sport.
 app.post('/api/bets/:id/reroute', async (req, res) => {
   const bets = getBets();
   const bet  = bets.find(b => b.id === req.params.id);
@@ -2569,9 +2565,14 @@ app.post('/api/bets/:id/reroute', async (req, res) => {
   if (!meta) return res.status(400).json({ error: `No sport mapping for leagueId ${bet.leagueId}` });
 
   try {
-    const oddsMap = await fetchOddsForLeague(meta.sport);
+    const events  = _oddsRawCache[meta.sport]?.length
+      ? _oddsRawCache[meta.sport]
+      : await oddsApi.get(`/sports/${meta.sport}/odds`, {
+          params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal' },
+        }).then(r => { _oddsRawCache[meta.sport] = r.data || []; return r.data || []; });
+    const oddsMap = _buildOddsMap(events);
     const [home, away] = (bet.fixture || '').split(' vs ');
-    const entry  = oddsMap[`${home}|${away}`] || {};
+    const entry   = oddsMap[`${home}|${away}`] || {};
     const outcomeName = bet.bet === 'Home Win' ? home
                       : bet.bet === 'Away Win' ? away
                       : 'Draw';
