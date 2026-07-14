@@ -1238,9 +1238,13 @@ async function checkAndResolve() {
       const status = fix.fixture?.status?.short;
       if (!['FT', 'AET', 'PEN', 'AWD', 'WO'].includes(status)) continue;
 
+      // h2h market settles on 90-minute FT result — use score.fulltime, not goals
+      // (goals includes extra time and penalties for AET/PEN fixtures)
+      const ftHome        = fix.score?.fulltime?.home ?? fix.goals?.home ?? 0;
+      const ftAway        = fix.score?.fulltime?.away ?? fix.goals?.away ?? 0;
       const hg            = fix.goals?.home ?? 0;
       const ag            = fix.goals?.away ?? 0;
-      const actualOutcome = hg > ag ? 'Home Win' : hg < ag ? 'Away Win' : 'Draw';
+      const actualOutcome = ftHome > ftAway ? 'Home Win' : ftHome < ftAway ? 'Away Win' : 'Draw';
       const resolvedAt    = new Date().toISOString();
       const finalScore    = `${hg}-${ag}`;
       const homeName      = fix.teams?.home?.name;
