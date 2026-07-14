@@ -193,6 +193,98 @@ The tiered fixture-count gate (deployed 2026-06-30) correctly blocks the worst d
 
 ---
 
+## 6. International quality signal — three time horizons (July implementation)
+
+**Finding date:** 2026-07-14  
+**Status:** Interim fix live. Full implementation planned for July upgrade.
+
+### Problem identified
+
+`standingsScore()` in `scoring.js` computed: `(flat.length - entry.rank + 1) / flat.length × 100`. For WC group stage, `flat.length` is 4 (one group). This produced scores of 100/75/50/25 for group ranks 1–4 regardless of team quality — all qualifying nations scored 75–100 since most progress to or finish near the top of their group.
+
+The divergence report confirmed the symptom: across 15 tracked WC fixtures, standings scores for both teams were uniformly 90–100 in factor breakdowns, providing no quality differentiation and contributing to the systematic underdog inflation documented in section 5.
+
+### Interim fix (committed 2026-07-14)
+
+`standingsScore()` now accepts a third `fixtureContext` argument. When `fixtureContext === 'international'`, it returns 50 (neutral) for both teams. This eliminates the artificial signal without introducing a replacement. The factor weight that was going to standings now distributes across the other factors via their relative weights.
+
+This is a floor fix, not the solution. The correct fix is to replace the standings component with a purpose-built international quality signal.
+
+### Planned replacement — three-component international quality score
+
+The three components each measure team quality at a different time horizon. When they agree, confidence in the quality assessment increases. When they diverge — e.g. a low-seeded team outperforming in-tournament — the divergence itself is meaningful signal.
+
+#### Component 1 — FIFA ranking score (long-term, 40% weight)
+
+Already implemented as the ranking anchor (`rankToQuality`, `FIFA_RANK_FALLBACK`). Reflects accumulated quality over a 4-year window. Captures structural programme strength: squad depth, coaching, infrastructure.
+
+This component is not new — it is the existing ranking anchor, renamed for clarity in the composite. No code change needed.
+
+#### Component 2 — Tournament seeding score (medium-term, 25% weight)
+
+Pre-tournament seedings capture squad fitness, recent form, and preparation factors at draw time — a snapshot of perceived quality at the point of most expert assessment, before in-tournament noise.
+
+Formula: `seedingScore = Math.round((1 - (seed - 1) / (totalSeeds - 1)) * 100)` scaled to the seeding scale in use:
+- Seeding 1 → 100
+- Seeding 4 → 75
+- Seeding 8 → 50
+- Proportional for all intermediate positions
+
+Storage: `data/tournament-seeds.json`, structure `{ "leagueId_season": { "teamId": seedNumber } }`. Example:
+
+```json
+{
+  "1_2026": {
+    "9": 1,
+    "2": 2,
+    "6": 3
+  }
+}
+```
+
+**Action required:** WC 2026 seedings should be manually entered into `data/tournament-seeds.json` now while the tournament is live. All 48 WC 2026 teams need seed numbers. This data will be used for July calibration analysis — without it we cannot backfill the component against QF/SF results.
+
+#### Component 3 — Opponent-quality-adjusted standings (short-term, 35% weight)
+
+In-tournament performance weighted by opponent strength. Distinguishes winning a group containing Spain from winning a group containing Panama. Captures momentum, tournament-specific form, and late fitness signals not visible in long-term rankings.
+
+Formula:
+```
+adjustedStandings = (points / maxPoints) × avgOpponentFifaQuality × 2
+```
+
+Where `avgOpponentFifaQuality` is the mean `rankToQuality(rank)` across all group opponents faced so far. Capped at 100.
+
+A team with 9/9 points against top-10 FIFA opponents scores ≈100. A team with 9/9 against rank-70 opponents scores ≈40–50.
+
+#### Composite
+
+```
+internationalQuality = (0.40 × fifaScore) + (0.25 × seedingScore) + (0.35 × adjustedStandings)
+```
+
+This replaces the standings factor in `homeF` and `awayF` for international fixtures, replacing the current `standings: 50` placeholder.
+
+#### Weight optimisation
+
+The 0.40/0.25/0.35 split is a starting estimate. These weights should be optimised against WC 2026 calibration data in July once sufficient resolved fixtures are available:
+
+1. For each resolved calibration entry with `context === 'international'`, compute the composite quality score under different weight combinations
+2. Regress quality score differential against actual result (home win / draw / away win)
+3. Select weights that minimise calibration error on the QF/SF/Final sample
+
+**Minimum data required:** approximately 15–20 resolved knockout fixtures for reliable weight estimation. The group stage (48 fixtures) provides additional training data if seedings are available.
+
+### Implementation order
+
+1. **Now:** enter WC 2026 seedings into `data/tournament-seeds.json` (manual, required for backfill)
+2. **Week 2:** implement `seedingScore()` and `adjustedStandings()` functions in `scoring.js`
+3. **Week 2:** wire composite into `scoreOneFixture()` as the `standings` factor for international context
+4. **Week 3:** backfill QF/SF/Final calibration data with the composite scores
+5. **Week 3/4:** weight optimisation against resolved calibration entries
+
+---
+
 ## 7. Pre-Pinnacle edge overstatement (documented 2026-07-07)
 
 **Finding date:** 2026-07-07  

@@ -601,7 +601,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     defense:   defenseScore(scoringPool, homeId, d),
     momentum:  momentumScore(scoringPool, homeId),
     injuries:  injuryScore(injuries, homeId),
-    standings: standingsScore(standings, homeId),
+    standings: standingsScore(standings, homeId, context),
   };
   const awayF = {
     form:      formScore(scoringPool, awayId, fw, d),
@@ -611,7 +611,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     defense:   defenseScore(scoringPool, awayId, d),
     momentum:  momentumScore(scoringPool, awayId),
     injuries:  injuryScore(injuries, awayId),
-    standings: standingsScore(standings, awayId),
+    standings: standingsScore(standings, awayId, context),
   };
 
   // Data confidence per team (capped at 1 when ≥15 fixtures available).

@@ -202,7 +202,11 @@ function h2hScore(h2hFixtures, homeTeamId, window = 5, decay = 0.05) {
   return Math.round((recencyAvg(pts, decay) / 3) * 100);
 }
 
-function standingsScore(standings, teamId) {
+function standingsScore(standings, teamId, fixtureContext) {
+  // Group standings within a 4-team WC/tournament group are meaningless for quality
+  // differentiation — all qualifiers are elite and a "rank 2 of 4" score of 75
+  // tells us nothing about relative team strength. Return neutral for international.
+  if (fixtureContext === 'international') return 50;
   if (!standings?.length) return 50;
   const flat = Array.isArray(standings[0]) ? standings.flat() : standings;
   const entry = flat.find(s => s.team?.id === teamId);
