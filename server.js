@@ -2484,7 +2484,11 @@ function selectBookmaker(stake, edge, { exchangeOdds = null, allExchangeOdds = [
   });
 
   let recommended = eligible[0] || null;
-  const bestPrice = eligible.find(b => b.id !== recommended?.id) || null;
+  // When recommended is an exchange, BEST PRICE shows the best non-exchange eligible book,
+  // not a second exchange with slightly worse net odds.
+  const bestPrice = recommended?.tier === 1
+    ? eligible.find(b => b.tier !== 1) || null
+    : eligible.find(b => b.id !== recommended?.id) || null;
 
   // Build routing warnings for signal/limited accounts
   const routingWarning = recommended
