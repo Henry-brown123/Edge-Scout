@@ -107,9 +107,8 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
 .btn-ghost { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
 .btn-ghost:hover { border-color: var(--cyan); color: var(--cyan); }
 .btn-sm { padding: 5px 12px; font-size: 11px; }
-.league-chip { padding: 4px 10px; font-size: 12px; border-radius: 20px; border: 1px solid var(--border); background: var(--surface2); color: var(--muted); cursor: pointer; transition: background .15s, color .15s, border-color .15s; }
-.league-chip.active { background: var(--cyan); color: #000; border-color: var(--cyan); }
-.league-chip:hover:not(.active) { border-color: var(--cyan); color: var(--cyan); }
+#league-select { background: var(--surface2); color: var(--text1); border: 1px solid var(--border); border-radius: 8px; padding: 4px; }
+#league-select option { background: var(--surface2); color: var(--text1); }
 .btn:disabled { opacity: .4; cursor: not-allowed; }
 
 /* ── Grids ── */
@@ -387,7 +386,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     <div class="scan-controls">
       <div class="field">
         <label>Leagues</label>
-        <select id="league-select" multiple size="4" style="min-width:160px;background:var(--surface2);color:var(--text1);border:1px solid var(--border);border-radius:8px;padding:4px">
+        <select id="league-select" multiple size="4" style="min-width:160px">
           <option value="1"   selected>🏆 World Cup 2026</option>
           <option value="39"  selected>🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League</option>
           <option value="140" selected>🇪🇸 La Liga</option>
