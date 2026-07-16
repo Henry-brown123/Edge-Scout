@@ -1245,7 +1245,9 @@ async function triggerMorningScan() {
     scanLog('Scan started server-side. Refreshing in 15s…', 'found');
     setTimeout(async () => {
       await loadState();
-      scanLog(`Done. ${STATE.watching.length} fixtures watching, ${STATE.bets.filter(b=>b.stage==='RECOMMENDED').length} locked.`, 'found');
+      const today = new Date().toISOString().split('T')[0];
+      const todayWatching = (STATE.watching || []).filter(w => w.kickoff?.startsWith(today)).length;
+      scanLog(`Done. ${todayWatching} fixtures watching today, ${STATE.bets.filter(b=>b.stage==='RECOMMENDED').length} locked.`, 'found');
       btn.disabled = false;
       btn.textContent = 'Run Scan Now';
     }, 15000);
