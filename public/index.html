@@ -346,7 +346,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
   </nav>
   <div class="status-pill">
     <div class="dot" id="api-dot"></div>
-    <span id="api-status">Connecting…</span>
+    <span id="api-status">Connecting…</span> · Paper trading
   </div>
 </header>
 
@@ -521,7 +521,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
 
   <!-- Key findings -->
   <div class="card" style="margin-bottom:16px">
-    <div class="card-header"><span class="card-title">Key Findings — WC 2026 Validation</span><span style="font-family:'DM Mono',monospace;font-size:.7rem;color:var(--text2)">documented findings, not live data</span></div>
+    <div class="card-header"><span class="card-title">Key Findings — WC 2026 Validation</span><span style="font-family:'DM Mono',monospace;font-size:.7rem;color:var(--text2)">World Cup validation snapshot · as at 11 Jul 2026</span></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-family:'DM Mono',monospace;font-size:.74rem">
       <div style="background:var(--surface2);border-radius:8px;padding:12px;border-left:3px solid var(--red)">
         <div style="color:var(--red);font-weight:700;margin-bottom:6px;font-size:.7rem;text-transform:uppercase;letter-spacing:.06em">Underdog Bias</div>
@@ -529,7 +529,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       </div>
       <div style="background:var(--surface2);border-radius:8px;padding:12px;border-left:3px solid var(--amber)">
         <div style="color:var(--amber);font-weight:700;margin-bottom:6px;font-size:.7rem;text-transform:uppercase;letter-spacing:.06em">Score Band Inversion</div>
-        <div style="color:var(--text1);line-height:1.5">60–79 band scores 0% directional accuracy. 40–59 scores 42% overall (placed bets: 3W 0L). High-conviction international underdog calls are the worst performers.</div>
+        <div style="color:var(--text1);line-height:1.5">60–79 band scores 0% directional accuracy. 40–59 scores 42% overall (placed bets: 3W 0L as at 11 Jul). High-conviction international underdog calls are the worst performers.</div>
       </div>
       <div style="background:var(--surface2);border-radius:8px;padding:12px;border-left:3px solid var(--green)">
         <div style="color:var(--green);font-weight:700;margin-bottom:6px;font-size:.7rem;text-transform:uppercase;letter-spacing:.06em">lowConfidence Gate</div>
@@ -537,7 +537,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       </div>
       <div style="background:var(--surface2);border-radius:8px;padding:12px;border-left:3px solid var(--cyan)">
         <div style="color:var(--cyan);font-weight:700;margin-bottom:6px;font-size:.7rem;text-transform:uppercase;letter-spacing:.06em">Placed Bet Record</div>
-        <div style="color:var(--text1);line-height:1.5">3W 1L (75%). All wins were small-divergence fixtures where model and market agreed closely. The one loss was a large-divergence underdog call that passed the gate.</div>
+        <div style="color:var(--text1);line-height:1.5">6W 3L (67%) as at 16 Jul 2026 — read live from Performance tab. Early record (as at 11 Jul): 3W 1L. All wins were small-divergence fixtures where model and market agreed closely.</div>
       </div>
     </div>
   </div>
@@ -971,6 +971,13 @@ async function apiFetch(url, opts = {}) {
   return r.json();
 }
 
+function apiFetchWithTimeout(url, opts = {}, ms = 5000) {
+  return Promise.race([
+    apiFetch(url, opts),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms)),
+  ]);
+}
+
 async function loadState() {
   try {
     const [s, meta] = await Promise.all([apiFetch('/api/state'), apiFetch('/api/scan-meta').catch(() => null)]);
@@ -1008,7 +1015,7 @@ async function checkApiStatus() {
   try {
     await apiFetch('/api/state');
     document.getElementById('api-dot').className     = 'dot live';
-    document.getElementById('api-status').textContent = 'Live';
+    document.getElementById('api-status').textContent = 'Live data · Paper trading';
   } catch {
     document.getElementById('api-dot').className     = 'dot';
     document.getElementById('api-status').textContent = 'Server Error';
@@ -1516,7 +1523,8 @@ async function renderCalibrationHealth() {
       <span>Suggested factor: <strong style="color:var(--cyan)">${suggested}</strong></span>
       <span>Active factor: <strong style="color:var(--text1)">${current}</strong></span>
       ${suggested !== current
-        ? `<button class="btn btn-ghost btn-sm" style="padding:2px 10px;font-size:.68rem" onclick="applyCalFactor(${suggested})">Apply ${suggested}</button>`
+        ? `<span style="color:var(--muted);font-size:.65rem">Based on ${data.total.toLocaleString()} fixtures. Applying this changes edge calculations and Kelly stakes on all future recommendations.</span>
+           <button class="btn btn-ghost btn-sm" style="padding:2px 10px;font-size:.68rem" onclick="applyCalFactor(${suggested})">Apply ${suggested}</button>`
         : `<span style="color:var(--green)">✓ factor matches data</span>`}
     </div>`;
 }
@@ -1808,8 +1816,9 @@ async function saveSettings() {
 async function loadStartupStatus() {
   const el = document.getElementById('startup-status-content');
   if (!el) return;
+  el.textContent = 'Loading…';
   try {
-    const d = await apiFetch('/api/startup/status');
+    const d = await apiFetchWithTimeout('/api/startup/status');
     const phaseColor = { complete: 'var(--green)', error: 'var(--red)', queued: 'var(--amber)', pending: 'var(--muted)' };
     const color = phaseColor[d.phase] || 'var(--amber)';
     const label = d.skipped ? 'Data present — backfill skipped'
@@ -1822,15 +1831,16 @@ async function loadStartupStatus() {
     const dataDir = '<div style="margin-top:4px;font-size:11px;color:var(--muted)">Data directory: checked via <code>/api/startup/status</code></div>';
     el.innerHTML = `<span style="font-weight:700;color:${color}">${label}</span>${missing}${completed}${dataDir}`;
   } catch(e) {
-    el.textContent = 'Failed to load startup status';
+    el.innerHTML = '<span style="color:var(--red)">Failed to load — Refresh to retry</span>';
   }
 }
 
 async function loadDataCoverage() {
   const el = document.getElementById('data-coverage-content');
   if (!el) return;
+  el.textContent = 'Loading…';
   try {
-    const d = await apiFetch('/api/diagnostics/data-coverage');
+    const d = await apiFetchWithTimeout('/api/diagnostics/data-coverage');
     const s = STATE.settings || {};
     const wowyActive = s.wowyActive ?? false;
 
@@ -1868,7 +1878,7 @@ async function loadDataCoverage() {
       </table>
       ${d.gaps?.length ? `<div style="margin-top:10px;padding:7px 10px;border-radius:6px;background:rgba(255,170,0,0.1);border:1px solid rgba(255,170,0,0.3);font-size:11px;color:#ffaa00">⚠ Coverage gaps: ${d.gaps.join(' · ')}</div>` : ''}`;
   } catch(e) {
-    el.textContent = 'Failed to load coverage data';
+    el.innerHTML = '<span style="color:var(--red)">Failed to load — Refresh to retry</span>';
   }
 }
 
@@ -2322,8 +2332,11 @@ async function applyCalFactor(factor) {
 
 async function loadOddsHistoryStats() {
   const pill = document.getElementById('oh-status-pill');
+  pill.textContent = 'LOADING';
+  pill.style.background = 'var(--surface3)';
+  pill.style.color = 'var(--muted)';
   try {
-    const d = await apiFetch('/api/odds-history/stats');
+    const d = await apiFetchWithTimeout('/api/odds-history/stats');
     document.getElementById('oh-total').textContent    = d.total.toLocaleString();
     document.getElementById('oh-resolved').textContent = d.resolved.toLocaleString();
     document.getElementById('oh-morning').textContent  = (d.byStage?.morning || 0).toLocaleString();
@@ -2347,7 +2360,9 @@ async function loadOddsHistoryStats() {
     pill.style.color = d.total > 0 ? 'var(--green)' : 'var(--muted)';
   } catch {
     pill.textContent = 'ERROR';
+    pill.style.background = 'rgba(239,68,68,.15)';
     pill.style.color = 'var(--red)';
+    document.getElementById('oh-by-league').innerHTML = '<span style="color:var(--red)">Failed to load — Refresh to retry</span>';
   }
 }
 
@@ -2442,8 +2457,9 @@ async function loadAccounts() {
   const tbody   = document.getElementById('accounts-body');
   const summary = document.getElementById('accounts-health-summary');
   if (!tbody) return;
+  tbody.innerHTML = '<tr><td colspan="9" style="color:var(--muted);padding:12px">Loading…</td></tr>';
   try {
-    const books = await apiFetch('/api/bookmakers');
+    const books = await apiFetchWithTimeout('/api/bookmakers');
 
     // Health summary
     const counts = { active: 0, signal: 0, limited: 0, restricted: 0 };
@@ -2507,7 +2523,7 @@ async function loadAccounts() {
       </tr>`;
     }).join('');
   } catch (e) {
-    if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="color:var(--red);padding:12px 8px">Failed to load: ${e.message}</td></tr>`;
+    if (tbody) tbody.innerHTML = '<tr><td colspan="9" style="color:var(--red);padding:12px 8px">Failed to load — Refresh to retry</td></tr>';
   }
 }
 
