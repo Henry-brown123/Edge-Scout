@@ -107,6 +107,9 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
 .btn-ghost { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
 .btn-ghost:hover { border-color: var(--cyan); color: var(--cyan); }
 .btn-sm { padding: 5px 12px; font-size: 11px; }
+.league-chip { padding: 4px 10px; font-size: 12px; border-radius: 20px; border: 1px solid var(--border); background: var(--surface2); color: var(--muted); cursor: pointer; transition: background .15s, color .15s, border-color .15s; }
+.league-chip.active { background: var(--cyan); color: #000; border-color: var(--cyan); }
+.league-chip:hover:not(.active) { border-color: var(--cyan); color: var(--cyan); }
 .btn:disabled { opacity: .4; cursor: not-allowed; }
 
 /* ── Grids ── */
@@ -382,25 +385,27 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       </div>
     </div>
     <div class="scan-controls">
-      <div class="field">
+      <div class="field" style="flex:1 1 100%">
         <label>Leagues</label>
-        <select id="league-select" multiple size="4" style="min-width:160px">
-          <option value="1"   selected>🏆 World Cup 2026</option>
-          <option value="39"  selected>🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League</option>
-          <option value="140" selected>🇪🇸 La Liga</option>
-          <option value="78"  selected>🇩🇪 Bundesliga</option>
-          <option value="135" selected>🇮🇹 Serie A</option>
-          <option value="61"  selected>🇫🇷 Ligue 1</option>
-          <option value="2"   selected>⭐ Champions League</option>
-        </select>
+        <div id="league-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
+          <button type="button" class="league-chip active" data-id="1">🏆 World Cup 2026</button>
+          <button type="button" class="league-chip active" data-id="39">🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League</button>
+          <button type="button" class="league-chip active" data-id="140">🇪🇸 La Liga</button>
+          <button type="button" class="league-chip active" data-id="78">🇩🇪 Bundesliga</button>
+          <button type="button" class="league-chip active" data-id="135">🇮🇹 Serie A</button>
+          <button type="button" class="league-chip active" data-id="61">🇫🇷 Ligue 1</button>
+          <button type="button" class="league-chip active" data-id="2">⭐ Champions League</button>
+        </div>
       </div>
-      <div class="field">
-        <label>Success threshold</label>
-        <input type="number" id="threshold-input" value="40" min="20" max="90" style="width:70px">
-      </div>
-      <div class="field">
-        <label>Paper bankroll (£)</label>
-        <input type="number" id="bankroll-input" value="1000" min="100" style="width:110px">
+      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end;margin-top:12px">
+        <div class="field">
+          <label>Success threshold</label>
+          <input type="number" id="threshold-input" value="40" min="20" max="90" style="width:70px">
+        </div>
+        <div class="field">
+          <label>Paper bankroll (£)</label>
+          <input type="number" id="bankroll-input" value="1000" min="100" style="width:110px">
+        </div>
       </div>
     </div>
     <div id="scan-log" class="log-box" style="display:none"></div>
@@ -1235,7 +1240,7 @@ async function triggerMorningScan() {
   document.getElementById('scan-log').innerHTML = '';
   scanLog('Triggering morning scan on server…', 'info');
 
-  const leagues = Array.from(document.getElementById('league-select').selectedOptions).map(o => o.value);
+  const leagues = Array.from(document.querySelectorAll('#league-chips .league-chip.active')).map(b => b.dataset.id);
   try {
     await apiFetch('/api/scan/morning', {
       method: 'POST',
@@ -1886,6 +1891,10 @@ document.addEventListener('DOMContentLoaded', () => {
   loadState();
   checkApiStatus();
   setInterval(checkApiStatus, 300000);
+  document.getElementById('league-chips').addEventListener('click', e => {
+    const chip = e.target.closest('.league-chip');
+    if (chip) chip.classList.toggle('active');
+  });
 });
 
 // ─── DETAIL DRAWER ────────────────────────────────────────────────────────────
