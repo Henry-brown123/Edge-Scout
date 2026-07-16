@@ -51,6 +51,9 @@ h1{font-size:22px;font-weight:700;letter-spacing:-0.5px;margin-bottom:4px}
 .t-text.done{color:rgba(255,255,255,0.3);text-decoration:line-through}
 .t-note{font-size:10px;color:rgba(255,255,255,0.3);margin-top:2px}
 .updated{font-size:11px;color:rgba(255,255,255,0.2);text-align:right;margin-top:28px}
+.live-tile{background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:12px 14px}
+.live-val{font-size:18px;font-weight:700;color:#fff;letter-spacing:-0.5px;margin-bottom:2px}
+.live-key{font-size:10px;color:rgba(255,255,255,0.35);letter-spacing:1px;text-transform:uppercase}
 </style>
 </head>
 <body>
@@ -65,6 +68,24 @@ h1{font-size:22px;font-weight:700;letter-spacing:-0.5px;margin-bottom:4px}
   <div class="sec-label">Core thesis</div>
   <div class="thesis">The betting market is most efficient in the most watched competitions. The Premier League gets priced by teams of quant analysts. Lower divisions, less-covered competitions, and non-outcome markets (goals, cards, corners) receive far less sophisticated pricing. A well-calibrated model with good historical data finds genuine edge more consistently in these markets than in Premier League match outcomes. The strategy is to start where the model is strongest — major leagues, match outcomes — and systematically expand into less efficient markets as data and confidence grows. Simultaneously, the bookmaker management module ensures the operation remains sustainable — spreading activity across 20+ operators and exchanges so no single restriction event materially impacts returns.</div>
   <div class="thesis">The ultimate goal is a self-improving, self-managing betting intelligence system that gets smarter with every match played and more operationally resilient with every bookmaker added.</div>
+</div>
+
+<div class="section" id="live-status-section">
+  <div class="sec-label" style="display:flex;align-items:center;gap:8px">
+    Live status
+    <span id="live-dot" style="width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,0.15);display:inline-block"></span>
+    <span id="live-label" style="font-size:10px;letter-spacing:1px;color:rgba(255,255,255,0.25)">LOADING</span>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:8px" id="live-grid">
+    <div class="live-tile"><div class="live-val" id="ls-bankroll">—</div><div class="live-key">Bankroll</div></div>
+    <div class="live-tile"><div class="live-val" id="ls-record">—</div><div class="live-key">Bet record</div></div>
+    <div class="live-tile"><div class="live-val" id="ls-roi">—</div><div class="live-key">ROI on staked</div></div>
+    <div class="live-tile"><div class="live-val" id="ls-fixtures">—</div><div class="live-key">Historical fixtures</div></div>
+    <div class="live-tile"><div class="live-val" id="ls-lineups">—</div><div class="live-key">Lineups</div></div>
+    <div class="live-tile"><div class="live-val" id="ls-wowy">—</div><div class="live-key">WOWY signals</div></div>
+    <div class="live-tile"><div class="live-val" id="ls-accounts">—</div><div class="live-key">Active accounts</div></div>
+    <div class="live-tile"><div class="live-val" id="ls-scan">—</div><div class="live-key">Last scan</div></div>
+  </div>
 </div>
 
 <div class="section">
@@ -297,6 +318,78 @@ function tog(i){
   p.style.display=o?"none":"block";
   c.classList.toggle("open",!o);
 }
+</script>
+
+<script>
+(async function loadLiveStatus() {
+  const API = 'https://edge-scout.onrender.com';
+  const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+
+  try {
+    const [state, startup, scanMeta, bookmakers] = await Promise.all([
+      fetch(`${API}/api/state`).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(`${API}/api/startup/status`).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(`${API}/api/scan-meta`).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(`${API}/api/bookmakers`).then(r => r.ok ? r.json() : null).catch(() => null),
+    ]);
+
+    let anyLoaded = false;
+
+    if (state) {
+      anyLoaded = true;
+      const br = state.bankroll?.current;
+      set('ls-bankroll', br != null ? `£${br.toLocaleString('en-GB', {minimumFractionDigits:2,maximumFractionDigits:2})}` : '—');
+
+      const bets = state.bets || [];
+      const resolved = bets.filter(b => b.stage === 'RESOLVED');
+      const wins = resolved.filter(b => b.result === 'win').length;
+      const losses = resolved.filter(b => b.result === 'loss').length;
+      set('ls-record', resolved.length ? `${wins}W / ${losses}L` : '—');
+
+      if (resolved.length) {
+        const totalStaked = resolved.reduce((s, b) => s + (b.suggestedStake || 0), 0);
+        const totalPnl = resolved.reduce((s, b) => s + (b.pnl || 0), 0);
+        const roi = totalStaked > 0 ? ((totalPnl / totalStaked) * 100).toFixed(1) : null;
+        set('ls-roi', roi != null ? `+${roi}%` : '—');
+      }
+    }
+
+    if (startup?.counts) {
+      anyLoaded = true;
+      set('ls-fixtures', (startup.counts.historicalFixtures || 0).toLocaleString());
+      set('ls-lineups', (startup.counts.lineups || 0).toLocaleString());
+      set('ls-wowy', (startup.counts.wowyHighConfidence || 0).toLocaleString());
+    }
+
+    if (bookmakers) {
+      anyLoaded = true;
+      const active = bookmakers.filter(b => (b.status || 'active') === 'active').length;
+      set('ls-accounts', active);
+    }
+
+    if (scanMeta?.completedAt) {
+      anyLoaded = true;
+      const d = new Date(scanMeta.completedAt);
+      const today = new Date().toDateString() === d.toDateString();
+      set('ls-scan', today
+        ? `Today ${d.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'})}`
+        : d.toLocaleDateString('en-GB', {day:'numeric',month:'short'}));
+    }
+
+    const dot = document.getElementById('live-dot');
+    const lbl = document.getElementById('live-label');
+    if (anyLoaded) {
+      dot.style.background = '#00ff87';
+      dot.style.boxShadow = '0 0 6px #00ff87';
+      lbl.textContent = 'LIVE';
+      lbl.style.color = '#00ff87';
+    } else {
+      lbl.textContent = 'UNAVAILABLE';
+    }
+  } catch {
+    document.getElementById('live-label').textContent = 'UNAVAILABLE';
+  }
+})();
 </script>
 </body>
 </html>

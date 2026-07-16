@@ -1737,7 +1737,10 @@ function _runOptimisation(records, existing, onProgress) {
 
 // ─── EXPRESS APP ─────────────────────────────────────────────────────────────
 
-app.use(cors());
+app.use(cors({
+  origin: ['https://henry-brown123.github.io', /\.onrender\.com$/, /localhost/],
+  optionsSuccessStatus: 200,
+}));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
