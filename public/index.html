@@ -882,6 +882,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
         <thead>
           <tr style="color:var(--muted);font-size:10px;letter-spacing:.08em;text-transform:uppercase">
             <th style="text-align:left;padding:6px 8px">Bookmaker</th>
+            <th style="text-align:left;padding:6px 8px">Parent Group</th>
             <th style="text-align:center;padding:6px 4px">Tier</th>
             <th style="text-align:center;padding:6px 4px"><span title="Manual">Status ✎</span></th>
             <th style="text-align:right;padding:6px 4px"><span title="Auto-tracked">Wk <small style="opacity:.6">auto</small></span></th>
@@ -893,7 +894,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
           </tr>
         </thead>
         <tbody id="accounts-body">
-          <tr><td colspan="9" style="color:var(--muted);padding:12px 8px">Loading…</td></tr>
+          <tr><td colspan="10" style="color:var(--muted);padding:12px 8px">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -2504,8 +2505,11 @@ async function loadAccounts() {
 
       const rowOpacity = status === 'restricted' ? 'opacity:.45;' : '';
 
+      const parentGroup = b.parentGroup ? `<span style="font-size:11px;color:var(--muted)">${b.parentGroup}</span>` : '—';
+
       return `<tr style="border-bottom:1px solid var(--border-subtle);${rowOpacity}">
         <td style="padding:8px 8px;color:#fff">${dot} ${b.name}${signalTimeline ? `<div style="margin-top:2px">${signalTimeline}</div>` : ''}</td>
+        <td style="padding:8px 8px">${parentGroup}</td>
         <td style="padding:8px 4px;text-align:center">${tierLabel}</td>
         <td style="padding:8px 4px;text-align:center">${statusBadge}${maxStakeLine}</td>
         <td style="padding:8px 4px;text-align:right;color:var(--muted)">${b.betsThisWeek || 0}</td>
@@ -2523,7 +2527,7 @@ async function loadAccounts() {
       </tr>`;
     }).join('');
   } catch (e) {
-    if (tbody) tbody.innerHTML = '<tr><td colspan="9" style="color:var(--red);padding:12px 8px">Failed to load — Refresh to retry</td></tr>';
+    if (tbody) tbody.innerHTML = '<tr><td colspan="10" style="color:var(--red);padding:12px 8px">Failed to load — Refresh to retry</td></tr>';
   }
 }
 

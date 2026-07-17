@@ -168,27 +168,28 @@ function getBookmakers()   { return readJSON('bookmakers.json')    || []; }
 function saveBookmakers(list) { writeJSON('bookmakers.json', list); }
 
 const DEFAULT_BOOKMAKERS = [
-  { id: 'betfair_exchange', name: 'Betfair Exchange', tier: 1, balance: null, status: 'active', statusUpdatedAt: null, statusNotes: '', maxStake: null, maxStakeObserved: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Exchange — lay/back, ~2% commission. No restrictions ever.' },
-  { id: 'smarkets',         name: 'Smarkets',         tier: 1, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Exchange — ~2% commission. No restrictions ever.' },
-  { id: 'pinnacle',         name: 'Pinnacle',         tier: 2, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Sharp book. Highest limits, rarely restricts winners.' },
-  { id: 'unibet',           name: 'Unibet',           tier: 2, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'European book. Higher tolerance than UK soft.' },
-  { id: 'betsson',          name: 'Betsson',          tier: 2, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
-  { id: 'nordicbet',        name: 'NordicBet',        tier: 2, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
-  { id: 'bet365',           name: 'Bet365',           tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
-  { id: 'william_hill',     name: 'William Hill',     tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
-  { id: 'ladbrokes',        name: 'Ladbrokes',        tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
-  { id: 'coral',            name: 'Coral',            tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
-  { id: 'paddy_power',      name: 'Paddy Power',      tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
-  { id: 'betfair_sb',       name: 'Betfair Sportsbook', tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Separate account from Betfair Exchange.' },
-  { id: 'skybet',           name: 'Sky Bet',          tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
-  { id: 'betway',           name: 'Betway',           tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
-  { id: '888sport',         name: '888sport',         tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
-  { id: 'betvictor',        name: 'BetVictor',        tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
-  { id: 'betfred',          name: 'Betfred',          tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
-  { id: 'boylesports',      name: 'BoyleSports',      tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
-  { id: 'quinnbet',         name: 'QuinnBet',         tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
-  { id: '10bet',            name: '10Bet',            tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
-  { id: 'matchbook',        name: 'Matchbook',        tier: 3, balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Exchange-style, low commission.' },
+  { id: 'betfair_exchange', name: 'Betfair Exchange', tier: 1, commission: 0.02,  parentGroup: 'Flutter Entertainment',       balance: null, status: 'active', statusUpdatedAt: null, statusNotes: '', maxStake: null, maxStakeObserved: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Exchange — lay/back, ~2% commission. No restrictions ever.' },
+  { id: 'smarkets',         name: 'Smarkets',         tier: 1, commission: 0.02,  parentGroup: 'Smarkets',                    balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Exchange — ~2% commission. No restrictions ever.' },
+  { id: 'matchbook',        name: 'Matchbook',         tier: 1, commission: 0.015, parentGroup: 'Matchbook (Exchange)',         balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Peer-to-peer exchange. 1.5% commission.' },
+  { id: 'betdaq',           name: 'BETDAQ',            tier: 1, commission: 0.02,  parentGroup: 'BETDAQ',                      balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'UKGC-regulated peer-to-peer exchange. 2% commission. Back/lay markets.' },
+  { id: 'pinnacle',         name: 'Pinnacle',          tier: 2, commission: null,  parentGroup: 'Pinnacle',                    balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Sharp book. Highest limits, rarely restricts winners.' },
+  { id: 'unibet',           name: 'Unibet',            tier: 2, commission: null,  parentGroup: 'Kindred Group',               balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'European book. Higher tolerance than UK soft.' },
+  { id: 'betsson',          name: 'Betsson',           tier: 2, commission: null,  parentGroup: 'Betsson Group',               balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: 'nordicbet',        name: 'NordicBet',         tier: 2, commission: null,  parentGroup: 'Betsson Group',               balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: 'bet365',           name: 'Bet365',            tier: 3, commission: null,  parentGroup: 'Bet365 Group',                balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: 'william_hill',     name: 'William Hill',      tier: 3, commission: null,  parentGroup: 'Evoke (formerly 888 Holdings)', balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: 'ladbrokes',        name: 'Ladbrokes',         tier: 3, commission: null,  parentGroup: 'Entain',                      balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: 'coral',            name: 'Coral',             tier: 3, commission: null,  parentGroup: 'Entain',                      balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: 'paddy_power',      name: 'Paddy Power',       tier: 3, commission: null,  parentGroup: 'Flutter Entertainment',       balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: 'betfair_sb',       name: 'Betfair Sportsbook', tier: 3, commission: null, parentGroup: 'Flutter Entertainment',       balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Separate account from Betfair Exchange.' },
+  { id: 'skybet',           name: 'Sky Bet',           tier: 3, commission: null,  parentGroup: 'Flutter Entertainment',       balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: 'betway',           name: 'Betway',            tier: 3, commission: null,  parentGroup: 'Super Group',                 balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: '888sport',         name: '888sport',          tier: 3, commission: null,  parentGroup: 'Evoke (formerly 888 Holdings)', balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: 'betvictor',        name: 'BetVictor',         tier: 3, commission: null,  parentGroup: 'BetVictor Group',             balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: 'betfred',          name: 'Betfred',           tier: 3, commission: null,  parentGroup: 'Betfred Group',               balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: 'boylesports',      name: 'BoyleSports',       tier: 3, commission: null,  parentGroup: 'BoyleSports Group',           balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: 'quinnbet',         name: 'QuinnBet',          tier: 3, commission: null,  parentGroup: 'Quinn Group',                 balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
+  { id: '10bet',            name: '10Bet',             tier: 3, commission: null,  parentGroup: 'TGP Europe',                  balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: '' },
 ];
 function getOddsHistory()  { return readJSON('odds-history.json') || []; }
 function getTournamentSeeds() { return readJSON('tournament-seeds.json') || null; }
@@ -2497,12 +2498,23 @@ function selectBookmaker(stake, edge, { exchangeOdds = null, allExchangeOdds = [
     ? eligible.find(b => b.tier !== 1) || null
     : eligible.find(b => b.id !== recommended?.id) || null;
 
-  // Build routing warnings for signal/limited accounts
-  const routingWarning = recommended
+  // Build routing warnings for signal/limited accounts and same parent group
+  let routingWarning = recommended
     ? (recommended.status === 'signal'  ? '⚠ Restriction signal — consider reduced stake'
        : recommended.status === 'limited' ? '⚠ Account limited — use maxStakeObserved cap'
        : null)
     : null;
+
+  if (!routingWarning && recommended?.parentGroup) {
+    const recentSameGroup = books.find(b =>
+      b.id !== recommended.id &&
+      b.parentGroup === recommended.parentGroup &&
+      b.lastUsed && new Date(b.lastUsed).getTime() > yesterday
+    );
+    if (recentSameGroup) {
+      routingWarning = `⚠ Same parent group as ${recentSameGroup.name} (${recommended.parentGroup}) — consider rotating to different group`;
+    }
+  }
 
   // If preferExchange is on and the recommended book isn't an exchange, promote the
   // best exchange from eligible — as long as its net odds are within the buffer of the best book.
@@ -3214,10 +3226,33 @@ app.listen(PORT, () => {
   migrateCalibrationProjectedBetKey();
   // 5b. Recalculate bankroll from unique resolved bets (fixes duplicate-bet inflation)
   recalculateBankroll();
-  // 5c. Seed bookmakers.json if not yet on disk
-  if (!readJSON('bookmakers.json')) {
-    saveBookmakers(DEFAULT_BOOKMAKERS);
-    console.log('[Startup] Seeded bookmakers.json with', DEFAULT_BOOKMAKERS.length, 'accounts');
+  // 5c. Seed bookmakers.json if not yet on disk, or migrate existing entries
+  {
+    const existing = readJSON('bookmakers.json');
+    if (!existing) {
+      saveBookmakers(DEFAULT_BOOKMAKERS);
+      console.log('[Startup] Seeded bookmakers.json with', DEFAULT_BOOKMAKERS.length, 'accounts');
+    } else {
+      const defaults = Object.fromEntries(DEFAULT_BOOKMAKERS.map(b => [b.id, b]));
+      let changed = false;
+      // Patch each existing entry with any missing/updated fields from defaults
+      for (const b of existing) {
+        const def = defaults[b.id];
+        if (!def) continue;
+        if (b.parentGroup == null && def.parentGroup) { b.parentGroup = def.parentGroup; changed = true; }
+        if (b.commission == null && def.commission != null) { b.commission = def.commission; changed = true; }
+        if (b.id === 'matchbook' && b.tier !== 1) { b.tier = 1; changed = true; }
+      }
+      // Add BETDAQ if not present
+      if (!existing.find(b => b.id === 'betdaq')) {
+        existing.splice(3, 0, defaults['betdaq']); // after Matchbook in tier-1 group
+        changed = true;
+      }
+      if (changed) {
+        saveBookmakers(existing);
+        console.log('[Startup] Migrated bookmakers.json — added parentGroup, commission, BETDAQ, Matchbook tier fix');
+      }
+    }
   }
   // 5d. Seed tournament-seeds.json if not yet on disk
   if (!readJSON('tournament-seeds.json')) {
