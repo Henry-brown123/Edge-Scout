@@ -2810,7 +2810,7 @@ async function runBackfillChain() {
     // Phase 2: lineups (~5,000 budget, hard stop at 05:00 UTC)
     if (backfillCutoffReached()) {
       console.log('[Backfill] 05:00 UTC cutoff — skipping lineups/stats to reserve quota for morning scan');
-      _startupStatus.phase = 'complete';
+      _startupStatus.phase = 'complete'; _wowyHighConfCache = null;
       _startupStatus.completedAt = new Date().toISOString();
       return;
     }
@@ -2824,7 +2824,7 @@ async function runBackfillChain() {
     // Phase 3: fixture stats (~1,000 budget, hard stop at 05:00 UTC)
     if (backfillCutoffReached()) {
       console.log('[Backfill] 05:00 UTC cutoff — skipping stats to reserve quota for morning scan');
-      _startupStatus.phase = 'complete';
+      _startupStatus.phase = 'complete'; _wowyHighConfCache = null;
       _startupStatus.completedAt = new Date().toISOString();
       return;
     }
@@ -3142,21 +3142,28 @@ app.get('/api/server-status', async (_req, res) => {
   });
 });
 
-app.get('/api/startup/status', (_req, res) => {
-  const hist     = readJSON('backfill-historical.json');
-  const stats    = readJSON('fixture-stats.json') || {};
-  const lineups  = readJSON('lineups.json') || {};
-  const profiles = require('./teamProfiles').readProfiles();
-  const { getWOWYDeltas } = require('./teamProfiles');
-
-  let wowyHighConf = 0;
+// Cache expensive WOWY count — recompute only when profiles change (startup/backfill)
+let _wowyHighConfCache = null;
+function getWOWYHighConfCount() {
+  if (_wowyHighConfCache !== null) return _wowyHighConfCache;
+  const { readProfiles, getWOWYDeltas } = require('./teamProfiles');
+  const profiles = readProfiles();
+  let count = 0;
   for (const p of Object.values(profiles)) {
     if (!p.playerDependency?.players) continue;
-    const deltas = getWOWYDeltas(p.teamId);
-    for (const d of Object.values(deltas)) {
-      if (d.confidence === 'high' && !d.selectionBias) wowyHighConf++;
+    for (const d of Object.values(getWOWYDeltas(p.teamId))) {
+      if (d.confidence === 'high' && !d.selectionBias) count++;
     }
   }
+  _wowyHighConfCache = count;
+  return count;
+}
+
+app.get('/api/startup/status', (_req, res) => {
+  const hist    = readJSON('backfill-historical.json');
+  const stats   = readJSON('fixture-stats.json') || {};
+  const lineups = readJSON('lineups.json') || {};
+  const wowyHighConf = getWOWYHighConfCount();
 
   const fixtureCount  = hist?.fixtures?.length ?? 0;
   const statsCount    = Object.keys(stats).length;
