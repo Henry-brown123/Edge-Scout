@@ -2934,6 +2934,10 @@ function startupCheck() {
     console.log('[Startup] All critical data files present — no backfill needed');
     _startupStatus = { phase: 'complete', skipped: true, completedAt: new Date().toISOString(), missing: [] };
   }
+  // Pre-warm the WOWY cache in the background so the first /api/startup/status request is fast
+  setImmediate(() => {
+    try { getWOWYHighConfCount(); } catch (e) { console.warn('[Startup] WOWY pre-warm failed:', e.message); }
+  });
 }
 
 // Extracted backfill logic callable without HTTP context
