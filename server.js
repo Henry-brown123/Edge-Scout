@@ -612,9 +612,14 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     }
   }
 
+  // Neutral venue: WC group stage and knockout are played at neutral sites — no home advantage.
+  // Must be computed before homeF so the factor score reflects 50 (neutral) not Spain's home win rate.
+  const neutralVenue = context === 'international' &&
+    (competitionPhase === 'group_stage' || competitionPhase === 'knockout');
+
   const homeF = {
     form:      formScore(scoringPool, homeId, fw, d),
-    homeAdv:   homeAdvScore(scoringPool, homeId, d),
+    homeAdv:   neutralVenue ? 50 : homeAdvScore(scoringPool, homeId, d),
     xg:        xgScore(scoringPool, homeId, statsCache, d),
     h2h:       h2hScore(h2hFixtures, homeId, hw, d),
     defense:   defenseScore(scoringPool, homeId, d),
@@ -664,8 +669,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     // Adjustment 3: WC group stage and knockout fixtures are played at neutral venues.
     // Symmetric base at 0.34/0.34 (no home advantage); quality and form do the differentiation.
     // Lower than 0.38 so genuine underdogs can still be suppressed by the rank correction.
-    const neutralVenue = context === 'international' &&
-      (competitionPhase === 'group_stage' || competitionPhase === 'knockout');
+    // neutralVenue already declared above homeF so both factor score and prob anchor respect it.
     const anchorHomeBase = neutralVenue ? 0.34 : cfg.homeBase;
     const anchorAwayBase = neutralVenue ? 0.34 : cfg.awayBase;
 
@@ -821,7 +825,12 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   // This is an ADDITIONAL gate — both must pass for a bet to unlock.
   const minFormCount   = Math.min(homeFormCount, awayFormCount);
   const tierThreshold  = minFormCount < 20 ? 0.08 : minFormCount < 35 ? 0.12 : 0.18;
-  const lowConfidence  = maxModelBookGap > gapThreshold || maxModelBookGap > tierThreshold;
+  // Knockout international gate: model has shown systematic underdog inflation at WC knockout
+  // stage (3 wrong bets at ~11pp gap). Cap effective threshold at 10pp for this context.
+  const effectiveGapThreshold = (context === 'international' && competitionPhase === 'knockout')
+    ? Math.min(gapThreshold, 0.10)
+    : gapThreshold;
+  const lowConfidence  = maxModelBookGap > effectiveGapThreshold || maxModelBookGap > tierThreshold;
   results.forEach(c => { c.lowConfidence = lowConfidence; });
 
   // WOWY key player signals — top movers by |delta| for each team, with confidence flag
