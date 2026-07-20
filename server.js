@@ -302,12 +302,12 @@ const BACKFILL_CONFIG = [
   // NOTE (Option 3): PL 2024/25 season has ended. Seasons 2022/2023/2024 are
   // fetched here so club profiles are populated for the 2025/26 season when it
   // starts (August 2026). Re-run this backfill at season start to pick up 2025.
-  { leagueId: '39',  name: 'Premier League',             seasons: [2024, 2023, 2022] },
-  { leagueId: '140', name: 'La Liga',                    seasons: [2024, 2023, 2022] },
-  { leagueId: '78',  name: 'Bundesliga',                 seasons: [2024, 2023, 2022] },
-  { leagueId: '135', name: 'Serie A',                    seasons: [2024, 2023, 2022] },
-  { leagueId: '61',  name: 'Ligue 1',                    seasons: [2024, 2023, 2022] },
-  { leagueId: '2',   name: 'UEFA Champions League',      seasons: [2024, 2023, 2022] },
+  { leagueId: '39',  name: 'Premier League',             seasons: [2024, 2023, 2022, 2021, 2020] },
+  { leagueId: '140', name: 'La Liga',                    seasons: [2024, 2023, 2022, 2021, 2020] },
+  { leagueId: '78',  name: 'Bundesliga',                 seasons: [2024, 2023, 2022, 2021, 2020] },
+  { leagueId: '135', name: 'Serie A',                    seasons: [2024, 2023, 2022, 2021, 2020] },
+  { leagueId: '61',  name: 'Ligue 1',                    seasons: [2024, 2023, 2022, 2021, 2020] },
+  { leagueId: '2',   name: 'UEFA Champions League',      seasons: [2024, 2023, 2022, 2021, 2020] },
   // New leagues — added July 2026
   { leagueId: '179', name: 'Scottish Premiership',       seasons: [2024, 2023, 2022] },
   { leagueId: '88',  name: 'Eredivisie',                 seasons: [2024, 2023, 2022] },
@@ -1522,12 +1522,12 @@ async function runProfileBackfill(onProgress) {
 // re-runs only fetch missing league/season pairs.
 
 const HISTORICAL_BACKFILL_CONFIG = [
-  { leagueId: '39',  name: 'Premier League',   seasons: [2024, 2023, 2022] },
-  { leagueId: '140', name: 'La Liga',           seasons: [2024, 2023, 2022] },
-  { leagueId: '135', name: 'Serie A',           seasons: [2024, 2023, 2022] },
-  { leagueId: '78',  name: 'Bundesliga',        seasons: [2024, 2023, 2022] },
-  { leagueId: '61',  name: 'Ligue 1',           seasons: [2024, 2023, 2022] },
-  { leagueId: '2',   name: 'Champions League',  seasons: [2024, 2023, 2022] },
+  { leagueId: '39',  name: 'Premier League',   seasons: [2024, 2023, 2022, 2021, 2020] },
+  { leagueId: '140', name: 'La Liga',           seasons: [2024, 2023, 2022, 2021, 2020] },
+  { leagueId: '135', name: 'Serie A',           seasons: [2024, 2023, 2022, 2021, 2020] },
+  { leagueId: '78',  name: 'Bundesliga',        seasons: [2024, 2023, 2022, 2021, 2020] },
+  { leagueId: '61',  name: 'Ligue 1',           seasons: [2024, 2023, 2022, 2021, 2020] },
+  { leagueId: '2',   name: 'Champions League',  seasons: [2024, 2023, 2022, 2021, 2020] },
   { leagueId: '32',  name: 'WC Qual UEFA',      seasons: [2024, 2020] },
   { leagueId: '34',  name: 'WC Qual CONMEBOL',  seasons: [2026, 2022] },
   { leagueId: '31',  name: 'WC Qual CONCACAF',  seasons: [2026, 2022] },
