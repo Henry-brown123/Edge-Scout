@@ -39,7 +39,8 @@ const app  = express();
 const PORT = process.env.PORT || 3000;
 
 const API_SPORTS_KEY = process.env.API_SPORTS_KEY || '36e45a67eec7cabd0a51db8f2570f934';
-const ODDS_API_KEY   = process.env.ODDS_API_KEY   || '822efb9daf359532c828e4205e6beb56';
+const ODDS_API_KEY   = process.env.ODDS_API_KEY;
+if (!ODDS_API_KEY) console.warn('[Startup] ODDS_API_KEY not set — odds fetching will fail');
 const DATA_DIR       = process.env.DATA_DIR || path.join(__dirname, 'data');
 
 // ─── DATA PERSISTENCE ────────────────────────────────────────────────────────
