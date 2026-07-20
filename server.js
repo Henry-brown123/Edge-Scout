@@ -64,7 +64,7 @@ console.log(`[Data] process.env.DATA_DIR=${process.env.DATA_DIR ?? '(unset)'} �
   const settingsDest = path.join(DATA_DIR, 'settings.json');
   if (!fs.existsSync(settingsDest)) {
     const defaults = { calibrationFactor: 1.11, wowyActive: true,
-      activeLeagues: ['1','39','140','78','135','61','2'], successThreshold: 40,
+      activeLeagues: ['1','39','140','78','135','61','2','179','88','94','3','848'], successThreshold: 40,
       decay: 0.05, formWindow: 6, h2hWindow: 5, kellyFraction: 0.5,
       weights: { form:18, homeAdv:12, xg:16, h2h:10, defense:14, momentum:10, injuries:8, standings:12 } };
     const settingsTmp = settingsDest + '.tmp';
@@ -123,7 +123,7 @@ function writeJSON(file, data) {
 const SETTINGS_DEFAULTS = {
   weights: { form:18, homeAdv:12, xg:16, h2h:10, defense:14, momentum:10, injuries:8, standings:12 },
   decay: 0.05, formWindow: 6, h2hWindow: 5, kellyFraction: 0.5,
-  activeLeagues: ['1','39','140','78','135','61','2'], successThreshold: 40,
+  activeLeagues: ['1','39','140','78','135','61','2','179','88','94','3','848'], successThreshold: 40,
   calibrationFactor: 1.08,
   wowyActive: true,
   preferExchange: true,
@@ -277,7 +277,12 @@ const LEAGUES = {
   '78':  { name: 'Bundesliga',          season: 2024, sport: 'soccer_germany_bundesliga' },
   '135': { name: 'Serie A',             season: 2024, sport: 'soccer_italy_serie_a' },
   '61':  { name: 'Ligue 1',             season: 2024, sport: 'soccer_france_ligue_one' },
-  '2':   { name: 'Champions League',    season: 2024, sport: 'soccer_uefa_champs_league' },
+  '2':   { name: 'Champions League',      season: 2024, sport: 'soccer_uefa_champs_league' },
+  '179': { name: 'Scottish Premiership',  season: 2026, sport: 'soccer_scotland_premiership' },
+  '88':  { name: 'Eredivisie',            season: 2026, sport: 'soccer_netherlands_eredivisie' },
+  '94':  { name: 'Primeira Liga',         season: 2026, sport: 'soccer_portugal_primeira_liga' },
+  '3':   { name: 'Europa League',         season: 2024, sport: 'soccer_uefa_europa_league' },
+  '848': { name: 'Conference League',     season: 2024, sport: 'soccer_uefa_europa_conference_league' },
 };
 
 // ─── BACKFILL CONFIG ──────────────────────────────────────────────────────────
@@ -303,6 +308,12 @@ const BACKFILL_CONFIG = [
   { leagueId: '135', name: 'Serie A',                    seasons: [2024, 2023, 2022] },
   { leagueId: '61',  name: 'Ligue 1',                    seasons: [2024, 2023, 2022] },
   { leagueId: '2',   name: 'UEFA Champions League',      seasons: [2024, 2023, 2022] },
+  // New leagues — added July 2026
+  { leagueId: '179', name: 'Scottish Premiership',       seasons: [2024, 2023, 2022] },
+  { leagueId: '88',  name: 'Eredivisie',                 seasons: [2024, 2023, 2022] },
+  { leagueId: '94',  name: 'Primeira Liga',              seasons: [2024, 2023, 2022] },
+  { leagueId: '3',   name: 'Europa League',              seasons: [2024, 2023, 2022] },
+  { leagueId: '848', name: 'Conference League',          seasons: [2024, 2023, 2022] },
 ];
 
 // ─── FIFA RANKING QUALITY ANCHOR ─────────────────────────────────────────────
@@ -1522,6 +1533,12 @@ const HISTORICAL_BACKFILL_CONFIG = [
   { leagueId: '31',  name: 'WC Qual CONCACAF',  seasons: [2026, 2022] },
   { leagueId: '5',   name: 'Nations League',    seasons: [2024, 2022] },
   { leagueId: '10',  name: 'Intl Friendlies',   seasons: [2024, 2023, 2022] },
+  // New leagues — added July 2026
+  { leagueId: '179', name: 'Scottish Premiership', seasons: [2024, 2023, 2022] },
+  { leagueId: '88',  name: 'Eredivisie',            seasons: [2024, 2023, 2022] },
+  { leagueId: '94',  name: 'Primeira Liga',         seasons: [2024, 2023, 2022] },
+  { leagueId: '3',   name: 'Europa League',         seasons: [2024, 2023, 2022] },
+  { leagueId: '848', name: 'Conference League',     seasons: [2024, 2023, 2022] },
 ];
 
 const OPTIMISE_EVERY = 500; // run weight optimisation after every N scored records
@@ -2160,6 +2177,11 @@ const CLOSING_ODDS_SPORT_MAP = {
   '61':  'soccer_france_ligue_one',
   '2':   'soccer_uefa_champs_league',
   '1':   'soccer_fifa_world_cup',
+  '179': 'soccer_scotland_premiership',
+  '88':  'soccer_netherlands_eredivisie',
+  '94':  'soccer_portugal_primeira_liga',
+  '3':   'soccer_uefa_europa_league',
+  '848': 'soccer_uefa_europa_conference_league',
 };
 
 let _closingOddsStatus = {
