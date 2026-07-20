@@ -2144,6 +2144,170 @@ app.post('/api/backfill/odds-history', async (req, res) => {
   _oddsBackfillRunning = false;
 });
 
+// ─── CLOSING ODDS BACKFILL ────────────────────────────────────────────────────
+// Fetches Pinnacle closing odds (one snapshot per fixture near kickoff) for all
+// historical fixtures in the 7 supported leagues across the last 2 seasons.
+// Stores results in closing-odds.json keyed by API-Sports fixtureId.
+// Groups fixtures by (sport, kickoff_hour) so fixtures sharing a kickoff time
+// share one API call — typically 6-10 fixtures per call on a match day.
+// Budget-capped: stops when creditsUsed reaches the configured limit.
+
+const CLOSING_ODDS_SPORT_MAP = {
+  '39':  'soccer_epl',
+  '140': 'soccer_spain_la_liga',
+  '135': 'soccer_italy_serie_a',
+  '78':  'soccer_germany_bundesliga',
+  '61':  'soccer_france_ligue_one',
+  '2':   'soccer_uefa_champs_league',
+  '1':   'soccer_fifa_world_cup',
+};
+
+let _closingOddsStatus = {
+  running: false, startedAt: null, completedAt: null, error: null,
+  creditsUsed: 0, creditsRemaining: null,
+  fixturesTotal: 0, fixturesMatched: 0, fixturesMissed: 0,
+  apiCallsMade: 0, currentLeague: null,
+};
+
+function getClosingOdds() { return readJSON('closing-odds.json') || {}; }
+function saveClosingOdds(data) { writeJSON('closing-odds.json', data); }
+
+// Fuzzy team name match: normalise both strings and check overlap.
+function normaliseTeam(name) {
+  return (name || '').toLowerCase()
+    .replace(/\bfc\b|\baf\b|\bsc\b|\bac\b|\bcd\b|\bfk\b/g, '')
+    .replace(/[^a-z0-9 ]/g, '')
+    .replace(/\s+/g, ' ').trim();
+}
+function teamsMatch(a, b) {
+  const na = normaliseTeam(a), nb = normaliseTeam(b);
+  if (na === nb) return true;
+  if (na.includes(nb) || nb.includes(na)) return true;
+  // token overlap — any shared word ≥4 chars
+  const ta = na.split(' '), tb = nb.split(' ');
+  return ta.some(w => w.length >= 4 && tb.includes(w));
+}
+
+async function runClosingOddsBackfill({ budgetCredits = 80000 } = {}) {
+  if (_closingOddsStatus.running) return;
+  _closingOddsStatus = {
+    running: true, startedAt: new Date().toISOString(), completedAt: null, error: null,
+    creditsUsed: 0, creditsRemaining: null,
+    fixturesTotal: 0, fixturesMatched: 0, fixturesMissed: 0,
+    apiCallsMade: 0, currentLeague: null,
+  };
+  console.log(`[ClosingOdds] Starting backfill — budget ${budgetCredits} credits`);
+
+  try {
+    const hist = readJSON('backfill-historical.json');
+    if (!hist?.fixtures?.length) throw new Error('backfill-historical.json empty or missing');
+
+    const closing = getClosingOdds();
+    const alreadyDone = new Set(Object.keys(closing).map(Number));
+
+    // Build list of fixtures needing odds, grouped by (sport, kickoff_hour)
+    const groups = new Map(); // key = "sport|2024-10-05T15" → [fixture, ...]
+    let skipped = 0;
+    for (const fix of hist.fixtures) {
+      const fid   = fix.fixture?.id;
+      const lid   = String(fix.league?.id);
+      const sport = CLOSING_ODDS_SPORT_MAP[lid];
+      const date  = fix.fixture?.date;
+      if (!fid || !sport || !date) continue;
+      // Only last 2 seasons (2023 and 2024 for clubs; 2022/2026 for WC already in data)
+      const year = new Date(date).getUTCFullYear();
+      if (year < 2023) { skipped++; continue; }
+      if (alreadyDone.has(fid)) { skipped++; continue; }
+      const hourKey = date.slice(0, 13); // "2024-10-05T15"
+      const groupKey = `${sport}|${hourKey}`;
+      if (!groups.has(groupKey)) groups.set(groupKey, []);
+      groups.get(groupKey).push(fix);
+    }
+    _closingOddsStatus.fixturesTotal = [...groups.values()].reduce((s, g) => s + g.length, 0);
+    console.log(`[ClosingOdds] ${_closingOddsStatus.fixturesTotal} fixtures to process in ${groups.size} API calls (${skipped} skipped)`);
+
+    let saveCounter = 0;
+    for (const [groupKey, fixtures] of groups) {
+      if (_closingOddsStatus.creditsUsed >= budgetCredits) {
+        console.log(`[ClosingOdds] Budget cap reached (${_closingOddsStatus.creditsUsed} credits) — stopping`);
+        break;
+      }
+      const [sport, hourKey] = groupKey.split('|');
+      const kickoffIso = hourKey + ':00:00Z';
+      _closingOddsStatus.currentLeague = sport;
+
+      try {
+        const resp = await oddsApi.get(`/sports/${sport}/odds-history`, {
+          params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h',
+                    oddsFormat: 'decimal', date: kickoffIso },
+        });
+        const creditsLast      = parseInt(resp.headers['x-requests-last'] || '0', 10);
+        const creditsRemaining = parseInt(resp.headers['x-requests-remaining'] || '0', 10);
+        _closingOddsStatus.creditsUsed      += creditsLast;
+        _closingOddsStatus.creditsRemaining  = creditsRemaining;
+        _closingOddsStatus.apiCallsMade++;
+
+        const events = resp.data?.data || resp.data || [];
+        for (const fix of fixtures) {
+          const home = fix.teams?.home?.name;
+          const away = fix.teams?.away?.name;
+          const fid  = fix.fixture?.id;
+          const ev   = events.find(e =>
+            teamsMatch(e.home_team, home) && teamsMatch(e.away_team, away)
+          );
+          if (!ev) { _closingOddsStatus.fixturesMissed++; continue; }
+
+          // Prefer Pinnacle; fall back to first available bookmaker
+          const bm = ev.bookmakers?.find(b => b.key === 'pinnacle') || ev.bookmakers?.[0];
+          if (!bm) { _closingOddsStatus.fixturesMissed++; continue; }
+          const mkt = bm.markets?.find(m => m.key === 'h2h');
+          if (!mkt) { _closingOddsStatus.fixturesMissed++; continue; }
+          const get = name => mkt.outcomes?.find(o => teamsMatch(o.name, name))?.price ?? null;
+
+          closing[fid] = {
+            fixtureId:   fid,
+            homeOdds:    get(home),
+            drawOdds:    get('Draw'),
+            awayOdds:    get(away),
+            bookmaker:   bm.key,
+            collectedAt: bm.last_update || kickoffIso,
+            snapshotTs:  kickoffIso,
+          };
+          _closingOddsStatus.fixturesMatched++;
+          saveCounter++;
+        }
+
+        // Save every 200 fixtures matched to guard against crashes
+        if (saveCounter >= 200) { saveClosingOdds(closing); saveCounter = 0; }
+
+        await new Promise(r => setTimeout(r, 250)); // ~4 req/s — well within limits
+      } catch (e) {
+        console.error(`[ClosingOdds] ${groupKey}: ${e.message}`);
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    }
+
+    saveClosingOdds(closing);
+    _closingOddsStatus.running     = false;
+    _closingOddsStatus.completedAt = new Date().toISOString();
+    console.log(`[ClosingOdds] Done — matched ${_closingOddsStatus.fixturesMatched}, missed ${_closingOddsStatus.fixturesMissed}, credits used ${_closingOddsStatus.creditsUsed}`);
+  } catch (e) {
+    _closingOddsStatus.running = false;
+    _closingOddsStatus.error   = e.message;
+    console.error('[ClosingOdds] Fatal:', e.message);
+  }
+}
+
+app.post('/api/backfill/closing-odds', (req, res) => {
+  if (_closingOddsStatus.running) return res.json({ error: 'already_running', status: _closingOddsStatus });
+  if (!ODDS_API_KEY) return res.status(500).json({ error: 'ODDS_API_KEY not set' });
+  const budget = parseInt(req.query.budget || '80000', 10);
+  res.json({ started: true, budget, message: `Closing odds backfill starting — budget ${budget} credits` });
+  runClosingOddsBackfill({ budgetCredits: budget }).catch(e => console.error('[ClosingOdds]', e.message));
+});
+
+app.get('/api/backfill/closing-odds/status', (req, res) => res.json(_closingOddsStatus));
+
 // Calibration data from all historical scored records for Fix 3 chart
 app.get('/api/backfill/historical/calibration', (req, res) => {
   const { computeModelProb, WEIGHTS_BY_CONTEXT } = require('./scoring');
