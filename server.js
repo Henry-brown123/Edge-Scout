@@ -2572,6 +2572,29 @@ app.get('/api/backfill/xg/status', (_req, res) => {
   res.json({ running: _xgImportRunning, count: Object.keys(store).length });
 });
 
+// Understat xG fetch — runs scripts/fetch-understat.js server-side
+let _understatRunning = false;
+app.post('/api/backfill/understat', (req, res) => {
+  if (_understatRunning) return res.json({ running: true, message: 'Already in progress' });
+  _understatRunning = true;
+  res.json({ started: true, message: 'Understat xG fetch running — poll /api/backfill/understat/status' });
+  const { execFile } = require('child_process');
+  const scriptPath   = path.join(__dirname, 'scripts', 'fetch-understat.js');
+  execFile(process.execPath, [scriptPath], { env: { ...process.env, DATA_DIR }, timeout: 300000 }, (err, stdout, stderr) => {
+    _understatRunning = false;
+    if (err) { console.error('[Understat] Error:', err.message, stderr); return; }
+    reloadXgStore();
+    const store = getXgStore();
+    console.log(`[Understat] Complete — ${Object.keys(store).length} entries in xg-data.json`);
+    console.log('[Understat]', stdout.trim().split('\n').slice(-4).join(' | '));
+  });
+});
+
+app.get('/api/backfill/understat/status', (_req, res) => {
+  const store = getXgStore();
+  res.json({ running: _understatRunning, count: Object.keys(store).length });
+});
+
 // Trigger pre-match scan for a specific watching entry
 app.post('/api/scan/prematch/:watchId', async (req, res) => {
   const watching = getWatching();
