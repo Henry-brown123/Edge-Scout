@@ -1196,6 +1196,10 @@ async function runPreMatchScan(watchingEntry) {
                    : 'Draw',
         settings,
       }),
+      // Per-bookmaker odds snapshot at lock time (for bookmaker selection UI)
+      oddsSnapshot: _buildBookmakerMarket(meta.sport || 'soccer_epl', scored.homeName, scored.awayName),
+      // Three-state placement flow
+      placementStatus: 'pending_placement', // 'pending_placement' | 'placed' | 'skipped'
       // Placement confirmation fields (filled by user after manual placement)
       placementConfirmed: false,
       bookmakerUsed: null,
@@ -1203,6 +1207,8 @@ async function runPreMatchScan(watchingEntry) {
       actualOdds:    null,
       actualStake:   null,
       placedAt:      null,
+      skippedAt:     null,
+      skipReason:    null,
     };
 
     const bets = getBets();
@@ -2846,6 +2852,7 @@ app.post('/api/bets/:id/confirm-placement', (req, res) => {
   bet.actualStake   = parseFloat(actualStake) || bet.suggestedStake;
   bet.placedAt      = new Date().toISOString();
   bet.placementConfirmed = true;
+  bet.placementStatus    = 'placed';
   saveBets(bets);
 
   // Update bookmaker stats
@@ -2861,6 +2868,20 @@ app.post('/api/bets/:id/confirm-placement', (req, res) => {
   }
 
   res.json({ bet, bookmaker: bm || null });
+});
+
+// POST skip a locked bet (no value / account not set up / other)
+app.post('/api/bets/:id/skip', (req, res) => {
+  const bets = getBets();
+  const bet  = bets.find(b => b.id === req.params.id);
+  if (!bet) return res.status(404).json({ error: 'Not found' });
+
+  const { skipReason } = req.body;
+  bet.placementStatus = 'skipped';
+  bet.skippedAt       = new Date().toISOString();
+  bet.skipReason      = skipReason || 'other';
+  saveBets(bets);
+  res.json({ bet });
 });
 
 // POST routing recommendation for a stake/edge pair

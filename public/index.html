@@ -266,6 +266,7 @@ select option { background: var(--surface2); }
   border-radius: 50%; animation: spin .7s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse-amber { 0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(245,166,35,.5)} 50%{opacity:.7;box-shadow:0 0 0 4px rgba(245,166,35,0)} }
 
 /* ── Table ── */
 .table-wrap { overflow-x: auto; }
@@ -433,17 +434,33 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     </div>
   </div>
 
-  <!-- RECOMMENDED bets -->
+  <!-- LOCKED BETS — two sub-sections -->
   <div class="card" id="recommended-card">
     <div class="card-header">
       <span class="card-title">Locked Bets — Recommended</span>
       <span style="font-size:11px;color:var(--muted)">Score 40+ · Confirmed lineups · Live odds</span>
     </div>
-    <div id="recommended-list">
-      <div class="empty" id="recommended-empty">
-        <div class="empty-icon">🔒</div>
-        <p>No locked bets yet. Pre-match scans fire automatically at T-60.</p>
+    <!-- Pending Placement sub-section -->
+    <div id="pending-section" style="display:none">
+      <div style="display:flex;align-items:center;gap:8px;padding:10px 16px 6px;border-bottom:1px solid var(--border)">
+        <span style="width:8px;height:8px;border-radius:50%;background:#f5a623;flex-shrink:0;animation:pulse-amber 1.4s infinite"></span>
+        <span style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#f5a623">Pending Placement</span>
+        <span id="pending-count" style="font-size:11px;color:var(--muted)"></span>
       </div>
+      <div id="pending-list"></div>
+    </div>
+    <!-- Placed sub-section -->
+    <div id="placed-section" style="display:none">
+      <div style="display:flex;align-items:center;gap:8px;padding:10px 16px 6px;border-bottom:1px solid var(--border)">
+        <span style="width:8px;height:8px;border-radius:50%;background:var(--green);flex-shrink:0"></span>
+        <span style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--green)">Placed — Awaiting Result</span>
+        <span id="placed-count" style="font-size:11px;color:var(--muted)"></span>
+      </div>
+      <div id="placed-list"></div>
+    </div>
+    <!-- Empty state (shown when both sections empty) -->
+    <div id="recommended-empty" style="padding:32px 16px">
+      <div class="empty"><div class="empty-icon">🔒</div><p>No locked bets yet. Pre-match scans fire automatically at T-60.</p></div>
     </div>
   </div>
 
@@ -907,30 +924,80 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
 </div><!-- /.app -->
 <div id="toast"></div>
 
-<!-- Placement confirmation modal -->
-<div id="placement-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;align-items:center;justify-content:center">
-  <div style="background:var(--surface1);border:1px solid var(--border);border-radius:16px;padding:24px;width:min(420px,90vw);max-height:90vh;overflow-y:auto">
-    <div style="font-size:15px;font-weight:700;margin-bottom:4px" id="pm-title">Confirm Placement</div>
-    <div style="font-size:12px;color:var(--muted);margin-bottom:20px" id="pm-subtitle"></div>
-    <div style="margin-bottom:14px">
-      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;letter-spacing:.06em;text-transform:uppercase">Where did you place it?</label>
-      <select id="pm-bookmaker" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:#fff;padding:8px 10px;font-size:13px">
-        <option value="">Select bookmaker…</option>
-      </select>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px">
-      <div>
-        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;letter-spacing:.06em;text-transform:uppercase">Actual odds</label>
-        <input id="pm-odds" type="number" step="0.01" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:#fff;padding:8px 10px;font-size:13px">
+<!-- Bookmaker selection panel (full-screen modal) -->
+<div id="bm-panel" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:1000;align-items:flex-end;justify-content:center" onclick="if(event.target===this)closeBmPanel()">
+  <div style="background:var(--surface1);border:1px solid var(--border);border-radius:16px 16px 0 0;width:min(780px,100vw);max-height:92vh;overflow-y:auto;padding:0 0 env(safe-area-inset-bottom)" onclick="event.stopPropagation()">
+    <!-- Panel header -->
+    <div style="position:sticky;top:0;background:var(--surface1);border-bottom:1px solid var(--border);padding:16px 20px 12px;z-index:1">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+        <div>
+          <div style="font-size:15px;font-weight:700" id="bmp-title">Select Bookmaker</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px" id="bmp-subtitle"></div>
+        </div>
+        <button onclick="closeBmPanel()" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;padding:0;line-height:1;flex-shrink:0">✕</button>
       </div>
-      <div>
-        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;letter-spacing:.06em;text-transform:uppercase">Stake placed (£)</label>
-        <input id="pm-stake" type="number" step="0.01" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:#fff;padding:8px 10px;font-size:13px">
+      <!-- Quick-select best exchange -->
+      <div style="margin-top:12px;padding:10px 12px;background:rgba(0,255,135,.06);border:1px solid rgba(0,255,135,.2);border-radius:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+        <div style="font-size:12px;color:var(--text2)" id="bmp-exchange-summary">Calculating best exchange…</div>
+        <button class="btn btn-cyan btn-sm" id="bmp-best-exchange-btn" onclick="selectBestExchange()" style="flex-shrink:0">Place with best exchange</button>
       </div>
     </div>
+
+    <!-- Bookmaker table -->
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:640px">
+        <thead>
+          <tr style="color:var(--muted);text-transform:uppercase;font-size:10px;letter-spacing:.06em;border-bottom:1px solid var(--border)">
+            <th style="padding:8px 12px;text-align:left">Bookmaker</th>
+            <th style="padding:8px 8px;text-align:center">Tier</th>
+            <th style="padding:8px 8px;text-align:right">Odds</th>
+            <th style="padding:8px 8px;text-align:right">Edge</th>
+            <th style="padding:8px 8px;text-align:right">Kelly Stake</th>
+            <th style="padding:8px 8px;text-align:right">Rounded</th>
+            <th style="padding:8px 8px;text-align:right">% Volume</th>
+            <th style="padding:8px 8px;text-align:center">Status</th>
+          </tr>
+        </thead>
+        <tbody id="bmp-table-body"></tbody>
+      </table>
+    </div>
+
+    <!-- Confirm section (shown after row selection) -->
+    <div id="bmp-confirm-section" style="display:none;padding:16px 20px;border-top:1px solid var(--border);background:var(--surface2)">
+      <div id="bmp-group-warning" style="display:none;padding:8px 12px;background:rgba(245,166,35,.12);border:1px solid rgba(245,166,35,.3);border-radius:6px;font-size:12px;color:#f5a623;margin-bottom:12px"></div>
+      <div id="bmp-selected-label" style="font-size:13px;font-weight:600;margin-bottom:12px;color:var(--text1)"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+        <div>
+          <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:5px;letter-spacing:.06em;text-transform:uppercase">Actual odds obtained</label>
+          <input id="bmp-odds" type="number" step="0.01" min="1.01" style="width:100%;background:var(--surface1);border:1px solid var(--border);border-radius:8px;color:#fff;padding:9px 10px;font-size:14px;box-sizing:border-box">
+        </div>
+        <div>
+          <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:5px;letter-spacing:.06em;text-transform:uppercase">Stake (£)</label>
+          <input id="bmp-stake" type="number" step="0.5" min="0.5" style="width:100%;background:var(--surface1);border:1px solid var(--border);border-radius:8px;color:#fff;padding:9px 10px;font-size:14px;box-sizing:border-box">
+        </div>
+      </div>
+      <div style="display:flex;gap:10px">
+        <button class="btn btn-ghost btn-sm" onclick="openSkipPanel()" style="min-height:44px;padding:0 20px">Skip this bet</button>
+        <button class="btn btn-cyan btn-sm" onclick="confirmPlacement()" style="flex:1;min-height:44px;font-size:14px">Confirm Placement</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Skip reason panel (shown inside bm-panel flow) -->
+<div id="skip-panel" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:1001;align-items:center;justify-content:center">
+  <div style="background:var(--surface1);border:1px solid var(--border);border-radius:12px;padding:24px;width:min(360px,90vw)">
+    <div style="font-size:14px;font-weight:700;margin-bottom:16px">Skip this bet</div>
+    <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:6px;letter-spacing:.06em;text-transform:uppercase">Reason</label>
+    <select id="skip-reason" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:#fff;padding:9px 10px;font-size:13px;margin-bottom:18px">
+      <option value="no_value">No value at current odds</option>
+      <option value="account_not_setup">Account not yet set up</option>
+      <option value="stake_too_high">Stake too high for account</option>
+      <option value="other">Other</option>
+    </select>
     <div style="display:flex;gap:10px;justify-content:flex-end">
-      <button class="btn btn-ghost btn-sm" onclick="closePlacementModal()">Skip</button>
-      <button class="btn btn-cyan btn-sm" onclick="confirmPlacement()">Confirm</button>
+      <button class="btn btn-ghost btn-sm" onclick="document.getElementById('skip-panel').style.display='none'">Cancel</button>
+      <button class="btn btn-sm" style="background:var(--red);color:#fff;border:none;min-height:44px;padding:0 20px" onclick="confirmSkip()">Confirm Skip</button>
     </div>
   </div>
 </div>
@@ -1086,13 +1153,31 @@ function renderScout() {
   document.getElementById('s-winrate').textContent  = resolved.length ? `${((wins/(wins+losses||1))*100).toFixed(0)}%` : '—';
   document.getElementById('s-record').textContent   = `${wins}W ${losses}L`;
 
-  // Recommended — use innerHTML only, never move the empty-state node
-  const recEl = document.getElementById('recommended-list');
-  if (locked.length) {
-    recEl.innerHTML = locked.map(b => recommendedCard(b)).join('');
+  // Split locked bets into pending/placed sub-sections
+  // Backward compat: treat placementConfirmed=true as 'placed', else 'pending_placement'
+  const getStatus = b => b.placementStatus || (b.placementConfirmed ? 'placed' : 'pending_placement');
+  const pendingBets = locked.filter(b => getStatus(b) === 'pending_placement');
+  const placedBets  = locked.filter(b => getStatus(b) === 'placed');
+
+  const pendingSection = document.getElementById('pending-section');
+  const placedSection  = document.getElementById('placed-section');
+  const emptyEl        = document.getElementById('recommended-empty');
+
+  if (pendingBets.length) {
+    pendingSection.style.display = 'block';
+    document.getElementById('pending-count').textContent = `${pendingBets.length} bet${pendingBets.length > 1 ? 's' : ''}`;
+    document.getElementById('pending-list').innerHTML = pendingBets.map(b => recommendedCard(b)).join('');
   } else {
-    recEl.innerHTML = `<div class="empty"><div class="empty-icon">🔒</div><p>No locked bets yet. Pre-match scans fire automatically at T-60.</p></div>`;
+    pendingSection.style.display = 'none';
   }
+  if (placedBets.length) {
+    placedSection.style.display = 'block';
+    document.getElementById('placed-count').textContent = `${placedBets.length} bet${placedBets.length > 1 ? 's' : ''}`;
+    document.getElementById('placed-list').innerHTML = placedBets.map(b => recommendedCard(b)).join('');
+  } else {
+    placedSection.style.display = 'none';
+  }
+  emptyEl.style.display = locked.length ? 'none' : 'block';
 
   // Watching
   const watEl  = document.getElementById('watching-list');
@@ -1115,46 +1200,41 @@ function updateBankrollBadge() {
 }
 
 function routingHTML(b) {
-  const r = b.routingRecommendation;
-  if (!r) return '';
-  const rec  = r.recommended;
-  const best = r.bestPrice;
-  const skips = (r.skip || []).slice(0, 3);
-  if (!rec) return '';
+  const status = b.placementStatus || (b.placementConfirmed ? 'placed' : 'pending_placement');
 
-  const confirmed = b.placementConfirmed;
-  if (confirmed) {
-    return `<div style="margin-top:10px;padding:10px 12px;background:rgba(0,255,135,.06);border:1px solid rgba(0,255,135,.15);border-radius:8px;font-size:11px">
-      <span style="color:var(--green);font-weight:600">✓ Placed</span>
-      <span style="color:var(--muted);margin-left:8px">${b.bookmakerUsed} @ ${b.actualOdds?.toFixed(2)} · £${b.actualStake?.toFixed(2)}</span>
+  if (status === 'placed') {
+    return `<div style="margin-top:10px;padding:10px 14px;background:rgba(0,255,135,.06);border:1px solid rgba(0,255,135,.18);border-radius:8px;font-size:12px;display:flex;align-items:center;gap:10px">
+      <span style="color:var(--green);font-size:14px">✓</span>
+      <div>
+        <span style="color:var(--green);font-weight:600">Placed</span>
+        <span style="color:var(--muted);margin-left:8px">${b.bookmakerUsed} @ ${b.actualOdds?.toFixed(2)} · £${b.actualStake?.toFixed(2)}</span>
+        ${b.placedAt ? `<span style="color:var(--muted);margin-left:8px;font-size:11px">${new Date(b.placedAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}</span>` : ''}
+      </div>
     </div>`;
   }
 
+  if (status === 'skipped') {
+    const reasonMap = { no_value: 'No value at odds', account_not_setup: 'Account not set up', stake_too_high: 'Stake too high', other: 'Other' };
+    return `<div style="margin-top:10px;padding:10px 14px;background:rgba(255,82,82,.06);border:1px solid rgba(255,82,82,.18);border-radius:8px;font-size:12px">
+      <span style="color:var(--red);font-weight:600">Skipped</span>
+      <span style="color:var(--muted);margin-left:8px">${reasonMap[b.skipReason] || b.skipReason}</span>
+    </div>`;
+  }
+
+  // pending_placement — show routing summary + Select Bookmaker button
+  const r = b.routingRecommendation;
+  const rec = r?.recommended;
   const tierLabel = t => t === 1 ? 'Exchange' : t === 2 ? 'Sharp' : 'UK';
-  const ex = r.exchangeOdds;
-  const teamKey = (r.outcomeName) || (b.bet === 'Home Win' ? b.fixture?.split(' vs ')[0]
-                : b.bet === 'Away Win' ? b.fixture?.split(' vs ')[1]
-                : 'Draw');
-  const exNet  = ex?.net?.[teamKey?.trim()];
-  const exRaw  = ex?.raw?.[teamKey?.trim()];
-  const exComm = ex ? Math.round(ex.commission * 100) : 2;
-  const altExchanges = (r.alternativeExchanges || []).map(alt => {
-    const altNet = alt.net?.[teamKey?.trim()];
-    return altNet ? `${alt.name} @${altNet.toFixed(2)}` : alt.name;
-  }).join(' · ');
-  const exchangeRow = ex
-    ? `<div><span style="color:var(--muted);display:inline-block;width:80px">EXCHANGE</span><span style="color:var(--text2)">${ex.name}</span>${exRaw ? `<span style="color:var(--muted);margin-left:6px">@${exRaw.toFixed(2)} raw · <strong style="color:var(--text2)">@${exNet?.toFixed(2)} net</strong> after ${exComm}% commission</span>` : ''}${altExchanges ? `<span style="color:var(--muted);margin-left:8px;font-size:10px">alt: ${altExchanges}</span>` : ''}</div>`
-    : `<div><span style="color:var(--muted);display:inline-block;width:80px">EXCHANGE</span><span style="color:var(--muted);font-style:italic">Check Betfair Exchange / Smarkets manually</span></div>`;
+  const recLine = rec
+    ? `<div style="font-size:11px;color:var(--muted)">Recommended: <strong style="color:var(--text1)">${rec.name}</strong> <span style="color:var(--muted)">${tierLabel(rec.tier)}</span>${r?.routingWarning ? ` · <span style="color:#f5a623">${r.routingWarning}</span>` : ''}</div>`
+    : `<div style="font-size:11px;color:var(--muted)">Open bookmaker selection to compare options</div>`;
   return `
-    <div style="margin-top:10px;padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;font-size:11px;line-height:2">
-      <div><span style="color:var(--muted);display:inline-block;width:80px">RECOMMENDED</span><span style="color:#fff;font-weight:600">${rec.name}</span><span style="color:var(--muted);margin-left:6px">${tierLabel(rec.tier)}${rec.lastUsed ? ' · last used ' + new Date(rec.lastUsed).toLocaleDateString('en-GB',{day:'numeric',month:'short'}) : ' · fresh'}</span></div>
-      ${r.routingWarning ? `<div style="color:#f5a623;font-size:10px;margin-left:80px">${r.routingWarning}</div>` : ''}
-      ${best ? `<div><span style="color:var(--muted);display:inline-block;width:80px">BEST PRICE</span><span style="color:var(--text2)">${best.name}</span></div>` : ''}
-      ${exchangeRow}
-      ${skips.map(s => `<div><span style="color:var(--muted);display:inline-block;width:80px">SKIP</span><span style="color:var(--muted);text-decoration:line-through">${s.name}</span><span style="color:var(--muted);margin-left:6px">${s.skipReason}</span></div>`).join('')}
-      <div style="margin-top:8px">
-        <button class="btn btn-cyan btn-sm" onclick="openPlacementModal('${b.id}')">Confirm placement</button>
+    <div style="margin-top:10px;padding:10px 14px;background:rgba(245,166,35,.06);border:1px solid rgba(245,166,35,.2);border-radius:8px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+      <div>
+        <div style="font-size:11px;font-weight:700;color:#f5a623;margin-bottom:2px;text-transform:uppercase;letter-spacing:.06em">Awaiting placement</div>
+        ${recLine}
       </div>
+      <button class="btn btn-sm" style="background:#f5a623;color:#000;border:none;font-weight:700;min-height:40px;padding:0 18px;flex-shrink:0" onclick="openBmPanel('${b.id}')">Select Bookmaker</button>
     </div>`;
 }
 
@@ -1188,9 +1268,10 @@ function recommendedCard(b) {
             <div class="stake-amount">£${(b.displayStake ?? b.suggestedStake).toFixed(2)}</div>
             <div class="stake-label">Half Kelly${b.kellStake && b.kellStake !== b.displayStake ? ` <span title="Exact Kelly: £${b.kellStake.toFixed(2)}" style="opacity:.55;font-size:9px">(exact £${b.kellStake.toFixed(2)})</span>` : ''}</div>
           </div>
-          <span class="stage-tag tag-recommended">Locked</span>
+          <span class="stage-tag tag-recommended" style="background:${(b.placementStatus||'pending_placement')==='placed'?'rgba(0,255,135,.15)':'rgba(245,166,35,.15)'};color:${(b.placementStatus||'pending_placement')==='placed'?'var(--green)':'#f5a623'}">${(b.placementStatus||'pending_placement')==='placed'?'Placed':'Locked'}</span>
+          ${(b.placementStatus||'pending_placement')==='placed' ? `
           <button class="btn btn-ghost btn-sm" onclick="manualResolve('${b.id}','win')" title="Mark Win" style="color:var(--green);border-color:var(--green)">W</button>
-          <button class="btn btn-ghost btn-sm" onclick="manualResolve('${b.id}','loss')" title="Mark Loss" style="color:var(--red);border-color:var(--red)">L</button>
+          <button class="btn btn-ghost btn-sm" onclick="manualResolve('${b.id}','loss')" title="Mark Loss" style="color:var(--red);border-color:var(--red)">L</button>` : ''}
         </div>
       </div>
       ${routingHTML(b)}
@@ -1683,10 +1764,10 @@ function drawPnlChart(data, initial = 1000) {
 // Uses in-memory odds cache on the server — no Odds API cost per tick.
 let _rerouteInterval = null;
 function syncRerouteInterval() {
-  const unconfirmed = (STATE.bets || []).filter(b => b.stage === 'RECOMMENDED' && !b.placementConfirmed);
+  const unconfirmed = (STATE.bets || []).filter(b => b.stage === 'RECOMMENDED' && (b.placementStatus || (b.placementConfirmed ? 'placed' : 'pending_placement')) === 'pending_placement');
   if (unconfirmed.length && !_rerouteInterval) {
     _rerouteInterval = setInterval(async () => {
-      const active = (STATE.bets || []).filter(b => b.stage === 'RECOMMENDED' && !b.placementConfirmed);
+      const active = (STATE.bets || []).filter(b => b.stage === 'RECOMMENDED' && (b.placementStatus || (b.placementConfirmed ? 'placed' : 'pending_placement')) === 'pending_placement');
       if (!active.length) { clearInterval(_rerouteInterval); _rerouteInterval = null; return; }
       for (const b of active) {
         try { await apiFetch(`/api/bets/${b.id}/reroute`, { method: 'POST' }); } catch { /* silent */ }
@@ -2382,73 +2463,280 @@ async function runOddsBackfill() {
   }
 }
 
-// ─── PLACEMENT CONFIRMATION MODAL ────────────────────────────────────────────
+// ─── BOOKMAKER SELECTION PANEL ───────────────────────────────────────────────
 
-let _placementBetId = null;
+let _bmPanelBetId   = null;
+let _bmPanelBooks   = [];
+let _bmSelectedId   = null;
+let _bmSelectedName = null;
 
-async function openPlacementModal(betId) {
-  _placementBetId = betId;
+async function openBmPanel(betId) {
+  _bmPanelBetId  = betId;
+  _bmSelectedId  = null;
+  _bmSelectedName = null;
+
   const bet = STATE.bets.find(b => b.id === betId);
   if (!bet) return;
 
-  // Title and subtitle
-  document.getElementById('pm-title').textContent = `Confirm placement — ${bet.fixture}`;
-  document.getElementById('pm-subtitle').textContent = `${bet.bet} · Kelly stake £${bet.suggestedStake?.toFixed(2)} · odds ${bet.bookOdds?.toFixed(2)}`;
+  document.getElementById('bmp-title').textContent    = bet.fixture;
+  document.getElementById('bmp-subtitle').textContent = `${bet.bet} · score ${bet.successScore} · book odds ${bet.bookOdds?.toFixed(2)} · Kelly £${(bet.displayStake ?? bet.suggestedStake)?.toFixed(2)}`;
+  document.getElementById('bmp-confirm-section').style.display = 'none';
+  document.getElementById('bmp-group-warning').style.display   = 'none';
+  document.getElementById('bmp-table-body').innerHTML = '<tr><td colspan="8" style="padding:20px;color:var(--muted);text-align:center">Loading bookmakers…</td></tr>';
+  document.getElementById('bmp-exchange-summary').textContent = 'Calculating best exchange…';
+  document.getElementById('bm-panel').style.display = 'flex';
 
-  // Pre-fill odds and stake
-  document.getElementById('pm-odds').value  = bet.bookOdds?.toFixed(2) || '';
-  document.getElementById('pm-stake').value = bet.suggestedStake?.toFixed(2) || '';
-
-  // Populate bookmaker dropdown from API
-  const sel = document.getElementById('pm-bookmaker');
-  sel.innerHTML = '<option value="">Select bookmaker…</option>';
   try {
-    const books = await apiFetch('/api/bookmakers');
-    const rec   = bet.routingRecommendation?.recommended;
-    books.forEach(b => {
-      const opt = document.createElement('option');
-      opt.value       = b.id;
-      opt.textContent = `${b.name} (T${b.tier})${b.id === rec?.id ? ' ★ Recommended' : ''}`;
-      if (b.id === rec?.id) opt.selected = true;
-      sel.appendChild(opt);
-    });
-    // Add Other
-    const other = document.createElement('option');
-    other.value = '__other__'; other.textContent = 'Other';
-    sel.appendChild(other);
-  } catch {}
+    _bmPanelBooks = await apiFetch('/api/bookmakers');
+  } catch {
+    _bmPanelBooks = [];
+  }
 
-  const modal = document.getElementById('placement-modal');
-  modal.style.display = 'flex';
+  _renderBmTable(bet, _bmPanelBooks);
 }
 
-function closePlacementModal() {
-  document.getElementById('placement-modal').style.display = 'none';
-  _placementBetId = null;
+function _bmOddsForOutcome(bm, bet) {
+  // Try the odds snapshot stored at lock time — fuzzy name match (Odds API "Betfair" vs internal "Betfair Exchange")
+  const snap = bet.oddsSnapshot || [];
+  const bmLow = bm.name.toLowerCase();
+  const entry = snap.find(s => {
+    const sLow = s.name.toLowerCase();
+    return sLow === bmLow || bmLow.includes(sLow) || sLow.includes(bmLow);
+  });
+  if (!entry) return null;
+  const [home, away] = (bet.fixture || '').split(' vs ');
+  if (bet.bet === 'Home Win') return entry.homeOdds;
+  if (bet.bet === 'Away Win') return entry.awayOdds;
+  return entry.drawOdds;
+}
+
+function _calcKelly(modelProb, odds, bankroll, fraction) {
+  if (!odds || odds <= 1 || !modelProb) return null;
+  const edge = modelProb * odds - 1;
+  if (edge <= 0) return null;
+  const kelly = (edge / (odds - 1)) * (fraction || 0.5);
+  return kelly * bankroll;
+}
+
+function _renderBmTable(bet, books) {
+  const bankroll  = STATE.bankroll?.current || 1000;
+  const modelProb = bet.modelProb || 0;
+  const fraction  = bet.kellyFraction || 0.5;
+  const recId     = bet.routingRecommendation?.recommended?.id;
+  const now       = Date.now();
+  const yesterday = now - 86400000;
+
+  // Total bets placed across all bookmakers for volume %
+  const totalBets = books.reduce((s, b) => s + (b.totalBets || 0), 0) || 1;
+
+  // Find best exchange net odds for the summary line
+  let bestExchange = null, bestExNet = 0;
+  for (const bm of books) {
+    if (bm.status === 'restricted') continue;
+    if (bm.tier !== 1) continue;
+    const odds = _bmOddsForOutcome(bm, bet);
+    if (!odds) continue;
+    const comm = bm.commission || 0.02;
+    const net  = 1 + (odds - 1) * (1 - comm);
+    if (net > bestExNet) { bestExNet = net; bestExchange = { ...bm, netOdds: net, rawOdds: odds }; }
+  }
+
+  if (bestExchange) {
+    const comm = Math.round((bestExchange.commission || 0.02) * 100);
+    document.getElementById('bmp-exchange-summary').innerHTML =
+      `Recommended: <strong>${bestExchange.name}</strong> @ ${bestExchange.rawOdds?.toFixed(2)} (net <strong>${bestExNet.toFixed(2)}</strong> after ${comm}% commission)`;
+    document.getElementById('bmp-best-exchange-btn')._bestExchangeId = bestExchange.id;
+  } else {
+    document.getElementById('bmp-exchange-summary').textContent = 'No exchange odds available at lock time';
+    document.getElementById('bmp-best-exchange-btn')._bestExchangeId = null;
+  }
+
+  // Sort: tier 1 first, then within tier by usage % asc
+  const sorted = [...books]
+    .filter(b => b.status !== 'restricted')
+    .sort((a, b) => {
+      if (a.tier !== b.tier) return a.tier - b.tier;
+      const aPct = (a.totalBets || 0) / totalBets;
+      const bPct = (b.totalBets || 0) / totalBets;
+      return aPct - bPct;
+    });
+
+  const TIER_LABEL = { 1: 'Exchange', 2: 'Sharp', 3: 'Soft' };
+  const TIER_COLOR = { 1: 'var(--cyan)', 2: '#a78bfa', 3: 'var(--muted)' };
+  const STATUS_DOT = { active: '🟢', signal: '🟡', limited: '🟠', restricted: '🔴' };
+
+  const rows = sorted.map(bm => {
+    const rawOdds  = _bmOddsForOutcome(bm, bet);
+    const comm     = bm.commission || 0;
+    const dispOdds = rawOdds
+      ? (bm.tier === 1 ? 1 + (rawOdds - 1) * (1 - comm) : rawOdds)
+      : null;
+    const edge     = rawOdds ? (modelProb * rawOdds - 1) : null;
+    const kellRaw  = rawOdds ? _calcKelly(modelProb, rawOdds, bankroll, fraction) : null;
+    const kellRnd  = kellRaw != null ? Math.max(0.5, Math.round(kellRaw * 2) / 2) : null;
+
+    const volPct   = totalBets > 1 ? ((bm.totalBets || 0) / totalBets * 100) : 0;
+    const overVol  = volPct > 15;
+    const usedRecently = bm.lastUsed && new Date(bm.lastUsed).getTime() > yesterday;
+    const isRec    = bm.id === recId;
+
+    const exchangeLiq = bm.tier === 1 && kellRnd && kellRnd > 0
+      ? (bm.liquidity != null ? bm.liquidity < kellRnd * 5 : false)
+      : false;
+
+    const rowBg = isRec ? 'rgba(0,255,135,.06)' : overVol ? 'rgba(255,82,82,.06)' : '';
+    const rowBorder = isRec ? 'border-left:3px solid var(--green)' : overVol ? 'border-left:3px solid var(--red)' : 'border-left:3px solid transparent';
+
+    return `<tr data-bmid="${bm.id}" data-bmname="${bm.name}"
+      style="cursor:pointer;${rowBg ? 'background:' + rowBg + ';' : ''}${rowBorder};transition:background .15s"
+      onclick="event.stopPropagation();selectBmRow('${bm.id}','${bm.name.replace(/'/g,"\\'")}',${rawOdds || bet.bookOdds},${kellRnd || (bet.displayStake ?? bet.suggestedStake)})"
+      onmouseenter="this.style.background='var(--surface2)'"
+      onmouseleave="this.style.background='${rowBg || ''}'">
+      <td style="padding:10px 12px;white-space:nowrap">
+        <div style="display:flex;align-items:center;gap:6px">
+          ${isRec ? '<span style="font-size:9px;background:var(--green);color:#000;border-radius:3px;padding:1px 4px;font-weight:700;letter-spacing:.04em">REC</span>' : ''}
+          <span style="font-weight:600;color:var(--text1)">${bm.name}</span>
+        </div>
+        <div style="font-size:10px;color:var(--muted);margin-top:1px" title="Parent group: ${bm.parentGroup || '—'}">${bm.parentGroup || '—'}</div>
+      </td>
+      <td style="padding:10px 8px;text-align:center">
+        <span style="font-size:10px;font-weight:700;color:${TIER_COLOR[bm.tier] || 'var(--muted)'}">${TIER_LABEL[bm.tier] || `T${bm.tier}`}</span>
+      </td>
+      <td style="padding:10px 8px;text-align:right;font-family:'DM Mono',monospace">
+        ${dispOdds ? `<span style="color:var(--text1)">${dispOdds.toFixed(2)}</span>${bm.tier === 1 && comm ? `<div style="font-size:9px;color:var(--muted)">net after ${Math.round(comm*100)}%</div>` : ''}` : '<span style="color:var(--muted)">—</span>'}
+      </td>
+      <td style="padding:10px 8px;text-align:right;font-family:'DM Mono',monospace">
+        ${edge != null ? `<span style="color:${edge > 0 ? 'var(--green)' : 'var(--red)'}">${edge > 0 ? '+' : ''}${(edge * 100).toFixed(1)}%</span>` : '<span style="color:var(--muted)">—</span>'}
+      </td>
+      <td style="padding:10px 8px;text-align:right;font-family:'DM Mono',monospace">
+        ${kellRaw != null ? `£${kellRaw.toFixed(2)}` : '<span style="color:var(--muted)">—</span>'}
+      </td>
+      <td style="padding:10px 8px;text-align:right;font-family:'DM Mono',monospace;font-weight:600">
+        ${kellRnd != null ? `£${kellRnd.toFixed(2)}` : '<span style="color:var(--muted)">—</span>'}
+        ${exchangeLiq ? '<div style="font-size:9px;color:#f5a623">Low liquidity ⚠</div>' : ''}
+      </td>
+      <td style="padding:10px 8px;text-align:right">
+        <span style="color:${overVol ? 'var(--red)' : 'var(--muted)'};font-weight:${overVol ? '700' : '400'}">${volPct.toFixed(0)}%</span>
+        ${overVol ? '<div style="font-size:9px;color:var(--red)">Over 15% ⚠</div>' : ''}
+      </td>
+      <td style="padding:10px 8px;text-align:center">
+        <span title="${bm.status}">${STATUS_DOT[bm.status || 'active'] || '🟢'}</span>
+        ${usedRecently ? '<div style="font-size:9px;color:var(--muted)">recent</div>' : ''}
+      </td>
+    </tr>`;
+  });
+
+  document.getElementById('bmp-table-body').innerHTML = rows.length
+    ? rows.join('')
+    : '<tr><td colspan="8" style="padding:20px;color:var(--muted);text-align:center">No active bookmakers configured</td></tr>';
+}
+
+function selectBmRow(bmId, bmName, odds, stake) {
+  _bmSelectedId   = bmId;
+  _bmSelectedName = bmName;
+
+  // Highlight selected row
+  document.querySelectorAll('#bmp-table-body tr').forEach(r => r.style.outline = '');
+  const row = document.querySelector(`#bmp-table-body tr[data-bmid="${bmId}"]`);
+  if (row) row.style.outline = '2px solid var(--cyan)';
+
+  // Pre-fill fields
+  document.getElementById('bmp-odds').value  = odds ? parseFloat(odds).toFixed(2) : '';
+  document.getElementById('bmp-stake').value = stake ? parseFloat(stake).toFixed(2) : '';
+  document.getElementById('bmp-selected-label').textContent = `Placing with: ${bmName}`;
+
+  // Check parent group warning
+  const bm   = _bmPanelBooks.find(b => b.id === bmId);
+  const warn = document.getElementById('bmp-group-warning');
+  const bet  = STATE.bets.find(b => b.id === _bmPanelBetId);
+  const yesterday = Date.now() - 86400000;
+  if (bm?.parentGroup) {
+    const sibling = _bmPanelBooks.find(s =>
+      s.id !== bmId &&
+      s.parentGroup === bm.parentGroup &&
+      s.lastUsed &&
+      new Date(s.lastUsed).getTime() > yesterday
+    );
+    if (sibling) {
+      const hoursAgo = Math.round((Date.now() - new Date(sibling.lastUsed).getTime()) / 3600000);
+      warn.textContent = `⚠ ${sibling.name} used ${hoursAgo}h ago — same ${bm.parentGroup} group`;
+      warn.style.display = 'block';
+    } else {
+      warn.style.display = 'none';
+    }
+  } else {
+    warn.style.display = 'none';
+  }
+
+  document.getElementById('bmp-confirm-section').style.display = 'block';
+  document.getElementById('bmp-confirm-section').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function selectBestExchange() {
+  const btn = document.getElementById('bmp-best-exchange-btn');
+  const id  = btn._bestExchangeId;
+  if (!id) return;
+  const bm  = _bmPanelBooks.find(b => b.id === id);
+  if (!bm)  return;
+  const bet = STATE.bets.find(b => b.id === _bmPanelBetId);
+  const rawOdds = bet ? _bmOddsForOutcome(bm, bet) : null;
+  const comm    = bm.commission || 0.02;
+  const netOdds = rawOdds ? 1 + (rawOdds - 1) * (1 - comm) : null;
+  const bankroll = STATE.bankroll?.current || 1000;
+  const kellRaw  = bet ? _calcKelly(bet.modelProb, rawOdds, bankroll, bet.kellyFraction || 0.5) : null;
+  const kellRnd  = kellRaw != null ? Math.max(0.5, Math.round(kellRaw * 2) / 2) : (bet?.displayStake ?? bet?.suggestedStake);
+  selectBmRow(bm.id, bm.name, netOdds || rawOdds || bet?.bookOdds, kellRnd);
+}
+
+function closeBmPanel() {
+  document.getElementById('bm-panel').style.display = 'none';
+  _bmPanelBetId  = null;
+  _bmSelectedId  = null;
+  _bmSelectedName = null;
 }
 
 async function confirmPlacement() {
-  if (!_placementBetId) return;
-  const sel   = document.getElementById('pm-bookmaker');
-  const bmId  = sel.value;
-  const bmName = sel.options[sel.selectedIndex]?.text?.replace(/ \(T\d\).*/, '').trim() || bmId;
-  const odds  = parseFloat(document.getElementById('pm-odds').value);
-  const stake = parseFloat(document.getElementById('pm-stake').value);
-
-  if (!bmId) { toast('Select a bookmaker', 'error'); return; }
+  if (!_bmPanelBetId || !_bmSelectedId) { toast('Select a bookmaker row first', 'error'); return; }
+  const odds  = parseFloat(document.getElementById('bmp-odds').value);
+  const stake = parseFloat(document.getElementById('bmp-stake').value);
+  if (!odds || odds <= 1) { toast('Enter valid odds', 'error'); return; }
+  if (!stake || stake <= 0) { toast('Enter a stake', 'error'); return; }
 
   try {
-    await apiFetch(`/api/bets/${_placementBetId}/confirm-placement`, {
-      method: 'POST',
+    await apiFetch(`/api/bets/${_bmPanelBetId}/confirm-placement`, {
+      method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bookmakerId: bmId === '__other__' ? 'other' : bmId, bookmakerName: bmName, actualOdds: odds, actualStake: stake }),
+      body:    JSON.stringify({ bookmakerId: _bmSelectedId, bookmakerName: _bmSelectedName, actualOdds: odds, actualStake: stake }),
     });
-    closePlacementModal();
+    closeBmPanel();
     await loadState();
     renderScout();
-    toast(`Placement confirmed — ${bmName} @ ${odds}`, 'success');
+    toast(`Placed with ${_bmSelectedName} @ ${odds} — £${stake}`, 'success');
   } catch (e) {
-    toast('Failed to confirm: ' + e.message, 'error');
+    toast('Confirm failed: ' + e.message, 'error');
+  }
+}
+
+function openSkipPanel() {
+  document.getElementById('skip-panel').style.display = 'flex';
+}
+
+async function confirmSkip() {
+  if (!_bmPanelBetId) return;
+  const reason = document.getElementById('skip-reason').value;
+  try {
+    await apiFetch(`/api/bets/${_bmPanelBetId}/skip`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ skipReason: reason }),
+    });
+    document.getElementById('skip-panel').style.display = 'none';
+    closeBmPanel();
+    await loadState();
+    renderScout();
+    toast('Bet skipped', 'info');
+  } catch (e) {
+    toast('Skip failed: ' + e.message, 'error');
   }
 }
 
