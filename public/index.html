@@ -576,6 +576,51 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     </div>
   </div>
 
+  <!-- Transactions -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-header">
+      <span class="card-title">Bankroll Transactions</span>
+      <button class="btn btn-ghost btn-sm" onclick="renderTransactions()">↻ Refresh</button>
+    </div>
+    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 14px">
+      Deposits, withdrawals, and resets — separate from betting P&L. ROI is unaffected by these movements.
+    </p>
+    <div id="txn-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px"></div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th style="text-align:center">Type</th>
+            <th style="text-align:right">Amount</th>
+            <th style="text-align:right">Bankroll Before</th>
+            <th style="text-align:right">Bankroll After</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody id="txn-body"></tbody>
+      </table>
+      <div class="empty" id="txn-empty" style="display:none">
+        <div class="empty-icon">💷</div>
+        <p>No transactions yet — use Deposit / Withdraw / Reset in Settings to log bankroll movements.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Profits banked tile — below transactions -->
+  <div class="grid-2" style="margin-top:16px" id="profits-banked-row" style="display:none">
+    <div class="stat-tile">
+      <div class="stat-label">Total Withdrawn (Profits Banked)</div>
+      <div class="stat-value c-green" id="total-withdrawn">—</div>
+      <div class="stat-sub" id="total-deposited-sub">—</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Net Funds In / Out</div>
+      <div class="stat-value" id="net-funds">—</div>
+      <div class="stat-sub">deposits minus withdrawals</div>
+    </div>
+  </div>
+
 </div>
 
 <!-- ═══════════════════════════ MODEL ═══════════════════════════ -->
@@ -964,11 +1009,16 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       </div>
 
       <div class="card">
-        <div class="card-header"><span class="card-title">Paper Trading</span></div>
-        <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
-          Reset wipes all bets and returns the bankroll to £1,000. Use at the end of a validation phase.
+        <div class="card-header"><span class="card-title">Bankroll Management</span></div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:14px">
+          Withdraw profits, deposit funds, or reset for a new validation phase. Withdrawals and deposits are logged separately from betting P&L so ROI stays clean.
         </div>
-        <button class="btn btn-ghost btn-sm" onclick="confirmReset()" style="border-color:var(--red);color:var(--red)">Reset Bankroll & Bets</button>
+        <div style="display:flex;flex-wrap:wrap;gap:8px">
+          <button class="btn btn-cyan btn-sm" onclick="confirmDeposit()">Deposit Funds</button>
+          <button class="btn btn-ghost btn-sm" onclick="confirmWithdraw()" style="border-color:var(--green);color:var(--green)">Withdraw Profits</button>
+          <button class="btn btn-ghost btn-sm" onclick="confirmBankrollReset()" style="border-color:var(--cyan);color:var(--cyan)">Reset Bankroll</button>
+          <button class="btn btn-ghost btn-sm" onclick="confirmReset()" style="border-color:var(--red);color:var(--red)">Reset Bankroll &amp; Bets</button>
+        </div>
       </div>
       <div class="card">
         <div class="card-header"><span class="card-title">API Status</span></div>
@@ -1557,6 +1607,7 @@ function renderPerformance() {
   });
 
   renderBmPerf();
+  renderTransactions();
 }
 
 async function renderBmPerf() {
@@ -2225,10 +2276,106 @@ async function loadDataCoverage() {
 }
 
 async function confirmReset() {
-  if (!confirm('This will wipe all bets and reset the bankroll to £1,000. Are you sure?')) return;
-  await apiFetch('/api/bankroll/reset', { method: 'POST' });
+  if (!confirm('This will wipe ALL bets and reset the bankroll. Use at end of a validation phase. Continue?')) return;
+  const amountStr = prompt('Starting bankroll amount (£):', '1000');
+  if (amountStr === null) return;
+  const amount = parseFloat(amountStr) || 1000;
+  const notes  = prompt('Notes (optional):', 'New validation phase') || '';
+  await apiFetch('/api/bankroll/reset', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ amount, notes }) });
   await loadState();
-  toast('Bankroll reset to £1,000', 'success');
+  toast(`Bankroll & bets reset to £${amount.toFixed(2)}`, 'success');
+}
+
+async function confirmBankrollReset() {
+  if (!confirm('This resets the bankroll only — bets are kept. Continue?')) return;
+  const amountStr = prompt('New starting bankroll amount (£):', '1000');
+  if (amountStr === null) return;
+  const amount = parseFloat(amountStr) || 1000;
+  const notes  = prompt('Notes (optional):', 'Bankroll reset') || '';
+  await apiFetch('/api/bankroll/reset-only', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ amount, notes }) });
+  await loadState();
+  toast(`Bankroll reset to £${amount.toFixed(2)} (bets kept)`, 'success');
+}
+
+async function confirmDeposit() {
+  const amountStr = prompt('Deposit amount (£):');
+  if (!amountStr) return;
+  const amount = parseFloat(amountStr);
+  if (!amount || amount <= 0) { toast('Invalid amount', 'error'); return; }
+  const notes = prompt('Notes (optional):', '') || '';
+  await apiFetch('/api/bankroll/deposit', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ amount, notes }) });
+  await loadState();
+  toast(`Deposited £${amount.toFixed(2)}`, 'success');
+}
+
+async function confirmWithdraw() {
+  const amountStr = prompt('Withdrawal amount (£):');
+  if (!amountStr) return;
+  const amount = parseFloat(amountStr);
+  if (!amount || amount <= 0) { toast('Invalid amount', 'error'); return; }
+  const notes = prompt('Notes (optional):', '') || '';
+  try {
+    await apiFetch('/api/bankroll/withdraw', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ amount, notes }) });
+    await loadState();
+    toast(`Withdrew £${amount.toFixed(2)}`, 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function renderTransactions() {
+  let data;
+  try { data = await apiFetch('/api/transactions'); } catch(e) { return; }
+
+  const tbody  = document.getElementById('txn-body');
+  const emptyEl = document.getElementById('txn-empty');
+  const summEl  = document.getElementById('txn-summary');
+  const profRow = document.getElementById('profits-banked-row');
+  tbody.innerHTML = '';
+
+  if (!data.transactions.length) {
+    emptyEl.style.display = 'block';
+    summEl.innerHTML = '';
+    profRow.style.display = 'none';
+    return;
+  }
+  emptyEl.style.display = 'none';
+  profRow.style.display = '';
+
+  // Summary chips
+  summEl.innerHTML = [
+    data.totalDeposited ? `<span class="badge badge-cyan">Deposited: £${data.totalDeposited.toFixed(2)}</span>` : '',
+    data.totalWithdrawn ? `<span class="badge badge-green">Withdrawn: £${data.totalWithdrawn.toFixed(2)}</span>` : '',
+    `<span class="badge ${data.netWithdrawn >= 0 ? 'badge-green' : 'badge-cyan'}">${data.netWithdrawn >= 0 ? 'Net out' : 'Net in'}: £${Math.abs(data.netWithdrawn).toFixed(2)}</span>`,
+  ].join('');
+
+  // Profits-banked tiles
+  document.getElementById('total-withdrawn').textContent   = `£${data.totalWithdrawn.toFixed(2)}`;
+  document.getElementById('total-deposited-sub').textContent = `£${data.totalDeposited.toFixed(2)} deposited`;
+  const netEl = document.getElementById('net-funds');
+  netEl.textContent = `${data.netWithdrawn >= 0 ? '+' : ''}£${Math.abs(data.netWithdrawn).toFixed(2)}`;
+  netEl.className   = `stat-value ${data.netWithdrawn >= 0 ? 'c-green' : 'c-red'}`;
+
+  // Type badges
+  const typeBadge = t =>
+    t === 'withdrawal' ? '<span class="badge badge-green">WITHDRAW</span>' :
+    t === 'deposit'    ? '<span class="badge badge-cyan">DEPOSIT</span>' :
+                         '<span class="badge badge-muted">RESET</span>';
+
+  // Table rows (newest first — already sorted that way from server)
+  data.transactions.forEach(txn => {
+    const d = new Date(txn.date);
+    const dateStr = `${d.toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'numeric'})} ${d.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'})}`;
+    const amtColor = txn.type === 'withdrawal' ? 'c-green' : txn.type === 'deposit' ? 'c-cyan' : 'c-muted';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="mono" style="white-space:nowrap">${dateStr}</td>
+      <td style="text-align:center">${typeBadge(txn.type)}</td>
+      <td style="text-align:right" class="mono ${amtColor}">£${txn.amount.toFixed(2)}</td>
+      <td style="text-align:right" class="mono">£${(txn.bankrollBefore||0).toFixed(2)}</td>
+      <td style="text-align:right" class="mono">£${(txn.bankrollAfter||0).toFixed(2)}</td>
+      <td style="color:var(--text2);font-size:.8rem">${txn.notes || ''}</td>
+    `;
+    tbody.appendChild(tr);
+  });
 }
 
 // ─── AUTO-REFRESH ─────────────────────────────────────────────────────────────

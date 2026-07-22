@@ -2010,14 +2010,82 @@ app.get('/api/state', (_req, res) => {
   });
 });
 
+// ── Transactions helpers ───────────────────────────────────────────────────────
+function getTransactions() { return readJSON('transactions.json') || []; }
+function saveTransactions(txns) { writeJSON('transactions.json', txns); }
+function addTransaction(type, amount, bankrollBefore, bankrollAfter, notes = '') {
+  const txns = getTransactions();
+  const id   = `txn_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
+  txns.unshift({ id, type, amount, bankrollBefore, bankrollAfter, date: new Date().toISOString(), notes });
+  saveTransactions(txns);
+  return txns[0];
+}
+
 // GET / PUT bankroll
 app.get('/api/bankroll', (_req, res) => res.json(getBankroll()));
-app.post('/api/bankroll/reset', (_req, res) => {
-  const br = { initial: 1000, current: 1000 };
+
+// Full reset: wipes bets + bankroll + watching, logs as 'reset' transaction
+app.post('/api/bankroll/reset', (req, res) => {
+  const amount = parseFloat(req.body?.amount) || 1000;
+  const notes  = req.body?.notes  || '';
+  const before = getBankroll().current;
+  const br     = { initial: amount, current: amount };
   saveBankroll(br);
   saveBets([]);
   saveWatching([]);
+  addTransaction('reset', amount, before, amount, notes);
   res.json(br);
+});
+
+// Bankroll-only reset: does NOT touch bets/watching
+app.post('/api/bankroll/reset-only', (req, res) => {
+  const amount = parseFloat(req.body?.amount) || 1000;
+  const notes  = req.body?.notes  || '';
+  const before = getBankroll().current;
+  const br     = { initial: amount, current: amount };
+  saveBankroll(br);
+  addTransaction('reset', amount, before, amount, notes || 'Bankroll reset (bets kept)');
+  res.json(br);
+});
+
+// Deposit — adds to current bankroll
+app.post('/api/bankroll/deposit', (req, res) => {
+  const amount = parseFloat(req.body?.amount);
+  if (!amount || amount <= 0) return res.status(400).json({ error: 'amount must be positive' });
+  const notes  = req.body?.notes || '';
+  const br     = getBankroll();
+  const before = br.current;
+  br.current   = parseFloat((br.current + amount).toFixed(2));
+  saveBankroll(br);
+  const txn = addTransaction('deposit', amount, before, br.current, notes);
+  res.json({ bankroll: br, transaction: txn });
+});
+
+// Withdrawal — deducts from current bankroll
+app.post('/api/bankroll/withdraw', (req, res) => {
+  const amount = parseFloat(req.body?.amount);
+  if (!amount || amount <= 0) return res.status(400).json({ error: 'amount must be positive' });
+  const br     = getBankroll();
+  if (amount > br.current) return res.status(400).json({ error: 'Cannot withdraw more than current bankroll' });
+  const notes  = req.body?.notes || '';
+  const before = br.current;
+  br.current   = parseFloat((br.current - amount).toFixed(2));
+  saveBankroll(br);
+  const txn = addTransaction('withdrawal', amount, before, br.current, notes);
+  res.json({ bankroll: br, transaction: txn });
+});
+
+// GET transactions
+app.get('/api/transactions', (_req, res) => {
+  const txns = getTransactions();
+  const totalWithdrawn = txns.filter(t => t.type === 'withdrawal').reduce((s, t) => s + t.amount, 0);
+  const totalDeposited = txns.filter(t => t.type === 'deposit').reduce((s, t) => s + t.amount, 0);
+  res.json({
+    transactions: txns,
+    totalWithdrawn: parseFloat(totalWithdrawn.toFixed(2)),
+    totalDeposited: parseFloat(totalDeposited.toFixed(2)),
+    netWithdrawn:   parseFloat((totalWithdrawn - totalDeposited).toFixed(2)),
+  });
 });
 
 // GET settings / PUT settings
