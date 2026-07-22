@@ -141,17 +141,35 @@ const { setRateLimited, isRateLimited, getRateLimitState, backfillCutoffReached 
 function getBankroll() {
   const stored  = readJSON('bankroll.json') || { initial: 1000, lastUpdated: null };
   const initial = stored.initial || 1000;
-  // Compute current from resolved bets (deduplicated by fixtureId) so cached value can never be stale
-  const bets    = readJSON('bets.json') || [];
-  const seen    = new Set();
-  let computed  = initial;
+
+  // Transactions shift the base: deposits add, withdrawals subtract, resets set a new anchor.
+  // We replay transactions to find the current non-bet base, starting from initial.
+  const txns = (readJSON('transactions.json') || []).slice().reverse(); // oldest first
+  let base = initial;
+  for (const t of txns) {
+    if (t.type === 'reset')      { base = t.bankrollAfter; }
+    else if (t.type === 'deposit')    { base += t.amount; }
+    else if (t.type === 'withdrawal') { base -= t.amount; }
+  }
+
+  // Add bet P&L on top of the transaction-adjusted base (deduped by fixtureId)
+  // Only count bets resolved AFTER the last reset transaction, to avoid double-counting cleared bets.
+  const lastReset = txns.filter(t => t.type === 'reset').pop();
+  const resetCutoff = lastReset ? new Date(lastReset.date).getTime() : 0;
+  const bets = readJSON('bets.json') || [];
+  const seen = new Set();
+  let betPnl = 0;
   for (const b of bets) {
     if (b.result && b.pnl != null && !seen.has(b.fixtureId)) {
-      seen.add(b.fixtureId);
-      computed += b.pnl;
+      const resolvedAt = b.resolvedAt ? new Date(b.resolvedAt).getTime() : Infinity;
+      if (resolvedAt > resetCutoff) {
+        seen.add(b.fixtureId);
+        betPnl += b.pnl;
+      }
     }
   }
-  const current = parseFloat(computed.toFixed(2));
+
+  const current = parseFloat((base + betPnl).toFixed(2));
   return { ...stored, initial, current };
 }
 
@@ -2029,12 +2047,11 @@ app.post('/api/bankroll/reset', (req, res) => {
   const amount = parseFloat(req.body?.amount) || 1000;
   const notes  = req.body?.notes  || '';
   const before = getBankroll().current;
-  const br     = { initial: amount, current: amount };
-  saveBankroll(br);
+  saveBankroll({ initial: amount });
   saveBets([]);
   saveWatching([]);
   addTransaction('reset', amount, before, amount, notes);
-  res.json(br);
+  res.json(getBankroll());
 });
 
 // Bankroll-only reset: does NOT touch bets/watching
@@ -2042,10 +2059,9 @@ app.post('/api/bankroll/reset-only', (req, res) => {
   const amount = parseFloat(req.body?.amount) || 1000;
   const notes  = req.body?.notes  || '';
   const before = getBankroll().current;
-  const br     = { initial: amount, current: amount };
-  saveBankroll(br);
+  saveBankroll({ initial: amount });
   addTransaction('reset', amount, before, amount, notes || 'Bankroll reset (bets kept)');
-  res.json(br);
+  res.json(getBankroll());
 });
 
 // Deposit — adds to current bankroll
@@ -2053,26 +2069,22 @@ app.post('/api/bankroll/deposit', (req, res) => {
   const amount = parseFloat(req.body?.amount);
   if (!amount || amount <= 0) return res.status(400).json({ error: 'amount must be positive' });
   const notes  = req.body?.notes || '';
-  const br     = getBankroll();
-  const before = br.current;
-  br.current   = parseFloat((br.current + amount).toFixed(2));
-  saveBankroll(br);
-  const txn = addTransaction('deposit', amount, before, br.current, notes);
-  res.json({ bankroll: br, transaction: txn });
+  const before = getBankroll().current;
+  const after  = parseFloat((before + amount).toFixed(2));
+  const txn    = addTransaction('deposit', amount, before, after, notes);
+  res.json({ bankroll: getBankroll(), transaction: txn });
 });
 
 // Withdrawal — deducts from current bankroll
 app.post('/api/bankroll/withdraw', (req, res) => {
   const amount = parseFloat(req.body?.amount);
   if (!amount || amount <= 0) return res.status(400).json({ error: 'amount must be positive' });
-  const br     = getBankroll();
-  if (amount > br.current) return res.status(400).json({ error: 'Cannot withdraw more than current bankroll' });
+  const before = getBankroll().current;
+  if (amount > before) return res.status(400).json({ error: 'Cannot withdraw more than current bankroll' });
   const notes  = req.body?.notes || '';
-  const before = br.current;
-  br.current   = parseFloat((br.current - amount).toFixed(2));
-  saveBankroll(br);
-  const txn = addTransaction('withdrawal', amount, before, br.current, notes);
-  res.json({ bankroll: br, transaction: txn });
+  const after  = parseFloat((before - amount).toFixed(2));
+  const txn = addTransaction('withdrawal', amount, before, after, notes);
+  res.json({ bankroll: getBankroll(), transaction: txn });
 });
 
 // GET transactions
@@ -3415,14 +3427,6 @@ function recalculateBankroll() {
       seen.add(b.fixtureId);
       unique.push(b);
     }
-  }
-
-  const initial = getBankroll().initial || 1000;
-  const current = parseFloat((initial + unique.reduce((sum, b) => sum + b.pnl, 0)).toFixed(2));
-  const br = getBankroll();
-  if (br.current !== current) {
-    saveBankroll({ ...br, current, initial });
-    console.log(`[Migration] Bankroll recalculated from ${unique.length} unique resolved bets: £${br.current} → £${current}`);
   }
 
   // Remove duplicate bets (keep first per fixtureId, remove remaining)
