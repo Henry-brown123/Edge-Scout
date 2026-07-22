@@ -505,6 +505,16 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       <div class="stat-value" id="p-roi">—</div>
       <div class="stat-sub">return on staked</div>
     </div>
+    <div class="stat-tile">
+      <div class="stat-label">Avg CLV</div>
+      <div class="stat-value" id="p-avg-clv">—</div>
+      <div class="stat-sub">vs Pinnacle close</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">CLV (Last 10)</div>
+      <div class="stat-value" id="p-clv-last10">—</div>
+      <div class="stat-sub" id="p-clv-n">— bets with data</div>
+    </div>
   </div>
 
   <div class="card" style="margin-bottom:16px">
@@ -654,6 +664,70 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
         <div class="empty-icon">📊</div>
         <p>No divergences tracked yet — fixtures appear here as they are scored.</p>
       </div>
+    </div>
+  </div>
+
+  <!-- ─── CLV Analysis ──────────────────────────────────────────── -->
+  <div class="card" style="margin-top:16px" id="clv-section">
+    <div class="card-header">
+      <span class="card-title">Closing Line Value (CLV)</span>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-family:'DM Mono',monospace;font-size:.7rem;color:var(--text2)">Pinnacle T−5 · placed bets only</span>
+        <button class="btn btn-ghost btn-sm" onclick="renderClv()">↻ Refresh</button>
+      </div>
+    </div>
+    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 16px">
+      CLV measures whether your bet price beat what Pinnacle closed at, ~5 minutes before kickoff. Consistently positive CLV is the strongest evidence of genuine edge.
+    </p>
+
+    <!-- Interpretation banner -->
+    <div id="clv-interpretation" style="margin-bottom:16px"></div>
+
+    <!-- Summary stats row -->
+    <div class="grid-4" style="margin-bottom:16px">
+      <div class="stat-tile">
+        <div class="stat-label">Avg CLV (All)</div>
+        <div class="stat-value" id="clv-avg-all">—</div>
+        <div class="stat-sub" id="clv-n-all">— bets</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-label">Avg CLV (Last 10)</div>
+        <div class="stat-value" id="clv-avg-10">—</div>
+        <div class="stat-sub">recent trend</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-label">Above Closing</div>
+        <div class="stat-value c-green" id="clv-pos-pct">—</div>
+        <div class="stat-sub">% of bets</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-label">Bets Pending CLV</div>
+        <div class="stat-value" id="clv-pending">—</div>
+        <div class="stat-sub">awaiting T−5</div>
+      </div>
+    </div>
+
+    <!-- Distribution histogram -->
+    <div style="margin-bottom:16px">
+      <div style="font-size:.75rem;font-weight:600;color:var(--text2);margin-bottom:8px;font-family:'DM Mono',monospace">CLV Distribution</div>
+      <div id="clv-histogram" style="display:flex;flex-direction:column;gap:6px"></div>
+    </div>
+
+    <!-- By league + by score band side by side -->
+    <div class="grid-2" style="margin-bottom:0;gap:16px">
+      <div>
+        <div style="font-size:.75rem;font-weight:600;color:var(--text2);margin-bottom:8px;font-family:'DM Mono',monospace">CLV by League</div>
+        <div id="clv-by-league"></div>
+      </div>
+      <div>
+        <div style="font-size:.75rem;font-weight:600;color:var(--text2);margin-bottom:8px;font-family:'DM Mono',monospace">CLV by Score Band</div>
+        <div id="clv-by-band"></div>
+      </div>
+    </div>
+
+    <div class="empty" id="clv-empty" style="display:none;padding:24px 0">
+      <div class="empty-icon">📈</div>
+      <p>No CLV data yet — closing odds are fetched automatically around kickoff for placed bets.</p>
     </div>
   </div>
 
@@ -1396,6 +1470,20 @@ function renderPerformance() {
   document.getElementById('p-roi').textContent       = roi !== '—' ? `${roi}%` : '—';
   document.getElementById('p-roi').className         = `stat-value ${parseFloat(roi) >= 0 ? 'c-green' : 'c-red'}`;
 
+  // CLV tiles — fetch asynchronously, update when ready
+  apiFetch('/api/clv-report').then(clv => {
+    const avgEl    = document.getElementById('p-avg-clv');
+    const l10El    = document.getElementById('p-clv-last10');
+    const nEl      = document.getElementById('p-clv-n');
+    if (clv.n === 0) { avgEl.textContent = '—'; l10El.textContent = '—'; nEl.textContent = '0 bets with data'; return; }
+    const fmt = v => v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`;
+    avgEl.textContent   = fmt(clv.avgClv);
+    avgEl.className     = `stat-value ${(clv.avgClv || 0) >= 0 ? 'c-green' : 'c-red'}`;
+    l10El.textContent   = fmt(clv.avgLast10);
+    l10El.className     = `stat-value ${(clv.avgLast10 || 0) >= 0 ? 'c-green' : 'c-red'}`;
+    nEl.textContent     = `${clv.n} bet${clv.n !== 1 ? 's' : ''} with data`;
+  }).catch(() => {});
+
   // P&L chart — placed bets only, deduplicated
   const curve = [];
   let running = 0;
@@ -1438,6 +1526,90 @@ async function renderModel() {
   renderFullCalibration();
   renderCalibrationHealth();
   renderDivergence();
+  renderClv();
+}
+
+async function renderClv() {
+  let clv;
+  try { clv = await apiFetch('/api/clv-report'); } catch(e) { return; }
+
+  const emptyEl = document.getElementById('clv-empty');
+  if (clv.n === 0) { emptyEl.style.display = 'block'; return; }
+  emptyEl.style.display = 'none';
+
+  const fmt = (v, decimals=1) => v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(decimals)}%`;
+  const cls = v => (v || 0) >= 0 ? 'c-green' : 'c-red';
+
+  // Summary tiles
+  document.getElementById('clv-avg-all').textContent  = fmt(clv.avgClv);
+  document.getElementById('clv-avg-all').className    = `stat-value ${cls(clv.avgClv)}`;
+  document.getElementById('clv-n-all').textContent    = `${clv.n} bet${clv.n !== 1 ? 's' : ''}`;
+  document.getElementById('clv-avg-10').textContent   = fmt(clv.avgLast10);
+  document.getElementById('clv-avg-10').className     = `stat-value ${cls(clv.avgLast10)}`;
+
+  const posCount = (clv.bets || []).filter(b => b.clv > 0).length;
+  const posPct   = clv.n ? ((posCount / clv.n) * 100).toFixed(0) : '—';
+  document.getElementById('clv-pos-pct').textContent  = clv.n ? `${posPct}%` : '—';
+
+  const placed = STATE.bets.filter(b => (b.placementStatus === 'placed' || b.placementConfirmed) && b.clv == null);
+  document.getElementById('clv-pending').textContent = placed.length || '0';
+
+  // Interpretation banner
+  const interpEl = document.getElementById('clv-interpretation');
+  if (clv.interpretation) {
+    const { level, text, avgClv: av } = clv.interpretation;
+    const bannerColor = level === 'strong' ? 'var(--green)' : level === 'moderate' ? 'var(--cyan)' : level === 'warning' ? 'var(--red)' : 'var(--muted)';
+    const icon = level === 'strong' ? '✅' : level === 'moderate' ? '📈' : level === 'warning' ? '⚠️' : 'ℹ️';
+    interpEl.innerHTML = `<div style="padding:12px 16px;border-radius:8px;border-left:3px solid ${bannerColor};background:color-mix(in srgb,${bannerColor} 10%,transparent);font-family:'DM Mono',monospace;font-size:.75rem;line-height:1.5;color:var(--text1)">${icon} ${text}</div>`;
+  } else {
+    interpEl.innerHTML = '';
+  }
+
+  // Histogram
+  const histEl = document.getElementById('clv-histogram');
+  histEl.innerHTML = '';
+  const maxCount = Math.max(...clv.buckets.map(b => b.count), 1);
+  clv.buckets.forEach(bucket => {
+    const pct  = ((bucket.count / maxCount) * 100).toFixed(0);
+    const isPos = bucket.label.includes('+') || bucket.label === '0 to +3';
+    const barColor = bucket.count === 0 ? 'var(--surface3)' : isPos ? 'var(--green)' : 'var(--red)';
+    histEl.innerHTML += `
+      <div style="display:flex;align-items:center;gap:8px;font-family:'DM Mono',monospace;font-size:.72rem">
+        <div style="width:70px;text-align:right;color:var(--text2);flex-shrink:0">${bucket.label}</div>
+        <div style="flex:1;background:var(--surface3);border-radius:3px;height:18px;position:relative">
+          <div style="width:${pct}%;background:${barColor};height:100%;border-radius:3px;transition:width .3s"></div>
+        </div>
+        <div style="width:20px;text-align:right;color:var(--text2)">${bucket.count}</div>
+      </div>`;
+  });
+
+  // By league table
+  const leagueEl = document.getElementById('clv-by-league');
+  if (clv.leagueBreakdown.length) {
+    leagueEl.innerHTML = `<table style="width:100%;font-family:'DM Mono',monospace;font-size:.72rem;border-collapse:collapse">
+      <thead><tr style="color:var(--muted)"><th style="text-align:left;padding:3px 0">League</th><th style="text-align:right;padding:3px 0">Bets</th><th style="text-align:right;padding:3px 0">Avg CLV</th></tr></thead>
+      <tbody>${clv.leagueBreakdown.map(r => `<tr>
+        <td style="padding:3px 0;color:var(--text1)">${r.league}</td>
+        <td style="text-align:right;color:var(--text2)">${r.count}</td>
+        <td style="text-align:right;color:${r.avgClv >= 0 ? 'var(--green)' : 'var(--red)'}">${fmt(r.avgClv)}</td>
+      </tr>`).join('')}</tbody></table>`;
+  } else {
+    leagueEl.innerHTML = '<p style="font-family:\'DM Mono\',monospace;font-size:.72rem;color:var(--muted)">No data</p>';
+  }
+
+  // By score band table
+  const bandEl = document.getElementById('clv-by-band');
+  if (clv.bandBreakdown.length) {
+    bandEl.innerHTML = `<table style="width:100%;font-family:'DM Mono',monospace;font-size:.72rem;border-collapse:collapse">
+      <thead><tr style="color:var(--muted)"><th style="text-align:left;padding:3px 0">Score Band</th><th style="text-align:right;padding:3px 0">Bets</th><th style="text-align:right;padding:3px 0">Avg CLV</th></tr></thead>
+      <tbody>${clv.bandBreakdown.map(r => `<tr>
+        <td style="padding:3px 0;color:var(--text1)">${r.band}</td>
+        <td style="text-align:right;color:var(--text2)">${r.count}</td>
+        <td style="text-align:right;color:${r.avgClv >= 0 ? 'var(--green)' : 'var(--red)'}">${fmt(r.avgClv)}</td>
+      </tr>`).join('')}</tbody></table>`;
+  } else {
+    bandEl.innerHTML = '<p style="font-family:\'DM Mono\',monospace;font-size:.72rem;color:var(--muted)">No data</p>';
+  }
 }
 
 async function renderDivergence() {

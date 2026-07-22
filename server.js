@@ -1382,7 +1382,50 @@ async function checkAndResolve() {
 
 // ─── SCHEDULER ───────────────────────────────────────────────────────────────
 
-const _cronRunning = { backfill: false, morningScan: false, preMatch: false, resolve: false };
+// ─── CLOSING ODDS FETCH FOR A SINGLE BET (T-5 CLV) ──────────────────────────
+// Returns { closingOdds, bookmaker, snapshotTs } or { closingOdds: null }.
+// Uses the same Odds API historical endpoint as the backfill.
+async function fetchClosingOddsForBet(bet) {
+  const sport = CLOSING_ODDS_SPORT_MAP[String(bet.leagueId)];
+  if (!sport) return { closingOdds: null, bookmaker: null, snapshotTs: null };
+
+  const kickoffIso = new Date(bet.kickoff).toISOString();
+  try {
+    const resp = await oddsApi.get(`/sports/${sport}/odds-history`, {
+      params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h',
+                oddsFormat: 'decimal', date: kickoffIso },
+    });
+    const events = resp.data?.data || resp.data || [];
+    const [home, away] = (bet.fixture || '').split(' vs ');
+    const ev = events.find(e => teamsMatch(e.home_team, home) && teamsMatch(e.away_team, away));
+    if (!ev) return { closingOdds: null, bookmaker: null, snapshotTs: null };
+
+    // Prefer Pinnacle; no fallback — spec requires Pinnacle or null
+    const bm = ev.bookmakers?.find(b => b.key === 'pinnacle');
+    if (!bm) return { closingOdds: null, bookmaker: null, snapshotTs: null };
+
+    const mkt = bm.markets?.find(m => m.key === 'h2h');
+    if (!mkt) return { closingOdds: null, bookmaker: null, snapshotTs: null };
+
+    // Validate snapshot is within 15 minutes of kickoff
+    const snapTs  = bm.last_update || kickoffIso;
+    const ageMins = Math.abs(new Date(kickoffIso) - new Date(snapTs)) / 60000;
+    if (ageMins > 15) return { closingOdds: null, bookmaker: null, snapshotTs: snapTs };
+
+    const get = name => mkt.outcomes?.find(o => teamsMatch(o.name, name))?.price ?? null;
+    let closingOdds = null;
+    if (bet.bet === 'Home Win') closingOdds = get(home);
+    else if (bet.bet === 'Away Win') closingOdds = get(away);
+    else closingOdds = get('Draw');
+
+    return { closingOdds, bookmaker: bm.key, snapshotTs: snapTs };
+  } catch (e) {
+    console.error(`[CLV:fetch] ${bet.fixture}: ${e.message}`);
+    return { closingOdds: null, bookmaker: null, snapshotTs: null };
+  }
+}
+
+const _cronRunning = { backfill: false, morningScan: false, preMatch: false, resolve: false, clv: false };
 const _cronLastRan = { backfill: null,  morningScan: null,  resolve: null };
 
 function setupScheduler() {
@@ -1478,7 +1521,53 @@ function setupScheduler() {
     }
   });
 
-  console.log('[Scheduler] Crons active: backfill@00:05UTC · scan@07:00UTC · T-60@every-min · resolve@every-5min');
+  // 5. Every minute — T-5 closing odds + CLV for placed bets
+  cron.schedule('* * * * *', async () => {
+    if (isRateLimited() || _cronRunning.clv) return;
+    const bets = getBets();
+    const now  = Date.now();
+    // Target: placed bets within 0–10 min of kickoff that haven't had CLV fetched yet
+    const toFetch = bets.filter(b =>
+      b.stage === 'RECOMMENDED' &&
+      (b.placementStatus === 'placed' || b.placementConfirmed) &&
+      b.closingOdds === undefined &&
+      b.kickoff &&
+      (() => { const m = (new Date(b.kickoff).getTime() - now) / 60000; return m >= -2 && m <= 8; })()
+    );
+    if (!toFetch.length) return;
+    _cronRunning.clv = true;
+    console.log(`[Cron:CLV] ${toFetch.length} bet(s) in T-5 window — fetching closing odds`);
+    try {
+      let changed = false;
+      for (const bet of toFetch) {
+        try {
+          const result = await fetchClosingOddsForBet(bet);
+          const fresh  = bets.find(b => b.id === bet.id);
+          if (!fresh) continue;
+          fresh.closingOdds          = result.closingOdds;
+          fresh.closingOddsBookmaker = result.bookmaker;
+          fresh.closingOddsAt        = result.snapshotTs;
+          if (result.closingOdds != null && fresh.actualOdds != null) {
+            fresh.clv = parseFloat((((fresh.actualOdds - result.closingOdds) / result.closingOdds) * 100).toFixed(2));
+            console.log(`[CLV] ${fresh.fixture} — ${fresh.bet} — entry ${fresh.actualOdds}, closing ${result.closingOdds}, CLV ${fresh.clv >= 0 ? '+' : ''}${fresh.clv}%`);
+          } else {
+            fresh.clv = null;
+            console.log(`[CLV] ${fresh.fixture} — ${fresh.bet} — no Pinnacle closing odds available`);
+          }
+          changed = true;
+        } catch (e) {
+          console.error(`[CLV] ${bet.fixture}: ${e.message}`);
+        }
+      }
+      if (changed) saveBets(bets);
+    } catch (e) {
+      console.error(`[Cron:CLV] Error: ${e.message}`);
+    } finally {
+      _cronRunning.clv = false;
+    }
+  });
+
+  console.log('[Scheduler] Crons active: backfill@00:05UTC · scan@07:00UTC · T-60@every-min · resolve@every-5min · CLV@every-min');
 }
 
 // ─── PROFILE BACKFILL ────────────────────────────────────────────────────────
@@ -1944,6 +2033,84 @@ app.put('/api/settings', (req, res) => {
 app.get('/api/bets',        (_req, res) => res.json(getBets()));
 app.get('/api/calibration', (_req, res) => res.json(getCalibration()));
 app.get('/api/scan-meta',   (_req, res) => res.json(readJSON('scan-meta.json') || {}));
+
+// CLV report — aggregates CLV across all placed bets that have closing odds
+app.get('/api/clv-report', (_req, res) => {
+  const bets = getBets();
+  // All placed bets where CLV has been computed (closingOdds fetched, not necessarily resolved)
+  const withClv = bets.filter(b =>
+    (b.placementStatus === 'placed' || b.placementConfirmed) &&
+    b.clv != null
+  );
+
+  const avgClv     = withClv.length ? withClv.reduce((s, b) => s + b.clv, 0) / withClv.length : null;
+  const last10     = withClv.slice(0, 10);
+  const avgLast10  = last10.length ? last10.reduce((s, b) => s + b.clv, 0) / last10.length : null;
+
+  // CLV distribution buckets: <-5, -5 to 0, 0 to 3, 3 to 7, 7 to 15, >15
+  const buckets = [
+    { label: '< −5%',   min: -Infinity, max: -5,       count: 0 },
+    { label: '−5 to 0', min: -5,        max: 0,        count: 0 },
+    { label: '0 to +3', min: 0,         max: 3,        count: 0 },
+    { label: '+3 to +7',min: 3,         max: 7,        count: 0 },
+    { label: '+7 to +15',min: 7,        max: 15,       count: 0 },
+    { label: '> +15%',  min: 15,        max: Infinity,  count: 0 },
+  ];
+  for (const b of withClv) {
+    const bucket = buckets.find(bk => b.clv >= bk.min && b.clv < bk.max);
+    if (bucket) bucket.count++;
+  }
+
+  // By league
+  const byLeague = {};
+  for (const b of withClv) {
+    const key = b.leagueName || 'Unknown';
+    if (!byLeague[key]) byLeague[key] = { sum: 0, count: 0 };
+    byLeague[key].sum   += b.clv;
+    byLeague[key].count += 1;
+  }
+  const leagueBreakdown = Object.entries(byLeague)
+    .map(([league, d]) => ({ league, avgClv: parseFloat((d.sum / d.count).toFixed(2)), count: d.count }))
+    .sort((a, b) => b.count - a.count);
+
+  // By score band
+  const byBand = {};
+  for (const b of withClv) {
+    const band = b.successScore != null ? `${Math.floor(b.successScore / 10) * 10}–${Math.floor(b.successScore / 10) * 10 + 9}` : 'Unknown';
+    if (!byBand[band]) byBand[band] = { sum: 0, count: 0 };
+    byBand[band].sum   += b.clv;
+    byBand[band].count += 1;
+  }
+  const bandBreakdown = Object.entries(byBand)
+    .map(([band, d]) => ({ band, avgClv: parseFloat((d.sum / d.count).toFixed(2)), count: d.count }))
+    .sort((a, b) => a.band.localeCompare(b.band));
+
+  // Plain-English interpretation
+  let interpretation = null;
+  if (avgClv != null && withClv.length >= 3) {
+    if (avgClv > 3)      interpretation = { level: 'strong',   avgClv: parseFloat(avgClv.toFixed(2)), n: withClv.length, text: `Your bets have beaten the closing line by an average of +${avgClv.toFixed(1)}% — this is strong evidence of genuine edge. The market consistently moves in your direction after you bet.` };
+    else if (avgClv >= 0) interpretation = { level: 'moderate', avgClv: parseFloat(avgClv.toFixed(2)), n: withClv.length, text: `Your bets have beaten the closing line by an average of +${avgClv.toFixed(1)}% — a moderate signal. Slightly beating the closing line; monitor over more bets.` };
+    else                   interpretation = { level: 'warning',  avgClv: parseFloat(avgClv.toFixed(2)), n: withClv.length, text: `The market is moving against your bets on average (${avgClv.toFixed(1)}%). Review model calibration — you may be buying into market sentiment rather than beating it.` };
+  } else if (withClv.length > 0 && withClv.length < 3) {
+    interpretation = { level: 'insufficient', avgClv: parseFloat((avgClv || 0).toFixed(2)), n: withClv.length, text: `${withClv.length} bet${withClv.length > 1 ? 's' : ''} with CLV data — need at least 3 for a meaningful signal.` };
+  }
+
+  res.json({
+    n: withClv.length,
+    avgClv:     avgClv    != null ? parseFloat(avgClv.toFixed(2))    : null,
+    avgLast10:  avgLast10 != null ? parseFloat(avgLast10.toFixed(2)) : null,
+    buckets,
+    leagueBreakdown,
+    bandBreakdown,
+    interpretation,
+    bets: withClv.map(b => ({
+      id: b.id, fixture: b.fixture, bet: b.bet, leagueName: b.leagueName,
+      successScore: b.successScore, actualOdds: b.actualOdds,
+      closingOdds: b.closingOdds, clv: b.clv,
+      closingOddsBookmaker: b.closingOddsBookmaker, placedAt: b.placedAt,
+    })),
+  });
+});
 
 app.get('/api/team-profile/:teamId', (req, res) => {
   const profiles = getTeamProfiles([parseInt(req.params.teamId, 10)]);
