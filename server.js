@@ -3297,6 +3297,7 @@ app.get('/api/data/sizes', (_req, res) => {
   const files = [
     'backfill-historical.json', 'fixture-stats.json', 'lineups.json',
     'team-profiles.json', 'calibration.json', 'settings.json',
+    'xg-data.json', 'closing-odds.json',
   ];
   const result = {};
   for (const f of files) {
