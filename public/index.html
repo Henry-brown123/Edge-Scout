@@ -541,6 +541,41 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     </div>
   </div>
 
+  <!-- Bookmaker Performance -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-header">
+      <span class="card-title">Bookmaker Performance</span>
+      <button class="btn btn-ghost btn-sm" onclick="renderBmPerf()">↻ Refresh</button>
+    </div>
+    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 14px">
+      P&L breakdown by bookmaker — placed bets only, computed live from bet records.
+    </p>
+    <div id="bm-perf-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px"></div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Bookmaker</th>
+            <th style="text-align:center">Tier</th>
+            <th style="text-align:right">Bets</th>
+            <th style="text-align:right">W / L</th>
+            <th style="text-align:right">Win %</th>
+            <th style="text-align:right">Staked</th>
+            <th style="text-align:right">P&L</th>
+            <th style="text-align:right">ROI</th>
+            <th style="text-align:right">Avg Odds</th>
+            <th style="text-align:center">Status</th>
+          </tr>
+        </thead>
+        <tbody id="bm-perf-body"></tbody>
+      </table>
+      <div class="empty" id="bm-perf-empty" style="display:none">
+        <div class="empty-icon">📚</div>
+        <p>No placed bets yet — bookmaker stats appear once you confirm placements.</p>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <!-- ═══════════════════════════ MODEL ═══════════════════════════ -->
@@ -1517,6 +1552,59 @@ function renderPerformance() {
       <td class="mono ${pnlCls}">${pnlStr}</td>
       <td>${resultBadge}</td>
       <td><button class="btn btn-ghost btn-sm" onclick="deleteBet('${b.id}')" style="padding:2px 8px;color:var(--muted)">✕</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  renderBmPerf();
+}
+
+async function renderBmPerf() {
+  let data;
+  try { data = await apiFetch('/api/bookmaker-performance'); } catch(e) { return; }
+
+  const tbody   = document.getElementById('bm-perf-body');
+  const emptyEl = document.getElementById('bm-perf-empty');
+  const summEl  = document.getElementById('bm-perf-summary');
+  tbody.innerHTML = '';
+
+  if (!data.rows.length) {
+    emptyEl.style.display = 'block';
+    summEl.innerHTML = '';
+    return;
+  }
+  emptyEl.style.display = 'none';
+
+  // Summary chips
+  const s = data.summary;
+  const fmtPnl = v => `${v >= 0 ? '+' : ''}£${Math.abs(v).toFixed(2)}`;
+  summEl.innerHTML = [
+    `<span class="badge badge-muted">${s.totalBets} placed</span>`,
+    `<span class="badge badge-muted">£${s.totalStaked.toFixed(2)} staked</span>`,
+    `<span class="badge ${(s.totalPnl||0) >= 0 ? 'badge-green' : 'badge-red'}">${fmtPnl(s.totalPnl||0)} P&L</span>`,
+    s.roi != null ? `<span class="badge ${s.roi >= 0 ? 'badge-green' : 'badge-red'}">${s.roi >= 0 ? '+' : ''}${s.roi}% ROI</span>` : '',
+    s.bestBm  ? `<span class="badge badge-cyan">Best: ${s.bestBm.name} (${s.bestBm.roi >= 0 ? '+' : ''}${s.bestBm.roi}%)</span>` : '',
+    s.worstBm && s.worstBm.id !== s.bestBm?.id ? `<span class="badge badge-red" style="opacity:.75">Worst: ${s.worstBm.name} (${s.worstBm.roi}%)</span>` : '',
+  ].join('');
+
+  const tierLabel = t => t === 1 ? '<span style="color:var(--cyan)">T1</span>' : t === 2 ? '<span style="color:var(--text1)">T2</span>' : '<span style="color:var(--muted)">T3</span>';
+  const statusBadge = s => s === 'active' ? '<span class="badge badge-green" style="font-size:.6rem">active</span>' : s === 'restricted' ? '<span class="badge badge-red" style="font-size:.6rem">restricted</span>' : `<span class="badge badge-muted" style="font-size:.6rem">${s}</span>`;
+
+  data.rows.forEach(r => {
+    const pnlCls = r.pnl > 0 ? 'c-green' : r.pnl < 0 ? 'c-red' : '';
+    const roiCls = (r.roi || 0) > 0 ? 'c-green' : (r.roi || 0) < 0 ? 'c-red' : '';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td style="font-weight:600">${r.name}${r.parentGroup ? `<div style="font-size:.65rem;color:var(--muted);font-weight:400">${r.parentGroup}</div>` : ''}</td>
+      <td style="text-align:center" class="mono">${tierLabel(r.tier)}</td>
+      <td style="text-align:right" class="mono">${r.bets}${r.pending ? `<span style="color:var(--muted);font-size:.7rem"> (+${r.pending})</span>` : ''}</td>
+      <td style="text-align:right" class="mono">${r.wins}W / ${r.losses}L</td>
+      <td style="text-align:right" class="mono ${r.winRate != null && r.winRate >= 50 ? 'c-green' : 'c-red'}">${r.winRate != null ? r.winRate + '%' : '—'}</td>
+      <td style="text-align:right" class="mono">£${r.staked.toFixed(2)}</td>
+      <td style="text-align:right" class="mono ${pnlCls}">${r.pnl > 0 ? '+' : ''}£${r.pnl.toFixed(2)}</td>
+      <td style="text-align:right" class="mono ${roiCls}">${r.roi != null ? (r.roi >= 0 ? '+' : '') + r.roi + '%' : '—'}</td>
+      <td style="text-align:right" class="mono">${r.avgOdds != null ? r.avgOdds.toFixed(2) : '—'}</td>
+      <td style="text-align:center">${statusBadge(r.status)}</td>
     `;
     tbody.appendChild(tr);
   });

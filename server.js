@@ -2112,6 +2112,65 @@ app.get('/api/clv-report', (_req, res) => {
   });
 });
 
+// Bookmaker performance — computed live from bets, not relying on bookmaker counters
+app.get('/api/bookmaker-performance', (_req, res) => {
+  const bets  = getBets();
+  const books = getBookmakers();
+
+  // Only count placed bets (placed or old placementConfirmed)
+  const placed = bets.filter(b =>
+    b.placementStatus === 'placed' || b.placementConfirmed
+  );
+
+  const byBm = {};
+  for (const b of placed) {
+    const key  = b.bookmakerId || '__unknown__';
+    const name = b.bookmakerUsed || 'Unknown';
+    if (!byBm[key]) byBm[key] = { id: key, name, bets: 0, wins: 0, losses: 0, staked: 0, pnl: 0, avgOdds: 0, oddsSum: 0 };
+    const row = byBm[key];
+    row.bets++;
+    row.staked  = parseFloat((row.staked  + (b.actualStake  || b.suggestedStake  || 0)).toFixed(2));
+    if (b.result === 'win')  { row.wins++;   row.pnl = parseFloat((row.pnl + (b.pnl || 0)).toFixed(2)); }
+    if (b.result === 'loss') { row.losses++; row.pnl = parseFloat((row.pnl + (b.pnl || 0)).toFixed(2)); }
+    if (b.actualOdds)        { row.oddsSum += b.actualOdds; }
+  }
+
+  const rows = Object.values(byBm).map(r => {
+    const resolved = r.wins + r.losses;
+    const roi      = r.staked ? parseFloat(((r.pnl / r.staked) * 100).toFixed(1)) : null;
+    const winRate  = resolved ? parseFloat(((r.wins / resolved) * 100).toFixed(1)) : null;
+    const avgOdds  = r.bets   ? parseFloat((r.oddsSum / r.bets).toFixed(2)) : null;
+    const bmMeta   = books.find(b => b.id === r.id) || {};
+    return {
+      id: r.id, name: r.name,
+      tier: bmMeta.tier || null,
+      status: bmMeta.status || 'active',
+      parentGroup: bmMeta.parentGroup || null,
+      bets: r.bets, wins: r.wins, losses: r.losses,
+      pending: r.bets - resolved,
+      staked: r.staked, pnl: r.pnl, roi, winRate, avgOdds,
+    };
+  }).filter(r => r.bets > 0).sort((a, b) => b.bets - a.bets);
+
+  const totalPnl    = rows.reduce((s, r) => s + r.pnl,    0);
+  const totalStaked = rows.reduce((s, r) => s + r.staked,  0);
+  const totalBets   = rows.reduce((s, r) => s + r.bets,    0);
+  const bestBm      = rows.filter(r => r.roi != null).sort((a, b) => b.roi - a.roi)[0] || null;
+  const worstBm     = rows.filter(r => r.roi != null).sort((a, b) => a.roi - b.roi)[0] || null;
+
+  res.json({
+    rows,
+    summary: {
+      totalBets,
+      totalStaked: parseFloat(totalStaked.toFixed(2)),
+      totalPnl:    parseFloat(totalPnl.toFixed(2)),
+      roi: totalStaked ? parseFloat(((totalPnl / totalStaked) * 100).toFixed(1)) : null,
+      bestBm:  bestBm  ? { id: bestBm.id,  name: bestBm.name,  roi: bestBm.roi  } : null,
+      worstBm: worstBm ? { id: worstBm.id, name: worstBm.name, roi: worstBm.roi } : null,
+    },
+  });
+});
+
 app.get('/api/team-profile/:teamId', (req, res) => {
   const profiles = getTeamProfiles([parseInt(req.params.teamId, 10)]);
   const profile  = profiles[req.params.teamId] || null;
