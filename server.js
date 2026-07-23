@@ -3638,6 +3638,25 @@ function normaliseTeamName(name) {
     .trim();
 }
 
+// Quick sample to inspect actual field values in both files
+app.get('/api/diagnostics/ev-dataset-sample', (_req, res) => {
+  const rawCo   = readJSON('closing-odds.json');
+  const rawHist = readJSON('backfill-historical.json');
+  const coArr   = Array.isArray(rawCo) ? rawCo : Object.values(rawCo || {});
+  const histArr = Array.isArray(rawHist) ? rawHist : Object.values(rawHist || {});
+  res.json({
+    closingOddsSample:  coArr.slice(0, 3),
+    historicalSample:   histArr.slice(0, 3).map(f => ({
+      fixtureDate: f.fixture?.date,
+      homeTeam:    f.teams?.home?.name,
+      awayTeam:    f.teams?.away?.name,
+      goalsHome:   f.goals?.home,
+      goalsAway:   f.goals?.away,
+      league:      f.league?.name,
+    })),
+  });
+});
+
 app.get('/api/diagnostics/ev-dataset', (_req, res) => {
   try {
     const rawCo      = readJSON('closing-odds.json');
