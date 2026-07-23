@@ -382,3 +382,40 @@ This affected every fixture card during the WC validation period.
 ### Fix
 
 `openDrawer()` now reads probabilities from `allCandidates[].modelProb` (server-calibrated) when present, with `computeProbs` retained as a fallback for legacy entries that predate the `allCandidates` field being stored. Both the Model Probabilities section and the Value Analysis cards now show identical numbers.
+
+---
+
+## 10. La Liga home advantage calibration — systematic 7pp underestimation (documented 2026-07-23)
+
+**Finding date:** 2026-07-23  
+**Status:** Documented. La Liga locked to `paper_only` until resolved. Fix planned for Week 2.
+
+### Finding
+
+EV calibration across 524 La Liga historical fixtures reveals the model systematically underestimates home teams:
+
+- **Model average home probability:** 38.51%
+- **Actual home win rate:** 45.44%
+- **Gap:** 7pp underestimation
+
+This is not a draw rate problem. Predicted draw rate (26.18%) is within noise of actual (25.70%). The underestimation is almost entirely on the home side, displaced to away.
+
+La Liga EV calibration is negative across all edge bands as a result — the model cannot reliably identify genuine home team value because its starting probability for home wins is structurally too low.
+
+### Root cause
+
+`homeAdvBaseWeight: 1.02` in `LEAGUE_CONFIG` for La Liga (league ID 140) is too low. La Liga has stronger home advantage than the 1.02 multiplier implies — this is consistent with La Liga's known stadium culture and tight pitches at grounds like Camp Nou, Mestalla, and San Mamés.
+
+### Fix (Week 2)
+
+After the non-linear model is deployed, increase La Liga `homeAdvBaseWeight` from 1.02 → 1.10 in `LEAGUE_CONFIG` in `scoring.js`:
+
+```js
+140: { name: 'La Liga', homeAdvBaseWeight: 1.10, ... }
+```
+
+Re-run EV calibration after the fix and confirm La Liga ROI improves. If still negative after the weight adjustment, investigate form and xG factor interactions specific to La Liga fixtures — the form signal may be over-weighting away teams that perform well in European competition but underperform domestically.
+
+### Current status
+
+La Liga is set to `paper_only` in `leagueModes` (settings.json). It will remain there until EV calibration shows positive ROI with the corrected weights. The `paper_only` lock is enforced server-side — the Go Live button in Settings is permanently disabled for La Liga regardless of the condition checklist state.
