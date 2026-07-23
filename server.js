@@ -3626,6 +3626,60 @@ app.get('/api/data/sizes', (_req, res) => {
   res.json(result);
 });
 
+app.get('/api/diagnostics/ev-dataset', (_req, res) => {
+  const closingOdds    = readJSON('closing-odds.json') || {};
+  const historical     = readJSON('backfill-historical.json') || [];
+
+  // Build historical lookup keyed by fixture date + teams
+  const histByKey = {};
+  for (const f of historical) {
+    if (f.goals?.home == null || f.goals?.away == null) continue;
+    const date = (f.fixture?.date || '').slice(0, 10);
+    const key  = `${f.teams?.home?.name}|${f.teams?.away?.name}|${date}`;
+    histByKey[key] = f;
+  }
+
+  const coEntries     = Object.values(closingOdds);
+  const withPinnacle  = coEntries.filter(e => e.pinnacleAvailable);
+
+  // Match pinnacle entries to historical results
+  let matched = 0;
+  const byLeague = {};
+  const dates    = [];
+
+  for (const e of withPinnacle) {
+    const date = (e.kickoff || e.date || '').slice(0, 10);
+    const key  = `${e.homeTeam}|${e.awayTeam}|${date}`;
+    const hist = histByKey[key];
+    const league = e.leagueName || e.league || 'Unknown';
+
+    if (!byLeague[league]) byLeague[league] = { pinnacle: 0, matched: 0 };
+    byLeague[league].pinnacle++;
+
+    if (hist) {
+      matched++;
+      byLeague[league].matched++;
+      if (date) dates.push(date);
+    }
+  }
+
+  dates.sort();
+
+  const leagueBreakdown = Object.entries(byLeague)
+    .map(([league, d]) => ({ league, pinnacleEntries: d.pinnacle, matched: d.matched }))
+    .sort((a, b) => b.matched - a.matched);
+
+  res.json({
+    closingOddsTotal:    coEntries.length,
+    pinnacleAvailable:   withPinnacle.length,
+    matchedWithResult:   matched,
+    dateRange: dates.length ? { from: dates[0], to: dates[dates.length - 1] } : null,
+    historicalFixtures:  historical.length,
+    historicalWithResult: Object.keys(histByKey).length,
+    leagueBreakdown,
+  });
+});
+
 const _serverStartedAt = new Date().toISOString();
 
 app.get('/api/server-status', async (_req, res) => {
