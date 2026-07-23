@@ -3626,6 +3626,18 @@ app.get('/api/data/sizes', (_req, res) => {
   res.json(result);
 });
 
+function normaliseTeamName(name) {
+  if (!name) return '';
+  return name
+    .toLowerCase()
+    .replace(/\s+fc$/i, '')
+    .replace(/\s+afc$/i, '')
+    .replace(/&/g, 'and')
+    .replace(/[^a-z0-9\s]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 app.get('/api/diagnostics/ev-dataset', (_req, res) => {
   try {
     const rawCo      = readJSON('closing-odds.json');
@@ -3643,29 +3655,38 @@ app.get('/api/diagnostics/ev-dataset', (_req, res) => {
 
     const withPinnacle = coEntries.filter(e => e.pinnacleAvailable);
 
-    // Build historical lookup — try multiple key shapes
+    // Build historical lookup keyed by date + normalised team names
     const histByKey = {};
     for (const f of historical) {
-      const hasResult = f.goals?.home != null && f.goals?.away != null;
-      if (!hasResult) continue;
-      const date  = (f.fixture?.date || f.date || '').slice(0, 10);
-      const home  = f.teams?.home?.name || f.homeTeam || '';
-      const away  = f.teams?.away?.name || f.awayTeam || '';
-      if (home && away && date) histByKey[`${home}|${away}|${date}`] = true;
+      if (f.goals?.home == null && f.goals?.away == null) continue;
+      const date = (f.fixture?.date || f.date || '').slice(0, 10);
+      const home = normaliseTeamName(f.teams?.home?.name || f.homeTeam || '');
+      const away = normaliseTeamName(f.teams?.away?.name || f.awayTeam || '');
+      if (home && away && date) {
+        histByKey[`${date}|${home}|${away}`] = {
+          goalsHome:  f.goals?.home,
+          goalsAway:  f.goals?.away,
+          league:     f.league?.name || 'Unknown',
+          fixtureId:  f.fixture?.id,
+        };
+      }
     }
 
     let matched = 0;
     const byLeague = {};
     const dates    = [];
 
-    for (const e of withPinnacle) {
+    for (const e of coEntries) {
       const date   = (e.kickoff || e.date || '').slice(0, 10);
-      const home   = e.homeTeam || e.home_team || '';
-      const away   = e.awayTeam || e.away_team || '';
+      const home   = normaliseTeamName(e.homeTeam || e.home_team || '');
+      const away   = normaliseTeamName(e.awayTeam || e.away_team || '');
+      const isPinnacle = e.bookmaker === 'pinnacle';
       const league = e.leagueName || e.league || 'Unknown';
-      if (!byLeague[league]) byLeague[league] = { pinnacle: 0, matched: 0 };
-      byLeague[league].pinnacle++;
-      if (histByKey[`${home}|${away}|${date}`]) {
+      if (!byLeague[league]) byLeague[league] = { total: 0, pinnacle: 0, matched: 0 };
+      byLeague[league].total++;
+      if (isPinnacle) byLeague[league].pinnacle++;
+      const hist = histByKey[`${date}|${home}|${away}`];
+      if (hist && isPinnacle) {
         matched++;
         byLeague[league].matched++;
         if (date) dates.push(date);
@@ -3674,7 +3695,7 @@ app.get('/api/diagnostics/ev-dataset', (_req, res) => {
 
     dates.sort();
     const leagueBreakdown = Object.entries(byLeague)
-      .map(([league, d]) => ({ league, pinnacleEntries: d.pinnacle, matched: d.matched }))
+      .map(([league, d]) => ({ league, total: d.total, pinnacle: d.pinnacle, matched: d.matched }))
       .sort((a, b) => b.matched - a.matched);
 
     // Q1: how many existing entries already have bookmaker === 'pinnacle'
@@ -3724,24 +3745,24 @@ app.get('/api/diagnostics/ev-dataset', (_req, res) => {
     }
 
     res.json({
-      // Q1
-      closingOddsTotal:          coEntries.length,
-      existingPinnacleEntries:   existingPinnacle.length,
-      existingPinnacleBookmakers: [...new Set(coEntries.map(e => e.bookmaker).filter(Boolean))],
-      // Q2
-      historicalTotal:           historical.length,
-      historicalWithResult:      histDates.length,
-      historicalDateRange:       histDates.length ? { oldest: histDates[0], newest: histDates[histDates.length-1] } : null,
+      // Matching results (key questions)
+      closingOddsTotal:    coEntries.length,
+      pinnacleEntries:     existingPinnacle.length,
+      matchedWithResult:   matched,
+      matchedDateRange:    dates.length ? { oldest: dates[0], newest: dates[dates.length - 1] } : null,
+      evReadySummary:      `${matched} of ${existingPinnacle.length} Pinnacle closing odds entries matched to a historical result`,
+      leagueBreakdown,
+      // Historical side
+      historicalTotal:     historical.length,
+      historicalWithResult: histDates.length,
+      historicalDateRange: histDates.length ? { oldest: histDates[0], newest: histDates[histDates.length-1] } : null,
       leagueSummary,
-      // Q3
+      // Credit estimate (last 12 months, 5 target leagues)
       recentTargetFixtureCount:  recentTargetFixtures.length,
       recentTargetWindow:        `${oneYearAgo.toISOString().slice(0,10)} to today`,
       recentByLeague,
       creditEstimateAt10perCall: creditEstimate10,
       creditEstimateAt20perCall: creditEstimate20,
-      // original fields
-      pinnacleAvailableFlag:     withPinnacle.length,
-      matchedWithResult:         matched,
     });
   } catch(e) {
     res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0,5) });
