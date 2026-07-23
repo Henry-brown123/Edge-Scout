@@ -329,7 +329,15 @@ function kelly(prob, odds, fraction = 0.5, bankroll = 1000) {
 // dataConf multiplier suppresses scores when historical data is thin.
 // At dataConf=0: multiplier = 0.4, so max raw 59 becomes ~24 (below 40 threshold).
 
-function computeSuccessScore(modelProb, bookOdds, formFixtureCount = 20, dataConf = 1, pinnacleEdge = null) {
+// League-specific edge cap: PL 20%+ edge is real (+18% ROI confirmed).
+// All other leagues at 20%+ edge: 0% ROI confirmed — halve the score.
+function applyEdgeCap(score, edge, leagueId) {
+  if (edge < 0.20) return score;
+  if (parseInt(leagueId, 10) === 39) return score; // Premier League: genuine edge
+  return Math.round(score * 0.5);
+}
+
+function computeSuccessScore(modelProb, bookOdds, formFixtureCount = 20, dataConf = 1, pinnacleEdge = null, leagueId = null) {
   const impliedProb = 1 / bookOdds;
   const edge = modelProb - impliedProb;
   if (edge <= 0) return 0;
@@ -339,9 +347,8 @@ function computeSuccessScore(modelProb, bookOdds, formFixtureCount = 20, dataCon
   const raw            = Math.min(99, Math.round(winComp + valueComp + confidenceComp));
   const dataMultiplier = 0.4 + (dataConf * 0.6);
   const base           = Math.round(raw * dataMultiplier);
-  // 20%+ edge vs Pinnacle confirmed 0% ROI at scale — suppress inflated scores
   const edgeVsPinnacle = pinnacleEdge !== null ? pinnacleEdge : edge;
-  return edgeVsPinnacle > 0.20 ? Math.round(base * 0.5) : base;
+  return applyEdgeCap(base, edgeVsPinnacle, leagueId);
 }
 
 // ─── SUPPORTING UTILITIES ─────────────────────────────────────────────────────

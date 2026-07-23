@@ -831,7 +831,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     const calProb   = Math.min(0.97, c.prob * calFactor);
     const edge      = calProb - impliedP;
     const pinnacleEdgeVsMarket = pinnStripped ? calProb - (pinnStripped[teamKey] ?? (1 / displayOdds)) : null;
-    const rawScore  = computeSuccessScore(calProb, displayOdds, homeFormCount, dataConf, pinnacleEdgeVsMarket);
+    const rawScore  = computeSuccessScore(calProb, displayOdds, homeFormCount, dataConf, pinnacleEdgeVsMarket, leagueId);
     const finalScore = Math.round(rawScore * wxMod * effMult);
     const k         = kelly(calProb, displayOdds, settings.kellyFraction, getBankroll().current);
 
@@ -886,13 +886,16 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   if (teamIntel.home) teamIntel.home.keyPlayers = wowyToKeyPlayers(homeId, true);
   if (teamIntel.away) teamIntel.away.keyPlayers = wowyToKeyPlayers(awayId, false);
 
+  const paperTradeLeagues = settings.paperTradeOnly || [];
+  const paperTradeOnly = paperTradeLeagues.includes(parseInt(leagueId, 10));
+
   return {
     fix, homeName, awayName, homeF, awayF, probs, weather, weatherCondition, results,
     kickoff: fix.fixture?.date,
     context, competitionPhase, lowConfidence,
     homeDataConf, awayDataConf, dataConf,
     homeFormCount, awayFormCount, minFormCount, tierThreshold,
-    teamIntel,
+    teamIntel, paperTradeOnly,
   };
 }
 
@@ -1024,6 +1027,7 @@ async function runMorningScan(leagueIds) {
               awayDataConf:     scored.awayDataConf,
               teamIntel:        scored.teamIntel,
               weatherCondition: scored.weatherCondition,
+              paperTradeOnly:   scored.paperTradeOnly,
             });
             console.log(`  [WATCHING] ${scored.homeName} vs ${scored.awayName} — score ${best.successScore}`);
           }
@@ -1190,10 +1194,11 @@ async function runPreMatchScan(watchingEntry) {
       impliedProb:  best.impliedProb,
       edge:         best.edge,
       ev:           best.ev,
+      paperTradeOnly: scored.paperTradeOnly,
       kellyFraction: settings.kellyFraction,
-      kellStake:     best.kelly.stake,
-      suggestedStake: roundStake(best.kelly.stake),
-      displayStake:  roundStake(best.kelly.stake),
+      kellStake:     scored.paperTradeOnly ? 0 : best.kelly.stake,
+      suggestedStake: scored.paperTradeOnly ? 0 : roundStake(best.kelly.stake),
+      displayStake:  scored.paperTradeOnly ? 0 : roundStake(best.kelly.stake),
       bankrollAtLock: br.current,
       stage:        'RECOMMENDED',
       lockedAt:     new Date().toISOString(),
@@ -3920,17 +3925,32 @@ app.get('/api/ev-calibration', (_req, res) => {
     };
     writeJSON('ev-calibration.json', result);
 
-    // Auto-update Kelly fraction if recommendation differs from current setting
+    // Auto-update Kelly fraction and paperTradeOnly leagues based on calibration findings
     const settings = readJSON('settings.json') || {};
     const currentFraction = settings.kellyFraction ?? 0.5;
     const recommendedFraction = KELLY_FRACTION_MAP[overallKelly] ?? currentFraction;
     const kellyChanged = recommendedFraction !== currentFraction && overallKelly !== 'flag_for_review';
-    if (kellyChanged) {
-      settings.kellyFraction = recommendedFraction;
-      writeJSON('settings.json', settings);
-    }
+    if (kellyChanged) settings.kellyFraction = recommendedFraction;
 
-    res.json({ ...result, kellyAutoUpdated: kellyChanged, previousKellyFraction: currentFraction });
+    // Any league with negative ROI across 30+ positive-edge fixtures → paper trade only
+    const paperLeagues = byLeague
+      .filter(l => l.roi !== null && l.roi < 0 && l.posEdgeN >= 30)
+      .map(l => {
+        const lid = Object.entries(LEAGUE_CONFIG).find(([, v]) => v.name === l.league)?.[0];
+        return lid ? parseInt(lid, 10) : null;
+      })
+      .filter(Boolean);
+    const existingPaper = settings.paperTradeOnly || [];
+    const newPaper = [...new Set([...existingPaper, ...paperLeagues])];
+    settings.paperTradeOnly = newPaper;
+    writeJSON('settings.json', settings);
+
+    res.json({
+      ...result,
+      kellyAutoUpdated:      kellyChanged,
+      previousKellyFraction: currentFraction,
+      paperTradeOnly:        newPaper,
+    });
   } catch(e) {
     res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0,5) });
   }

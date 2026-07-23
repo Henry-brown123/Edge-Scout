@@ -821,11 +821,8 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       </div>
     </div>
 
-    <!-- 20%+ warning card -->
-    <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.4);border-radius:8px;padding:12px 16px;margin-bottom:16px">
-      <div style="font-weight:700;color:#ef4444;font-size:12px;margin-bottom:4px">⚠ 20%+ Edge Band — 265 fixtures, 0% ROI</div>
-      <div style="font-size:11px;color:var(--text2)">Large claimed edges are not translating to real returns. This is the international underdog inflation pattern confirmed at scale. Fixtures in this band now have their success score halved automatically.</div>
-    </div>
+    <!-- Dynamic warning cards populated by renderEvCal() -->
+    <div id="ev-cal-warning-cards"></div>
 
     <!-- Overall interpretation -->
     <div id="ev-cal-interpretation" style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin-bottom:16px;padding:10px 14px;background:var(--surface2);border-radius:6px">
@@ -1470,6 +1467,7 @@ function recommendedCard(b) {
     : b.bet;
   return `
     <div class="fixture-card recommended" style="flex-direction:column;align-items:stretch;padding-bottom:12px">
+      ${b.paperTradeOnly ? `<div style="background:rgba(255,170,0,0.12);border-bottom:1px solid rgba(255,170,0,0.3);padding:6px 14px;font-size:11px;font-weight:700;color:#ffaa00;border-radius:8px 8px 0 0;margin:-12px -12px 10px">⚠ PAPER ONLY — EV calibration negative for this league. Zero real-money stake.</div>` : ''}
       <div style="display:flex;align-items:flex-start;gap:10px">
         ${scoreBadge(b.successScore)}
         <div class="fixture-meta" style="flex:1">
@@ -1523,6 +1521,7 @@ function watchingCard(w) {
         ${contextBadge(w.context)}
         ${weatherBadge(w.weatherCondition)}
         ${w.lowConfidence ? '<span class="badge badge-red" title="Model diverges from bookmaker beyond data-confidence threshold — will not auto-lock">LOW CONF</span>' : ''}
+        ${w.paperTradeOnly ? '<span class="badge" style="background:rgba(255,170,0,0.15);color:#ffaa00;border:1px solid rgba(255,170,0,0.4);font-size:.6rem" title="EV calibration negative — paper trade only pending investigation">PAPER ONLY</span>' : ''}
         <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();forcePreMatch('${w.id}')">Lock now</button>
       </div>
     </div>`;
@@ -1824,32 +1823,79 @@ async function renderEvCal() {
   const KELLY_LABELS = { half_kelly: 'Half-Kelly (0.5)', third_kelly: 'Third-Kelly (0.33)', quarter_kelly: 'Quarter-Kelly (0.25)', flag_for_review: 'Flag for Review' };
   const KELLY_FRACTION_VALUES = { half_kelly: '0.5', third_kelly: '0.33', quarter_kelly: '0.25' };
 
-  // Overall interpretation
+  const pl = d.byLeague?.find(l => l.league === 'Premier League');
+  const ll = d.byLeague?.find(l => l.league === 'La Liga');
+
+  // ── Dynamic warning cards ──────────────────────────────────────────────────
+  const warningEl = document.getElementById('ev-cal-warning-cards');
+  if (warningEl) {
+    const cards = [];
+
+    // PL 20%+ genuine edge card
+    const pl20 = pl?.bands?.find(b => b.band === '20%+');
+    if (pl20 && pl20.roi != null && pl20.roi > 0) {
+      const roiPct = (pl20.roi * 100).toFixed(1);
+      cards.push(`<div style="background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.4);border-radius:8px;padding:12px 16px;margin-bottom:10px">
+        <div style="font-weight:700;color:var(--green);font-size:12px;margin-bottom:4px">✓ Premier League 20%+ Edge — ${pl20.n} fixtures, +${roiPct}% ROI — Genuine edge</div>
+        <div style="font-size:11px;color:var(--text2)">High-edge Premier League calls are not capped. EV calibration confirms this band produces real returns. Score penalty does not apply to PL fixtures.</div>
+      </div>`);
+    }
+
+    // Non-PL 20%+ cap warning
+    const overall20 = d.bands?.find(b => b.band === '20%+');
+    if (overall20 && overall20.n > 0) {
+      const nonPl20n = overall20.n - (pl20?.n ?? 0);
+      const nonPlRoiRaw = overall20.roi != null && pl20?.roi != null
+        ? ((overall20.roi * overall20.n - (pl20.roi ?? 0) * (pl20.n ?? 0)) / Math.max(1, nonPl20n))
+        : overall20.roi;
+      const nonPlRoi = nonPlRoiRaw != null ? (nonPlRoiRaw * 100).toFixed(1) : '—';
+      if (nonPl20n > 0) {
+        cards.push(`<div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.4);border-radius:8px;padding:12px 16px;margin-bottom:10px">
+          <div style="font-weight:700;color:#ef4444;font-size:12px;margin-bottom:4px">⚠ Non-PL 20%+ Edge Band — ${nonPl20n} fixtures, ${nonPlRoi}% ROI — Score penalised</div>
+          <div style="font-size:11px;color:var(--text2)">Large claimed edges in non-Premier League fixtures are not translating to real returns. International underdog inflation pattern confirmed at scale. Success scores halved automatically for these fixtures.</div>
+        </div>`);
+      }
+    }
+
+    // La Liga paper-trade warning
+    if (ll && ll.roi != null && ll.roi < 0 && ll.posEdgeN >= 30) {
+      const llRoiPct = (ll.roi * 100).toFixed(1);
+      cards.push(`<div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.5);border-radius:8px;padding:12px 16px;margin-bottom:10px">
+        <div style="font-weight:700;color:#ef4444;font-size:12px;margin-bottom:4px">⛔ La Liga — Negative Historical ROI (${llRoiPct}%) — Paper Trading Only</div>
+        <div style="font-size:11px;color:var(--text2)">La Liga shows ${llRoiPct}% ROI across ${ll.posEdgeN} positive-edge fixtures (${ll.n} total). Model systematically underestimates La Liga home teams by ~7pp vs actual outcomes. All La Liga recommendations are flagged PAPER ONLY — zero Kelly stake until home bias is resolved. Click La Liga row below to see band breakdown.</div>
+      </div>`);
+    }
+
+    warningEl.innerHTML = cards.join('');
+  }
+
+  // ── Overall interpretation ─────────────────────────────────────────────────
   const interpEl = document.getElementById('ev-cal-interpretation');
   if (interpEl && d.summary) {
-    const pl = d.byLeague?.find(l => l.league === 'Premier League');
-    const ll = d.byLeague?.find(l => l.league === 'La Liga');
     const overallRoiPct = d.summary.positiveEdgeRoi != null ? (d.summary.positiveEdgeRoi * 100).toFixed(1) : '—';
-    const plRoi = pl?.roi != null ? (pl.roi * 100).toFixed(1) : '—';
-    const llRoi = ll?.roi != null ? (ll.roi * 100).toFixed(1) : '—';
+    const plRoi  = pl?.roi  != null ? ((pl.roi  >= 0 ? '+' : '') + (pl.roi  * 100).toFixed(1) + '%') : '—';
+    const llRoi  = ll?.roi  != null ? (ll.roi   * 100).toFixed(1) + '%' : '—';
     const kellyLabel = KELLY_LABELS[d.summary.kellyRecommendation] || d.summary.kellyRecommendation;
-    interpEl.textContent = `Based on ${d.summary.totalMatched.toLocaleString()} fixtures with Pinnacle closing odds, the model shows ${overallRoiPct}% overall ROI on positive-edge calls. ` +
-      `Premier League: ${plRoi >= 0 ? '+' : ''}${plRoi}% ROI (${pl?.posEdgeN ?? 0} bets). ` +
-      `La Liga: ${llRoi}% ROI (${ll?.posEdgeN ?? 0} bets). ` +
+    interpEl.textContent = `Based on ${d.summary.totalMatched.toLocaleString()} fixtures with Pinnacle closing odds, the model shows ${overallRoiPct >= 0 ? '+' : ''}${overallRoiPct}% overall ROI on positive-edge calls. ` +
+      `Premier League: ${plRoi} ROI (${pl?.posEdgeN ?? 0} bets). ` +
+      `La Liga: ${llRoi} ROI (${ll?.posEdgeN ?? 0} bets) — paper trading only. ` +
       `${kellyLabel} staking recommended.`;
   }
 
-  // Band bars
-  function renderBandBars(containerId, bands) {
+  // ── Band bars ──────────────────────────────────────────────────────────────
+  function renderBandBars(containerId, bands, highlightLeagueId = null) {
     const el = document.getElementById(containerId);
     if (!el || !bands) return;
     const maxAbs = Math.max(0.01, ...bands.filter(b => b.roi != null).map(b => Math.abs(b.roi)));
     el.innerHTML = bands.map(b => {
-      const roiPct = b.roi != null ? (b.roi * 100).toFixed(1) : null;
-      const barW   = b.roi != null ? Math.round(Math.abs(b.roi) / maxAbs * 100) : 0;
-      const color  = b.roi == null ? 'var(--muted)' : b.roi >= 0 ? 'var(--green)' : 'var(--red)';
-      const warn   = b.warning === 'small_sample' ? ' <span style="font-size:10px;color:var(--muted)">(n<30)</span>' : '';
-      return `<div style="display:flex;align-items:center;gap:10px;font-size:11px">
+      const roiPct  = b.roi != null ? (b.roi * 100).toFixed(1) : null;
+      const barW    = b.roi != null ? Math.round(Math.abs(b.roi) / maxAbs * 100) : 0;
+      const isPl20  = highlightLeagueId === 39 && b.band === '20%+' && b.roi != null && b.roi > 0;
+      const color   = b.roi == null ? 'var(--muted)' : b.roi >= 0 ? 'var(--green)' : 'var(--red)';
+      const warn    = b.warning === 'small_sample' ? ' <span style="font-size:10px;color:var(--muted)">(n<30)</span>' : '';
+      const border  = isPl20 ? 'border:1px solid rgba(16,185,129,0.5);border-radius:4px;padding:2px 4px;' : '';
+      const note    = isPl20 ? ' <span style="font-size:10px;color:var(--green);font-weight:700">✓ genuine</span>' : '';
+      return `<div style="display:flex;align-items:center;gap:10px;font-size:11px;${border}">
         <div style="width:70px;flex-shrink:0;color:var(--text2);font-family:'DM Mono',monospace">${b.band}</div>
         <div style="flex:1;height:14px;background:var(--surface3);border-radius:3px;overflow:hidden">
           <div style="width:${barW}%;height:100%;background:${color};border-radius:3px;transition:width .4s"></div>
@@ -1857,60 +1903,69 @@ async function renderEvCal() {
         <div style="width:60px;text-align:right;font-family:'DM Mono',monospace;color:${color};font-weight:700">
           ${roiPct != null ? (parseFloat(roiPct) >= 0 ? '+' : '') + roiPct + '%' : '—'}
         </div>
-        <div style="width:45px;text-align:right;color:var(--muted);font-size:10px">n=${b.n}${warn}</div>
+        <div style="width:60px;text-align:right;color:var(--muted);font-size:10px">n=${b.n}${warn}${note}</div>
       </div>`;
     }).join('');
   }
 
   renderBandBars('ev-cal-bands', d.bands);
 
-  // League rows
+  // ── League rows ────────────────────────────────────────────────────────────
   const leaguesEl = document.getElementById('ev-cal-leagues');
   if (leaguesEl && d.byLeague) {
     const maxAbs = Math.max(0.01, ...d.byLeague.filter(l => l.roi != null).map(l => Math.abs(l.roi)));
     leaguesEl.innerHTML = d.byLeague.map(l => {
-      const roiPct = l.roi != null ? (l.roi * 100).toFixed(1) : null;
-      const barW   = l.roi != null ? Math.round(Math.abs(l.roi) / maxAbs * 100) : 0;
-      const color  = l.roi == null ? 'var(--muted)' : l.roi >= 0 ? 'var(--green)' : 'var(--red)';
-      const warn   = l.posEdgeN < 30 ? ' ⚠' : '';
-      const llWarn = l.league === 'La Liga' && l.roi != null && l.roi < 0
-        ? ' <span style="font-size:10px;color:var(--red);font-weight:700">Investigation needed</span>' : '';
-      return `<div style="display:flex;align-items:center;gap:10px;font-size:11px;cursor:pointer" onclick="toggleLaLigaDetail('${l.league}')">
-        <div style="width:120px;flex-shrink:0;color:var(--text2)">${l.league}${llWarn}</div>
+      const roiPct   = l.roi != null ? (l.roi * 100).toFixed(1) : null;
+      const barW     = l.roi != null ? Math.round(Math.abs(l.roi) / maxAbs * 100) : 0;
+      const color    = l.roi == null ? 'var(--muted)' : l.roi >= 0 ? 'var(--green)' : 'var(--red)';
+      const smallN   = l.posEdgeN < 30 ? ' ⚠' : '';
+      const isPaper  = l.roi != null && l.roi < 0 && l.posEdgeN >= 30;
+      const paperTag = isPaper ? ' <span style="font-size:.55rem;background:rgba(255,170,0,0.15);color:#ffaa00;border:1px solid rgba(255,170,0,0.4);border-radius:3px;padding:1px 4px;vertical-align:middle">PAPER</span>' : '';
+      const clickable = l.bands ? `style="cursor:pointer"` : '';
+      const slug = l.league.replace(/\s+/g, '-');
+      return `<div ${clickable} onclick="toggleLeagueBandDetail('${slug}')" style="display:flex;align-items:center;gap:10px;font-size:11px;padding:2px 0">
+        <div style="width:130px;flex-shrink:0;color:var(--text2)">${l.league}${paperTag}</div>
         <div style="flex:1;height:14px;background:var(--surface3);border-radius:3px;overflow:hidden">
           <div style="width:${barW}%;height:100%;background:${color};border-radius:3px"></div>
         </div>
         <div style="width:60px;text-align:right;font-family:'DM Mono',monospace;color:${color};font-weight:700">
           ${roiPct != null ? (parseFloat(roiPct) >= 0 ? '+' : '') + roiPct + '%' : '—'}
         </div>
-        <div style="width:50px;text-align:right;color:var(--muted);font-size:10px">n=${l.posEdgeN}${warn}</div>
+        <div style="width:45px;text-align:right;color:var(--muted);font-size:10px">n=${l.posEdgeN}${smallN}</div>
+      </div>
+      <div id="ev-band-detail-${slug}" style="display:none;margin:4px 0 8px 140px;padding:8px;background:var(--surface2);border-radius:6px;border-left:2px solid ${color}">
+        <div style="font-size:10px;font-weight:700;color:var(--muted);margin-bottom:6px;letter-spacing:.06em;text-transform:uppercase">${l.league} — ROI by Edge Band</div>
+        <div id="ev-band-detail-bars-${slug}"></div>
       </div>`;
     }).join('');
+
+    // Pre-render band detail bars for each league
+    for (const l of d.byLeague) {
+      if (!l.bands) continue;
+      const slug = l.league.replace(/\s+/g, '-');
+      const isPlLeague = l.league === 'Premier League';
+      renderBandBars(`ev-band-detail-bars-${slug}`, l.bands, isPlLeague ? 39 : null);
+    }
   }
 
-  // La Liga band detail
-  const ll = d.byLeague?.find(l => l.league === 'La Liga');
-  if (ll?.bands) {
-    const detailEl = document.getElementById('ev-cal-laliga-detail');
-    if (detailEl) detailEl.style.display = 'block';
-    renderBandBars('ev-cal-laliga-bands', ll.bands);
-  }
+  // Legacy La Liga detail panel (kept for compatibility, hidden now detail is inline)
+  document.getElementById('ev-cal-laliga-detail')?.style && (document.getElementById('ev-cal-laliga-detail').style.display = 'none');
 
-  // Kelly recommendation
+  // ── Kelly recommendation ───────────────────────────────────────────────────
   const kellyEl = document.getElementById('ev-cal-kelly');
   if (kellyEl && d.summary) {
     const rec = d.summary.kellyRecommendation;
     const label = KELLY_LABELS[rec] || rec;
     const color = rec === 'flag_for_review' ? 'var(--red)' : rec === 'half_kelly' ? 'var(--green)' : 'var(--cyan)';
+    const reasoning = rec === 'third_kelly'   ? 'Edge exists but variance is high — reduce stake size to stay solvent through losing runs.' :
+                      rec === 'half_kelly'     ? 'Strong consistent edge — standard half-Kelly is appropriate.' :
+                      rec === 'quarter_kelly'  ? 'Marginal edge — minimal exposure until calibration improves.' :
+                                                 'Negative or zero ROI — do not stake until model is recalibrated.';
     kellyEl.innerHTML = `<div style="font-weight:700;color:${color};margin-bottom:4px">Kelly Recommendation: ${label}</div>
-      <div style="color:var(--text2)">Based on ${d.summary.positiveEdge} positive-edge fixtures. ROI ${d.summary.positiveEdgeRoi != null ? ((d.summary.positiveEdgeRoi*100).toFixed(1)+'%') : '—'} on 5%+ edge calls. ` +
-      (rec === 'third_kelly' ? 'Edge exists but variance is high — reduce stake size to stay solvent through losing runs.' :
-       rec === 'half_kelly'  ? 'Strong consistent edge — standard half-Kelly is appropriate.' :
-       rec === 'quarter_kelly' ? 'Marginal edge — minimal exposure until calibration improves.' :
-       'Negative or zero ROI — do not stake until model is recalibrated.') + `</div>`;
+      <div style="color:var(--text2)">${reasoning} Based on ${d.summary.positiveEdge} positive-edge fixtures, ${d.summary.positiveEdgeRoi != null ? ((d.summary.positiveEdgeRoi >= 0 ? '+' : '') + (d.summary.positiveEdgeRoi * 100).toFixed(1) + '% ROI') : '—'} on 5%+ edge calls.</div>`;
   }
 
-  // Settings notification when recommendation differs from current Kelly
+  // ── Settings notification ──────────────────────────────────────────────────
   if (!_evCalDismissed && d.summary?.kellyRecommendation && d.summary.kellyRecommendation !== 'flag_for_review') {
     const currentEl = document.getElementById('kelly-frac-input');
     const currentVal = currentEl?.value;
@@ -1927,10 +1982,13 @@ async function renderEvCal() {
   }
 }
 
-function toggleLaLigaDetail(league) {
-  if (league !== 'La Liga') return;
-  const el = document.getElementById('ev-cal-laliga-detail');
+function toggleLeagueBandDetail(slug) {
+  const el = document.getElementById(`ev-band-detail-${slug}`);
   if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+function toggleLaLigaDetail(league) {
+  toggleLeagueBandDetail(league.replace(/\s+/g, '-'));
 }
 
 function applyEvKellyRecommendation() {
