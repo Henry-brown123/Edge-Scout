@@ -830,7 +830,8 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     const impliedP  = pinnStripped?.[teamKey] ?? (1 / displayOdds);
     const calProb   = Math.min(0.97, c.prob * calFactor);
     const edge      = calProb - impliedP;
-    const rawScore  = computeSuccessScore(calProb, displayOdds, homeFormCount, dataConf);
+    const pinnacleEdgeVsMarket = pinnStripped ? calProb - (pinnStripped[teamKey] ?? (1 / displayOdds)) : null;
+    const rawScore  = computeSuccessScore(calProb, displayOdds, homeFormCount, dataConf, pinnacleEdgeVsMarket);
     const finalScore = Math.round(rawScore * wxMod * effMult);
     const k         = kelly(calProb, displayOdds, settings.kellyFraction, getBankroll().current);
 
@@ -3878,6 +3879,7 @@ app.get('/api/ev-calibration', (_req, res) => {
       posRoi = parseFloat((posEdge.reduce((s, f) => s + (f.won ? (f.pinnacleOdds - 1) : -1), 0) / posEdge.length).toFixed(4));
     }
 
+    // Per-league stats with per-band breakdown
     const leagueMap = {};
     for (const f of matched) {
       const lid  = parseInt(f.leagueId, 10);
@@ -3891,19 +3893,44 @@ app.get('/api/ev-calibration', (_req, res) => {
       if (posE.length > 0) {
         roi = parseFloat((posE.reduce((s, f) => s + (f.won ? (f.pinnacleOdds - 1) : -1), 0) / posE.length).toFixed(4));
       }
-      return { league, n: fxs.length, posEdgeN: posE.length, roi, kelly: kellyRec(roi) };
+      return {
+        league,
+        n:       fxs.length,
+        posEdgeN: posE.length,
+        roi,
+        kelly:   kellyRec(roi),
+        bands:   bandStats(fxs),
+      };
     }).sort((a, b) => b.n - a.n);
 
-    res.json({
+    const KELLY_FRACTION_MAP = { half_kelly: 0.5, third_kelly: 0.33, quarter_kelly: 0.25 };
+    const overallKelly = kellyRec(posRoi);
+
+    // Persist results and auto-update Kelly fraction in settings
+    const result = {
+      generatedAt:   new Date().toISOString(),
       summary: {
         totalMatched:        matched.length,
         positiveEdge:        posEdge.length,
         positiveEdgeRoi:     posRoi,
-        kellyRecommendation: kellyRec(posRoi),
+        kellyRecommendation: overallKelly,
       },
       bands:    bandStats(matched),
       byLeague,
-    });
+    };
+    writeJSON('ev-calibration.json', result);
+
+    // Auto-update Kelly fraction if recommendation differs from current setting
+    const settings = readJSON('settings.json') || {};
+    const currentFraction = settings.kellyFraction ?? 0.5;
+    const recommendedFraction = KELLY_FRACTION_MAP[overallKelly] ?? currentFraction;
+    const kellyChanged = recommendedFraction !== currentFraction && overallKelly !== 'flag_for_review';
+    if (kellyChanged) {
+      settings.kellyFraction = recommendedFraction;
+      writeJSON('settings.json', settings);
+    }
+
+    res.json({ ...result, kellyAutoUpdated: kellyChanged, previousKellyFraction: currentFraction });
   } catch(e) {
     res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0,5) });
   }

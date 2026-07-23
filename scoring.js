@@ -329,7 +329,7 @@ function kelly(prob, odds, fraction = 0.5, bankroll = 1000) {
 // dataConf multiplier suppresses scores when historical data is thin.
 // At dataConf=0: multiplier = 0.4, so max raw 59 becomes ~24 (below 40 threshold).
 
-function computeSuccessScore(modelProb, bookOdds, formFixtureCount = 20, dataConf = 1) {
+function computeSuccessScore(modelProb, bookOdds, formFixtureCount = 20, dataConf = 1, pinnacleEdge = null) {
   const impliedProb = 1 / bookOdds;
   const edge = modelProb - impliedProb;
   if (edge <= 0) return 0;
@@ -338,7 +338,10 @@ function computeSuccessScore(modelProb, bookOdds, formFixtureCount = 20, dataCon
   const confidenceComp = Math.min(formFixtureCount / 50, 1) * 19;
   const raw            = Math.min(99, Math.round(winComp + valueComp + confidenceComp));
   const dataMultiplier = 0.4 + (dataConf * 0.6);
-  return Math.round(raw * dataMultiplier);
+  const base           = Math.round(raw * dataMultiplier);
+  // 20%+ edge vs Pinnacle confirmed 0% ROI at scale — suppress inflated scores
+  const edgeVsPinnacle = pinnacleEdge !== null ? pinnacleEdge : edge;
+  return edgeVsPinnacle > 0.20 ? Math.round(base * 0.5) : base;
 }
 
 // ─── SUPPORTING UTILITIES ─────────────────────────────────────────────────────

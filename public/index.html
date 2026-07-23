@@ -811,6 +811,54 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     </div>
   </div>
 
+  <!-- ─── EV Calibration ────────────────────────────────────────── -->
+  <div class="card" style="margin-top:16px" id="ev-cal-section">
+    <div class="card-header">
+      <span class="card-title">EV Calibration</span>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-family:'DM Mono',monospace;font-size:.7rem;color:var(--text2)">Pinnacle closing odds · 1,403 historical fixtures</span>
+        <button class="btn btn-ghost btn-sm" onclick="renderEvCal()">↻ Refresh</button>
+      </div>
+    </div>
+
+    <!-- 20%+ warning card -->
+    <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.4);border-radius:8px;padding:12px 16px;margin-bottom:16px">
+      <div style="font-weight:700;color:#ef4444;font-size:12px;margin-bottom:4px">⚠ 20%+ Edge Band — 265 fixtures, 0% ROI</div>
+      <div style="font-size:11px;color:var(--text2)">Large claimed edges are not translating to real returns. This is the international underdog inflation pattern confirmed at scale. Fixtures in this band now have their success score halved automatically.</div>
+    </div>
+
+    <!-- Overall interpretation -->
+    <div id="ev-cal-interpretation" style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin-bottom:16px;padding:10px 14px;background:var(--surface2);border-radius:6px">
+      Loading calibration data…
+    </div>
+
+    <!-- Band ROI chart -->
+    <div style="margin-bottom:20px">
+      <div style="font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px">ROI by Edge Band (Pinnacle closing odds)</div>
+      <div id="ev-cal-bands" style="display:flex;flex-direction:column;gap:6px"></div>
+    </div>
+
+    <!-- League comparison -->
+    <div style="margin-bottom:8px">
+      <div style="font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px">League Breakdown</div>
+      <div id="ev-cal-leagues" style="display:flex;flex-direction:column;gap:6px"></div>
+    </div>
+
+    <!-- Kelly recommendation -->
+    <div id="ev-cal-kelly" style="margin-top:16px;padding:12px 16px;border-radius:8px;background:var(--surface2);font-size:12px"></div>
+
+    <!-- La Liga band detail -->
+    <div id="ev-cal-laliga-detail" style="margin-top:16px;display:none">
+      <div style="font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px">La Liga — ROI by Edge Band</div>
+      <div id="ev-cal-laliga-bands" style="display:flex;flex-direction:column;gap:6px"></div>
+    </div>
+
+    <div class="empty" id="ev-cal-empty" style="display:none;padding:24px 0">
+      <div class="empty-icon">📊</div>
+      <p>Run EV calibration from the API to populate this section.</p>
+    </div>
+  </div>
+
 </div>
 
 <!-- ═══════════════════════════ SETTINGS ═══════════════════════════ -->
@@ -952,6 +1000,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
             <label>Kelly Fraction</label>
             <select id="kelly-frac-input">
               <option value="0.25">Quarter Kelly</option>
+              <option value="0.33">Third Kelly</option>
               <option value="0.5" selected>Half Kelly</option>
               <option value="1">Full Kelly</option>
             </select>
@@ -1006,6 +1055,15 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
           <button class="btn btn-ghost btn-sm" onclick="loadDataCoverage()">Refresh</button>
         </div>
         <div id="data-coverage-content" style="font-size:12px;color:var(--muted)">Loading…</div>
+      </div>
+
+      <div class="card" id="ev-kelly-notify-card" style="display:none;border:1px solid rgba(6,182,212,0.4)">
+        <div class="card-header"><span class="card-title">EV Calibration Recommendation</span></div>
+        <div id="ev-kelly-notify-body" style="font-size:12px;color:var(--text2);margin-bottom:14px"></div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-cyan btn-sm" onclick="applyEvKellyRecommendation()">Apply Recommended Setting</button>
+          <button class="btn btn-ghost btn-sm" onclick="dismissEvKellyNotify()">Dismiss</button>
+        </div>
       </div>
 
       <div class="card">
@@ -1669,6 +1727,7 @@ async function renderModel() {
   renderCalibrationHealth();
   renderDivergence();
   renderClv();
+  renderEvCal();
 }
 
 async function renderClv() {
@@ -1752,6 +1811,143 @@ async function renderClv() {
   } else {
     bandEl.innerHTML = '<p style="font-family:\'DM Mono\',monospace;font-size:.72rem;color:var(--muted)">No data</p>';
   }
+}
+
+let _evCalDismissed = false;
+let _evCalData = null;
+
+async function renderEvCal() {
+  let d;
+  try { d = await apiFetch('/api/ev-calibration'); } catch(e) { return; }
+  _evCalData = d;
+
+  const KELLY_LABELS = { half_kelly: 'Half-Kelly (0.5)', third_kelly: 'Third-Kelly (0.33)', quarter_kelly: 'Quarter-Kelly (0.25)', flag_for_review: 'Flag for Review' };
+  const KELLY_FRACTION_VALUES = { half_kelly: '0.5', third_kelly: '0.33', quarter_kelly: '0.25' };
+
+  // Overall interpretation
+  const interpEl = document.getElementById('ev-cal-interpretation');
+  if (interpEl && d.summary) {
+    const pl = d.byLeague?.find(l => l.league === 'Premier League');
+    const ll = d.byLeague?.find(l => l.league === 'La Liga');
+    const overallRoiPct = d.summary.positiveEdgeRoi != null ? (d.summary.positiveEdgeRoi * 100).toFixed(1) : '—';
+    const plRoi = pl?.roi != null ? (pl.roi * 100).toFixed(1) : '—';
+    const llRoi = ll?.roi != null ? (ll.roi * 100).toFixed(1) : '—';
+    const kellyLabel = KELLY_LABELS[d.summary.kellyRecommendation] || d.summary.kellyRecommendation;
+    interpEl.textContent = `Based on ${d.summary.totalMatched.toLocaleString()} fixtures with Pinnacle closing odds, the model shows ${overallRoiPct}% overall ROI on positive-edge calls. ` +
+      `Premier League: ${plRoi >= 0 ? '+' : ''}${plRoi}% ROI (${pl?.posEdgeN ?? 0} bets). ` +
+      `La Liga: ${llRoi}% ROI (${ll?.posEdgeN ?? 0} bets). ` +
+      `${kellyLabel} staking recommended.`;
+  }
+
+  // Band bars
+  function renderBandBars(containerId, bands) {
+    const el = document.getElementById(containerId);
+    if (!el || !bands) return;
+    const maxAbs = Math.max(0.01, ...bands.filter(b => b.roi != null).map(b => Math.abs(b.roi)));
+    el.innerHTML = bands.map(b => {
+      const roiPct = b.roi != null ? (b.roi * 100).toFixed(1) : null;
+      const barW   = b.roi != null ? Math.round(Math.abs(b.roi) / maxAbs * 100) : 0;
+      const color  = b.roi == null ? 'var(--muted)' : b.roi >= 0 ? 'var(--green)' : 'var(--red)';
+      const warn   = b.warning === 'small_sample' ? ' <span style="font-size:10px;color:var(--muted)">(n<30)</span>' : '';
+      return `<div style="display:flex;align-items:center;gap:10px;font-size:11px">
+        <div style="width:70px;flex-shrink:0;color:var(--text2);font-family:'DM Mono',monospace">${b.band}</div>
+        <div style="flex:1;height:14px;background:var(--surface3);border-radius:3px;overflow:hidden">
+          <div style="width:${barW}%;height:100%;background:${color};border-radius:3px;transition:width .4s"></div>
+        </div>
+        <div style="width:60px;text-align:right;font-family:'DM Mono',monospace;color:${color};font-weight:700">
+          ${roiPct != null ? (parseFloat(roiPct) >= 0 ? '+' : '') + roiPct + '%' : '—'}
+        </div>
+        <div style="width:45px;text-align:right;color:var(--muted);font-size:10px">n=${b.n}${warn}</div>
+      </div>`;
+    }).join('');
+  }
+
+  renderBandBars('ev-cal-bands', d.bands);
+
+  // League rows
+  const leaguesEl = document.getElementById('ev-cal-leagues');
+  if (leaguesEl && d.byLeague) {
+    const maxAbs = Math.max(0.01, ...d.byLeague.filter(l => l.roi != null).map(l => Math.abs(l.roi)));
+    leaguesEl.innerHTML = d.byLeague.map(l => {
+      const roiPct = l.roi != null ? (l.roi * 100).toFixed(1) : null;
+      const barW   = l.roi != null ? Math.round(Math.abs(l.roi) / maxAbs * 100) : 0;
+      const color  = l.roi == null ? 'var(--muted)' : l.roi >= 0 ? 'var(--green)' : 'var(--red)';
+      const warn   = l.posEdgeN < 30 ? ' ⚠' : '';
+      const llWarn = l.league === 'La Liga' && l.roi != null && l.roi < 0
+        ? ' <span style="font-size:10px;color:var(--red);font-weight:700">Investigation needed</span>' : '';
+      return `<div style="display:flex;align-items:center;gap:10px;font-size:11px;cursor:pointer" onclick="toggleLaLigaDetail('${l.league}')">
+        <div style="width:120px;flex-shrink:0;color:var(--text2)">${l.league}${llWarn}</div>
+        <div style="flex:1;height:14px;background:var(--surface3);border-radius:3px;overflow:hidden">
+          <div style="width:${barW}%;height:100%;background:${color};border-radius:3px"></div>
+        </div>
+        <div style="width:60px;text-align:right;font-family:'DM Mono',monospace;color:${color};font-weight:700">
+          ${roiPct != null ? (parseFloat(roiPct) >= 0 ? '+' : '') + roiPct + '%' : '—'}
+        </div>
+        <div style="width:50px;text-align:right;color:var(--muted);font-size:10px">n=${l.posEdgeN}${warn}</div>
+      </div>`;
+    }).join('');
+  }
+
+  // La Liga band detail
+  const ll = d.byLeague?.find(l => l.league === 'La Liga');
+  if (ll?.bands) {
+    const detailEl = document.getElementById('ev-cal-laliga-detail');
+    if (detailEl) detailEl.style.display = 'block';
+    renderBandBars('ev-cal-laliga-bands', ll.bands);
+  }
+
+  // Kelly recommendation
+  const kellyEl = document.getElementById('ev-cal-kelly');
+  if (kellyEl && d.summary) {
+    const rec = d.summary.kellyRecommendation;
+    const label = KELLY_LABELS[rec] || rec;
+    const color = rec === 'flag_for_review' ? 'var(--red)' : rec === 'half_kelly' ? 'var(--green)' : 'var(--cyan)';
+    kellyEl.innerHTML = `<div style="font-weight:700;color:${color};margin-bottom:4px">Kelly Recommendation: ${label}</div>
+      <div style="color:var(--text2)">Based on ${d.summary.positiveEdge} positive-edge fixtures. ROI ${d.summary.positiveEdgeRoi != null ? ((d.summary.positiveEdgeRoi*100).toFixed(1)+'%') : '—'} on 5%+ edge calls. ` +
+      (rec === 'third_kelly' ? 'Edge exists but variance is high — reduce stake size to stay solvent through losing runs.' :
+       rec === 'half_kelly'  ? 'Strong consistent edge — standard half-Kelly is appropriate.' :
+       rec === 'quarter_kelly' ? 'Marginal edge — minimal exposure until calibration improves.' :
+       'Negative or zero ROI — do not stake until model is recalibrated.') + `</div>`;
+  }
+
+  // Settings notification when recommendation differs from current Kelly
+  if (!_evCalDismissed && d.summary?.kellyRecommendation && d.summary.kellyRecommendation !== 'flag_for_review') {
+    const currentEl = document.getElementById('kelly-frac-input');
+    const currentVal = currentEl?.value;
+    const recommended = KELLY_FRACTION_VALUES[d.summary.kellyRecommendation];
+    if (recommended && currentVal && recommended !== currentVal) {
+      const LABEL = { '0.5': 'Half-Kelly', '0.33': 'Third-Kelly', '0.25': 'Quarter-Kelly' };
+      const card = document.getElementById('ev-kelly-notify-card');
+      const body = document.getElementById('ev-kelly-notify-body');
+      if (card && body) {
+        body.textContent = `EV calibration recommends ${LABEL[recommended]} based on ${d.summary.totalMatched.toLocaleString()} historical fixtures — current setting: ${LABEL[currentVal] || currentVal}. Apply recommended setting?`;
+        card.style.display = '';
+      }
+    }
+  }
+}
+
+function toggleLaLigaDetail(league) {
+  if (league !== 'La Liga') return;
+  const el = document.getElementById('ev-cal-laliga-detail');
+  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+function applyEvKellyRecommendation() {
+  if (!_evCalData?.summary?.kellyRecommendation) return;
+  const KELLY_FRACTION_VALUES = { half_kelly: '0.5', third_kelly: '0.33', quarter_kelly: '0.25' };
+  const val = KELLY_FRACTION_VALUES[_evCalData.summary.kellyRecommendation];
+  if (!val) return;
+  const el = document.getElementById('kelly-frac-input');
+  if (el) el.value = val;
+  saveSettings();
+  dismissEvKellyNotify();
+}
+
+function dismissEvKellyNotify() {
+  _evCalDismissed = true;
+  const card = document.getElementById('ev-kelly-notify-card');
+  if (card) card.style.display = 'none';
 }
 
 async function renderDivergence() {
