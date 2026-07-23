@@ -128,6 +128,11 @@ const SETTINGS_DEFAULTS = {
   wowyActive: true,
   preferExchange: true,
   preferExchangeBuffer: 5,
+  leagueModes: {
+    '39': 'paper', '140': 'paper_only', '135': 'paper', '78': 'paper',
+    '61': 'paper', '2': 'paper', '1': 'paper', '179': 'paper',
+    '88': 'paper', '94': 'paper', '3': 'paper', '848': 'paper',
+  },
 };
 
 function getSettings() {
@@ -156,7 +161,7 @@ function getBankroll() {
   // Only count bets resolved AFTER the last reset transaction, to avoid double-counting cleared bets.
   const lastReset = txns.filter(t => t.type === 'reset').pop();
   const resetCutoff = lastReset ? new Date(lastReset.date).getTime() : 0;
-  const bets = readJSON('bets.json') || [];
+  const bets = (readJSON('bets.json') || []).filter(b => !b.mode || b.mode === 'paper');
   const seen = new Set();
   let betPnl = 0;
   for (const b of bets) {
@@ -240,6 +245,49 @@ function saveWatching(list)     { writeJSON('watching.json', list); }
 function saveBankroll(br)       { writeJSON('bankroll.json', { ...br, lastUpdated: new Date().toISOString() }); }
 function saveCalibration(list)  { writeJSON('calibration.json', list); }
 function saveOddsHistory(list)  { writeJSON('odds-history.json', list); }
+function getRealBets()          { return readJSON('real-bets.json') || []; }
+function saveRealBets(list)     { writeJSON('real-bets.json', list); }
+
+function getLeagueModes() {
+  const settings = getSettings();
+  const modes = { ...SETTINGS_DEFAULTS.leagueModes, ...(settings.leagueModes || {}) };
+  // Sync paperTradeOnly array into leagueModes as paper_only
+  const paperOnly = settings.paperTradeOnly || [];
+  for (const lid of paperOnly) modes[String(lid)] = 'paper_only';
+  return modes;
+}
+
+function getLeagueMode(leagueId) {
+  return getLeagueModes()[String(leagueId)] || 'paper';
+}
+
+function getRealBankroll() {
+  const bookmakers = getBookmakers();
+  return bookmakers
+    .filter(b => b.status === 'active' && b.balance != null && b.balance > 0)
+    .reduce((sum, b) => sum + b.balance, 0);
+}
+
+function getEvKellyFraction(leagueId) {
+  const KELLY_MAP = { half_kelly: 0.5, third_kelly: 0.33, quarter_kelly: 0.25 };
+  const evCal = readJSON('ev-calibration.json');
+  if (!evCal?.byLeague) return 0.33; // default third-kelly until calibrated
+  const leagueName = (LEAGUES[String(leagueId)] || {}).name;
+  const entry = evCal.byLeague.find(l => l.league === leagueName);
+  return KELLY_MAP[entry?.kelly] ?? 0.33;
+}
+
+// On startup: tag all existing bets without a mode field as 'paper'
+(function migrateBetModes() {
+  try {
+    const bets = readJSON('bets.json') || [];
+    let changed = false;
+    for (const b of bets) {
+      if (!b.mode) { b.mode = 'paper'; changed = true; }
+    }
+    if (changed) writeJSON('bets.json', bets);
+  } catch (e) { console.error('[Migration] bet modes:', e.message); }
+})();
 
 // Fixture stats: keyed by fixture ID (string). Each entry: { home: {xg, shotsOn, totalShots, possession}, away: {...} }
 function getFixtureStats() { return readJSON('fixture-stats.json') || {}; }
@@ -886,8 +934,10 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   if (teamIntel.home) teamIntel.home.keyPlayers = wowyToKeyPlayers(homeId, true);
   if (teamIntel.away) teamIntel.away.keyPlayers = wowyToKeyPlayers(awayId, false);
 
-  const paperTradeLeagues = settings.paperTradeOnly || [];
-  const paperTradeOnly = paperTradeLeagues.includes(parseInt(leagueId, 10));
+  const leagueMode  = getLeagueMode(leagueId);
+  const paperTradeOnly = leagueMode === 'paper_only'
+    || (settings.paperTradeOnly || []).includes(parseInt(leagueId, 10));
+  const betMode = leagueMode === 'real' ? 'real' : 'paper';
 
   return {
     fix, homeName, awayName, homeF, awayF, probs, weather, weatherCondition, results,
@@ -895,7 +945,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     context, competitionPhase, lowConfidence,
     homeDataConf, awayDataConf, dataConf,
     homeFormCount, awayFormCount, minFormCount, tierThreshold,
-    teamIntel, paperTradeOnly,
+    teamIntel, paperTradeOnly, betMode,
   };
 }
 
@@ -1176,9 +1226,18 @@ async function runPreMatchScan(watchingEntry) {
       }
     } catch {}
 
-    // Lock the bet
+    // Lock the bet — mode-aware Kelly and bankroll
+    const betMode   = scored.betMode || 'paper';
+    const isReal    = betMode === 'real';
+    const realBr    = isReal ? getRealBankroll() : null;
+    const evKelly   = isReal ? getEvKellyFraction(leagueId) : settings.kellyFraction;
+    const bankrollForKelly = isReal ? (realBr || 0) : getBankroll().current;
+    const realKelly = kelly(best.modelProb * (settings.calibrationFactor ?? 1.08),
+                            best.bookOdds, evKelly, bankrollForKelly);
     const br    = getBankroll();
     const betId = uuidv4();
+    const computedStake = scored.paperTradeOnly ? 0
+      : isReal ? roundStake(realKelly.stake) : roundStake(best.kelly.stake);
     const bet   = {
       id:           betId,
       fixtureId:    fix.fixture.id,
@@ -1194,12 +1253,13 @@ async function runPreMatchScan(watchingEntry) {
       impliedProb:  best.impliedProb,
       edge:         best.edge,
       ev:           best.ev,
+      mode:          betMode,
       paperTradeOnly: scored.paperTradeOnly,
-      kellyFraction: settings.kellyFraction,
-      kellStake:     scored.paperTradeOnly ? 0 : best.kelly.stake,
-      suggestedStake: scored.paperTradeOnly ? 0 : roundStake(best.kelly.stake),
-      displayStake:  scored.paperTradeOnly ? 0 : roundStake(best.kelly.stake),
-      bankrollAtLock: br.current,
+      kellyFraction: evKelly,
+      kellStake:     computedStake,
+      suggestedStake: computedStake,
+      displayStake:  computedStake,
+      bankrollAtLock: isReal ? (realBr || 0) : br.current,
       stage:        'RECOMMENDED',
       lockedAt:     new Date().toISOString(),
       result:       null,
@@ -1242,6 +1302,11 @@ async function runPreMatchScan(watchingEntry) {
     }
     bets.unshift(bet);
     saveBets(bets);
+    if (isReal) {
+      const realBets = getRealBets();
+      realBets.unshift(bet);
+      saveRealBets(realBets);
+    }
 
     // Mark calibration entry as bet placed
     if (watchingEntry.calId) {
@@ -3954,6 +4019,142 @@ app.get('/api/ev-calibration', (_req, res) => {
   } catch(e) {
     res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0,5) });
   }
+});
+
+// ─── LEAGUE MODES ─────────────────────────────────────────────────────────────
+
+const LEAGUE_NAMES_MAP = {
+  '39': 'Premier League', '140': 'La Liga', '135': 'Serie A', '78': 'Bundesliga',
+  '61': 'Ligue 1', '2': 'Champions League', '1': 'World Cup', '179': 'Scottish Premiership',
+  '88': 'Eredivisie', '94': 'Primeira Liga', '3': 'Europa League', '848': 'Conference League',
+};
+
+function getLivePaperRecord(leagueId) {
+  const lid = String(leagueId);
+  const bets = getBets().filter(b => String(b.leagueId) === lid && (!b.mode || b.mode === 'paper'));
+  const resolved = bets.filter(b => b.result && b.pnl != null);
+  const wins     = resolved.filter(b => b.result === 'win').length;
+  const staked   = resolved.reduce((s, b) => s + (b.suggestedStake || 0), 0);
+  const returned = resolved.reduce((s, b) => s + (b.suggestedStake || 0) + (b.pnl || 0), 0);
+  const roi = staked > 0 ? (returned - staked) / staked : null;
+  return { total: bets.length, resolved: resolved.length, wins, losses: resolved.length - wins, roi };
+}
+
+function canGoLive(leagueId) {
+  const evCal = readJSON('ev-calibration.json');
+  const leagueName = LEAGUE_NAMES_MAP[String(leagueId)];
+  const leagueEv = evCal?.byLeague?.find(l => l.league === leagueName);
+  const paperRecord = getLivePaperRecord(leagueId);
+  const activeAccounts = getBookmakers().filter(b => b.status === 'active' && b.balance != null && b.balance > 0);
+  return {
+    evPositive:      { met: (leagueEv?.roi ?? -1) > 0, value: leagueEv?.roi ?? null, fixtures: leagueEv?.posEdgeN ?? 0 },
+    paperTrades50:   { met: paperRecord.resolved >= 50,  value: paperRecord.resolved, required: 50 },
+    paperRoiPositive:{ met: paperRecord.roi != null && paperRecord.roi > 0, value: paperRecord.roi },
+    fundedAccounts:  { met: activeAccounts.length >= 3,  value: activeAccounts.length, required: 3 },
+    allMet: (leagueEv?.roi ?? -1) > 0 && paperRecord.resolved >= 50 && (paperRecord.roi ?? -1) > 0 && activeAccounts.length >= 3,
+  };
+}
+
+app.get('/api/league-modes', (_req, res) => {
+  try {
+    const modes   = getLeagueModes();
+    const evCal   = readJSON('ev-calibration.json');
+    const leagues = Object.keys(LEAGUE_NAMES_MAP).map(lid => {
+      const name       = LEAGUE_NAMES_MAP[lid];
+      const mode       = modes[lid] || 'paper';
+      const leagueEv   = evCal?.byLeague?.find(l => l.league === name);
+      const paperRec   = getLivePaperRecord(lid);
+      const check      = canGoLive(lid);
+      return { leagueId: lid, name, mode, ev: leagueEv || null, paperRecord: paperRec, goLiveCheck: check };
+    });
+    res.json({ leagues, realBankroll: getRealBankroll() });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/league-modes/:leagueId', (req, res) => {
+  try {
+    const { leagueId } = req.params;
+    const { mode } = req.body;
+    if (!['paper', 'real', 'disabled'].includes(mode)) return res.status(400).json({ error: 'Invalid mode' });
+    const currentMode = getLeagueMode(leagueId);
+    if (currentMode === 'paper_only') return res.status(403).json({ error: 'League is locked to paper_only by EV calibration' });
+    const settings = readJSON('settings.json') || {};
+    settings.leagueModes = { ...getLeagueModes(), [String(leagueId)]: mode };
+    writeJSON('settings.json', settings);
+    res.json({ leagueId, mode });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/go-live-check/:leagueId', (req, res) => {
+  try {
+    const lid = req.params.leagueId;
+    res.json({ leagueName: LEAGUE_NAMES_MAP[String(lid)] || `League ${lid}`, ...canGoLive(lid) });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/go-live/:leagueId', (req, res) => {
+  try {
+    const { leagueId } = req.params;
+    const check = canGoLive(leagueId);
+    if (!check.allMet) return res.status(400).json({ error: 'Go Live conditions not met', check });
+    const settings = readJSON('settings.json') || {};
+    settings.leagueModes = { ...getLeagueModes(), [String(leagueId)]: 'real' };
+    writeJSON('settings.json', settings);
+    console.log(`[GoLive] League ${leagueId} (${LEAGUE_NAMES_MAP[leagueId]}) switched to REAL money`);
+    res.json({ leagueId, leagueName: LEAGUE_NAMES_MAP[String(leagueId)] || `League ${leagueId}`, mode: 'real', check });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/performance/paper', (_req, res) => {
+  try {
+    const bets     = getBets().filter(b => !b.mode || b.mode === 'paper');
+    const resolved = bets.filter(b => b.result && b.pnl != null);
+    const wins     = resolved.filter(b => b.result === 'win');
+    const staked   = resolved.reduce((s, b) => s + (b.suggestedStake || 0), 0);
+    const pnl      = resolved.reduce((s, b) => s + (b.pnl || 0), 0);
+    const roi      = staked > 0 ? pnl / staked : null;
+    const br       = getBankroll();
+    res.json({
+      mode:     'paper',
+      bankroll: br.current,
+      total:    bets.length,
+      resolved: resolved.length,
+      wins:     wins.length,
+      losses:   resolved.length - wins.length,
+      winRate:  resolved.length > 0 ? wins.length / resolved.length : null,
+      staked, pnl, roi,
+      bets,
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/performance/real', (_req, res) => {
+  try {
+    const bets     = getBets().filter(b => b.mode === 'real');
+    const resolved = bets.filter(b => b.result && b.pnl != null);
+    const wins     = resolved.filter(b => b.result === 'win');
+    const staked   = resolved.reduce((s, b) => s + (b.suggestedStake || 0), 0);
+    const pnl      = resolved.reduce((s, b) => s + (b.pnl || 0), 0);
+    const roi      = staked > 0 ? pnl / staked : null;
+    const bookmakers = getBookmakers().filter(b => b.status === 'active');
+    const realBankroll = bookmakers.filter(b => b.balance != null && b.balance > 0)
+      .reduce((s, b) => s + b.balance, 0);
+    const bookmakerBreakdown = bookmakers
+      .filter(b => b.balance != null)
+      .map(b => ({ name: b.name, balance: b.balance, status: b.status }))
+      .sort((a, b) => (b.balance ?? 0) - (a.balance ?? 0));
+    res.json({
+      mode:     'real',
+      realBankroll, bookmakerBreakdown,
+      total:    bets.length,
+      resolved: resolved.length,
+      wins:     wins.length,
+      losses:   resolved.length - wins.length,
+      winRate:  resolved.length > 0 ? wins.length / resolved.length : null,
+      staked, pnl, roi,
+      bets,
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 const _serverStartedAt = new Date().toISOString();

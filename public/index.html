@@ -284,6 +284,28 @@ td.mono { font-family: var(--font-data); }
 .badge-amber  { background: rgba(255,209,102,.1); color: var(--amber); }
 .badge-cyan   { background: rgba(76,201,240,.1);  color: var(--cyan);  }
 .badge-muted  { background: var(--surface3); color: var(--muted); }
+.badge-real   { background: rgba(255,209,102,.18); color: #c8960a; border: 1px solid rgba(255,209,102,.45); }
+.badge-paper  { background: rgba(76,201,240,.12);  color: var(--cyan); border: 1px solid rgba(76,201,240,.3); }
+.badge-paper-only { background: rgba(107,114,128,.12); color: var(--muted); border: 1px solid rgba(107,114,128,.25); }
+.fixture-card.real-money { border-left: 3px solid var(--amber); background: #1d1b15; border-color: #3a3220; }
+.fixture-card.paper-trade { border-left: 3px solid var(--cyan); }
+
+/* ── Performance view switcher ── */
+.perf-view-btn { background: none; border: none; color: var(--muted); font-family: var(--font-head); font-size: 12px; font-weight: 600; padding: 6px 14px; border-radius: 7px; cursor: pointer; transition: all .15s; }
+.perf-view-btn:hover { color: var(--text); }
+.active-paper-view { background: rgba(76,201,240,.15); color: var(--cyan) !important; }
+.active-real-view  { background: rgba(255,209,102,.15); color: var(--amber) !important; }
+.active-combined-view { background: var(--surface3); color: var(--text) !important; }
+
+/* ── Betting modes league row ── */
+.mode-league-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+.mode-league-row:last-child { border-bottom: none; }
+.mode-seg { display: flex; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); flex-shrink: 0; }
+.mode-seg-btn { padding: 4px 10px; font-size: 10px; font-family: var(--font-head); font-weight: 700; cursor: pointer; background: var(--surface3); color: var(--muted); border: none; border-right: 1px solid var(--border); transition: all .1s; }
+.mode-seg-btn:last-child { border-right: none; }
+.mode-seg-btn.seg-paper { background: rgba(76,201,240,.2); color: var(--cyan); }
+.mode-seg-btn.seg-real  { background: rgba(255,209,102,.2); color: var(--amber); }
+.mode-seg-btn.seg-off   { background: rgba(107,114,128,.15); color: var(--muted); }
 
 /* ── P&L chart ── */
 .chart-wrap { height: 200px; position: relative; margin-top: 12px; }
@@ -483,6 +505,16 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
 <!-- ═══════════════════════════ PERFORMANCE ════════════════════════ -->
 <div class="tab-panel" id="tab-performance">
 
+  <!-- View switcher -->
+  <div style="display:flex;gap:4px;margin-bottom:16px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:4px;width:fit-content">
+    <button id="perf-view-paper"    class="perf-view-btn active-paper-view" onclick="switchPerfView('paper')">Paper Trading</button>
+    <button id="perf-view-real"     class="perf-view-btn" onclick="switchPerfView('real')">Real Money</button>
+    <button id="perf-view-combined" class="perf-view-btn" onclick="switchPerfView('combined')">Combined</button>
+  </div>
+
+  <!-- Paper Trading view (default) -->
+  <div id="perf-paper-view">
+
   <!-- Summary stats -->
   <div class="grid-4" style="margin-bottom:16px">
     <div class="stat-tile">
@@ -620,6 +652,83 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       <div class="stat-sub">deposits minus withdrawals</div>
     </div>
   </div>
+
+  </div><!-- /perf-paper-view -->
+
+  <!-- ── Real Money view ──────────────────────────────────────────── -->
+  <div id="perf-real-view" style="display:none">
+    <div class="grid-4" style="margin-bottom:16px">
+      <div class="stat-tile" style="border-top:2px solid var(--amber)">
+        <div class="stat-label">Real Bankroll</div>
+        <div class="stat-value c-amber" id="real-bankroll-total">—</div>
+        <div class="stat-sub">sum of funded accounts</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-label">Real Bets</div>
+        <div class="stat-value" id="real-total-bets">0</div>
+        <div class="stat-sub" id="real-record">0W / 0L</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-label">Real ROI</div>
+        <div class="stat-value" id="real-roi">—</div>
+        <div class="stat-sub">return on real money staked</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-label">Real P&amp;L</div>
+        <div class="stat-value" id="real-pnl">£0</div>
+        <div class="stat-sub" id="real-staked-sub">£0 staked</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header">
+        <span class="card-title">Bookmaker Balances</span>
+        <span style="font-size:11px;color:var(--muted)">update balances in Accounts section</span>
+      </div>
+      <div id="real-bm-balances" style="display:flex;flex-direction:column;gap:6px"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><span class="card-title">Real Money Bet Log</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Fixture</th><th>League</th><th>Bet</th><th>Odds</th>
+            <th>Stake</th><th>P&amp;L</th><th>Result</th>
+          </tr></thead>
+          <tbody id="real-bets-body"></tbody>
+        </table>
+        <div class="empty" id="real-bets-empty"><div class="empty-icon">💰</div><p>No real money bets yet. Switch a league to Real in Settings → Betting Modes.</p></div>
+      </div>
+    </div>
+  </div><!-- /perf-real-view -->
+
+  <!-- ── Combined view ────────────────────────────────────────────── -->
+  <div id="perf-combined-view" style="display:none">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+      <div class="card" style="border-top:2px solid var(--cyan)">
+        <div class="card-header"><span class="card-title" style="color:var(--cyan)">Paper Trading</span></div>
+        <div id="combined-paper-stats" style="display:flex;flex-direction:column;gap:8px"></div>
+      </div>
+      <div class="card" style="border-top:2px solid var(--amber)">
+        <div class="card-header"><span class="card-title" style="color:var(--amber)">Real Money</span></div>
+        <div id="combined-real-stats" style="display:flex;flex-direction:column;gap:8px"></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">All Bets</span><span style="font-size:11px;color:var(--muted)">paper + real</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Mode</th><th>Fixture</th><th>League</th><th>Bet</th>
+            <th>Odds</th><th>Stake</th><th>P&amp;L</th><th>Result</th>
+          </tr></thead>
+          <tbody id="combined-bets-body"></tbody>
+        </table>
+        <div class="empty" id="combined-bets-empty"><div class="empty-icon">📊</div><p>No bets yet.</p></div>
+      </div>
+    </div>
+  </div><!-- /perf-combined-view -->
 
 </div>
 
@@ -1054,6 +1163,21 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
         <div id="data-coverage-content" style="font-size:12px;color:var(--muted)">Loading…</div>
       </div>
 
+      <!-- Betting Modes -->
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-header">
+          <span class="card-title">Betting Modes</span>
+          <div style="display:flex;gap:8px;align-items:center">
+            <span style="font-size:10px;color:var(--muted)">per league</span>
+            <button class="btn btn-ghost btn-sm" onclick="renderBettingModes()">↻ Refresh</button>
+          </div>
+        </div>
+        <div id="betting-modes-list" style="display:flex;flex-direction:column"></div>
+        <div class="empty" id="betting-modes-empty" style="display:none;padding:20px 0">
+          <p style="color:var(--muted);font-size:12px">Loading league modes…</p>
+        </div>
+      </div>
+
       <div class="card" id="ev-kelly-notify-card" style="display:none;border:1px solid rgba(6,182,212,0.4)">
         <div class="card-header"><span class="card-title">EV Calibration Recommendation</span></div>
         <div id="ev-kelly-notify-body" style="font-size:12px;color:var(--text2);margin-bottom:14px"></div>
@@ -1228,7 +1352,7 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.classList.add('active');
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
     if (btn.dataset.tab === 'model')       renderModel();
-    if (btn.dataset.tab === 'performance') renderPerformance();
+    if (btn.dataset.tab === 'performance') { switchPerfView('paper'); renderPerformance(); }
     if (btn.dataset.tab === 'settings')  { renderSettings(); loadBackfillStatus(); loadOddsHistoryStats(); loadStartupStatus(); loadAccounts(); }
   });
 });
@@ -1465,9 +1589,22 @@ function recommendedCard(b) {
   const betLabel = isNeutral
     ? (b.bet === 'Home Win' ? `${home} Win` : b.bet === 'Away Win' ? `${away} Win` : b.bet)
     : b.bet;
+  const isReal      = b.mode === 'real';
+  const isPaperOnly = b.paperTradeOnly;
+  const modeClass   = isReal ? 'real-money' : 'paper-trade';
+  const modeBadge   = isReal
+    ? `<span class="badge badge-real">REAL £</span>`
+    : isPaperOnly
+      ? `<span class="badge badge-paper-only" title="EV calibration negative — paper only">PAPER ONLY</span>`
+      : `<span class="badge badge-paper">PAPER</span>`;
+  const stakeColor  = isReal ? 'var(--amber)' : 'var(--cyan)';
+  const kellyLabel  = isReal
+    ? `${b.kellyFraction === 0.5 ? 'Half' : b.kellyFraction === 0.33 ? 'Third' : 'Quarter'}-Kelly · real`
+    : 'Kelly · paper';
   return `
-    <div class="fixture-card recommended" style="flex-direction:column;align-items:stretch;padding-bottom:12px">
-      ${b.paperTradeOnly ? `<div style="background:rgba(255,170,0,0.12);border-bottom:1px solid rgba(255,170,0,0.3);padding:6px 14px;font-size:11px;font-weight:700;color:#ffaa00;border-radius:8px 8px 0 0;margin:-12px -12px 10px">⚠ PAPER ONLY — EV calibration negative for this league. Zero real-money stake.</div>` : ''}
+    <div class="fixture-card recommended ${modeClass}" style="flex-direction:column;align-items:stretch;padding-bottom:12px">
+      ${isPaperOnly ? `<div style="background:rgba(255,170,0,0.12);border-bottom:1px solid rgba(255,170,0,0.3);padding:6px 14px;font-size:11px;font-weight:700;color:#ffaa00;border-radius:8px 8px 0 0;margin:-12px -12px 10px">⚠ PAPER ONLY — EV calibration negative. Zero real-money stake.</div>` : ''}
+      ${isReal ? `<div style="background:rgba(255,209,102,0.08);border-bottom:1px solid rgba(255,209,102,0.2);padding:5px 14px;font-size:10px;font-weight:700;color:var(--amber);border-radius:8px 8px 0 0;margin:-12px -12px 8px;letter-spacing:.04em">REAL MONEY BET</div>` : ''}
       <div style="display:flex;align-items:flex-start;gap:10px">
         ${scoreBadge(b.successScore)}
         <div class="fixture-meta" style="flex:1">
@@ -1476,6 +1613,7 @@ function recommendedCard(b) {
             <span>${b.leagueName}</span>
             <span>🇬🇧 KO ${kickoff}</span>
             <span class="badge badge-cyan">${betLabel}</span>
+            ${modeBadge}
             <span style="color:var(--cyan)">+${edgePct}% edge</span>
             <span>@${b.bookOdds.toFixed(2)}</span>
             ${b.weather ? `<span title="Weather">🌧 ${b.weather.precipProb}% rain, ${b.weather.windSpeed?.toFixed(0)}km/h</span>` : ''}
@@ -1483,8 +1621,8 @@ function recommendedCard(b) {
         </div>
         <div class="fixture-right" style="flex-shrink:0">
           <div class="stake-box">
-            <div class="stake-amount">£${(b.displayStake ?? b.suggestedStake).toFixed(2)}</div>
-            <div class="stake-label">Half Kelly${b.kellStake && b.kellStake !== b.displayStake ? ` <span title="Exact Kelly: £${b.kellStake.toFixed(2)}" style="opacity:.55;font-size:9px">(exact £${b.kellStake.toFixed(2)})</span>` : ''}</div>
+            <div class="stake-amount" style="color:${stakeColor}">£${(b.displayStake ?? b.suggestedStake).toFixed(2)}</div>
+            <div class="stake-label">${kellyLabel}</div>
           </div>
           <span class="stage-tag tag-recommended" style="background:${(b.placementStatus||'pending_placement')==='placed'?'rgba(0,255,135,.15)':'rgba(245,166,35,.15)'};color:${(b.placementStatus||'pending_placement')==='placed'?'var(--green)':'#f5a623'}">${(b.placementStatus||'pending_placement')==='placed'?'Placed':'Locked'}</span>
           ${(b.placementStatus||'pending_placement')==='placed' ? `
@@ -1504,8 +1642,14 @@ function watchingCard(w) {
   const projLabel = neutral
     ? (w.projectedBet === 'Home Win' ? `${home} Win` : w.projectedBet === 'Away Win' ? `${away} Win` : w.projectedBet)
     : w.projectedBet;
+  const wMode = w.betMode || 'paper';
+  const wModeTag = wMode === 'real'
+    ? `<span class="badge badge-real">REAL £</span>`
+    : w.paperTradeOnly
+      ? `<span class="badge badge-paper-only" title="EV calibration negative — paper only">PAPER ONLY</span>`
+      : `<span class="badge badge-paper">PAPER</span>`;
   return `
-    <div class="fixture-card watching" onclick="openDrawerById('${w.id}')">
+    <div class="fixture-card watching ${wMode === 'real' ? 'real-money' : 'paper-trade'}" onclick="openDrawerById('${w.id}')">
       ${scoreBadge(w.projectedScore)}
       <div class="fixture-meta">
         <div class="fixture-name">${w.fixture}</div>
@@ -1518,10 +1662,10 @@ function watchingCard(w) {
       </div>
       <div class="fixture-right">
         <span class="stage-tag tag-watching">WATCHING</span>
+        ${wModeTag}
         ${contextBadge(w.context)}
         ${weatherBadge(w.weatherCondition)}
         ${w.lowConfidence ? '<span class="badge badge-red" title="Model diverges from bookmaker beyond data-confidence threshold — will not auto-lock">LOW CONF</span>' : ''}
-        ${w.paperTradeOnly ? '<span class="badge" style="background:rgba(255,170,0,0.15);color:#ffaa00;border:1px solid rgba(255,170,0,0.4);font-size:.6rem" title="EV calibration negative — paper trade only pending investigation">PAPER ONLY</span>' : ''}
         <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();forcePreMatch('${w.id}')">Lock now</button>
       </div>
     </div>`;
@@ -2372,6 +2516,191 @@ function exportCSV() {
 }
 
 // ─── SETTINGS ────────────────────────────────────────────────────────────────
+// ─── PERFORMANCE VIEW SWITCHER ───────────────────────────────────────────────
+function switchPerfView(view) {
+  ['paper','real','combined'].forEach(v => {
+    const btn = document.getElementById('perf-view-' + v);
+    const pane = document.getElementById('perf-' + v + '-view');
+    if (btn) { btn.classList.toggle('active-paper-view',    v === view && view === 'paper'); btn.classList.toggle('active-real-view', v === view && view === 'real'); btn.classList.toggle('active-combined-view', v === view && view === 'combined'); }
+    if (pane) pane.style.display = v === view ? '' : 'none';
+  });
+  if (view === 'real')     renderPerfReal();
+  if (view === 'combined') renderPerfCombined();
+}
+
+// ─── REAL PERFORMANCE VIEW ────────────────────────────────────────────────────
+async function renderPerfReal() {
+  const el = document.getElementById('perf-real-view');
+  if (!el) return;
+  try {
+    const data = await fetch('/api/performance/real').then(r => r.json());
+    const rb = data.realBankroll ?? 0;
+    const bks = data.bookmakerBalances || [];
+    const resolved = data.resolved ?? 0;
+    const wins = data.wins ?? 0;
+    const losses = data.losses ?? 0;
+    const pnl = data.pnl ?? 0;
+    const roi = data.roi != null ? data.roi.toFixed(1) : '—';
+    const bets = data.bets || [];
+    el.innerHTML = `
+      <div class="stat-grid" style="margin-bottom:16px">
+        <div class="stat-card"><div class="stat-label">Real Bankroll</div><div class="stat-value ${rb >= 0 ? 'c-green' : 'c-red'}">£${rb.toFixed(2)}</div></div>
+        <div class="stat-card"><div class="stat-label">Real Bets</div><div class="stat-value">${resolved}</div></div>
+        <div class="stat-card"><div class="stat-label">Record</div><div class="stat-value">${wins}W / ${losses}L</div></div>
+        <div class="stat-card"><div class="stat-label">ROI</div><div class="stat-value ${parseFloat(roi) >= 0 ? 'c-green' : 'c-red'}">${roi}%</div></div>
+        <div class="stat-card"><div class="stat-label">P&amp;L</div><div class="stat-value ${pnl >= 0 ? 'c-green' : 'c-red'}">${pnl >= 0 ? '+' : ''}£${pnl.toFixed(2)}</div></div>
+      </div>
+      ${bks.length ? `<div class="card" style="margin-bottom:16px"><div class="card-title">Bookmaker Balances</div>${bks.map(b => `<div class="mode-league-row"><span>${b.name}</span><span style="color:${b.balance > 0 ? 'var(--green)':'var(--muted)'}">£${b.balance.toFixed(2)}</span></div>`).join('')}</div>` : ''}
+      <div class="card"><div class="card-title">Real Bet Log</div>
+        ${bets.length === 0 ? '<div class="empty">No real bets yet</div>' : `<table class="bet-log-table"><thead><tr><th>Fixture</th><th>Bet</th><th>Odds</th><th>Stake</th><th>Result</th></tr></thead><tbody>
+          ${bets.map(b => `<tr><td>${b.fixture}</td><td>${b.betLabel||b.topPick}</td><td>${b.bookOdds?.toFixed(2)||'—'}</td><td>£${(b.suggestedStake||0).toFixed(2)}</td><td style="color:${b.result==='win'?'var(--green)':b.result==='loss'?'var(--red)':'var(--muted)'}">${b.result||'pending'}</td></tr>`).join('')}
+          </tbody></table>`}
+      </div>`;
+  } catch(e) { el.innerHTML = '<div class="empty">Failed to load real performance</div>'; }
+}
+
+// ─── COMBINED PERFORMANCE VIEW ────────────────────────────────────────────────
+async function renderPerfCombined() {
+  const el = document.getElementById('perf-combined-view');
+  if (!el) return;
+  try {
+    const [paperData, realData] = await Promise.all([
+      fetch('/api/performance/paper').then(r => r.json()).catch(() => ({})),
+      fetch('/api/performance/real').then(r => r.json()).catch(() => ({})),
+    ]);
+    const allBets = [...(paperData.bets||[]).map(b => ({...b, _src:'paper'})), ...(realData.bets||[]).map(b => ({...b, _src:'real'}))].sort((a,b) => new Date(b.lockedAt||0) - new Date(a.lockedAt||0));
+    el.innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+        <div class="card"><div class="card-title" style="color:var(--cyan)">Paper Trading</div>
+          <div class="stat-grid" style="grid-template-columns:1fr 1fr;gap:8px">
+            <div class="stat-card"><div class="stat-label">Bets</div><div class="stat-value">${paperData.resolved??0}</div></div>
+            <div class="stat-card"><div class="stat-label">ROI</div><div class="stat-value ${(paperData.roi??0)>=0?'c-green':'c-red'}">${paperData.roi!=null?paperData.roi.toFixed(1):'—'}%</div></div>
+            <div class="stat-card"><div class="stat-label">Record</div><div class="stat-value">${paperData.wins??0}W / ${paperData.losses??0}L</div></div>
+            <div class="stat-card"><div class="stat-label">P&amp;L</div><div class="stat-value ${(paperData.pnl??0)>=0?'c-green':'c-red'}">${(paperData.pnl??0)>=0?'+':''}£${(paperData.pnl??0).toFixed(2)}</div></div>
+          </div>
+        </div>
+        <div class="card"><div class="card-title" style="color:var(--amber)">Real Money</div>
+          <div class="stat-grid" style="grid-template-columns:1fr 1fr;gap:8px">
+            <div class="stat-card"><div class="stat-label">Bets</div><div class="stat-value">${realData.resolved??0}</div></div>
+            <div class="stat-card"><div class="stat-label">ROI</div><div class="stat-value ${(realData.roi??0)>=0?'c-green':'c-red'}">${realData.roi!=null?realData.roi.toFixed(1):'—'}%</div></div>
+            <div class="stat-card"><div class="stat-label">Record</div><div class="stat-value">${realData.wins??0}W / ${realData.losses??0}L</div></div>
+            <div class="stat-card"><div class="stat-label">P&amp;L</div><div class="stat-value ${(realData.pnl??0)>=0?'c-green':'c-red'}">${(realData.pnl??0)>=0?'+':''}£${(realData.pnl??0).toFixed(2)}</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="card"><div class="card-title">All Bets</div>
+        ${allBets.length === 0 ? '<div class="empty">No bets yet</div>' : `<table class="bet-log-table"><thead><tr><th>Fixture</th><th>Mode</th><th>Bet</th><th>Odds</th><th>Stake</th><th>Result</th></tr></thead><tbody>
+          ${allBets.map(b => `<tr><td>${b.fixture}</td><td><span class="badge ${b._src==='real'?'badge-real':'badge-paper'}">${b._src==='real'?'REAL £':'PAPER'}</span></td><td>${b.betLabel||b.topPick}</td><td>${b.bookOdds?.toFixed(2)||'—'}</td><td>£${(b.suggestedStake||0).toFixed(2)}</td><td style="color:${b.result==='win'?'var(--green)':b.result==='loss'?'var(--red)':'var(--muted)'}">${b.result||'pending'}</td></tr>`).join('')}
+          </tbody></table>`}
+      </div>`;
+  } catch(e) { el.innerHTML = '<div class="empty">Failed to load combined view</div>'; }
+}
+
+// ─── BETTING MODES (SETTINGS) ─────────────────────────────────────────────────
+let _goLiveLeagueId = null;
+
+async function renderBettingModes() {
+  const list = document.getElementById('betting-modes-list');
+  const empty = document.getElementById('betting-modes-empty');
+  if (!list) return;
+  list.innerHTML = '<div class="empty" style="padding:12px 0">Loading…</div>';
+  try {
+    const data = await fetch('/api/league-modes').then(r => r.json());
+    const leagues = data.leagues || [];
+    if (!leagues.length) { list.innerHTML = ''; if (empty) empty.style.display = ''; return; }
+    if (empty) empty.style.display = 'none';
+    list.innerHTML = leagues.map(l => {
+      const isPaperOnly = l.mode === 'paper_only';
+      const isReal = l.mode === 'real';
+      const canLive = l.goLiveCheck?.allMet;
+      return `
+        <div class="mode-league-row">
+          <div style="flex:1">
+            <div style="font-weight:600;font-size:13px">${l.name}</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:2px">
+              ${l.paperRecord ? `${l.paperRecord.resolved} paper bets · ROI ${l.paperRecord.roi != null ? (l.paperRecord.roi*100).toFixed(1)+'%' : '—'}` : 'No data'}
+              ${isPaperOnly ? ' · <span style="color:#ffaa00">EV negative — locked to paper</span>' : ''}
+            </div>
+          </div>
+          <div class="mode-seg">
+            <button class="mode-seg-btn seg-paper ${l.mode==='paper'||isPaperOnly?'active':''}" onclick="setLeagueMode('${l.leagueId}','paper')" ${isPaperOnly?'disabled title="EV negative — cannot enable real money"':''}>Paper</button>
+            <button class="mode-seg-btn seg-real  ${isReal?'active':''}"  onclick="${canLive&&!isReal?`openGoLiveModal('${l.leagueId}')`:isReal?`setLeagueMode('${l.leagueId}','paper')`:`showGoLiveGate('${l.leagueId}')`}" ${isPaperOnly?'disabled':''} title="${isPaperOnly?'EV negative':canLive?'Go Live — all conditions met':'Go Live conditions not yet met'}">Real £</button>
+          </div>
+        </div>`;
+    }).join('');
+  } catch(e) { list.innerHTML = '<div class="empty">Failed to load league modes</div>'; }
+}
+
+async function setLeagueMode(leagueId, mode) {
+  try {
+    await fetch(`/api/league-modes/${leagueId}`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ mode }) });
+    renderBettingModes();
+  } catch(e) { toast('Failed to update mode', 'error'); }
+}
+
+async function showGoLiveGate(leagueId) {
+  await openGoLiveModal(leagueId);
+}
+
+async function openGoLiveModal(leagueId) {
+  _goLiveLeagueId = leagueId;
+  const modal = document.getElementById('go-live-modal');
+  const checklist = document.getElementById('go-live-checklist');
+  const confirmBtn = document.getElementById('go-live-confirm');
+  const title = document.getElementById('go-live-league-name');
+  if (!modal) return;
+  if (checklist) checklist.innerHTML = '<div style="color:var(--muted);padding:8px 0">Checking conditions…</div>';
+  if (confirmBtn) confirmBtn.disabled = true;
+  modal.style.display = 'flex';
+  try {
+    const data = await fetch(`/api/go-live-check/${leagueId}`).then(r => r.json());
+    if (title) title.textContent = data.leagueName || `League ${leagueId}`;
+    const items = [
+      { key:'evPositive',       label:'Positive historical EV', detail: data.evPositive?.value != null ? `ROI ${(data.evPositive.value*100).toFixed(1)}% across ${data.evPositive.fixtures||0} fixtures` : 'No EV data' },
+      { key:'paperTrades50',    label:'50+ live paper trades',  detail: `${data.paperTrades50?.value??0} resolved / 50 required` },
+      { key:'paperRoiPositive', label:'Positive live paper ROI', detail: data.paperRoiPositive?.value != null ? `${(data.paperRoiPositive.value*100).toFixed(1)}% ROI` : 'No live paper data' },
+      { key:'fundedAccounts',   label:'3+ funded bookmaker accounts', detail: `${data.fundedAccounts?.value??0} active / 3 required` },
+    ];
+    if (checklist) checklist.innerHTML = items.map(item => {
+      const cond = data[item.key];
+      const met  = cond?.met;
+      return `<div style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--border)">
+        <span style="font-size:16px;flex-shrink:0">${met ? '✅' : '❌'}</span>
+        <div>
+          <div style="font-weight:600;font-size:13px;color:${met?'var(--green)':'var(--red)'}">${item.label}</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">${item.detail}</div>
+        </div>
+      </div>`;
+    }).join('');
+    if (confirmBtn) confirmBtn.disabled = !data.allMet;
+  } catch(e) {
+    if (checklist) checklist.innerHTML = '<div style="color:var(--red)">Failed to load conditions</div>';
+  }
+}
+
+function closeGoLiveModal() {
+  const modal = document.getElementById('go-live-modal');
+  if (modal) modal.style.display = 'none';
+  _goLiveLeagueId = null;
+}
+
+async function executeGoLive() {
+  if (!_goLiveLeagueId) return;
+  const confirmBtn = document.getElementById('go-live-confirm');
+  if (confirmBtn) confirmBtn.disabled = true;
+  try {
+    const res = await fetch(`/api/go-live/${_goLiveLeagueId}`, { method:'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Go Live failed');
+    toast(`${data.leagueName || 'League'} is now LIVE for real money bets`, 'success');
+    closeGoLiveModal();
+    renderBettingModes();
+  } catch(e) {
+    toast(e.message || 'Go Live failed', 'error');
+    if (confirmBtn) confirmBtn.disabled = false;
+  }
+}
+
 function renderSettings() {
   const s = STATE.settings || {};
   const W = s.weights || { form:18, homeAdv:12, xg:16, h2h:10, defense:14, momentum:10, injuries:8, standings:12 };
@@ -2405,6 +2734,7 @@ function renderSettings() {
   const brInput = document.getElementById('bankroll-input');
   if (brInput) brInput.value = Math.round(STATE.bankroll?.current ?? 1000);
   loadDataCoverage();
+  renderBettingModes();
 }
 
 function updateWeightTotal() {
@@ -3555,6 +3885,47 @@ async function updateMaxStake(bmId, bmName, current) {
 
 <div class="drawer-overlay" id="drawer-overlay" onclick="closeDrawer()"></div>
 <div class="drawer" id="drawer"></div>
+
+<!-- ── Go Live modal ───────────────────────────────────────────────────── -->
+<div id="go-live-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:1000;align-items:center;justify-content:center">
+  <div style="background:var(--surface2);border:1px solid var(--border);border-radius:14px;width:min(480px,94vw);padding:24px;position:relative">
+    <button onclick="closeGoLiveModal()" style="position:absolute;top:14px;right:14px;background:none;border:none;color:var(--muted);font-size:1.3rem;cursor:pointer;line-height:1">×</button>
+    <div style="font-family:'Syne',sans-serif;font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px" id="go-live-title">Go Live — Premier League</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:18px">All four conditions must be met before switching to real money</div>
+
+    <!-- Checklist -->
+    <div id="go-live-checklist" style="display:flex;flex-direction:column;gap:8px;margin-bottom:18px"></div>
+
+    <!-- EV summary -->
+    <div id="go-live-ev-summary" style="background:var(--surface3);border-radius:8px;padding:10px 14px;font-size:11px;color:var(--text2);margin-bottom:18px;display:none"></div>
+
+    <div style="display:flex;gap:10px">
+      <button id="go-live-confirm-btn" onclick="executeGoLive()" style="flex:1;padding:10px 0;border-radius:8px;background:rgba(255,209,102,.2);border:1px solid rgba(255,209,102,.5);color:var(--amber);font-family:'Syne',sans-serif;font-weight:700;font-size:13px;cursor:pointer;opacity:.4;pointer-events:none" disabled>
+        Confirm — Go Live
+      </button>
+      <button onclick="closeGoLiveModal()" class="btn btn-ghost btn-sm" style="padding:10px 18px">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── GO LIVE MODAL ──────────────────────────────────────────────────────── -->
+<div id="go-live-modal" style="display:none;position:fixed;inset:0;z-index:9000;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px)" onclick="if(event.target===this)closeGoLiveModal()">
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:14px;padding:28px;max-width:420px;width:90%;box-shadow:0 24px 48px rgba(0,0,0,0.4)">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
+      <div>
+        <div style="font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--amber);margin-bottom:4px">GO LIVE CHECK</div>
+        <div id="go-live-league-name" style="font-size:18px;font-weight:700;font-family:var(--font-head)">—</div>
+      </div>
+      <button onclick="closeGoLiveModal()" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;line-height:1">×</button>
+    </div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:16px">All four conditions must be met before switching to real-money betting on this league.</div>
+    <div id="go-live-checklist" style="border:1px solid var(--border);border-radius:8px;padding:4px 12px;margin-bottom:20px"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn btn-ghost" onclick="closeGoLiveModal()">Cancel</button>
+      <button id="go-live-confirm" class="btn btn-primary" onclick="executeGoLive()" disabled style="background:var(--amber);color:#000;font-weight:700">Go Live</button>
+    </div>
+  </div>
+</div>
 
 </body>
 </html>
