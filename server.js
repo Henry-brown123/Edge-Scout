@@ -3799,6 +3799,116 @@ app.get('/api/diagnostics/ev-dataset', (_req, res) => {
   }
 });
 
+// ─── EV CALIBRATION ──────────────────────────────────────────────────────────
+
+app.get('/api/ev-calibration', (_req, res) => {
+  try {
+    const historical     = readJSON('backfill-historical.json') || {};
+    const scoredRecords  = historical.scoredRecords || [];
+    const optWeights     = historical.optimisedWeights || {};
+    const closingOdds    = readJSON('closing-odds.json') || {};   // keyed by fixtureId
+
+    const { computeModelProb, classifyFixture, LEAGUE_CONFIG } = require('./scoring');
+
+    const BANDS = [
+      { label: '< 0%',   min: -Infinity, max: 0    },
+      { label: '0–5%',   min: 0,         max: 0.05 },
+      { label: '5–10%',  min: 0.05,      max: 0.10 },
+      { label: '10–15%', min: 0.10,      max: 0.15 },
+      { label: '15–20%', min: 0.15,      max: 0.20 },
+      { label: '20%+',   min: 0.20,      max: Infinity },
+    ];
+
+    const matched = [];
+    for (const rec of scoredRecords) {
+      const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
+      if (!co) continue;
+      if (!rec.actualOutcome) continue;
+      if (!rec.homeFactors || !rec.awayFactors) continue;
+
+      const context    = rec.context || classifyFixture(rec.leagueId);
+      const weights    = optWeights[context] || optWeights.club_domestic;
+      if (!weights) continue;
+
+      const leagueConfig = LEAGUE_CONFIG[parseInt(rec.leagueId, 10)] || null;
+      const probs = computeModelProb(rec.homeFactors, rec.awayFactors, weights, context, leagueConfig);
+
+      let topOutcome, modelProb, pinnacleOdds;
+      if (probs.home >= probs.draw && probs.home >= probs.away) {
+        topOutcome = 'home'; modelProb = probs.home; pinnacleOdds = co.homeOdds;
+      } else if (probs.away >= probs.draw) {
+        topOutcome = 'away'; modelProb = probs.away; pinnacleOdds = co.awayOdds;
+      } else {
+        topOutcome = 'draw'; modelProb = probs.draw; pinnacleOdds = co.drawOdds;
+      }
+
+      if (!pinnacleOdds || pinnacleOdds <= 1) continue;
+
+      const pinnacleImplied = 1 / pinnacleOdds;
+      const edge = (modelProb - pinnacleImplied) / pinnacleImplied;
+      const won  = rec.actualOutcome === topOutcome;
+
+      matched.push({ fixtureId: rec.fixtureId, leagueId: rec.leagueId, context,
+        topOutcome, modelProb, pinnacleOdds, pinnacleImplied, edge, won, date: rec.date });
+    }
+
+    function bandStats(fixtures) {
+      return BANDS.map(b => {
+        const inBand = fixtures.filter(f => f.edge >= b.min && f.edge < b.max);
+        const n = inBand.length;
+        let roi = null;
+        if (n > 0) {
+          const total = inBand.reduce((s, f) => s + (f.won ? (f.pinnacleOdds - 1) : -1), 0);
+          roi = parseFloat((total / n).toFixed(4));
+        }
+        return { band: b.label, n, roi, warning: n < 30 ? 'small_sample' : null };
+      });
+    }
+
+    function kellyRec(roi) {
+      if (roi === null || roi < 0) return 'flag_for_review';
+      if (roi < 0.02) return 'quarter_kelly';
+      if (roi < 0.05) return 'third_kelly';
+      return 'half_kelly';
+    }
+
+    const posEdge = matched.filter(f => f.edge >= 0.05);
+    let posRoi = null;
+    if (posEdge.length > 0) {
+      posRoi = parseFloat((posEdge.reduce((s, f) => s + (f.won ? (f.pinnacleOdds - 1) : -1), 0) / posEdge.length).toFixed(4));
+    }
+
+    const leagueMap = {};
+    for (const f of matched) {
+      const lid  = parseInt(f.leagueId, 10);
+      const name = LEAGUE_CONFIG[lid]?.name || `League ${f.leagueId}`;
+      if (!leagueMap[name]) leagueMap[name] = [];
+      leagueMap[name].push(f);
+    }
+    const byLeague = Object.entries(leagueMap).map(([league, fxs]) => {
+      const posE = fxs.filter(f => f.edge >= 0.05);
+      let roi = null;
+      if (posE.length > 0) {
+        roi = parseFloat((posE.reduce((s, f) => s + (f.won ? (f.pinnacleOdds - 1) : -1), 0) / posE.length).toFixed(4));
+      }
+      return { league, n: fxs.length, posEdgeN: posE.length, roi, kelly: kellyRec(roi) };
+    }).sort((a, b) => b.n - a.n);
+
+    res.json({
+      summary: {
+        totalMatched:        matched.length,
+        positiveEdge:        posEdge.length,
+        positiveEdgeRoi:     posRoi,
+        kellyRecommendation: kellyRec(posRoi),
+      },
+      bands:    bandStats(matched),
+      byLeague,
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0,5) });
+  }
+});
+
 const _serverStartedAt = new Date().toISOString();
 
 app.get('/api/server-status', async (_req, res) => {
