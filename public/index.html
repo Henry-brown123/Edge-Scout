@@ -2585,11 +2585,15 @@ function drawPnlChart(data, initial = 1000) {
   data.forEach((v, i) => i === 0 ? ctx.moveTo(xp(i), yp(v)) : ctx.lineTo(xp(i), yp(v)));
   ctx.stroke();
 
-  // Axis labels
+  // Axis labels — suppress £0 zero line label if it would overlap min or max labels
   ctx.fillStyle = '#6b7280'; ctx.font = '10px DM Mono, monospace';
+  const LABEL_GAP = 20; // min pixel separation between labels
   ctx.fillText(`+£${max.toFixed(0)}`, 2, pad.t + 10);
-  ctx.fillText(`£${min.toFixed(0)}`, 2, pad.t + H);
-  ctx.fillText('£0', 2, yp(0) + 4);
+  if (min !== 0) ctx.fillText(`£${min.toFixed(0)}`, 2, pad.t + H);
+  const zeroY = yp(0);
+  const tooCloseToMax = zeroY < pad.t + 10 + LABEL_GAP;
+  const tooCloseToMin = zeroY > pad.t + H - LABEL_GAP;
+  if (!tooCloseToMax && !tooCloseToMin) ctx.fillText('£0', 2, zeroY + 4);
 }
 
 // Auto-refresh routing every 60s for any unconfirmed locked bets.
