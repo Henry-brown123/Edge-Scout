@@ -1212,6 +1212,9 @@ async function loadState() {
     renderScout();
     updateBankrollBadge();
     syncRerouteInterval();
+    // Keep bankroll input in Morning Scan in sync with actual bankroll
+    const brInput = document.getElementById('bankroll-input');
+    if (brInput) brInput.value = Math.round(s.bankroll?.current ?? 1000);
 
     // Phase 2 readiness banner
     const p2banner = document.getElementById('phase2-banner');
