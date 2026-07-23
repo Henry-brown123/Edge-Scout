@@ -3642,11 +3642,17 @@ function normaliseTeamName(name) {
 app.get('/api/diagnostics/ev-dataset-sample', (_req, res) => {
   const rawCo   = readJSON('closing-odds.json');
   const rawHist = readJSON('backfill-historical.json');
-  const coArr   = Array.isArray(rawCo) ? rawCo : Object.values(rawCo || {});
+  const coArr   = Array.isArray(rawCo) ? rawCo : Object.entries(rawCo || {}).map(([k,v]) => ({_key: k, ...v}));
   const histArr = Array.isArray(rawHist) ? rawHist : Object.values(rawHist || {});
+  // Also try matching the first CO fixture ID against historical
+  const firstCoKey = Object.keys(rawCo || {})[0];
+  const histById   = histArr.find(f => String(f.fixture?.id) === String(firstCoKey));
   res.json({
+    closingOddsIsObject: !Array.isArray(rawCo),
+    closingOddsFirstKey: firstCoKey,
     closingOddsSample:  coArr.slice(0, 3),
     historicalSample:   histArr.slice(0, 3).map(f => ({
+      _fixtureId:  f.fixture?.id,
       fixtureDate: f.fixture?.date,
       homeTeam:    f.teams?.home?.name,
       awayTeam:    f.teams?.away?.name,
@@ -3654,6 +3660,9 @@ app.get('/api/diagnostics/ev-dataset-sample', (_req, res) => {
       goalsAway:   f.goals?.away,
       league:      f.league?.name,
     })),
+    histMatchForFirstCo: histById
+      ? { fixtureId: histById.fixture?.id, home: histById.teams?.home?.name, date: histById.fixture?.date }
+      : 'NOT FOUND — fixture ID not in historical',
   });
 });
 
@@ -3674,38 +3683,40 @@ app.get('/api/diagnostics/ev-dataset', (_req, res) => {
 
     const withPinnacle = coEntries.filter(e => e.pinnacleAvailable);
 
-    // Build historical lookup keyed by date + normalised team names
-    const histByKey = {};
+    // Build historical lookup by fixtureId (the only reliable shared key)
+    const histById = {};
     for (const f of historical) {
-      if (f.goals?.home == null && f.goals?.away == null) continue;
-      const date = (f.fixture?.date || f.date || '').slice(0, 10);
-      const home = normaliseTeamName(f.teams?.home?.name || f.homeTeam || '');
-      const away = normaliseTeamName(f.teams?.away?.name || f.awayTeam || '');
-      if (home && away && date) {
-        histByKey[`${date}|${home}|${away}`] = {
-          goalsHome:  f.goals?.home,
-          goalsAway:  f.goals?.away,
-          league:     f.league?.name || 'Unknown',
-          fixtureId:  f.fixture?.id,
-        };
-      }
+      const id = String(f.fixture?.id || '');
+      if (!id) continue;
+      histById[id] = {
+        goalsHome:  f.goals?.home,
+        goalsAway:  f.goals?.away,
+        league:     f.league?.name || 'Unknown',
+        date:       (f.fixture?.date || '').slice(0, 10),
+        homeTeam:   f.teams?.home?.name || '',
+        awayTeam:   f.teams?.away?.name || '',
+        hasResult:  f.goals?.home != null || f.goals?.away != null,
+      };
     }
+
+    // closing-odds.json is an object keyed by fixtureId
+    const coObject = Array.isArray(rawCo) ? {} : (rawCo || {});
 
     let matched = 0;
     const byLeague = {};
     const dates    = [];
 
-    for (const e of coEntries) {
-      const date   = (e.kickoff || e.date || '').slice(0, 10);
-      const home   = normaliseTeamName(e.homeTeam || e.home_team || '');
-      const away   = normaliseTeamName(e.awayTeam || e.away_team || '');
+    for (const [fixtureId, e] of Object.entries(coObject)) {
       const isPinnacle = e.bookmaker === 'pinnacle';
-      const league = e.leagueName || e.league || 'Unknown';
+      const hist = histById[String(fixtureId)];
+      const league = hist?.league || 'Unknown';
+      const date   = hist?.date   || (e.snapshotTs || '').slice(0, 10);
+
       if (!byLeague[league]) byLeague[league] = { total: 0, pinnacle: 0, matched: 0 };
       byLeague[league].total++;
       if (isPinnacle) byLeague[league].pinnacle++;
-      const hist = histByKey[`${date}|${home}|${away}`];
-      if (hist && isPinnacle) {
+
+      if (isPinnacle && hist?.hasResult) {
         matched++;
         byLeague[league].matched++;
         if (date) dates.push(date);
