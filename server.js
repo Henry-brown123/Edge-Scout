@@ -2186,13 +2186,20 @@ app.get('/api/calibration', (_req, res) => res.json(getCalibration()));
 app.get('/api/scan-meta',   (_req, res) => res.json(readJSON('scan-meta.json') || {}));
 
 // CLV report — aggregates CLV across all placed bets that have closing odds
-app.get('/api/clv-report', (_req, res) => {
+app.get('/api/clv-report', (req, res) => {
   const bets = getBets();
+  const fromTs = req.query.from ? new Date(req.query.from).getTime() : null;
+  const toTs   = req.query.to   ? new Date(req.query.to).getTime()   : null;
   // All placed bets where CLV has been computed (closingOdds fetched, not necessarily resolved)
-  const withClv = bets.filter(b =>
-    (b.placementStatus === 'placed' || b.placementConfirmed) &&
-    b.clv != null
-  );
+  const withClv = bets.filter(b => {
+    if (!((b.placementStatus === 'placed' || b.placementConfirmed) && b.clv != null)) return false;
+    if (fromTs || toTs) {
+      const t = new Date(b.lockedAt || b.placedAt || 0).getTime();
+      if (fromTs && t < fromTs) return false;
+      if (toTs   && t > toTs)   return false;
+    }
+    return true;
+  });
 
   const avgClv     = withClv.length ? withClv.reduce((s, b) => s + b.clv, 0) / withClv.length : null;
   const last10     = withClv.slice(0, 10);
@@ -2264,14 +2271,22 @@ app.get('/api/clv-report', (_req, res) => {
 });
 
 // Bookmaker performance — computed live from bets, not relying on bookmaker counters
-app.get('/api/bookmaker-performance', (_req, res) => {
+app.get('/api/bookmaker-performance', (req, res) => {
   const bets  = getBets();
   const books = getBookmakers();
+  const fromTs = req.query.from ? new Date(req.query.from).getTime() : null;
+  const toTs   = req.query.to   ? new Date(req.query.to).getTime()   : null;
 
   // Only count placed bets (placed or old placementConfirmed)
-  const placed = bets.filter(b =>
-    b.placementStatus === 'placed' || b.placementConfirmed
-  );
+  const placed = bets.filter(b => {
+    if (!(b.placementStatus === 'placed' || b.placementConfirmed)) return false;
+    if (fromTs || toTs) {
+      const t = new Date(b.lockedAt || b.placedAt || 0).getTime();
+      if (fromTs && t < fromTs) return false;
+      if (toTs   && t > toTs)   return false;
+    }
+    return true;
+  });
 
   const byBm = {};
   for (const b of placed) {
