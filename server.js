@@ -3677,15 +3677,71 @@ app.get('/api/diagnostics/ev-dataset', (_req, res) => {
       .map(([league, d]) => ({ league, pinnacleEntries: d.pinnacle, matched: d.matched }))
       .sort((a, b) => b.matched - a.matched);
 
+    // Q1: how many existing entries already have bookmaker === 'pinnacle'
+    const existingPinnacle = coEntries.filter(e => e.bookmaker === 'pinnacle');
+
+    // Q2: date range of historical fixtures, broken down by league
+    const TARGET_LEAGUES = ['Premier League','La Liga','Serie A','Bundesliga','Ligue 1'];
+    const oneYearAgo = new Date(); oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+    const histDates = [];
+    const histByLeague = {};
+    for (const f of historical) {
+      if (f.goals?.home == null && f.goals?.away == null) continue;
+      const date    = (f.fixture?.date || '').slice(0, 10);
+      const league  = f.league?.name || 'Unknown';
+      const country = f.league?.country || '';
+      if (date) histDates.push(date);
+      if (!histByLeague[league]) histByLeague[league] = { count: 0, dates: [] };
+      histByLeague[league].count++;
+      if (date) histByLeague[league].dates.push(date);
+    }
+    histDates.sort();
+
+    // Q3: fixtures in the 5 target leagues in the last 12 months
+    const recentTargetFixtures = historical.filter(f => {
+      if (f.goals?.home == null && f.goals?.away == null) return false;
+      const date   = (f.fixture?.date || '').slice(0, 10);
+      const league = f.league?.name || '';
+      return date >= oneYearAgo.toISOString().slice(0,10) && TARGET_LEAGUES.includes(league);
+    });
+    // Credits: Odds API historical endpoint costs ~10 credits per event returned per call.
+    // One call per fixture date (batched by sport/date), returns all events that day.
+    // Conservative estimate: 1 call per fixture = 10 credits each.
+    const creditEstimate10  = recentTargetFixtures.length * 10;
+    const creditEstimate20  = recentTargetFixtures.length * 20;
+
+    const leagueSummary = Object.entries(histByLeague)
+      .map(([league, d]) => {
+        d.dates.sort();
+        return { league, count: d.count, oldest: d.dates[0] || null, newest: d.dates[d.dates.length-1] || null };
+      })
+      .sort((a,b) => b.count - a.count);
+
+    const recentByLeague = {};
+    for (const f of recentTargetFixtures) {
+      const l = f.league?.name || 'Unknown';
+      recentByLeague[l] = (recentByLeague[l] || 0) + 1;
+    }
+
     res.json({
-      closingOddsTotal:     coEntries.length,
-      pinnacleAvailable:    withPinnacle.length,
-      matchedWithResult:    matched,
-      dateRange: dates.length ? { from: dates[0], to: dates[dates.length - 1] } : null,
-      historicalTotal:      historical.length,
-      historicalWithResult: Object.keys(histByKey).length,
-      leagueBreakdown,
-      debug: { coSampleKeys: coSample, histSampleKeys: histSample },
+      // Q1
+      closingOddsTotal:          coEntries.length,
+      existingPinnacleEntries:   existingPinnacle.length,
+      existingPinnacleBookmakers: [...new Set(coEntries.map(e => e.bookmaker).filter(Boolean))],
+      // Q2
+      historicalTotal:           historical.length,
+      historicalWithResult:      histDates.length,
+      historicalDateRange:       histDates.length ? { oldest: histDates[0], newest: histDates[histDates.length-1] } : null,
+      leagueSummary,
+      // Q3
+      recentTargetFixtureCount:  recentTargetFixtures.length,
+      recentTargetWindow:        `${oneYearAgo.toISOString().slice(0,10)} to today`,
+      recentByLeague,
+      creditEstimateAt10perCall: creditEstimate10,
+      creditEstimateAt20perCall: creditEstimate20,
+      // original fields
+      pinnacleAvailableFlag:     withPinnacle.length,
+      matchedWithResult:         matched,
     });
   } catch(e) {
     res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0,5) });
