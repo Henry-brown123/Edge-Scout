@@ -3627,57 +3627,69 @@ app.get('/api/data/sizes', (_req, res) => {
 });
 
 app.get('/api/diagnostics/ev-dataset', (_req, res) => {
-  const closingOdds    = readJSON('closing-odds.json') || {};
-  const historical     = readJSON('backfill-historical.json') || [];
+  try {
+    const rawCo      = readJSON('closing-odds.json');
+    const rawHist    = readJSON('backfill-historical.json');
 
-  // Build historical lookup keyed by fixture date + teams
-  const histByKey = {};
-  for (const f of historical) {
-    if (f.goals?.home == null || f.goals?.away == null) continue;
-    const date = (f.fixture?.date || '').slice(0, 10);
-    const key  = `${f.teams?.home?.name}|${f.teams?.away?.name}|${date}`;
-    histByKey[key] = f;
-  }
+    // closing-odds.json may be an object (keyed by fixtureId) or array
+    const coEntries  = Array.isArray(rawCo) ? rawCo : (rawCo ? Object.values(rawCo) : []);
+    // backfill-historical.json may be an object with a fixtures array, or a plain array
+    const historical = Array.isArray(rawHist) ? rawHist
+                     : (rawHist?.fixtures ? rawHist.fixtures : (rawHist ? Object.values(rawHist) : []));
 
-  const coEntries     = Object.values(closingOdds);
-  const withPinnacle  = coEntries.filter(e => e.pinnacleAvailable);
+    // Peek at structure for debugging
+    const coSample   = coEntries[0]   ? Object.keys(coEntries[0])   : [];
+    const histSample = historical[0]  ? Object.keys(historical[0])  : [];
 
-  // Match pinnacle entries to historical results
-  let matched = 0;
-  const byLeague = {};
-  const dates    = [];
+    const withPinnacle = coEntries.filter(e => e.pinnacleAvailable);
 
-  for (const e of withPinnacle) {
-    const date = (e.kickoff || e.date || '').slice(0, 10);
-    const key  = `${e.homeTeam}|${e.awayTeam}|${date}`;
-    const hist = histByKey[key];
-    const league = e.leagueName || e.league || 'Unknown';
-
-    if (!byLeague[league]) byLeague[league] = { pinnacle: 0, matched: 0 };
-    byLeague[league].pinnacle++;
-
-    if (hist) {
-      matched++;
-      byLeague[league].matched++;
-      if (date) dates.push(date);
+    // Build historical lookup — try multiple key shapes
+    const histByKey = {};
+    for (const f of historical) {
+      const hasResult = f.goals?.home != null && f.goals?.away != null;
+      if (!hasResult) continue;
+      const date  = (f.fixture?.date || f.date || '').slice(0, 10);
+      const home  = f.teams?.home?.name || f.homeTeam || '';
+      const away  = f.teams?.away?.name || f.awayTeam || '';
+      if (home && away && date) histByKey[`${home}|${away}|${date}`] = true;
     }
+
+    let matched = 0;
+    const byLeague = {};
+    const dates    = [];
+
+    for (const e of withPinnacle) {
+      const date   = (e.kickoff || e.date || '').slice(0, 10);
+      const home   = e.homeTeam || e.home_team || '';
+      const away   = e.awayTeam || e.away_team || '';
+      const league = e.leagueName || e.league || 'Unknown';
+      if (!byLeague[league]) byLeague[league] = { pinnacle: 0, matched: 0 };
+      byLeague[league].pinnacle++;
+      if (histByKey[`${home}|${away}|${date}`]) {
+        matched++;
+        byLeague[league].matched++;
+        if (date) dates.push(date);
+      }
+    }
+
+    dates.sort();
+    const leagueBreakdown = Object.entries(byLeague)
+      .map(([league, d]) => ({ league, pinnacleEntries: d.pinnacle, matched: d.matched }))
+      .sort((a, b) => b.matched - a.matched);
+
+    res.json({
+      closingOddsTotal:     coEntries.length,
+      pinnacleAvailable:    withPinnacle.length,
+      matchedWithResult:    matched,
+      dateRange: dates.length ? { from: dates[0], to: dates[dates.length - 1] } : null,
+      historicalTotal:      historical.length,
+      historicalWithResult: Object.keys(histByKey).length,
+      leagueBreakdown,
+      debug: { coSampleKeys: coSample, histSampleKeys: histSample },
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0,5) });
   }
-
-  dates.sort();
-
-  const leagueBreakdown = Object.entries(byLeague)
-    .map(([league, d]) => ({ league, pinnacleEntries: d.pinnacle, matched: d.matched }))
-    .sort((a, b) => b.matched - a.matched);
-
-  res.json({
-    closingOddsTotal:    coEntries.length,
-    pinnacleAvailable:   withPinnacle.length,
-    matchedWithResult:   matched,
-    dateRange: dates.length ? { from: dates[0], to: dates[dates.length - 1] } : null,
-    historicalFixtures:  historical.length,
-    historicalWithResult: Object.keys(histByKey).length,
-    leagueBreakdown,
-  });
 });
 
 const _serverStartedAt = new Date().toISOString();
