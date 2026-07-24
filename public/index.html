@@ -1841,9 +1841,10 @@ function renderPerformance() {
   const losses   = resolved.filter(b => b.result === 'loss').length;
   const staked   = resolved.reduce((s, b) => s + b.suggestedStake, 0);
 
-  // Bankroll tile — always shows live bankroll; period P&L is sum of pnl in window
-  const totalPnl  = bankroll.current - bankroll.initial;
-  const totalPnlPct = ((totalPnl / bankroll.initial) * 100).toFixed(1);
+  // Bankroll tile — always shows live bankroll; all-time P&L from summed bet pnl
+  const allResolved = allPlaced.filter(b => b.stage === 'RESOLVED');
+  const totalPnl    = allResolved.reduce((s, b) => s + (b.pnl || 0), 0);
+  const totalPnlPct = bankroll.initial ? ((totalPnl / bankroll.initial) * 100).toFixed(1) : '0.0';
   const periodPnl = resolved.reduce((s, b) => s + (b.pnl || 0), 0);
   const periodPnlPct = bankroll.initial ? ((periodPnl / bankroll.initial) * 100).toFixed(1) : '0.0';
 
@@ -2585,15 +2586,19 @@ function drawPnlChart(data, initial = 1000) {
   data.forEach((v, i) => i === 0 ? ctx.moveTo(xp(i), yp(v)) : ctx.lineTo(xp(i), yp(v)));
   ctx.stroke();
 
-  // Axis labels — suppress £0 zero line label if it would overlap min or max labels
+  // Axis labels — max at top, min at bottom, £0 zero line only when it has clear space
   ctx.fillStyle = '#6b7280'; ctx.font = '10px DM Mono, monospace';
-  const LABEL_GAP = 20; // min pixel separation between labels
+  const LABEL_GAP = 20;
   ctx.fillText(`+£${max.toFixed(0)}`, 2, pad.t + 10);
-  if (min !== 0) ctx.fillText(`£${min.toFixed(0)}`, 2, pad.t + H);
-  const zeroY = yp(0);
-  const tooCloseToMax = zeroY < pad.t + 10 + LABEL_GAP;
-  const tooCloseToMin = zeroY > pad.t + H - LABEL_GAP;
-  if (!tooCloseToMax && !tooCloseToMin) ctx.fillText('£0', 2, zeroY + 4);
+  // Bottom label: always show, either the min value or £0 when min=0
+  ctx.fillText(min === 0 ? '£0' : `£${min.toFixed(0)}`, 2, pad.t + H);
+  // Zero line label: only when distinct from both min and max labels
+  if (min !== 0) {
+    const zeroY = yp(0);
+    const tooCloseToMax = zeroY < pad.t + 10 + LABEL_GAP;
+    const tooCloseToMin = zeroY > pad.t + H - LABEL_GAP;
+    if (!tooCloseToMax && !tooCloseToMin) ctx.fillText('£0', 2, zeroY + 4);
+  }
 }
 
 // Auto-refresh routing every 60s for any unconfirmed locked bets.
