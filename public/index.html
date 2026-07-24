@@ -1893,9 +1893,15 @@ function renderPerformance() {
   // P&L chart — period filtered, oldest first
   const curveResolved = resolved.slice().reverse();
   const curve = [];
+  const curveLabels = [];
   let running = 0;
-  curveResolved.forEach(b => { running += b.pnl || 0; curve.push(running); });
-  drawPnlChart(curve, bankroll.initial);
+  curveResolved.forEach(b => {
+    running += b.pnl || 0;
+    curve.push(running);
+    const d = new Date(b.lockedAt || b.kickoff || 0);
+    curveLabels.push(d.getFullYear() > 2000 ? d.toLocaleDateString('en-GB', { day:'numeric', month:'short' }) : '');
+  });
+  drawPnlChart(curve, bankroll.initial, curveLabels);
 
   // Bet log — period filtered
   const tbody = document.getElementById('bets-body');
@@ -2548,56 +2554,103 @@ async function renderFullCalibration() {
   }
 }
 
-function drawPnlChart(data, initial = 1000) {
+function drawPnlChart(data, initial = 1000, labels = []) {
   const canvas = document.getElementById('pnl-chart');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   canvas.width  = canvas.parentElement.offsetWidth || 400;
-  canvas.height = 200;
+  canvas.height = 220;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (!data.length) return;
 
-  const pad = { t: 10, r: 10, b: 28, l: 46 };
+  const pad = { t: 14, r: 16, b: 36, l: 58 };
   const W   = canvas.width  - pad.l - pad.r;
   const H   = canvas.height - pad.t - pad.b;
   const min = Math.min(...data, 0);
   const max = Math.max(...data, 0);
   const range = max - min || 1;
 
-  const xp = i => pad.l + (i / (data.length - 1 || 1)) * W;
-  const yp = v => pad.t + H - ((v - min) / range) * H;
+  const xp = i  => pad.l + (i / (data.length - 1 || 1)) * W;
+  const yp = v  => pad.t + H - ((v - min) / range) * H;
 
-  // Grid & zero line
-  ctx.strokeStyle = '#2a2a3a'; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(pad.l, yp(0)); ctx.lineTo(pad.l + W, yp(0)); ctx.stroke();
+  // ── Y grid lines at nice intervals ────────────────────────────────────────
+  function niceInterval(r, targetTicks) {
+    const rough = r / targetTicks;
+    const exp   = Math.pow(10, Math.floor(Math.log10(rough)));
+    const f     = rough / exp;
+    const nice  = f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10;
+    return nice * exp;
+  }
+  const interval = niceInterval(range, 5);
+  const tickMin  = Math.ceil(min  / interval) * interval;
+  const tickMax  = Math.floor(max / interval) * interval;
 
-  // Fill
+  ctx.font      = '10px DM Mono, monospace';
+  ctx.textAlign = 'right';
+
+  for (let v = tickMin; v <= tickMax + 0.001; v += interval) {
+    const y = yp(v);
+    const isZero = Math.abs(v) < 0.001;
+
+    // Grid line
+    ctx.strokeStyle = isZero ? '#3a3a50' : '#222230';
+    ctx.lineWidth   = isZero ? 1.5 : 1;
+    ctx.setLineDash(isZero ? [] : [3, 4]);
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + W, y); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Y label
+    const sign  = v > 0 ? '+' : '';
+    const label = v >= 1000 || v <= -1000
+      ? `${sign}£${(v / 1000).toFixed(v % 1000 === 0 ? 0 : 1)}k`
+      : `${sign}£${v.toFixed(0)}`;
+    ctx.fillStyle = isZero ? '#9ca3af' : '#6b7280';
+    ctx.fillText(label, pad.l - 4, y + 3.5);
+  }
+
+  // ── Fill ──────────────────────────────────────────────────────────────────
   const grad = ctx.createLinearGradient(0, pad.t, 0, pad.t + H);
-  grad.addColorStop(0, 'rgba(76,201,240,0.25)');
-  grad.addColorStop(1, 'rgba(76,201,240,0)');
+  grad.addColorStop(0, 'rgba(76,201,240,0.22)');
+  grad.addColorStop(1, 'rgba(76,201,240,0.02)');
   ctx.beginPath();
   data.forEach((v, i) => i === 0 ? ctx.moveTo(xp(i), yp(v)) : ctx.lineTo(xp(i), yp(v)));
   ctx.lineTo(xp(data.length - 1), yp(0)); ctx.lineTo(xp(0), yp(0));
   ctx.closePath(); ctx.fillStyle = grad; ctx.fill();
 
-  // Line
-  ctx.strokeStyle = '#4cc9f0'; ctx.lineWidth = 2;
+  // ── Line ──────────────────────────────────────────────────────────────────
+  ctx.strokeStyle = '#4cc9f0'; ctx.lineWidth = 2; ctx.setLineDash([]);
   ctx.beginPath();
   data.forEach((v, i) => i === 0 ? ctx.moveTo(xp(i), yp(v)) : ctx.lineTo(xp(i), yp(v)));
   ctx.stroke();
 
-  // Axis labels — max at top, min at bottom, £0 zero line only when it has clear space
-  ctx.fillStyle = '#6b7280'; ctx.font = '10px DM Mono, monospace';
-  const LABEL_GAP = 20;
-  ctx.fillText(`+£${max.toFixed(0)}`, 2, pad.t + 10);
-  // Bottom label: always show, either the min value or £0 when min=0
-  ctx.fillText(min === 0 ? '£0' : `£${min.toFixed(0)}`, 2, pad.t + H);
-  // Zero line label: only when distinct from both min and max labels
-  if (min !== 0) {
-    const zeroY = yp(0);
-    const tooCloseToMax = zeroY < pad.t + 10 + LABEL_GAP;
-    const tooCloseToMin = zeroY > pad.t + H - LABEL_GAP;
-    if (!tooCloseToMax && !tooCloseToMin) ctx.fillText('£0', 2, zeroY + 4);
+  // ── Endpoint dot ──────────────────────────────────────────────────────────
+  const lastX = xp(data.length - 1), lastY = yp(data[data.length - 1]);
+  ctx.beginPath(); ctx.arc(lastX, lastY, 3.5, 0, Math.PI * 2);
+  ctx.fillStyle = '#4cc9f0'; ctx.fill();
+
+  // ── X axis date labels ────────────────────────────────────────────────────
+  if (labels.length) {
+    const maxXLabels = Math.min(6, data.length);
+    const step = Math.max(1, Math.floor((data.length - 1) / (maxXLabels - 1)));
+    const indices = [];
+    for (let i = 0; i < data.length; i += step) indices.push(i);
+    if (indices[indices.length - 1] !== data.length - 1) indices.push(data.length - 1);
+
+    ctx.fillStyle = '#6b7280'; ctx.font = '9px DM Mono, monospace';
+    const minLabelGap = 36;
+    let lastLabelX = -Infinity;
+    indices.forEach(i => {
+      const x = xp(i);
+      if (x - lastLabelX < minLabelGap) return;
+      const lbl = labels[i];
+      if (!lbl) return;
+      ctx.textAlign = i === 0 ? 'left' : i === data.length - 1 ? 'right' : 'center';
+      ctx.fillText(lbl, x, pad.t + H + 20);
+      // Tick mark
+      ctx.strokeStyle = '#3a3a50'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x, pad.t + H + 1); ctx.lineTo(x, pad.t + H + 5); ctx.stroke();
+      lastLabelX = x;
+    });
   }
 }
 
