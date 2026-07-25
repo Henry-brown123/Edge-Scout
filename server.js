@@ -3124,6 +3124,61 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
+app.get('/api/pir/analysis', (_req, res) => {
+  const { getPIRData, getWOWYDeltas, readProfiles } = require('./teamProfiles');
+  const pirData  = getPIRData();
+  const entries  = Object.values(pirData);
+
+  // Top 10 by PIR score (only scored players — pir not null)
+  const scored   = entries.filter(e => e.pir != null);
+  const top10    = scored.sort((a, b) => b.pir - a.pir).slice(0, 10).map(e => ({
+    name: e.playerName, team: e.teamName, league: e.leagueName,
+    pir: e.pir, mins: e.minutesPlayed, rating: e.rating,
+    goals90: e.goals90, assists90: e.assists90,
+  }));
+
+  // Per-league breakdown
+  const byLeague = {};
+  for (const e of entries) {
+    if (!byLeague[e.leagueName]) byLeague[e.leagueName] = { total: 0, scored: 0 };
+    byLeague[e.leagueName].total++;
+    if (e.pir != null) byLeague[e.leagueName].scored++;
+  }
+
+  // WOWY overlap — how many players with WOWY entries also have PIR
+  const profiles  = readProfiles();
+  let wowyTotal   = 0;
+  let wowyWithPIR = 0;
+  const conflicts = [];
+  for (const profile of Object.values(profiles)) {
+    if (!profile.teamId) continue;
+    const deltas = getWOWYDeltas(profile.teamId);
+    for (const [pid, d] of Object.entries(deltas)) {
+      wowyTotal++;
+      if (pirData[pid]) {
+        wowyWithPIR++;
+        if (d.conflictFlag) conflicts.push({
+          name: d.name || pid, team: profile.name,
+          wowy: Math.round(d.delta * 100), pir: pirData[pid].pir,
+          importance: d.importanceScore,
+        });
+      }
+    }
+  }
+
+  // Low-minutes check — entries with < 450 mins that got through (old code)
+  const belowThreshold = entries.filter(e => e.minutesPlayed > 0 && e.minutesPlayed < 450).length;
+
+  res.json({
+    total: entries.length,
+    scored: scored.length,
+    belowMinutesThreshold: belowThreshold,
+    top10,
+    byLeague,
+    wowyOverlap: { wowyTotal, wowyWithPIR, conflicts: conflicts.slice(0, 10) },
+  });
+});
+
 // Trigger pre-match scan for a specific watching entry
 app.post('/api/scan/prematch/:watchId', async (req, res) => {
   const watching = getWatching();
