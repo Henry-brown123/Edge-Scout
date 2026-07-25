@@ -2185,6 +2185,33 @@ app.get('/api/bets',        (_req, res) => res.json(getBets()));
 app.get('/api/calibration', (_req, res) => res.json(getCalibration()));
 app.get('/api/scan-meta',   (_req, res) => res.json(readJSON('scan-meta.json') || {}));
 
+// Model info — forces GBDT weights to load so startup log lines appear in Render logs.
+app.get('/api/model-info', (_req, res) => {
+  const fs = require('fs'), path = require('path');
+  const weightsPath = path.join(__dirname, 'models/gbdt-weights.json');
+  const hasWeights  = fs.existsSync(weightsPath);
+  let meta = null;
+  if (hasWeights) {
+    try { meta = JSON.parse(fs.readFileSync(weightsPath, 'utf8')); } catch {}
+  }
+  // Invoke predict with a synthetic fixture to force model initialisation
+  const testProbs = model.predict(
+    { form:65, homeAdv:60, xg:62, h2h:50, defense:60, momentum:65, injuries:75, standings:58 },
+    { form:55, homeAdv:50, xg:55, h2h:50, defense:55, momentum:55, injuries:75, standings:52 },
+    null, 'club_domestic', null
+  );
+  res.json({
+    active:      hasWeights ? 'gbdt' : 'linear',
+    description: hasWeights ? 'GBDT + Platt scaling' : 'Linear weighted sum',
+    trainedAt:   meta?.trainedAt ?? null,
+    trainN:      meta?.trainN ?? null,
+    testN:       meta?.testN ?? null,
+    metrics:     meta?.metrics ?? null,
+    hyperparams: meta?.hyperparams ?? null,
+    testPredict: { home: +testProbs.home.toFixed(4), draw: +testProbs.draw.toFixed(4), away: +testProbs.away.toFixed(4) },
+  });
+});
+
 // CLV report — aggregates CLV across all placed bets that have closing odds
 app.get('/api/clv-report', (req, res) => {
   const bets = getBets();
