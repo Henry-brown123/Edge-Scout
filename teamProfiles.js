@@ -5,6 +5,29 @@ const path = require('path');
 
 const DATA_DIR      = process.env.DATA_DIR || path.join(__dirname, 'data');
 const PROFILES_PATH = path.join(DATA_DIR, 'team-profiles.json');
+const PIR_PATH      = path.join(DATA_DIR, 'pir-data.json');
+
+let _pirCache = null;
+function getPIRData() {
+  if (_pirCache) return _pirCache;
+  try { _pirCache = JSON.parse(fs.readFileSync(PIR_PATH, 'utf8')); }
+  catch { _pirCache = {}; }
+  return _pirCache;
+}
+function reloadPIRCache() { _pirCache = null; }
+
+// Combined importance score: WOWY 60% + PIR 40%.
+// wowyDelta: raw WOWY delta in proportion units (e.g. 0.22 = +22pp).
+// pirEntry: entry from pir-data.json, or null if unavailable.
+function playerImportanceScore(wowyDelta, pirEntry) {
+  const wowyPP        = wowyDelta * 100; // convert to pp
+  const pirComponent  = pirEntry ? (pirEntry.pir - 50) / 50 * 20 : 0;
+  const importance    = (wowyPP * 0.60) + (pirComponent * 0.40);
+  const conflictFlag  = !!pirEntry
+    && Math.abs(wowyPP) > 15
+    && Math.sign(wowyPP) !== Math.sign(pirComponent);
+  return { importance: Math.round(importance * 10) / 10, conflictFlag };
+}
 
 // Global league average home win rates by fixture context
 const LEAGUE_AVG_HOME_WIN_RATE = {
@@ -587,14 +610,18 @@ function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dat
       const deltas = getWOWYDeltas(profile.teamId);
       let adj = 0;
       const absentPlayers = profile.confirmedAbsent || []; // set by pre-match lineup check
-      for (const [, d] of Object.entries(deltas)) {
+      for (const [pid, d] of Object.entries(deltas)) {
         if (d.confidence !== 'high') continue;
         if (d.selectionBias) continue;
-        if (Math.abs(d.delta) < 0.10) continue;
-        const isAbsent = absentPlayers.some(id => String(id) === String(d.playerId));
+        // Use combined importance score (WOWY 60% + PIR 40%) when available;
+        // fall back to raw WOWY delta threshold (10pp) when PIR is not present.
+        const importancePP = d.importanceScore ?? (d.delta * 100);
+        if (Math.abs(importancePP) < 12) continue;
+        const isAbsent = absentPlayers.some(id => String(id) === String(pid));
         if (!isAbsent) continue;
-        // Player is confirmed absent: dampen delta by 30%, cap contribution at ±5pp
-        const contribution = Math.max(-0.05, Math.min(0.05, d.delta * 0.3));
+        // Dampen by 35% (slightly raised from 30% — PIR corroboration improves reliability)
+        const rawAdj   = d.pirAvailable ? d.importanceScore / 100 * 0.35 : d.delta * 0.3;
+        const contribution = Math.max(-0.05, Math.min(0.05, rawAdj));
         adj += contribution;
       }
       return Math.max(-0.08, Math.min(0.08, adj)); // total cap ±8pp across all absent players
@@ -689,14 +716,23 @@ function getWOWYDeltas(teamId) {
     // suggests player was only rested in already-won or low-risk fixtures
     const selectionBias = withoutRate > 0.85 && woTotal < 15 && (withRate - withoutRate) < 0;
 
+    const pirData  = getPIRData();
+    const pirEntry = pirData[playerId] || null;
+    const delta    = parseFloat((withRate - withoutRate).toFixed(3));
+    const { importance, conflictFlag } = playerImportanceScore(delta, pirEntry);
+
     result[playerId] = {
       name:        rec.name || null,
-      delta:       parseFloat((withRate - withoutRate).toFixed(3)),
+      delta,
       withRate:    parseFloat(withRate.toFixed(3)),
       withoutRate: parseFloat(withoutRate.toFixed(3)),
       wTotal, woTotal,
       confidence:  (wTotal >= 8 && woTotal >= 5) ? 'high' : 'low',
       selectionBias: selectionBias || undefined,
+      pir:           pirEntry?.pir ?? null,
+      pirAvailable:  !!pirEntry,
+      importanceScore: importance,
+      conflictFlag:  conflictFlag || undefined,
     };
   }
   return result;
@@ -713,6 +749,9 @@ module.exports = {
   applyTeamProfileModifiers,
   updateWOWY,
   getWOWYDeltas,
+  getPIRData,
+  reloadPIRCache,
+  playerImportanceScore,
   LEAGUE_AVG_HOME_WIN_RATE,
   CONTEXT_THRESHOLDS,
   THRESHOLDS,

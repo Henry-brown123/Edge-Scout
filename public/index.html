@@ -3314,22 +3314,39 @@ function teamIntelSection(w) {
     ? `<div style="margin-top:10px;font-size:.72rem;color:var(--text2);line-height:1.6">${notes.map(n => `• ${n}`).join('<br>')}</div>`
     : '';
 
-  // WOWY key player signals
+  // WOWY + PIR key player signals
   function wowyHtml(profile, label) {
     const kp = profile?.keyPlayers;
     if (!kp?.length) return '';
     const rows = kp.map(p => {
-      const name  = p.name || `Player ${p.playerId}`;
-      const sign  = p.delta >= 0 ? '+' : '';
-      const color = p.delta >= 0 ? 'var(--green)' : 'var(--red)';
-      const flag  = p.confidence === 'low' ? ' <span title="Low sample size" style="color:var(--amber)">⚠</span>' : '';
-      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px solid var(--border)">
-        <span style="color:var(--text1);font-weight:600">${name}${flag}</span>
-        <span style="color:${color};font-size:.8rem">${sign}${(p.delta*100).toFixed(0)}pp <span style="color:var(--text2);font-size:.68rem">(${(p.withRate*100).toFixed(0)}% with / ${(p.withoutRate*100).toFixed(0)}% without · n=${p.wTotal}/${p.woTotal})</span></span>
+      const name         = p.name || `Player ${p.playerId}`;
+      const wowySgn      = p.delta >= 0 ? '+' : '';
+      const wowyColor    = p.delta >= 0 ? 'var(--green)' : 'var(--red)';
+      const impScore     = p.importanceScore ?? null;
+      const impColor     = impScore !== null ? (impScore >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--text2)';
+      const lowConf      = p.confidence === 'low' ? ' <span title="Low sample size" style="color:var(--amber);font-size:.7em">⚠</span>' : '';
+      const conflict     = p.conflictFlag ? ' <span title="WOWY and PIR signals conflict — use caution" style="color:var(--amber);font-size:.7em" data-tooltip="WOWY and PIR disagree">⚡</span>' : '';
+      const pirBadge     = p.pirAvailable
+        ? `<span style="background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:1px 5px;font-size:.65rem;font-family:'DM Mono',monospace;color:var(--cyan)">PIR ${p.pir}</span>`
+        : `<span style="font-size:.65rem;color:var(--text2);font-family:'DM Mono',monospace">PIR —</span>`;
+      const impBadge     = impScore !== null
+        ? `<span style="color:${impColor};font-size:.75rem;font-family:'DM Mono',monospace">${impScore >= 0 ? '+' : ''}${impScore}</span>`
+        : '';
+      return `<div style="padding:5px 0;border-bottom:1px solid var(--border)">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span style="font-weight:600;font-size:.82rem">${name}${lowConf}${conflict}</span>
+          <div style="display:flex;align-items:center;gap:6px">
+            ${pirBadge}
+            <span style="color:${wowyColor};font-size:.75rem;font-family:'DM Mono',monospace">WOWY ${wowySgn}${(p.delta*100).toFixed(0)}pp</span>
+            ${impBadge ? `<span style="color:var(--text2);font-size:.65rem">→</span>${impBadge}` : ''}
+          </div>
+        </div>
+        <div style="font-size:.65rem;color:var(--text2);font-family:'DM Mono',monospace;margin-top:2px">${(p.withRate*100).toFixed(0)}% with / ${(p.withoutRate*100).toFixed(0)}% without · n=${p.wTotal}/${p.woTotal}</div>
       </div>`;
     }).join('');
+    const hasPIR = kp.some(p => p.pirAvailable);
     return `<div style="margin-top:8px;padding:8px 10px;background:var(--surface2);border-radius:8px">
-      <div style="font-size:.68rem;font-weight:700;color:var(--cyan);text-transform:uppercase;margin-bottom:6px">⚡ ${label} Key Players (WOWY)</div>
+      <div style="font-size:.68rem;font-weight:700;color:var(--cyan);text-transform:uppercase;margin-bottom:6px">⚡ ${label} Key Players (WOWY${hasPIR ? ' + PIR' : ''})</div>
       ${rows}
     </div>`;
   }

@@ -938,23 +938,27 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   const lowConfidence  = maxModelBookGap > effectiveGapThreshold || maxModelBookGap > tierThreshold;
   results.forEach(c => { c.lowConfidence = lowConfidence; });
 
-  // WOWY key player signals — top movers by |delta| for each team, with confidence flag
+  // WOWY + PIR key player signals — sorted by combined importance score
   const wowyToKeyPlayers = (teamId, isHome) => {
-    const deltas = getWOWYDeltas(teamId);
+    const deltas = getWOWYDeltas(teamId); // already enriched with pir/importanceScore
     return Object.entries(deltas)
-      .filter(([, d]) => Math.abs(d.delta) >= 0.10) // only meaningful signals
-      .sort((a, b) => Math.abs(b[1].delta) - Math.abs(a[1].delta))
+      .filter(([, d]) => Math.abs(d.importanceScore ?? (d.delta * 100)) >= 10)
+      .sort((a, b) => Math.abs(b[1].importanceScore ?? (b[1].delta * 100)) - Math.abs(a[1].importanceScore ?? (a[1].delta * 100)))
       .slice(0, 3)
       .map(([pid, d]) => ({
-        playerId: parseInt(pid, 10),
-        name: d.name,
-        delta: d.delta,
-        withRate: d.withRate,
-        withoutRate: d.withoutRate,
-        wTotal: d.wTotal,
-        woTotal: d.woTotal,
-        confidence: d.confidence,
-        selectionBias: d.selectionBias || false,
+        playerId:       parseInt(pid, 10),
+        name:           d.name,
+        delta:          d.delta,
+        withRate:       d.withRate,
+        withoutRate:    d.withoutRate,
+        wTotal:         d.wTotal,
+        woTotal:        d.woTotal,
+        confidence:     d.confidence,
+        selectionBias:  d.selectionBias || false,
+        pir:            d.pir ?? null,
+        pirAvailable:   d.pirAvailable || false,
+        importanceScore: d.importanceScore ?? null,
+        conflictFlag:   d.conflictFlag || false,
       }));
   };
   if (teamIntel.home) teamIntel.home.keyPlayers = wowyToKeyPlayers(homeId, true);
@@ -3080,6 +3084,46 @@ app.get('/api/backfill/understat/status', (_req, res) => {
   res.json({ running: _understatRunning, count: Object.keys(store).length });
 });
 
+// PIR (Player Impact Rating) fetch
+let _pirRunning = false;
+const _pirStatus = { running: false, startedAt: null, completedAt: null, count: 0, error: null };
+app.post('/api/backfill/pir', (req, res) => {
+  if (_pirRunning) return res.json({ running: true, message: 'PIR fetch already in progress' });
+  _pirRunning = true;
+  _pirStatus.running    = true;
+  _pirStatus.startedAt  = new Date().toISOString();
+  _pirStatus.completedAt = null;
+  _pirStatus.error      = null;
+  res.json({ started: true, message: 'PIR fetch running — poll /api/backfill/pir/status' });
+  const { execFile } = require('child_process');
+  const scriptPath   = path.join(__dirname, 'scripts', 'fetch-pir.js');
+  execFile(process.execPath, [scriptPath], {
+    env: { ...process.env, DATA_DIR, API_SPORTS_KEY: process.env.API_SPORTS_KEY },
+    timeout: 1800000, // 30 min
+  }, (err, stdout, stderr) => {
+    _pirRunning = false;
+    _pirStatus.running = false;
+    _pirStatus.completedAt = new Date().toISOString();
+    if (err) {
+      _pirStatus.error = err.message;
+      console.error('[PIR] Error:', err.message, stderr);
+      return;
+    }
+    const { reloadPIRCache, getPIRData } = require('./teamProfiles');
+    reloadPIRCache();
+    const data = getPIRData();
+    _pirStatus.count = Object.keys(data).length;
+    console.log(`[PIR] Complete — ${_pirStatus.count} players in pir-data.json`);
+    console.log('[PIR]', stdout.trim().split('\n').slice(-2).join(' | '));
+  });
+});
+
+app.get('/api/backfill/pir/status', (_req, res) => {
+  const { getPIRData } = require('./teamProfiles');
+  const data = getPIRData();
+  res.json({ ..._pirStatus, count: Object.keys(data).length });
+});
+
 // Trigger pre-match scan for a specific watching entry
 app.post('/api/scan/prematch/:watchId', async (req, res) => {
   const watching = getWatching();
@@ -3552,6 +3596,31 @@ async function runBackfillChain() {
     await runFixtureStatsBackfillFn({ budget: 1000 });
     const statsAfter = readJSON('fixture-stats.json') || {};
     console.log(`[Backfill] Phase 3 complete — ${Object.keys(statsAfter).length} stats on disk`);
+
+    // Phase 4: PIR refresh — weekly cadence, skip if data is < 7 days old
+    const pirStore     = (() => { try { return JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'pir-data.json'), 'utf8')); } catch { return {}; } })();
+    const pirEntries   = Object.values(pirStore);
+    const pirNewest    = pirEntries.reduce((a, b) => (!a || b.updatedAt > a.updatedAt) ? b : a, null);
+    const pirAgeDays   = pirNewest ? (Date.now() - new Date(pirNewest.updatedAt).getTime()) / 86400000 : Infinity;
+    if (pirAgeDays >= 7) {
+      if (backfillCutoffReached()) {
+        console.log('[Backfill] 05:00 UTC cutoff — skipping PIR refresh');
+      } else {
+        _startupStatus.phase = 'pir';
+        console.log('[Backfill] Phase 4: PIR refresh (data is ' + Math.round(pirAgeDays) + ' days old)…');
+        try {
+          const { run: runPIR } = require('./scripts/fetch-pir');
+          await runPIR();
+          const { reloadPIRCache, getPIRData } = require('./teamProfiles');
+          reloadPIRCache();
+          console.log(`[Backfill] Phase 4 complete — ${Object.keys(getPIRData()).length} PIR entries`);
+        } catch (pirErr) {
+          console.error('[Backfill] PIR phase error (non-fatal):', pirErr.message);
+        }
+      }
+    } else {
+      console.log(`[Backfill] PIR data is ${Math.round(pirAgeDays)} days old — skipping refresh`);
+    }
 
     _startupStatus.phase = 'complete';
     _startupStatus.completedAt = new Date().toISOString();
@@ -4320,6 +4389,13 @@ app.get('/api/server-status', async (_req, res) => {
       stats:              Object.keys(stats).length,
       wowyHighConfidence: wowyHighConf,
       xgData:             { count: Object.keys(getXgStore()).length },
+      pir: (() => {
+        const { getPIRData } = require('./teamProfiles');
+        const pd = getPIRData();
+        const entries = Object.values(pd);
+        const mostRecent = entries.reduce((a, b) => (!a || b.updatedAt > a.updatedAt) ? b : a, null);
+        return { count: entries.length, lastUpdated: mostRecent?.updatedAt ?? null };
+      })(),
     },
     rateLimit:          getRateLimitState(),
     backfill:           { phase: _startupStatus.phase, startedAt: _startupStatus.startedAt, completedAt: _startupStatus.completedAt, lastRan: _cronLastRan.backfill },
