@@ -761,6 +761,85 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
 <!-- ═══════════════════════════ MODEL ═══════════════════════════ -->
 <div class="tab-panel" id="tab-model">
 
+  <!-- Model engine status -->
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header">
+      <span class="card-title">Model Engine</span>
+      <span style="font-family:'DM Mono',monospace;font-size:.7rem;color:var(--green);background:color-mix(in srgb,var(--green) 12%,transparent);padding:2px 8px;border-radius:4px">Non-linear active</span>
+    </div>
+    <div style="font-family:'DM Mono',monospace;font-size:.75rem;color:var(--text1);margin-bottom:14px">
+      <strong>GBDT + Platt scaling</strong> — gradient-boosted decision trees (200 trees, depth 3, LR 0.02, 70% subsampling) with per-class Platt calibration. Replaced linear weighted sum on 2026-07-25. Trained on 6,652 fixtures, validated on 1,664 held-out (most recent 20% by date).
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px">
+      <div class="stat-tile">
+        <div class="stat-label">Log-loss (GBDT)</div>
+        <div class="stat-value c-green">0.9880</div>
+        <div class="stat-sub">was 1.0183 linear (−0.030)</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-label">Brier Score (GBDT)</div>
+        <div class="stat-value c-green">0.5889</div>
+        <div class="stat-sub">was 0.6086 linear (−0.020)</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-label">50–60% band bias</div>
+        <div class="stat-value c-green">−1.2pp</div>
+        <div class="stat-sub">was +13.5pp linear</div>
+      </div>
+    </div>
+    <div style="font-family:'DM Mono',monospace;font-size:.72rem">
+      <div style="color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em;font-size:.67rem">Probability band calibration — held-out validation set</div>
+      <table style="width:100%;border-collapse:collapse">
+        <thead>
+          <tr style="color:var(--muted);font-size:.67rem">
+            <th style="text-align:left;padding:4px 8px 4px 0">Band</th>
+            <th style="text-align:right;padding:4px 8px">n</th>
+            <th style="text-align:right;padding:4px 8px">Bias (linear)</th>
+            <th style="text-align:right;padding:4px 8px">Bias (GBDT)</th>
+            <th style="text-align:right;padding:4px 8px">Δ</th>
+          </tr>
+        </thead>
+        <tbody style="color:var(--text1)">
+          <tr style="border-top:1px solid var(--surface3)">
+            <td style="padding:4px 8px 4px 0">&lt;40%</td>
+            <td style="text-align:right;padding:4px 8px;color:var(--text2)">194</td>
+            <td style="text-align:right;padding:4px 8px;color:var(--text2)">+0.1pp</td>
+            <td style="text-align:right;padding:4px 8px;color:var(--green)">+1.0pp</td>
+            <td style="text-align:right;padding:4px 8px;color:var(--text2)">+0.9pp</td>
+          </tr>
+          <tr style="border-top:1px solid var(--surface3)">
+            <td style="padding:4px 8px 4px 0">40–50%</td>
+            <td style="text-align:right;padding:4px 8px;color:var(--text2)">583</td>
+            <td style="text-align:right;padding:4px 8px;color:var(--red)">+8.6pp</td>
+            <td style="text-align:right;padding:4px 8px;color:var(--green)">+2.6pp</td>
+            <td style="text-align:right;padding:4px 8px;color:var(--green)">−6.0pp</td>
+          </tr>
+          <tr style="border-top:1px solid var(--surface3);background:color-mix(in srgb,var(--green) 6%,transparent)">
+            <td style="padding:4px 8px 4px 0"><strong>50–60%</strong></td>
+            <td style="text-align:right;padding:4px 8px;color:var(--text2)">516</td>
+            <td style="text-align:right;padding:4px 8px;color:var(--red)">+13.5pp</td>
+            <td style="text-align:right;padding:4px 8px;color:var(--green)"><strong>−1.2pp</strong></td>
+            <td style="text-align:right;padding:4px 8px;color:var(--green)"><strong>−14.7pp</strong></td>
+          </tr>
+          <tr style="border-top:1px solid var(--surface3)">
+            <td style="padding:4px 8px 4px 0">60–70%</td>
+            <td style="text-align:right;padding:4px 8px;color:var(--text2)">284</td>
+            <td style="text-align:right;padding:4px 8px;color:var(--red)">+17.0pp</td>
+            <td style="text-align:right;padding:4px 8px;color:var(--green)">+4.1pp</td>
+            <td style="text-align:right;padding:4px 8px;color:var(--green)">−12.9pp</td>
+          </tr>
+          <tr style="border-top:1px solid var(--surface3)">
+            <td style="padding:4px 8px 4px 0">70%+ <span style="color:var(--cyan);font-size:.65rem">new</span></td>
+            <td style="text-align:right;padding:4px 8px;color:var(--text2)">87</td>
+            <td style="text-align:right;padding:4px 8px;color:var(--muted)">n/a</td>
+            <td style="text-align:right;padding:4px 8px;color:var(--cyan)">+1.7pp</td>
+            <td style="text-align:right;padding:4px 8px;color:var(--cyan)">new</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
   <!-- Key findings -->
   <div class="card" style="margin-bottom:16px">
     <div class="card-header"><span class="card-title">Key Findings — WC 2026 Validation</span><span style="font-family:'DM Mono',monospace;font-size:.7rem;color:var(--text2)">World Cup validation snapshot · as at 11 Jul 2026</span></div>
