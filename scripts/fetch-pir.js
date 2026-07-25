@@ -47,7 +47,8 @@ function calculatePIR(stats) {
   if (!s) return null;
   const games   = s.games?.appearences || 1;
   const mins    = s.games?.minutes || (games * 75);
-  const per90   = Math.max(mins / 90, 0.5);
+  if (mins < 450) return null; // < 5 full games — per-90 too volatile
+  const per90   = mins / 90;
 
   const goals90     = (s.goals?.total    || 0) / per90;
   const assists90   = (s.goals?.assists  || 0) / per90;
