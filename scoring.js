@@ -460,6 +460,96 @@ function internationalQualityScore(teamName, tournamentSeedings, extraRankings) 
   ));
 }
 
+// ─── GOALS MARKET SCORING (POISSON) ──────────────────────────────────────────
+
+function _factorial(n) {
+  if (n <= 1) return 1;
+  let r = 1;
+  for (let i = 2; i <= n; i++) r *= i;
+  return r;
+}
+
+function _poissonProb(lambda, k) {
+  return Math.exp(-lambda) * Math.pow(lambda, k) / _factorial(k);
+}
+
+// P(total goals > threshold) — threshold is the line, e.g. 2.5
+function _overProb(homeXg, awayXg, threshold) {
+  const lambda = homeXg + awayXg;
+  let cumulative = 0;
+  for (let k = 0; k <= Math.floor(threshold); k++) {
+    cumulative += _poissonProb(lambda, k);
+  }
+  return Math.min(0.99, Math.max(0.01, 1 - cumulative));
+}
+
+// P(home scores ≥1) * P(away scores ≥1)
+function _bttsProb(homeXg, awayXg) {
+  return Math.min(0.99, Math.max(0.01, (1 - Math.exp(-homeXg)) * (1 - Math.exp(-awayXg))));
+}
+
+// Score goals markets from xG data.
+// totalsOddsMap: "HomeTeam|AwayTeam" → { "2.5": { over, under }, "1.5": {...}, "3.5": {...} }
+// Returns array of goals candidates (market: "goals") or [] if no xG data.
+function scoreGoalsMarkets(homeName, awayName, date, totalsOddsMap, bankroll = 1000, kellyFraction = 0.5) {
+  const xgEntry = lookupXg(homeName, awayName, date);
+  if (!xgEntry || xgEntry.home == null || xgEntry.away == null) return [];
+
+  const homeXg = xgEntry.home;
+  const awayXg = xgEntry.away;
+  const key    = `${homeName}|${awayName}`;
+  const totals = totalsOddsMap?.[key] || {};
+
+  const overBtts  = _bttsProb(homeXg, awayXg);
+  const over25    = _overProb(homeXg, awayXg, 2.5);
+  const over15    = _overProb(homeXg, awayXg, 1.5);
+  const over35    = _overProb(homeXg, awayXg, 3.5);
+
+  const markets = [
+    { bet: 'Over 2.5',  prob: over25,       bookOdds: totals['2.5']?.over   ?? null },
+    { bet: 'Under 2.5', prob: 1 - over25,   bookOdds: totals['2.5']?.under  ?? null },
+    { bet: 'Over 1.5',  prob: over15,       bookOdds: totals['1.5']?.over   ?? null },
+    { bet: 'Under 1.5', prob: 1 - over15,   bookOdds: totals['1.5']?.under  ?? null },
+    { bet: 'Over 3.5',  prob: over35,       bookOdds: totals['3.5']?.over   ?? null },
+    { bet: 'Under 3.5', prob: 1 - over35,   bookOdds: totals['3.5']?.under  ?? null },
+    { bet: 'BTTS Yes',  prob: overBtts,     bookOdds: totals['btts']?.yes   ?? null },
+    { bet: 'BTTS No',   prob: 1 - overBtts, bookOdds: totals['btts']?.no    ?? null },
+  ];
+
+  const candidates = [];
+  for (const m of markets) {
+    const impliedProb = m.bookOdds ? 1 / m.bookOdds : null;
+    const edge        = impliedProb != null ? m.prob - impliedProb : null;
+    const ev          = m.bookOdds  != null ? m.prob * (m.bookOdds - 1) - (1 - m.prob) : null;
+
+    let successScore = null;
+    if (m.bookOdds && edge > 0) {
+      const winComp   = m.prob * 35;
+      const valueComp = Math.min(edge / 0.15, 1) * 45;
+      successScore    = Math.min(99, Math.round(winComp + valueComp));
+    }
+
+    const k = m.bookOdds ? kelly(m.prob, m.bookOdds, kellyFraction, bankroll) : null;
+
+    candidates.push({
+      market:      'goals',
+      bet:         m.bet,
+      modelProb:   parseFloat(m.prob.toFixed(4)),
+      bookOdds:    m.bookOdds,
+      impliedProb: impliedProb != null ? parseFloat(impliedProb.toFixed(4)) : null,
+      edge:        edge != null ? parseFloat(edge.toFixed(4)) : null,
+      ev:          ev   != null ? parseFloat(ev.toFixed(4))   : null,
+      successScore,
+      kelly:       k,
+      homeXg:      parseFloat(homeXg.toFixed(3)),
+      awayXg:      parseFloat(awayXg.toFixed(3)),
+      totalXg:     parseFloat((homeXg + awayXg).toFixed(3)),
+    });
+  }
+
+  return candidates;
+}
+
 // ─── SUPPORTING UTILITIES ─────────────────────────────────────────────────────
 
 // Recency decay brackets for historical weight training
@@ -496,5 +586,6 @@ module.exports = {
   computeModelProb, computeXGProxy, classifyCompetitionPhase,
   kelly, computeSuccessScore,
   historicalWeight, weatherModifier,
-  reloadXgStore, getXgStore,
+  reloadXgStore, getXgStore, lookupXg,
+  scoreGoalsMarkets,
 };

@@ -3398,6 +3398,43 @@ function valueRow(label, modelP, odds, ev, kelly, stake, isProjected, successSco
     </div>`;
 }
 
+function goalsValueRow(bet, modelProb, bookOdds, ev, kellyStake, successScore, homeXg, awayXg) {
+  const edge = bookOdds ? ((modelProb - 1/bookOdds) * 100) : null;
+  const edgeCol = (edge != null && edge > 0) ? 'var(--green)' : 'var(--red)';
+  const scoreCol = successScore != null ? (successScore >= 60 ? 'var(--green)' : successScore >= 40 ? 'var(--amber)' : 'var(--text2)') : 'var(--text2)';
+  return `
+    <div style="background:var(--surface2);border-radius:10px;padding:10px 14px;margin-bottom:6px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <span style="font-family:'Syne',sans-serif;font-weight:700;font-size:.85rem">${bet}</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          ${bookOdds ? `<span style="font-family:'DM Mono',monospace;font-size:.8rem;color:var(--text2)">@ ${bookOdds.toFixed(2)}</span>` : '<span style="font-family:\'DM Mono\',monospace;font-size:.75rem;color:var(--text2)">no odds</span>'}
+          ${successScore != null ? `<div style="background:var(--surface);border:1px solid ${scoreCol};border-radius:6px;padding:2px 7px;text-align:center">
+            <span style="font-family:'Syne',sans-serif;font-weight:700;font-size:.9rem;color:${scoreCol}">${successScore}</span>
+          </div>` : ''}
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;font-family:'DM Mono',monospace;text-align:center">
+        <div>
+          <div style="font-size:.9rem;font-weight:700;color:var(--cyan)">${(modelProb*100).toFixed(1)}%</div>
+          <div style="font-size:.55rem;color:var(--text2);text-transform:uppercase">Model</div>
+        </div>
+        <div>
+          <div style="font-size:.9rem;font-weight:700">${bookOdds ? ((1/bookOdds)*100).toFixed(1)+'%' : '—'}</div>
+          <div style="font-size:.55rem;color:var(--text2);text-transform:uppercase">Implied</div>
+        </div>
+        <div>
+          <div style="font-size:.9rem;font-weight:700;color:${edgeCol}">${edge != null ? (edge > 0 ? '+' : '') + edge.toFixed(1)+'%' : '—'}</div>
+          <div style="font-size:.55rem;color:var(--text2);text-transform:uppercase">Edge</div>
+        </div>
+        <div>
+          <div style="font-size:.9rem;font-weight:700;color:${ev != null && ev > 0 ? 'var(--green)' : 'var(--red)'}">${ev != null ? (ev > 0 ? '+' : '') + (ev*100).toFixed(1)+'%' : '—'}</div>
+          <div style="font-size:.55rem;color:var(--text2);text-transform:uppercase">EV</div>
+        </div>
+      </div>
+      ${kellyStake > 0 ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border);font-family:'DM Mono',monospace;font-size:.75rem;color:var(--text2)">Kelly: <span style="color:var(--green);font-weight:700">£${kellyStake.toFixed(2)}</span></div>` : ''}
+    </div>`;
+}
+
 async function openDrawerById(id) {
   try {
     const fresh = await apiFetch('/api/state');
@@ -3488,6 +3525,22 @@ function openDrawer(w) {
       ${oddsNote}
       ${valueRows}
     </div>
+
+    ${(() => {
+      const gc = w.goalsCandidates;
+      if (!gc?.length) return '';
+      const xgInfo = gc[0];
+      const primaryMarkets = ['Over 2.5', 'Under 2.5', 'Over 1.5', 'Under 1.5', 'Over 3.5', 'Under 3.5', 'BTTS Yes', 'BTTS No'];
+      const rows = primaryMarkets.map(name => {
+        const c = gc.find(x => x.bet === name);
+        if (!c) return '';
+        return goalsValueRow(name, c.modelProb, c.bookOdds, c.ev, c.kelly?.stake, c.successScore, c.homeXg, c.awayXg);
+      }).join('');
+      return `<div class="drawer-section">
+        <h4>Goals Markets <span style="font-family:'DM Mono',monospace;font-size:.65rem;color:var(--text2);font-weight:400;margin-left:8px">xG ${xgInfo.homeXg} – ${xgInfo.awayXg} (Σ ${xgInfo.totalXg})</span></h4>
+        ${rows}
+      </div>`;
+    })()}
 
     <div class="drawer-section">
       <h4>Factor Breakdown <span style="color:var(--cyan);margin-left:8px">▬ ${home}</span> <span style="color:var(--pink);margin-left:8px">▬ ${away}</span></h4>

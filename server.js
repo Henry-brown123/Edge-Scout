@@ -15,7 +15,8 @@ const {
   internationalFormScore, internationalQualityScore, lookupFIFARank,
   computeModelProb, computeXGProxy, classifyCompetitionPhase,
   kelly, computeSuccessScore, weatherModifier,
-  reloadXgStore, getXgStore,
+  reloadXgStore, getXgStore, lookupXg,
+  scoreGoalsMarkets,
 } = require('./scoring');
 
 const model = require('./models/interface');
@@ -529,15 +530,39 @@ function _buildOddsMap(events) {
   return map;
 }
 
+// Build totals map: "HomeTeam|AwayTeam" → { "2.5": {over, under}, "1.5": {...}, "3.5": {...} }
+// Uses Pinnacle when available (sharpest lines), falls back to first available bookmaker.
+function _buildTotalsMap(events) {
+  const map = {};
+  for (const ev of (events || [])) {
+    const key      = `${ev.home_team}|${ev.away_team}`;
+    const pinnacle = ev.bookmakers?.find(b => b.title === 'Pinnacle');
+    const ukBook   = ev.bookmakers?.find(b => UK_BOOKS.has(b.title)) || ev.bookmakers?.[0];
+    const source   = pinnacle || ukBook;
+    if (!source) continue;
+    const totalsMkt = source.markets?.find(m => m.key === 'totals');
+    if (!totalsMkt) continue;
+    const lines = {};
+    for (const o of (totalsMkt.outcomes || [])) {
+      const pt = String(o.point);
+      if (!lines[pt]) lines[pt] = {};
+      if (o.name === 'Over')  lines[pt].over  = o.price;
+      if (o.name === 'Under') lines[pt].under = o.price;
+    }
+    if (Object.keys(lines).length > 0) map[key] = lines;
+  }
+  return map;
+}
+
 async function fetchOddsForLeague(sport) {
   try {
     const { data } = await oddsApi.get(`/sports/${sport}/odds`, {
-      params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal' },
+      params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h,totals', oddsFormat: 'decimal' },
     });
     const events = data || [];
     _oddsRawCache[sport] = events;
-    return _buildOddsMap(events);
-  } catch { return {}; }
+    return { oddsMap: _buildOddsMap(events), totalsMap: _buildTotalsMap(events) };
+  } catch { return { oddsMap: {}, totalsMap: {} }; }
 }
 
 // Build the per-bookmaker market array for a fixture from cached raw events
@@ -622,7 +647,7 @@ function persistOddsSnapshot(fix, scored, sport, stage, leagueId, leagueName, se
 
 // ─── CORE FIXTURE SCORER ─────────────────────────────────────────────────────
 
-async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap, settings) {
+async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap, settings, totalsMap = {}) {
   const homeId   = fix.teams?.home?.id;
   const awayId   = fix.teams?.away?.id;
   const homeName = fix.teams?.home?.name;
@@ -875,6 +900,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     const k         = kelly(calProb, displayOdds, settings.kellyFraction, getBankroll().current);
 
     const entry = {
+      market: 'match_outcome',
       bet: c.label, modelProb: c.prob, bookOdds: displayOdds, impliedProb: impliedP,
       edge, successScore: finalScore, kelly: k,
       ev: calProb * (displayOdds - 1) - (1 - calProb),
@@ -930,6 +956,11 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     || (settings.paperTradeOnly || []).includes(parseInt(leagueId, 10));
   const betMode = leagueMode === 'real' ? 'real' : 'paper';
 
+  const goalsCandidates = scoreGoalsMarkets(
+    homeName, awayName, fix.fixture?.date,
+    totalsMap, getBankroll().current, settings.kellyFraction
+  );
+
   return {
     fix, homeName, awayName, homeF, awayF, probs, weather, weatherCondition, results,
     kickoff: fix.fixture?.date,
@@ -937,6 +968,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     homeDataConf, awayDataConf, dataConf,
     homeFormCount, awayFormCount, minFormCount, tierThreshold,
     teamIntel, paperTradeOnly, betMode,
+    goalsCandidates,
   };
 }
 
@@ -991,7 +1023,7 @@ async function runMorningScan(leagueIds) {
       const standings = sd?.response?.[0]?.league?.standings || [];
 
       // Odds
-      const oddsMap = await fetchOddsForLeague(meta.sport || 'soccer_epl');
+      const { oddsMap, totalsMap } = await fetchOddsForLeague(meta.sport || 'soccer_epl');
 
       // Pre-load fixture stats cache from disk (populated by pre-match lock and stats backfill)
       const fixtureStatsDb = getFixtureStats();
@@ -1007,7 +1039,7 @@ async function runMorningScan(leagueIds) {
 
       for (const fix of fixtures) {
         try {
-          const scored = await scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap, settings);
+          const scored = await scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap, settings, totalsMap);
           const best   = scored.results.reduce((a, b) => a.successScore > b.successScore ? a : b);
           persistOddsSnapshot(fix, scored, meta.sport || 'soccer_epl', 'morning', leagueId, meta.name, settings);
           const calEntry = {
@@ -1021,7 +1053,8 @@ async function runMorningScan(leagueIds) {
             successScore:    best.successScore,
             projectedBet:    best.displayLabel || best.bet,
             projectedBetKey: best.bet,
-            candidates:   scored.results,
+            candidates:      scored.results,
+            goalsCandidates: scored.goalsCandidates,
             betPlaced:    false,
             betId:        null,
             resolved:          false,
@@ -1057,6 +1090,7 @@ async function runMorningScan(leagueIds) {
               ev:              best.ev,
               kelly:           best.kelly,
               allCandidates:   scored.results,
+              goalsCandidates: scored.goalsCandidates,
               weather:         scored.weather,
               homeF:           scored.homeF,
               awayF:           scored.awayF,
@@ -1173,9 +1207,9 @@ async function runPreMatchScan(watchingEntry) {
 
     const { data: std } = await apiSports.get('/standings', { params: { league: leagueId, season: meta.season } });
     const standings = std?.response?.[0]?.league?.standings || [];
-    const oddsMap   = await fetchOddsForLeague(meta.sport || 'soccer_epl');
+    const { oddsMap, totalsMap } = await fetchOddsForLeague(meta.sport || 'soccer_epl');
 
-    const scored = await scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap, settings);
+    const scored = await scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap, settings, totalsMap);
     const best   = scored.results.reduce((a, b) => a.successScore > b.successScore ? a : b);
     persistOddsSnapshot(fix, scored, meta.sport || 'soccer_epl', 'pre_match_lock', leagueId, meta.name, settings);
 
