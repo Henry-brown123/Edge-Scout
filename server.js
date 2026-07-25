@@ -2678,9 +2678,9 @@ async function runClosingOddsBackfill({ budgetCredits = 80000 } = {}) {
       const sport = CLOSING_ODDS_SPORT_MAP[lid];
       const date  = fix.fixture?.date;
       if (!fid || !sport || !date) continue;
-      // Only last 2 seasons (2023 and 2024 for clubs; 2022/2026 for WC already in data)
+      // 3-season window: 2022/23, 2023/24, 2024/25 (calendar year 2022+)
       const year = new Date(date).getUTCFullYear();
-      if (year < 2023) { skipped++; continue; }
+      if (year < 2022) { skipped++; continue; }
       if (alreadyDone.has(fid)) { skipped++; continue; }
       const hourKey = date.slice(0, 13); // "2024-10-05T15"
       const groupKey = `${sport}|${hourKey}`;
@@ -4016,7 +4016,9 @@ app.get('/api/ev-calibration', (_req, res) => {
       if (!leagueMap[name]) leagueMap[name] = [];
       leagueMap[name].push(f);
     }
-    const byLeague = Object.entries(leagueMap).map(([league, fxs]) => {
+    const byLeague = Object.entries(leagueMap)
+    .filter(([, fxs]) => fxs.length >= 100)
+    .map(([league, fxs]) => {
       const posE = fxs.filter(f => f.edge >= 0.05);
       let roi = null;
       if (posE.length > 0) {

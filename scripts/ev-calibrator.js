@@ -127,16 +127,18 @@ for (const f of matched) {
   leagueMap[name].push(f);
 }
 
-const byLeague = Object.entries(leagueMap).map(([league, fixtures]) => {
-  const n = fixtures.length;
-  const posE = fixtures.filter(f => f.edge >= 0.05);
-  let roi = null;
-  if (posE.length > 0) {
-    roi = posE.reduce((sum, f) => sum + (f.won ? (f.pinnacleOdds - 1) : -1), 0) / posE.length;
-  }
-  const kelly = kellyRecommendation(roi);
-  return { league, n, posEdgeN: posE.length, roi, kelly };
-}).sort((a, b) => b.n - a.n);
+const byLeague = Object.entries(leagueMap)
+  .filter(([, fixtures]) => fixtures.length >= 100)
+  .map(([league, fixtures]) => {
+    const n = fixtures.length;
+    const posE = fixtures.filter(f => f.edge >= 0.05);
+    let roi = null;
+    if (posE.length > 0) {
+      roi = posE.reduce((sum, f) => sum + (f.won ? (f.pinnacleOdds - 1) : -1), 0) / posE.length;
+    }
+    const kelly = kellyRecommendation(roi);
+    return { league, n, posEdgeN: posE.length, roi, kelly };
+  }).sort((a, b) => b.n - a.n);
 
 // ─── RESULT ───────────────────────────────────────────────────────────────────
 
