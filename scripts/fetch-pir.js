@@ -6,10 +6,11 @@ const axios = require('axios');
 
 const DATA_DIR       = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
 const PIR_PATH       = path.join(DATA_DIR, 'pir-data.json');
-const API_KEY        = process.env.API_SPORTS_KEY;
+const API_KEY        = process.env.API_SPORTS_KEY || '36e45a67eec7cabd0a51db8f2570f934';
 const RATE_LIMIT_MS  = 300;
+const PIR_REFRESH_DAYS = 7;
 
-// Club leagues only — international teams don't have per-player stats via this endpoint
+// Club leagues only — stats available via API-Sports
 const PIR_LEAGUES = [
   { id: 39,  season: 2024, name: 'Premier League'   },
   { id: 140, season: 2024, name: 'La Liga'           },
@@ -23,8 +24,6 @@ const PIR_LEAGUES = [
   { id: 3,   season: 2024, name: 'Europa League'     },
   { id: 848, season: 2024, name: 'Conference League' },
 ];
-
-const PIR_REFRESH_DAYS = 7;
 
 const apiSports = axios.create({
   baseURL: 'https://v3.football.api-sports.io',
@@ -48,7 +47,7 @@ function calculatePIR(stats) {
   if (!s) return null;
   const games   = s.games?.appearences || 1;
   const mins    = s.games?.minutes || (games * 75);
-  const per90   = Math.max(mins / 90, 0.5); // avoid divide-by-near-zero
+  const per90   = Math.max(mins / 90, 0.5);
 
   const goals90     = (s.goals?.total    || 0) / per90;
   const assists90   = (s.goals?.assists  || 0) / per90;
@@ -69,88 +68,138 @@ function calculatePIR(stats) {
   return Math.min(100, Math.max(0, Math.round(raw)));
 }
 
-async function fetchLeague(leagueId, season, leagueName, existing) {
+// Fetch all team IDs for a league via standings
+async function getTeamIds(leagueId, season) {
+  try {
+    const resp = await apiSports.get('/standings', { params: { league: leagueId, season } });
+    const groups = resp.data?.response?.[0]?.league?.standings || [];
+    // standings can be a nested array (groups) or flat array
+    const flat = Array.isArray(groups[0]) ? groups.flat() : groups;
+    return flat.map(s => ({ id: s.team?.id, name: s.team?.name })).filter(t => t.id);
+  } catch (e) {
+    console.error(`  [PIR] standings error league=${leagueId}: ${e.message}`);
+    return [];
+  }
+}
+
+// For cup competitions (CL/EL/Conference) use historical fixtures to gather team IDs
+function getTeamIdsFromHistorical(leagueId) {
+  try {
+    const hist = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'backfill-historical.json'), 'utf8'));
+    const seen = new Map();
+    for (const f of (hist.fixtures || [])) {
+      if (f.league?.id !== leagueId) continue;
+      const h = f.teams?.home; const a = f.teams?.away;
+      if (h?.id) seen.set(h.id, h.name);
+      if (a?.id) seen.set(a.id, a.name);
+    }
+    return [...seen.entries()].map(([id, name]) => ({ id, name }));
+  } catch { return []; }
+}
+
+async function fetchTeamPlayers(teamId, teamName, season, leagueId, leagueName, existing) {
   let page = 1;
-  let fetched = 0;
   const updated = {};
 
   while (true) {
     let resp;
     try {
-      resp = await apiSports.get('/players/statistics', {
-        params: { league: leagueId, season, page },
-      });
+      resp = await apiSports.get('/players', { params: { team: teamId, season, page } });
     } catch (e) {
-      console.error(`  [PIR] fetch error league=${leagueId} page=${page}: ${e.message}`);
+      console.error(`  [PIR] fetch error team=${teamId} page=${page}: ${e.message}`);
       break;
     }
 
-    const players  = resp.data?.response || [];
-    const paging   = resp.data?.paging   || { current: 1, total: 1 };
+    const players = resp.data?.response || [];
+    const paging  = resp.data?.paging   || { current: 1, total: 1 };
 
     for (const p of players) {
       const playerId = p.player?.id;
       if (!playerId) continue;
 
-      // Skip if refreshed within PIR_REFRESH_DAYS
+      const s = p.statistics?.[0];
+      // Skip players with no minutes (didn't play)
+      if (!s?.games?.minutes || s.games.minutes === 0) continue;
+
+      // Skip if refreshed recently
       const ex = existing[String(playerId)];
       if (ex?.updatedAt) {
         const ageDays = (Date.now() - new Date(ex.updatedAt).getTime()) / 86400000;
-        if (ageDays < PIR_REFRESH_DAYS) { updated[String(playerId)] = ex; fetched++; continue; }
+        if (ageDays < PIR_REFRESH_DAYS) { updated[String(playerId)] = ex; continue; }
       }
 
       const pir = calculatePIR(p);
       if (pir === null) continue;
 
-      const s = p.statistics?.[0];
+      const per90 = Math.max((s.games?.minutes || 75) / 90, 0.5);
       updated[String(playerId)] = {
         playerId,
         playerName:   p.player?.name   || null,
-        teamId:       s?.team?.id      || null,
-        teamName:     s?.team?.name    || null,
+        teamId:       s.team?.id       || teamId,
+        teamName:     s.team?.name     || teamName,
         leagueId,
         leagueName,
         season,
         pir,
-        appearances:  s?.games?.appearences || 0,
-        minutesPlayed: s?.games?.minutes   || 0,
-        goals90:      parseFloat(((s?.goals?.total || 0) / Math.max((s?.games?.minutes || 75) / 90, 0.5)).toFixed(3)),
-        assists90:    parseFloat(((s?.goals?.assists || 0) / Math.max((s?.games?.minutes || 75) / 90, 0.5)).toFixed(3)),
-        keyPasses90:  parseFloat(((s?.passes?.key || 0) / Math.max((s?.games?.minutes || 75) / 90, 0.5)).toFixed(3)),
-        rating:       parseFloat(s?.games?.rating || 6.5) || 6.5,
-        updatedAt:    new Date().toISOString(),
+        appearances:   s.games?.appearences || 0,
+        minutesPlayed: s.games?.minutes     || 0,
+        goals90:       parseFloat(((s.goals?.total    || 0) / per90).toFixed(3)),
+        assists90:     parseFloat(((s.goals?.assists  || 0) / per90).toFixed(3)),
+        keyPasses90:   parseFloat(((s.passes?.key     || 0) / per90).toFixed(3)),
+        rating:        parseFloat(s.games?.rating || 6.5) || 6.5,
+        updatedAt:     new Date().toISOString(),
       };
-      fetched++;
     }
-
-    console.log(`  [PIR] ${leagueName} page ${paging.current}/${paging.total} — ${players.length} players`);
 
     if (paging.current >= paging.total) break;
     page++;
     await sleep(RATE_LIMIT_MS);
   }
 
-  return { updated, fetched };
+  return updated;
 }
 
-async function run() {
-  if (!API_KEY) { console.error('[PIR] API_SPORTS_KEY not set'); process.exit(1); }
+const CUP_LEAGUES = new Set([2, 3, 848]); // CL, EL, Conference — no standings, use historical
 
-  console.log('[PIR] Starting fetch...');
+async function run() {
+  console.log('[PIR] Starting fetch — team-based approach...');
   const existing = readPIR();
-  const all = { ...existing };
-  let totalFetched = 0;
+  const all      = { ...existing };
+  let totalNew   = 0;
 
   for (const league of PIR_LEAGUES) {
     console.log(`[PIR] League: ${league.name} (${league.id})`);
-    const { updated, fetched } = await fetchLeague(league.id, league.season, league.name, all);
-    Object.assign(all, updated);
-    totalFetched += fetched;
-    savePIR(all); // save after each league so progress isn't lost on interrupt
-    await sleep(RATE_LIMIT_MS);
+
+    let teams;
+    if (CUP_LEAGUES.has(league.id)) {
+      teams = getTeamIdsFromHistorical(league.id);
+    } else {
+      teams = await getTeamIds(league.id, league.season);
+      await sleep(RATE_LIMIT_MS);
+    }
+
+    if (!teams.length) {
+      console.log(`  [PIR] No teams found for ${league.name}`);
+      continue;
+    }
+
+    console.log(`  [PIR] ${teams.length} teams to fetch`);
+    let leagueNew = 0;
+
+    for (const team of teams) {
+      const updated = await fetchTeamPlayers(team.id, team.name, league.season, league.id, league.name, all);
+      const newEntries = Object.values(updated).filter(v => !v.updatedAt || !all[String(v.playerId)]?.updatedAt || v.updatedAt > all[String(v.playerId)].updatedAt);
+      Object.assign(all, updated);
+      leagueNew += Object.keys(updated).length;
+      await sleep(RATE_LIMIT_MS);
+    }
+
+    console.log(`  [PIR] ${league.name} done — ${leagueNew} players`);
+    totalNew += leagueNew;
+    savePIR(all); // save after each league so progress isn't lost
   }
 
-  console.log(`[PIR] Done — ${totalFetched} players processed, ${Object.keys(all).length} total in store`);
+  console.log(`[PIR] Complete — ${totalNew} players processed, ${Object.keys(all).length} total in store`);
   return all;
 }
 
