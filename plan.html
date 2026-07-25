@@ -144,7 +144,7 @@ h1{font-size:22px;font-weight:700;letter-spacing:-0.5px;margin-bottom:4px}
 
 <div id="phases"></div>
 
-<div class="updated">Last updated: 16 July 2026</div>
+<div class="updated">Last updated: 25 July 2026</div>
 
 <script>
 const phases=[
@@ -217,7 +217,7 @@ const phases=[
     {s:"done",t:"Odds history passive collection active"},
     {s:"done",t:"Calibration health card with traffic light and suggested factor"},
     {s:"done",t:"Model vs Market divergence report — tracks all 8pp+ divergences against outcomes"},
-    {s:"active",t:"World Cup knockout validation (June 28 – July 19)",n:"9 bets placed: 6W 3L (67%). Bankroll £1,439.11 (+43.9%). ROI +50.6% on staked. lowConfidence gate blocked 17+ losing bets."},
+    {s:"active",t:"World Cup knockout validation (June 28 – July 19)",n:"7W 3L (70%). Bankroll £1,439.11. ROI +50.5% on staked. lowConfidence gate blocked 17+ losing bets."},
     {s:"done",t:"Performance tab restructure — placed bets only"},
     {s:"done",t:"Model tab created — directional accuracy, calibration health, divergence report, key findings"},
     {s:"done",t:"Duplicate bet bug fixed — pre-match lock no longer creates multiple bets per fixture"},
@@ -225,28 +225,30 @@ const phases=[
     {s:"upcoming",t:"Review calibration data and divergence report at end of tournament"},
     {s:"upcoming",t:"Assess whether real money criteria are met"},
   ]},
-  {title:"Phase 7 — July upgrade window (July 19 – Aug 8)",badge:"upcoming",label:"Upcoming — World Cup final July 19",pct:0,tasks:[
-    {s:"upcoming",t:"— Week 1 (Jul 19–26): Data foundations —",n:""},
-    {s:"upcoming",t:"Buy The Odds API paid tier ($30–60) — 6 years of historical odds across all leagues",n:"Validation infrastructure. Cannot confirm genuine edge without it."},
-    {s:"upcoming",t:"Run historical odds backfill — populate odds history for all 8,305 fixtures"},
-    {s:"upcoming",t:"Understat xG integration — ~11,000 matches of real xG data across 5 top leagues"},
-    {s:"upcoming",t:"Extend historical backfill to 5 seasons across all active leagues"},
-    {s:"upcoming",t:"Add and start backfilling new leagues: Eredivisie, Primeira Liga, Scottish Premiership, Europa League, Conference League"},
-    {s:"upcoming",t:"— Week 2 (Jul 26–Aug 1): Model fixes and validation —",n:""},
-    {s:"upcoming",t:"Review WC calibration data and divergence report — full post-tournament analysis"},
-    {s:"upcoming",t:"Fix score band inversion — add divergence penalty multiplier so large model-market gaps reduce success score rather than inflate it",n:"Score band inversion confirmed: 60-79 band 0% accuracy, 40-59 93%. Blocking correct but success score formula is broken for international context."},
-    {s:"upcoming",t:"EV optimiser — validate edge estimates against 6 years of real historical odds"},
-    {s:"upcoming",t:"Identify which leagues show strongest edge using historical odds backfill"},
-    {s:"upcoming",t:"Write and implement non-linear model upgrade — target 56–58% directional accuracy",n:"Platt scaling per probability band or isotonic regression layer on top of existing factor pipeline"},
-    {s:"upcoming",t:"International factor weight calibration against WC 2026 results"},
-    {s:"upcoming",t:"— Week 3 (Aug 1–8): Markets, accounts, final calibration —",n:""},
-    {s:"upcoming",t:"Build full PIR system using API-Sports per-90 player statistics"},
-    {s:"upcoming",t:"Goals market expansion: over/under 2.5 goals, BTTS"},
-    {s:"upcoming",t:"Bookmaker management module — account database, restriction detection, rotation"},
-    {s:"upcoming",t:"Betfair Exchange API integration"},
-    {s:"upcoming",t:"Camouflage logic — recreational bet pattern per bookmaker account"},
-    {s:"upcoming",t:"Per-bookmaker bet breakdown — full odds/edge/stake table per bookmaker when bet locks, with usage % and performance tracking in Performance tab"},
-    {s:"upcoming",t:"Final calibration pass across all leagues before Aug 8 go-live"},
+  {title:"Phase 7 — July upgrade window (July 19 – Aug 8)",badge:"active",label:"In progress",pct:70,tasks:[
+    {s:"done",t:"Historical odds backfill — The Odds API 100K tier purchased and backfill complete"},
+    {s:"done",t:"EV optimiser — PL +18.5% ROI confirmed, La Liga flagged negative (paper only)"},
+    {s:"done",t:"Understat xG integration — 10,771 matches live across 5 top leagues"},
+    {s:"done",t:"Full bookmaker selection UI at bet lock — tier-aware routing with performance tracking"},
+    {s:"done",t:"CLV tracking with T-5 Pinnacle fetch — closing line value computed per placed bet"},
+    {s:"done",t:"Bookmaker performance tracking in Performance tab — P&L breakdown per bookmaker"},
+    {s:"done",t:"Time period filtering — 7D / 14D / 1M / 3M / All / Custom in Performance tab"},
+    {s:"done",t:"Dual-mode betting system — paper vs real money per league, combined P&L view"},
+    {s:"done",t:"Non-linear model upgrade — GBDT + Platt scaling, log-loss 1.018 → 0.988, 50–60% band bias eliminated (was +13.5pp, now −1.2pp)"},
+    {s:"done",t:"Divergence penalty for international fixtures — tiered multiplier (10–15pp ×0.75, 15–20pp ×0.50, 20pp+ ×0.25)"},
+    {s:"done",t:"Confederation strength adjustment — internationalFormScore() weights results by opponent FIFA ranking"},
+    {s:"done",t:"Three-component international quality signal — FIFA ranking 40%, tournament seeding 25%, quality-adj standings 35%"},
+    {s:"done",t:"GBDT auto-retraining every 500 new scored records — improvement gate requires Δlog-loss ≥ 0.001"},
+    {s:"done",t:"Withdrawal / deposit / reset transaction system — separate from betting P&L"},
+    {s:"done",t:"New league configuration: Scottish Premiership (179), Eredivisie (88), Primeira Liga (94), Europa League (3), Conference League (848)"},
+    {s:"done",t:"5-season backfill extension running — new leagues fetching 3 seasons, existing leagues at 5"},
+    {s:"upcoming",t:"Goals market expansion (Task 3.1) — over/under 2.5 goals, BTTS — next"},
+    {s:"upcoming",t:"PIR system (Task 3.2) — Player Impact Rating using API-Sports per-90 stats"},
+    {s:"upcoming",t:"Per-league weight optimisation (Task 3.3)"},
+    {s:"upcoming",t:"La Liga home advantage recalibration — homeAdvBaseWeight 1.02 → 1.10"},
+    {s:"upcoming",t:"Historical EV calibration for new leagues — awaiting 100+ matched fixtures with Pinnacle closing odds"},
+    {s:"upcoming",t:"Full system validation (Task 4.1) — pre-season calibration pass across all leagues"},
+    {s:"upcoming",t:"Paper trading reset — post World Cup final July 19 (do this manually)"},
   ]},
   {title:"Phase 8 — Premier League season (from Aug 8)",badge:"upcoming",label:"Upcoming",pct:0,tasks:[
     {s:"upcoming",t:"10–12 leagues live simultaneously from day one",n:"PL, La Liga, Serie A, Bundesliga, Ligue 1, Eredivisie, Primeira Liga, Scottish Prem, Europa League, Conference League + existing 2"},
