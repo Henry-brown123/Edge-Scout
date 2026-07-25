@@ -337,7 +337,18 @@ function applyEdgeCap(score, edge, leagueId) {
   return Math.round(score * 0.5);
 }
 
-function computeSuccessScore(modelProb, bookOdds, formFixtureCount = 20, dataConf = 1, pinnacleEdge = null, leagueId = null) {
+// International divergence penalty: large model–market gaps on international fixtures
+// are systematically wrong (7/7 WC 2026 large-divergence picks lost). Penalty scales
+// with divergence magnitude; below 10pp the model tracks the market reliably.
+function applyDivergencePenalty(score, divergence, context) {
+  if (context !== 'international') return score;
+  if (divergence < 0.10) return score;
+  if (divergence < 0.15) return Math.round(score * 0.75); // 10–15pp: −25%
+  if (divergence < 0.20) return Math.round(score * 0.50); // 15–20pp: −50%
+  return Math.round(score * 0.25);                         // 20pp+:   −75%
+}
+
+function computeSuccessScore(modelProb, bookOdds, formFixtureCount = 20, dataConf = 1, pinnacleEdge = null, leagueId = null, context = null) {
   const impliedProb = 1 / bookOdds;
   const edge = modelProb - impliedProb;
   if (edge <= 0) return 0;
@@ -348,7 +359,8 @@ function computeSuccessScore(modelProb, bookOdds, formFixtureCount = 20, dataCon
   const dataMultiplier = 0.4 + (dataConf * 0.6);
   const base           = Math.round(raw * dataMultiplier);
   const edgeVsPinnacle = pinnacleEdge !== null ? pinnacleEdge : edge;
-  return applyEdgeCap(base, edgeVsPinnacle, leagueId);
+  const capped         = applyEdgeCap(base, edgeVsPinnacle, leagueId);
+  return applyDivergencePenalty(capped, edge, context);
 }
 
 // ─── SUPPORTING UTILITIES ─────────────────────────────────────────────────────

@@ -879,7 +879,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     const calProb   = Math.min(0.97, c.prob * calFactor);
     const edge      = calProb - impliedP;
     const pinnacleEdgeVsMarket = pinnStripped ? calProb - (pinnStripped[teamKey] ?? (1 / displayOdds)) : null;
-    const rawScore  = computeSuccessScore(calProb, displayOdds, homeFormCount, dataConf, pinnacleEdgeVsMarket, leagueId);
+    const rawScore  = computeSuccessScore(calProb, displayOdds, homeFormCount, dataConf, pinnacleEdgeVsMarket, leagueId, context);
     const finalScore = Math.round(rawScore * wxMod * effMult);
     const k         = kelly(calProb, displayOdds, settings.kellyFraction, getBankroll().current);
 
