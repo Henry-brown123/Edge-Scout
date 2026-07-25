@@ -363,6 +363,103 @@ function computeSuccessScore(modelProb, bookOdds, formFixtureCount = 20, dataCon
   return applyDivergencePenalty(capped, edge, context);
 }
 
+// ─── FIFA RANKINGS ────────────────────────────────────────────────────────────
+
+const FIFA_RANK_FALLBACK = {
+  'Argentina':1,'France':2,'England':3,'Brazil':4,'Belgium':5,
+  'Portugal':6,'Spain':7,'Netherlands':8,'Colombia':8,'Italy':9,
+  'Germany':10,'Croatia':12,'Morocco':13,'Switzerland':14,'Denmark':14,
+  'United States':15,'USA':15,'Mexico':16,'Uruguay':17,'Japan':19,
+  'Senegal':18,'Austria':25,'Sweden':28,'Turkey':31,'Algeria':36,
+  'Chile':35,'Norway':37,'Czechia':38,'Scotland':40,'Slovenia':42,
+  'Slovakia':43,'Romania':46,'Nigeria':47,"Côte d'Ivoire":50,'Ireland':50,
+  'Costa Rica':51,'Canada':51,'Finland':52,'Cameroon':53,'Bosnia & Herzegovina':62,
+  'Bosnia':62,'Venezuela':58,'Democratic Republic of Congo':59,'Iraq':59,
+  'Qatar':66,'Iceland':67,'Honduras':73,'El Salvador':73,'Jordan':87,
+  'China PR':91,'China':91,'Peru':93,'Indonesia':130,'Kuwait':145,
+  'South Korea':23,'Australia':24,'Ecuador':45,'Ghana':60,'Jamaica':62,
+  'Panama':64,'Saudi Arabia':56,'Iran':22,'Ukraine':22,'Poland':26,
+  'Wales':29,'Hungary':27,'Serbia':33,'Egypt':36,'Tunisia':30,
+  'Bolivia':82,'Paraguay':63,'New Zealand':90,'Palestine':95,'Georgia':74,
+  'Tajikistan':105,'Thailand':115,'Vietnam':119,'India':127,'Uzbekistan':70,
+};
+
+// Optional extraRankings object checked first, falls back to FIFA_RANK_FALLBACK.
+function lookupFIFARank(teamName, extraRankings) {
+  if (!teamName) return 55;
+  if (extraRankings) {
+    const v = extraRankings[teamName];
+    if (v) return v;
+  }
+  const lower = teamName.toLowerCase();
+  const key = Object.keys(FIFA_RANK_FALLBACK).find(k =>
+    lower.includes(k.toLowerCase()) || k.toLowerCase().includes(lower)
+  );
+  return key ? FIFA_RANK_FALLBACK[key] : 55;
+}
+
+// ─── INTERNATIONAL SCORING IMPROVEMENTS ───────────────────────────────────────
+
+// Replaces formScore() for international fixtures.
+// Weights results by opponent FIFA ranking so wins vs rank-1 count far more
+// than wins vs rank-100; prevents teams with good records vs weak opposition
+// from being over-rated.
+function internationalFormScore(teamId, historicalPool, extraRankings) {
+  const INTL_IDS = new Set([1, 4, 5, 6, 7, 8, 9, 10, 31, 32, 33, 34, 35, 960]);
+  const intlFixtures = historicalPool
+    .filter(f =>
+      INTL_IDS.has(f.league?.id) &&
+      (f.teams?.home?.id === teamId || f.teams?.away?.id === teamId) &&
+      f.fixture?.status?.short === 'FT'
+    )
+    .sort((a, b) => new Date(b.fixture?.date) - new Date(a.fixture?.date))
+    .slice(0, 10);
+
+  if (intlFixtures.length < 3) return 50;
+
+  let weightedSum = 0;
+  let totalWeight = 0;
+
+  for (const fixture of intlFixtures) {
+    const isHome = fixture.teams?.home?.id === teamId;
+    const opponent = isHome ? fixture.teams?.away : fixture.teams?.home;
+    const opponentRank = lookupFIFARank(opponent?.name, extraRankings);
+    const opponentQuality = Math.max(0.05, (101 - opponentRank) / 100);
+
+    const homeGoals = fixture.goals?.home ?? 0;
+    const awayGoals = fixture.goals?.away ?? 0;
+    const won  = isHome ? homeGoals > awayGoals : awayGoals > homeGoals;
+    const drew = homeGoals === awayGoals;
+    const points = won ? 1 : drew ? 0.4 : 0;
+
+    const recencyW = historicalWeight(fixture.fixture?.date);
+    const w = opponentQuality * recencyW;
+    weightedSum += points * w;
+    totalWeight += w;
+  }
+
+  const rate = totalWeight > 0 ? weightedSum / totalWeight : 0.5;
+  return Math.round(rate * 100);
+}
+
+// Replaces standingsScore() for international fixtures.
+// Three-component composite: FIFA ranking (40%), tournament seeding (25%),
+// opponent-quality-adjusted standing (35% — proxied by FIFA score until live
+// tournament data accumulates).
+function internationalQualityScore(teamName, tournamentSeedings, extraRankings) {
+  const rank      = lookupFIFARank(teamName, extraRankings);
+  const fifaScore = Math.max(5, Math.round((101 - rank) * 1.0));
+
+  const seed      = tournamentSeedings?.[teamName] ?? 24;
+  const seedScore = Math.max(5, Math.round(105 - seed * 2));
+
+  const adjustedStandings = fifaScore; // proxy until live standings accumulate
+
+  return Math.min(100, Math.max(0,
+    Math.round(fifaScore * 0.40 + seedScore * 0.25 + adjustedStandings * 0.35)
+  ));
+}
+
 // ─── SUPPORTING UTILITIES ─────────────────────────────────────────────────────
 
 // Recency decay brackets for historical weight training
@@ -394,6 +491,8 @@ module.exports = {
   recencyAvg, outcomePoints,
   formScore, homeAdvScore, xgScore, defenseScore,
   momentumScore, h2hScore, standingsScore, injuryScore,
+  internationalFormScore, internationalQualityScore,
+  lookupFIFARank, FIFA_RANK_FALLBACK,
   computeModelProb, computeXGProxy, classifyCompetitionPhase,
   kelly, computeSuccessScore,
   historicalWeight, weatherModifier,

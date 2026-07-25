@@ -12,6 +12,7 @@ const {
   classifyFixture, WEIGHTS_BY_CONTEXT, CONTEXT_CONFIG, LEAGUE_CONFIG,
   formScore, homeAdvScore, xgScore, defenseScore, momentumScore,
   h2hScore, standingsScore, injuryScore,
+  internationalFormScore, internationalQualityScore, lookupFIFARank,
   computeModelProb, computeXGProxy, classifyCompetitionPhase,
   kelly, computeSuccessScore, weatherModifier,
   reloadXgStore, getXgStore,
@@ -383,41 +384,20 @@ const BACKFILL_CONFIG = [
   { leagueId: '848', name: 'Conference League',          seasons: [2024, 2023, 2022] },
 ];
 
-// ─── FIFA RANKING QUALITY ANCHOR ─────────────────────────────────────────────
-// Hardcoded approximate FIFA rankings for WC 2026 teams + major leagues.
-// Used to calibrate model when historical fixture data is thin (≤15 matches).
-
-const FIFA_RANK_FALLBACK = {
-  'Argentina':1,'France':2,'England':3,'Brazil':4,'Belgium':5,
-  'Portugal':6,'Spain':7,'Netherlands':8,'Colombia':8,'Italy':9,
-  'Germany':10,'Croatia':12,'Morocco':13,'Switzerland':14,'Denmark':14,
-  'United States':15,'USA':15,'Mexico':16,'Uruguay':17,'Japan':19,
-  'Senegal':18,'Austria':25,'Sweden':28,'Turkey':31,'Algeria':36,
-  'Chile':35,'Norway':37,'Czechia':38,'Scotland':40,'Slovenia':42,
-  'Slovakia':43,'Romania':46,'Nigeria':47,'Côte d\'Ivoire':50,'Ireland':50,
-  'Costa Rica':51,'Canada':51,'Finland':52,'Cameroon':53,'Bosnia & Herzegovina':62,
-  'Bosnia':62,'Venezuela':58,'Democratic Republic of Congo':59,'Iraq':59,
-  'Qatar':66,'Iceland':67,'Honduras':73,'El Salvador':73,'Jordan':87,
-  'China PR':91,'China':91,'Peru':93,'Indonesia':130,'Kuwait':145,
-  'South Korea':23,'Australia':24,'Ecuador':45,'Ghana':60,'Jamaica':62,
-  'Panama':64,'Saudi Arabia':56,'Iran':22,'Ukraine':22,'Poland':26,
-  'Wales':29,'Hungary':27,'Serbia':33,'Egypt':36,'Tunisia':30,
-  'Bolivia':82,'Paraguay':63,'New Zealand':90,'Palestine':95,'Georgia':74,
-  'Tajikistan':105,'Thailand':115,'Vietnam':119,'India':127,'Uzbekistan':70,
-};
-
-function lookupFIFARank(teamName) {
-  if (!teamName) return 55;
-  const lower = teamName.toLowerCase();
-  const key = Object.keys(FIFA_RANK_FALLBACK).find(k =>
-    lower.includes(k.toLowerCase()) || k.toLowerCase().includes(lower)
-  );
-  return key ? FIFA_RANK_FALLBACK[key] : 55; // default: ~55th in world
-}
+// FIFA_RANK_FALLBACK and lookupFIFARank are now exported from scoring.js
 
 function rankToQuality(rank) {
   // rank 1 → 100, rank 55 → 50, rank 105 → 0 (clamped 5-100)
   return Math.max(5, Math.min(100, Math.round(105 - rank)));
+}
+
+// Lazy loader for tournament-seeds.json — returns { teamName: seedNumber }
+let _tournamentSeeds = null;
+function getTournamentSeeds() {
+  if (_tournamentSeeds !== null) return _tournamentSeeds;
+  const data = readJSON('tournament-seeds.json');
+  _tournamentSeeds = data?.teams ?? {};
+  return _tournamentSeeds;
 }
 
 function daysSinceLastMatch(formFixtures, teamId, kickoffDate) {
@@ -716,6 +696,16 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     injuries:  injuryScore(injuries, awayId),
     standings: standingsScore(standings, awayId, context),
   };
+
+  // International quality overrides: replace generic form + standings with
+  // opponent-quality-weighted form and three-component quality signal.
+  if (context === 'international') {
+    const seeds = getTournamentSeeds();
+    homeF.form     = internationalFormScore(homeId, scoringPool);
+    awayF.form     = internationalFormScore(awayId, scoringPool);
+    homeF.standings = internationalQualityScore(homeName, seeds);
+    awayF.standings = internationalQualityScore(awayName, seeds);
+  }
 
   // Data confidence per team (capped at 1 when ≥15 fixtures available).
   // For international fixtures, count from the full international scoring pool so that
