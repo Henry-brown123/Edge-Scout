@@ -358,21 +358,31 @@ function bandAccuracy(records, probFn) {
     process.exit(0);
   }
 
+  // ── Improvement gate: only replace deployed weights if new log-loss is meaningfully better ──
+  const outPath = path.join(__dirname, 'gbdt-weights.json');
+  if (fs.existsSync(outPath)) {
+    try {
+      const current = JSON.parse(fs.readFileSync(outPath, 'utf8'));
+      const currentLogLoss = current.validation?.logLoss ?? current.metrics?.logLossGBDT ?? Infinity;
+      if (llGBDT >= currentLogLoss - 0.001) {
+        console.log(`\n  [GBDT] New log-loss (${llGBDT.toFixed(4)}) not meaningfully better than deployed (${currentLogLoss.toFixed(4)}) — keeping existing weights`);
+        process.exit(0);
+      }
+      console.log(`\n  [GBDT] Improvement: ${currentLogLoss.toFixed(4)} → ${llGBDT.toFixed(4)} — writing new weights`);
+    } catch {}
+  }
+
   // ── Write weights ──
   const weightsOut = {
     trainedAt:   new Date().toISOString(),
     trainN:      train.length,
     testN:       test.length,
     hyperparams: { nTrees: N_TREES, depth: DEPTH, lr: LR, minLeaf: MIN_LEAF },
-    metrics: {
-      logLossLinear: llLinear, logLossGBDT: llGBDT,
-      brierLinear:   bsLinear, brierGBDT:   bsGBDT,
-    },
+    validation:  { logLoss: llGBDT, brier: bsGBDT, logLossLinear: llLinear, brierLinear: bsLinear },
+    metrics:     { logLossLinear: llLinear, logLossGBDT: llGBDT, brierLinear: bsLinear, brierGBDT: bsGBDT },
     classifiers,
     platt,
   };
-  const outPath = path.join(__dirname, 'gbdt-weights.json');
   fs.writeFileSync(outPath, JSON.stringify(weightsOut));
   console.log(`\n  Written: ${outPath} (${(fs.statSync(outPath).size / 1024).toFixed(0)} KB)`);
-  console.log('\n  To deploy: edit models/interface.js → module.exports = require(\'./gbdt\')');
 })();

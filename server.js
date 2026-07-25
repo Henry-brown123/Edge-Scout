@@ -42,6 +42,7 @@ const API_SPORTS_KEY = process.env.API_SPORTS_KEY || '36e45a67eec7cabd0a51db8f25
 const ODDS_API_KEY   = process.env.ODDS_API_KEY;
 if (!ODDS_API_KEY) console.warn('[Startup] ODDS_API_KEY not set — odds fetching will fail');
 const DATA_DIR       = process.env.DATA_DIR || path.join(__dirname, 'data');
+const RETRAIN_THRESHOLD = 500;
 
 // ─── DATA PERSISTENCE ────────────────────────────────────────────────────────
 
@@ -1756,6 +1757,7 @@ async function runHistoricalBackfill({ rescore = false, onProgress } = {}) {
       optimisedWeights: null,
       accuracy:         null,
     };
+    const previousScoredCount = existing.scoredRecords.length;
 
     // Detect corrupt state: league cache says fetched but fixture pool is empty.
     // This happens when the process is killed mid-write and JSON is truncated.
@@ -1908,6 +1910,7 @@ async function runHistoricalBackfill({ rescore = false, onProgress } = {}) {
     writeJSON('backfill-historical-meta.json', summary);
     _historicalBackfillStatus = { ...summary, phase: 'complete' };
     console.log(`[HistoricalBackfill] Done — ${summary.totalFixtures} fixtures, ${summary.scoredCount} scored, ${profileCount} profiles`);
+    checkAndRetrain(previousScoredCount, scoredMap.size);
     return summary;
 
   } catch (e) {
@@ -1917,6 +1920,30 @@ async function runHistoricalBackfill({ rescore = false, onProgress } = {}) {
     throw e;
   } finally {
     _historicalBackfillRunning = false;
+  }
+}
+
+function checkAndRetrain(previousCount, newCount) {
+  const prevBucket = Math.floor(previousCount / RETRAIN_THRESHOLD);
+  const newBucket  = Math.floor(newCount      / RETRAIN_THRESHOLD);
+  if (newBucket <= prevBucket) return;
+  console.log(`[GBDT] Retrain threshold crossed (${previousCount} → ${newCount}) — starting retraining`);
+  try {
+    const { execSync } = require('child_process');
+    execSync('node scripts/gbdt-train.js', {
+      cwd:     __dirname,
+      env:     { ...process.env, DATA_DIR: process.env.DATA_DIR },
+      timeout: 300000,
+      stdio:   'inherit',
+    });
+    console.log('[GBDT] Retraining complete — reloading model weights');
+    // Clear the require cache so interface.js re-evaluates on next predict()
+    const iface = path.join(__dirname, 'models/interface.js');
+    const gbdt  = path.join(__dirname, 'models/gbdt.js');
+    delete require.cache[require.resolve(iface)];
+    delete require.cache[require.resolve(gbdt)];
+  } catch (e) {
+    console.error('[GBDT] Retraining failed:', e.message);
   }
 }
 
@@ -4240,6 +4267,14 @@ app.get('/api/server-status', async (_req, res) => {
     [39, 2, 140, 135, 78, 61].includes(f.league?.id) && [2022, 2023, 2024].includes(f.league?.season)
   ).length;
 
+  const scoredCount   = hist?.scoredRecords?.length ?? 0;
+  const nextRetrainAt = Math.ceil((scoredCount + 1) / RETRAIN_THRESHOLD) * RETRAIN_THRESHOLD;
+  let gbdtMeta = null;
+  try {
+    const wp = path.join(__dirname, 'models/gbdt-weights.json');
+    if (fs.existsSync(wp)) gbdtMeta = JSON.parse(fs.readFileSync(wp, 'utf8'));
+  } catch {}
+
   res.json({
     server: { uptime: Math.floor(process.uptime()), startedAt: _serverStartedAt, nodeVersion: process.version },
     disk:   { dataDir: DATA_DIR, writable: diskWritable, files },
@@ -4254,6 +4289,14 @@ app.get('/api/server-status', async (_req, res) => {
     rateLimit:          getRateLimitState(),
     backfill:           { phase: _startupStatus.phase, startedAt: _startupStatus.startedAt, completedAt: _startupStatus.completedAt, lastRan: _cronLastRan.backfill },
     crons:              { backfill: { lastRan: _cronLastRan.backfill, schedule: '00:05 UTC daily' }, morningScan: { lastRan: _cronLastRan.morningScan, schedule: '07:00 UTC daily' } },
+    model: {
+      type:          gbdtMeta ? 'gbdt' : 'linear',
+      trainedAt:     gbdtMeta?.trainedAt ?? null,
+      trainN:        gbdtMeta?.trainN ?? null,
+      logLoss:       gbdtMeta?.validation?.logLoss ?? gbdtMeta?.metrics?.logLossGBDT ?? null,
+      scoredCount,
+      nextRetrainAt,
+    },
     apiQuotaUsedToday,
   });
 });

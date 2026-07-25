@@ -770,6 +770,9 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     <div style="font-family:'DM Mono',monospace;font-size:.75rem;color:var(--text1);margin-bottom:14px">
       <strong>GBDT + Platt scaling</strong> — gradient-boosted decision trees (200 trees, depth 3, LR 0.02, 70% subsampling) with per-class Platt calibration. Replaced linear weighted sum on 2026-07-25. Trained on 6,652 fixtures, validated on 1,664 held-out (most recent 20% by date).
     </div>
+    <div id="model-retrain-line" style="font-family:'DM Mono',monospace;font-size:.72rem;color:var(--muted);margin-bottom:14px">
+      Next retrain at <span id="model-next-retrain">—</span> scored records (<span id="model-scored-count">—</span> now)
+    </div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px">
       <div class="stat-tile">
         <div class="stat-label">Log-loss (GBDT)</div>
@@ -2077,6 +2080,15 @@ async function renderModel() {
   renderDivergence();
   renderClv();
   renderEvCal();
+  try {
+    const s = await apiFetch('/api/server-status');
+    if (s?.model) {
+      const sc = s.model.scoredCount ?? 0;
+      const nr = s.model.nextRetrainAt ?? Math.ceil((sc + 1) / 500) * 500;
+      document.getElementById('model-scored-count').textContent = sc.toLocaleString();
+      document.getElementById('model-next-retrain').textContent = nr.toLocaleString();
+    }
+  } catch {}
 }
 
 async function renderClv() {
