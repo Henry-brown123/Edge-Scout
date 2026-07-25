@@ -549,6 +549,15 @@ function _buildTotalsMap(events) {
       if (o.name === 'Over')  lines[pt].over  = o.price;
       if (o.name === 'Under') lines[pt].under = o.price;
     }
+    // BTTS odds from both_teams_to_score market, stored under 'btts' key
+    const bttsMkt = source.markets?.find(m => m.key === 'both_teams_to_score');
+    if (bttsMkt) {
+      lines.btts = {};
+      for (const o of (bttsMkt.outcomes || [])) {
+        if (o.name === 'Yes') lines.btts.yes = o.price;
+        if (o.name === 'No')  lines.btts.no  = o.price;
+      }
+    }
     if (Object.keys(lines).length > 0) map[key] = lines;
   }
   return map;
@@ -557,7 +566,7 @@ function _buildTotalsMap(events) {
 async function fetchOddsForLeague(sport) {
   try {
     const { data } = await oddsApi.get(`/sports/${sport}/odds`, {
-      params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h,totals', oddsFormat: 'decimal' },
+      params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h,totals,both_teams_to_score', oddsFormat: 'decimal' },
     });
     const events = data || [];
     _oddsRawCache[sport] = events;
