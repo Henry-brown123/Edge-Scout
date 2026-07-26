@@ -3213,13 +3213,13 @@ app.get('/api/backfill/pir/status', (_req, res) => {
 });
 
 app.get('/api/pir/analysis', (_req, res) => {
-  const { getPIRData, getWOWYDeltas, readProfiles } = require('./teamProfiles');
-  const pirData  = getPIRData();
-  const entries  = Object.values(pirData);
+  const { getPIRData, readProfiles, playerImportanceScore } = require('./teamProfiles');
+  const pirData = getPIRData();
+  const entries = Object.values(pirData);
 
-  // Top 10 by PIR score (only scored players — pir not null)
-  const scored   = entries.filter(e => e.pir != null);
-  const top10    = scored.sort((a, b) => b.pir - a.pir).slice(0, 10).map(e => ({
+  // Top 10 by PIR score
+  const scored = entries.filter(e => e.pir != null);
+  const top10  = [...scored].sort((a, b) => b.pir - a.pir).slice(0, 10).map(e => ({
     name: e.playerName, team: e.teamName, league: e.leagueName,
     pir: e.pir, mins: e.minutesPlayed, rating: e.rating,
     goals90: e.goals90, assists90: e.assists90,
@@ -3228,33 +3228,39 @@ app.get('/api/pir/analysis', (_req, res) => {
   // Per-league breakdown
   const byLeague = {};
   for (const e of entries) {
-    if (!byLeague[e.leagueName]) byLeague[e.leagueName] = { total: 0, scored: 0 };
-    byLeague[e.leagueName].total++;
-    if (e.pir != null) byLeague[e.leagueName].scored++;
+    const key = e.leagueName || 'Unknown';
+    if (!byLeague[key]) byLeague[key] = { total: 0, scored: 0 };
+    byLeague[key].total++;
+    if (e.pir != null) byLeague[key].scored++;
   }
 
-  // WOWY overlap — how many players with WOWY entries also have PIR
-  const profiles  = readProfiles();
-  let wowyTotal   = 0;
-  let wowyWithPIR = 0;
+  // WOWY overlap — single pass through all profiles, no per-team getWOWYDeltas calls
+  const profiles = readProfiles();
+  let wowyTotal = 0, wowyWithPIR = 0;
   const conflicts = [];
   for (const profile of Object.values(profiles)) {
-    if (!profile.teamId) continue;
-    const deltas = getWOWYDeltas(profile.teamId);
-    for (const [pid, d] of Object.entries(deltas)) {
+    const players = profile?.playerDependency?.players;
+    if (!players) continue;
+    for (const [pid, rec] of Object.entries(players)) {
+      const w = rec.with, wo = rec.without;
+      const wTotal = w.w + w.d + w.l, woTotal = wo.w + wo.d + wo.l;
+      if (wTotal < 5 || woTotal < 3) continue;
       wowyTotal++;
-      if (pirData[pid]) {
+      const pirEntry = pirData[pid];
+      if (pirEntry) {
         wowyWithPIR++;
-        if (d.conflictFlag) conflicts.push({
-          name: d.name || pid, team: profile.name,
-          wowy: Math.round(d.delta * 100), pir: pirData[pid].pir,
-          importance: d.importanceScore,
+        const withRate    = (w.w + 0.5 * w.d) / wTotal;
+        const withoutRate = (wo.w + 0.5 * wo.d) / woTotal;
+        const delta = parseFloat((withRate - withoutRate).toFixed(3));
+        const { importance, conflictFlag } = playerImportanceScore(delta, pirEntry);
+        if (conflictFlag) conflicts.push({
+          name: rec.name || pid, team: profile.name,
+          wowy: Math.round(delta * 100), pir: pirEntry.pir, importance,
         });
       }
     }
   }
 
-  // Low-minutes check — entries with < 450 mins that got through (old code)
   const belowThreshold = entries.filter(e => e.minutesPlayed > 0 && e.minutesPlayed < 450).length;
 
   res.json({
