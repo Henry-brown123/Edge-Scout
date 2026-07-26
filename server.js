@@ -2786,7 +2786,7 @@ function teamsMatch(a, b) {
   return ta.some(w => w.length >= 4 && tb.includes(w));
 }
 
-async function runClosingOddsBackfill({ budgetCredits = 80000 } = {}) {
+async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null } = {}) {
   if (_closingOddsStatus.running) return;
   _closingOddsStatus = {
     running: true, startedAt: new Date().toISOString(), completedAt: null, error: null,
@@ -2812,6 +2812,7 @@ async function runClosingOddsBackfill({ budgetCredits = 80000 } = {}) {
       const sport = CLOSING_ODDS_SPORT_MAP[lid];
       const date  = fix.fixture?.date;
       if (!fid || !sport || !date) continue;
+      if (leagueIds && !leagueIds.includes(lid)) { skipped++; continue; }
       // 3-season window: 2022/23, 2023/24, 2024/25 (calendar year 2022+)
       const year = new Date(date).getUTCFullYear();
       if (year < 2022) { skipped++; continue; }
@@ -2900,8 +2901,9 @@ app.post('/api/backfill/closing-odds', (req, res) => {
   if (_closingOddsStatus.running) return res.json({ error: 'already_running', status: _closingOddsStatus });
   if (!ODDS_API_KEY) return res.status(500).json({ error: 'ODDS_API_KEY not set' });
   const budget = parseInt(req.query.budget || '80000', 10);
-  res.json({ started: true, budget, message: `Closing odds backfill starting — budget ${budget} credits` });
-  runClosingOddsBackfill({ budgetCredits: budget }).catch(e => console.error('[ClosingOdds]', e.message));
+  const leagueIds = req.query.leagues ? req.query.leagues.split(',').map(s => s.trim()) : null;
+  res.json({ started: true, budget, leagueIds, message: `Closing odds backfill starting — budget ${budget} credits${leagueIds ? `, leagues: ${leagueIds.join(',')}` : ''}` });
+  runClosingOddsBackfill({ budgetCredits: budget, leagueIds }).catch(e => console.error('[ClosingOdds]', e.message));
 });
 
 app.get('/api/backfill/closing-odds/status', (req, res) => res.json(_closingOddsStatus));
