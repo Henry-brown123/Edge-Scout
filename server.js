@@ -385,8 +385,8 @@ const BACKFILL_CONFIG = [
   { leagueId: '2',   name: 'UEFA Champions League',      seasons: [2024, 2023, 2022, 2021, 2020] },
   // New leagues — added July 2026
   { leagueId: '179', name: 'Scottish Premiership',       seasons: [2024, 2023, 2022] },
-  { leagueId: '88',  name: 'Eredivisie',                 seasons: [2024, 2023, 2022] },
-  { leagueId: '94',  name: 'Primeira Liga',              seasons: [2024, 2023, 2022] },
+  { leagueId: '88',  name: 'Eredivisie',                 seasons: [2024, 2023, 2022, 2021, 2020] },
+  { leagueId: '94',  name: 'Primeira Liga',              seasons: [2024, 2023, 2022, 2021, 2020] },
   { leagueId: '3',   name: 'Europa League',              seasons: [2024, 2023, 2022] },
   { leagueId: '848', name: 'Conference League',          seasons: [2024, 2023, 2022] },
 ];
@@ -1769,8 +1769,8 @@ const HISTORICAL_BACKFILL_CONFIG = [
   { leagueId: '10',  name: 'Intl Friendlies',   seasons: [2024, 2023, 2022] },
   // New leagues — added July 2026
   { leagueId: '179', name: 'Scottish Premiership', seasons: [2024, 2023, 2022] },
-  { leagueId: '88',  name: 'Eredivisie',            seasons: [2024, 2023, 2022] },
-  { leagueId: '94',  name: 'Primeira Liga',         seasons: [2024, 2023, 2022] },
+  { leagueId: '88',  name: 'Eredivisie',            seasons: [2024, 2023, 2022, 2021, 2020] },
+  { leagueId: '94',  name: 'Primeira Liga',         seasons: [2024, 2023, 2022, 2021, 2020] },
   { leagueId: '3',   name: 'Europa League',         seasons: [2024, 2023, 2022] },
   { leagueId: '848', name: 'Conference League',     seasons: [2024, 2023, 2022] },
 ];
@@ -2915,6 +2915,51 @@ app.post('/api/backfill/closing-odds', (req, res) => {
 });
 
 app.get('/api/backfill/closing-odds/status', (req, res) => res.json(_closingOddsStatus));
+
+// Per-league diagnostic: actual vs model home/draw/away rates from scored records
+// GET /api/league/diagnostic?leagues=88,94  (omit for all leagues)
+app.get('/api/league/diagnostic', (req, res) => {
+  const data = readJSON('backfill-historical.json');
+  if (!data?.scoredRecords?.length) return res.json({ leagues: {} });
+  const filter = req.query.leagues ? new Set(req.query.leagues.split(',').map(s => s.trim())) : null;
+
+  const byLeague = {};
+  for (const rec of data.scoredRecords) {
+    const lid = String(rec.leagueId);
+    if (filter && !filter.has(lid)) continue;
+    if (!rec.actualOutcome) continue;
+    if (!byLeague[lid]) byLeague[lid] = { home: 0, draw: 0, away: 0, total: 0,
+      modelHomeSum: 0, modelDrawSum: 0, modelAwaySum: 0 };
+    const b = byLeague[lid];
+    b.total++;
+    if (rec.actualOutcome === 'home') b.home++;
+    else if (rec.actualOutcome === 'draw') b.draw++;
+    else b.away++;
+    b.modelHomeSum += rec.modelHomeProb || 0;
+    b.modelDrawSum += rec.modelDrawProb || 0;
+    b.modelAwaySum += rec.modelAwayProb || 0;
+  }
+
+  const { LEAGUE_CONFIG } = require('./scoring');
+  const result = {};
+  for (const [lid, b] of Object.entries(byLeague)) {
+    const cfg = LEAGUE_CONFIG[parseInt(lid)] || {};
+    result[lid] = {
+      name: cfg.name || lid,
+      n: b.total,
+      actual:  { home: +(b.home / b.total).toFixed(4), draw: +(b.draw / b.total).toFixed(4), away: +(b.away / b.total).toFixed(4) },
+      modelAvg:{ home: +(b.modelHomeSum / b.total).toFixed(4), draw: +(b.modelDrawSum / b.total).toFixed(4), away: +(b.modelAwaySum / b.total).toFixed(4) },
+      config:  { avgHomeWinRate: cfg.avgHomeWinRate, avgDrawRate: cfg.avgDrawRate, avgAwayWinRate: cfg.avgAwayWinRate,
+                 homeAdvBaseWeight: cfg.homeAdvBaseWeight, drawBaseWeight: cfg.drawBaseWeight },
+      delta:   {
+        home: +((b.home / b.total) - (b.modelHomeSum / b.total)).toFixed(4),
+        draw: +((b.draw / b.total) - (b.modelDrawSum / b.total)).toFixed(4),
+        away: +((b.away / b.total) - (b.modelAwaySum / b.total)).toFixed(4),
+      },
+    };
+  }
+  res.json({ leagues: result });
+});
 
 // Calibration data from all historical scored records for Fix 3 chart
 app.get('/api/backfill/historical/calibration', (req, res) => {

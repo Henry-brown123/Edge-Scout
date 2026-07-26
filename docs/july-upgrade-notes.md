@@ -419,3 +419,92 @@ Re-run EV calibration after the fix and confirm La Liga ROI improves. If still n
 ### Current status
 
 La Liga is set to `paper_only` in `leagueModes` (settings.json). It will remain there until EV calibration shows positive ROI with the corrected weights. The `paper_only` lock is enforced server-side — the Go Live button in Settings is permanently disabled for La Liga regardless of the condition checklist state.
+
+---
+
+## 11. New League Onboarding Checklist
+
+**Established:** 2026-07-26  
+**First applied to:** Eredivisie (id:88), Primeira Liga (id:94)
+
+This checklist applies to every league added to Edge Scout — Championship, Bundesliga 2, Belgian Pro League, Scottish Premiership, etc. A league must complete all 8 steps before receiving real-money recommendations.
+
+### The 8 Steps
+
+#### Step 1 — Historical fixture backfill (5 seasons minimum)
+Add the league to `HISTORICAL_BACKFILL_CONFIG` and `BACKFILL_CONFIG` in `server.js` with seasons `[2024, 2023, 2022, 2021, 2020]`. Trigger `POST /api/backfill/historical`. Target: 500+ scored records minimum; below this the EV calibration has insufficient signal.
+
+#### Step 2 — Historical Pinnacle closing odds fetch
+Run `POST /api/backfill/closing-odds?leagues=<id>&budget=<n>`. Check whether The Odds API has Pinnacle historical coverage for the league — some leagues (e.g. Scottish Premiership) have zero coverage and can never be EV-calibrated via this source. If 0 matches returned: note in league status and skip Steps 3–5; the league remains paper-trade until an alternative odds source is found.
+
+#### Step 3 — EV calibration — initial run
+Run `GET /api/ev-calibration`. The league should now appear in `byLeague`. Record:
+- Total matched fixtures (n)
+- Overall ROI
+- Band-level ROI breakdown (all 6 bands)
+- Kelly recommendation
+
+If n < 100: insufficient data — add more seasons (back to 2019 if available) and repeat Step 1.
+
+#### Step 4 — Home/draw/away rate diagnostic
+Run `GET /api/league/diagnostic?leagues=<id>`. Compare:
+
+| Metric | Config value (`LEAGUE_CONFIG`) | Model average prediction | Actual rate (historical) |
+|--------|-------------------------------|--------------------------|--------------------------|
+| Home win rate | `avgHomeWinRate` | `modelAvg.home` | `actual.home` |
+| Draw rate | `avgDrawRate` | `modelAvg.draw` | `actual.draw` |
+| Away win rate | `avgAwayWinRate` | `modelAvg.away` | `actual.away` |
+
+**Red flags:**
+- Model avg home > actual home by >3pp → `homeAdvBaseWeight` is too high, reduce it
+- Model avg home < actual home by >3pp → `homeAdvBaseWeight` too low, increase it
+- Model avg draw > actual draw by >3pp → `drawBaseWeight` too high, reduce it
+- EV band ROI worst at high-edge bands → systematic false positive generation; model miscalibrated for this league
+
+#### Step 5 — LEAGUE_CONFIG calibration adjustments
+Update `scoring.js` `LEAGUE_CONFIG[id]`:
+- `avgHomeWinRate`, `avgDrawRate`, `avgAwayWinRate` → set to observed actual rates from Step 4
+- `homeAdvBaseWeight` → adjust directionally based on delta (see Step 4 red flags)
+- `drawBaseWeight` → adjust if draw rate is systematically off
+- `marketEfficiency` → start at 0.80 for new leagues (less efficient than top-5); raise to 0.88+ only with evidence
+
+#### Step 6 — Extended backfill rescore
+After adjusting `LEAGUE_CONFIG`, trigger `POST /api/backfill/historical?rescore=true` to regenerate all scored records with the corrected parameters. Then re-run `/api/ev-calibration`.
+
+#### Step 7 — Paper trade with monitoring (minimum 50 resolved bets)
+Set league to `paper_trade_only` in `settings.paperTradeOnly`. Monitor:
+- Live paper ROI after 20, 35, 50 resolved bets
+- CLV (closing line value) per bet — positive CLV with negative ROI is variance; negative CLV means the model has no edge
+- Flag any systematic bias (all losses on home favourites, all losses on draws, etc.)
+
+#### Step 8 — Go Live decision
+Requirements before enabling real-money recommendations:
+1. ≥50 resolved paper bets
+2. Paper ROI ≥ 0% (or CLV strongly positive with a clear variance explanation)
+3. EV calibration ROI ≥ 0% (or at worst -5% with improving trend)
+4. No systematic band failure (no single band with ROI < -30% and n > 20)
+5. Explicit Go Live decision recorded in this doc with date and evidence
+
+Never go live based on a small sample or model confidence alone. The EV calibration and paper trade period exist to catch model failures before real money is at risk.
+
+### League Status Tracker
+
+| League | id | Backfill | Closing Odds | EV Cal (ROI) | Diagnostic | Config Fixed | Paper Bets | Status |
+|--------|-----|----------|-------------|--------------|------------|--------------|------------|--------|
+| Premier League | 39 | ✅ 5 seasons | ✅ Pinnacle | +15.5% | ✅ | ✅ | — | **half_kelly** |
+| La Liga | 140 | ✅ 5 seasons | ✅ Pinnacle | -7.8% | ✅ | ✅ partial | — | paper_only |
+| Bundesliga | 78 | ✅ 5 seasons | ✅ Pinnacle | +1.5% | ✅ | ✅ | — | **quarter_kelly** |
+| Serie A | 135 | ✅ 5 seasons | ✅ Pinnacle | -7.7% | ✅ | ✅ | — | paper_only |
+| Ligue 1 | 61 | ✅ 5 seasons | ✅ Pinnacle | -6.6% | ✅ | ✅ | — | paper_only |
+| Eredivisie | 88 | ⏳ 5 seasons (2020–21 pending) | ✅ 927 matched | -18.6% | ⏳ pending deploy | ⏳ pending | — | paper_only |
+| Primeira Liga | 94 | ⏳ 5 seasons (2020–21 pending) | ✅ 106 matched | -38.9% | ⏳ pending deploy | ⏳ pending | — | paper_only |
+| Scottish Prem | 179 | ✅ 3 seasons | ❌ 0 Pinnacle matches | N/A | — | — | — | paper_only (no EV cal) |
+| Champions League | 2 | ✅ 3 seasons | ✅ Pinnacle | — | — | — | — | paper_only |
+
+### Notes on specific leagues
+
+**Eredivisie (88):** Initial EV calibration shows -18.6% ROI. Band analysis shows systematic false positive generation — the model's highest-confidence calls (-54.8% at 5–10% edge band) are the worst performers. Root cause: model not calibrated for Dutch football's higher scoring rate (avg 3.12 goals/game vs 2.52 in Ligue 1). Config adjustment: increase `avgGoalsPerGame` impact, recalibrate home advantage. 2020–21 seasons added to increase signal.
+
+**Primeira Liga (94):** Only 106 matched closing odds fixtures (partial backfill — budget ran out). -38.97% ROI but heavily driven by small samples (most positive-edge bands n<10). Inconclusive until more fixtures are matched. 2020–21 seasons added. Re-run closing odds backfill when 100K plan resets on August 1.
+
+**Scottish Premiership (179):** The Odds API has no Pinnacle historical data for this league. EV calibration is impossible via current data source. Remains paper_only indefinitely. If a Pinnacle data source becomes available, restart from Step 2.
