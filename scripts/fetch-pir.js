@@ -136,6 +136,12 @@ async function fetchTeamPlayers(teamId, teamName, season, leagueId, leagueName, 
       const pir = calculatePIR(p);
       if (pir === null) continue;
 
+      // Keep the entry with the most minutes — domestic seasons have more data than cups
+      const prevEntry = all[String(playerId)];
+      const prevMins  = prevEntry?.minutesPlayed || 0;
+      if (!FORCE_REFRESH && prevEntry && prevMins >= (s.games?.minutes || 0)) continue;
+      if (FORCE_REFRESH && prevEntry && prevMins > (s.games?.minutes || 0)) continue;
+
       const per90 = Math.max((s.games?.minutes || 75) / 90, 0.5);
       updated[String(playerId)] = {
         playerId,
