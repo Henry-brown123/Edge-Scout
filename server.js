@@ -2804,9 +2804,12 @@ async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null 
     const alreadyDone = new Set(Object.keys(closing).map(Number));
 
     // Build list of fixtures needing odds, grouped by (sport, kickoff_hour)
+    // Yield every 500 fixtures so the event loop stays responsive during the sync scan.
     const groups = new Map(); // key = "sport|2024-10-05T15" → [fixture, ...]
     let skipped = 0;
+    let scanIdx = 0;
     for (const fix of hist.fixtures) {
+      if (++scanIdx % 500 === 0) await new Promise(r => setImmediate(r));
       const fid   = fix.fixture?.id;
       const lid   = String(fix.league?.id);
       const sport = CLOSING_ODDS_SPORT_MAP[lid];
@@ -3865,10 +3868,7 @@ function startupCheck() {
     console.log('[Startup] All critical data files present — no backfill needed');
     _startupStatus = { phase: 'complete', skipped: true, completedAt: new Date().toISOString(), missing: [] };
   }
-  // Pre-warm the WOWY cache in the background so the first /api/startup/status request is fast
-  setImmediate(() => {
-    try { getWOWYHighConfCount(); } catch (e) { console.warn('[Startup] WOWY pre-warm failed:', e.message); }
-  });
+  // WOWY count is computed lazily on first /api/startup/status request (fast now — single profile read)
 }
 
 // Extracted backfill logic callable without HTTP context
@@ -4567,13 +4567,19 @@ app.get('/api/server-status', async (_req, res) => {
 let _wowyHighConfCache = null;
 function getWOWYHighConfCount() {
   if (_wowyHighConfCache !== null) return _wowyHighConfCache;
-  const { readProfiles, getWOWYDeltas } = require('./teamProfiles');
-  const profiles = readProfiles();
+  const { readProfiles } = require('./teamProfiles');
+  const profiles = readProfiles(); // read once — getWOWYDeltas re-reads per team, so inline instead
   let count = 0;
-  for (const p of Object.values(profiles)) {
-    if (!p.playerDependency?.players) continue;
-    for (const d of Object.values(getWOWYDeltas(p.teamId))) {
-      if (d.confidence === 'high' && !d.selectionBias) count++;
+  for (const profile of Object.values(profiles)) {
+    if (!profile.playerDependency?.players) continue;
+    for (const [, rec] of Object.entries(profile.playerDependency.players)) {
+      const w = rec.with, wo = rec.without;
+      const wTotal = w.w + w.d + w.l, woTotal = wo.w + wo.d + wo.l;
+      if (wTotal < 5 || woTotal < 3) continue;
+      const withoutRate = (wo.w + 0.5 * wo.d) / woTotal;
+      const selectionBias = withoutRate > 0.85 && woTotal < 15
+        && ((w.w + 0.5 * w.d) / wTotal - withoutRate) < 0;
+      if ((wTotal >= 8 && woTotal >= 5) && !selectionBias) count++;
     }
   }
   _wowyHighConfCache = count;
@@ -4654,6 +4660,18 @@ app.listen(PORT, () => {
   migrateCalibrationProjectedBetKey();
   // 5b. Recalculate bankroll from unique resolved bets (fixes duplicate-bet inflation)
   recalculateBankroll();
+  // 5b2. Repair corrupt bankroll.json (< MIN_VALID_BYTES from a partial write)
+  {
+    const brPath = path.join(DATA_DIR, 'bankroll.json');
+    try {
+      const brSize = fs.statSync(brPath).size;
+      if (brSize < MIN_VALID_BYTES) {
+        const repaired = getBankroll();
+        writeJSON('bankroll.json', { initial: repaired.initial, lastUpdated: new Date().toISOString() });
+        console.log(`[Startup] Repaired corrupt bankroll.json (was ${brSize}b) — initial: ${repaired.initial}, current: ${repaired.current}`);
+      }
+    } catch { /* file missing — will be created on first save */ }
+  }
   // 5c. Seed bookmakers.json if not yet on disk, or migrate existing entries
   {
     const existing = readJSON('bookmakers.json');
