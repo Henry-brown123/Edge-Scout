@@ -69,12 +69,17 @@ const THRESHOLDS = CONTEXT_THRESHOLDS.club_domestic;
 
 // ─── PERSISTENCE ─────────────────────────────────────────────────────────────
 
+let _profilesCache = null;
+
 function readProfiles() {
-  try { return JSON.parse(fs.readFileSync(PROFILES_PATH, 'utf8')); }
-  catch { return {}; }
+  if (_profilesCache) return _profilesCache;
+  try { _profilesCache = JSON.parse(fs.readFileSync(PROFILES_PATH, 'utf8')); }
+  catch { _profilesCache = {}; }
+  return _profilesCache;
 }
 
 function saveProfiles(profiles) {
+  _profilesCache = profiles;
   const tmp = PROFILES_PATH + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(profiles, null, 2));
   fs.renameSync(tmp, PROFILES_PATH);

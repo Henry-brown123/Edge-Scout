@@ -298,8 +298,13 @@ function getFixtureStats() { return readJSON('fixture-stats.json') || {}; }
 function saveFixtureStats(data) { writeJSON('fixture-stats.json', data); }
 
 // Lineups: keyed by fixture ID. Each entry: { home: {teamId, starters:[{id,name}], substitutes:[{id,name}], formation}, away: {...}, fetchedAt }
-function getLineups() { return readJSON('lineups.json') || {}; }
-function saveLineups(data) { writeJSON('lineups.json', data); }
+let _lineupsCache = null;
+function getLineups() {
+  if (_lineupsCache) return _lineupsCache;
+  _lineupsCache = readJSON('lineups.json') || {};
+  return _lineupsCache;
+}
+function saveLineups(data) { _lineupsCache = data; writeJSON('lineups.json', data); }
 
 // Shared lineup parser — stores {id, name} objects so WOWY can use player names.
 function parseApiLineup(teamEntry) {
