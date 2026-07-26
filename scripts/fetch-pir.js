@@ -4,23 +4,27 @@ const fs    = require('fs');
 const path  = require('path');
 const axios = require('axios');
 
-const DATA_DIR       = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
-const PIR_PATH       = path.join(DATA_DIR, 'pir-data.json');
-const API_KEY        = process.env.API_SPORTS_KEY || '36e45a67eec7cabd0a51db8f2570f934';
-const RATE_LIMIT_MS  = 300;
+const DATA_DIR        = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+const PIR_PATH        = path.join(DATA_DIR, 'pir-data.json');
+const API_KEY         = process.env.API_SPORTS_KEY || '36e45a67eec7cabd0a51db8f2570f934';
+const RATE_LIMIT_MS   = 300;
 const PIR_REFRESH_DAYS = 7;
+const FORCE_REFRESH   = process.env.PIR_FORCE === '1';
 
-// Club leagues only — stats available via API-Sports
+// Domestic leagues run first — their players get filed under domestic league.
+// Cup leagues run last — players already in store keep their domestic entry (staleness check),
+// but in force mode they're re-fetched and filed under their primary domestic league.
+// Scottish, Eredivisie, Primeira Liga run after big 5 so their players aren't overwritten.
 const PIR_LEAGUES = [
   { id: 39,  season: 2024, name: 'Premier League'   },
   { id: 140, season: 2024, name: 'La Liga'           },
   { id: 78,  season: 2024, name: 'Bundesliga'        },
   { id: 135, season: 2024, name: 'Serie A'           },
   { id: 61,  season: 2024, name: 'Ligue 1'           },
-  { id: 2,   season: 2024, name: 'Champions League'  },
   { id: 179, season: 2024, name: 'Scottish Prem'     },
   { id: 88,  season: 2024, name: 'Eredivisie'        },
   { id: 94,  season: 2024, name: 'Primeira Liga'     },
+  { id: 2,   season: 2024, name: 'Champions League'  },
   { id: 3,   season: 2024, name: 'Europa League'     },
   { id: 848, season: 2024, name: 'Conference League' },
 ];
@@ -122,9 +126,9 @@ async function fetchTeamPlayers(teamId, teamName, season, leagueId, leagueName, 
       // Skip players with no minutes (didn't play)
       if (!s?.games?.minutes || s.games.minutes === 0) continue;
 
-      // Skip if refreshed recently
+      // Skip if refreshed recently (unless force mode)
       const ex = existing[String(playerId)];
-      if (ex?.updatedAt) {
+      if (!FORCE_REFRESH && ex?.updatedAt) {
         const ageDays = (Date.now() - new Date(ex.updatedAt).getTime()) / 86400000;
         if (ageDays < PIR_REFRESH_DAYS) { updated[String(playerId)] = ex; continue; }
       }
@@ -163,9 +167,21 @@ async function fetchTeamPlayers(teamId, teamName, season, leagueId, leagueName, 
 const CUP_LEAGUES = new Set([2, 3, 848]); // CL, EL, Conference — no standings, use historical
 
 async function run() {
-  console.log('[PIR] Starting fetch — team-based approach...');
-  const existing = readPIR();
-  const all      = { ...existing };
+  console.log(`[PIR] Starting fetch — team-based approach${FORCE_REFRESH ? ' (FORCE mode)' : ''}...`);
+  let existing = readPIR();
+
+  // In force mode, strip all entries below the 450-min threshold before re-fetching.
+  // This ensures the gate is applied cleanly to the full dataset.
+  if (FORCE_REFRESH) {
+    const before = Object.keys(existing).length;
+    existing = Object.fromEntries(
+      Object.entries(existing).filter(([, v]) => (v.minutesPlayed || 0) >= 450)
+    );
+    console.log(`[PIR] Force mode — stripped ${before - Object.keys(existing).length} sub-threshold entries, ${Object.keys(existing).length} kept`);
+    savePIR(existing);
+  }
+
+  const all = { ...existing };
   let totalNew   = 0;
 
   for (const league of PIR_LEAGUES) {
@@ -177,10 +193,15 @@ async function run() {
     } else {
       teams = await getTeamIds(league.id, league.season);
       await sleep(RATE_LIMIT_MS);
+      // Fallback to historical fixtures if standings returned nothing
+      if (!teams.length) {
+        console.log(`  [PIR] Standings returned 0 teams for ${league.name} — falling back to historical`);
+        teams = getTeamIdsFromHistorical(league.id);
+      }
     }
 
     if (!teams.length) {
-      console.log(`  [PIR] No teams found for ${league.name}`);
+      console.log(`  [PIR] No teams found for ${league.name} — skipping`);
       continue;
     }
 

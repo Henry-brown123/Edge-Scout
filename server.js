@@ -35,6 +35,7 @@ const {
   buildStandingsIndex,
   scoreFixtureFromPool,
   optimiseWeights: optimiseModelWeights,
+  optimiseLeagueWeights,
 } = require('./weightOptimiser');
 
 const app  = express();
@@ -656,6 +657,12 @@ function persistOddsSnapshot(fix, scored, sport, stage, leagueId, leagueName, se
 
 // ─── CORE FIXTURE SCORER ─────────────────────────────────────────────────────
 
+function _getWeightsForFixture(leagueId, context, settings) {
+  const lid = String(leagueId);
+  if (settings.leagueWeights?.[lid]) return settings.leagueWeights[lid];
+  return settings.optimisedWeights?.[context] || WEIGHTS_BY_CONTEXT[context];
+}
+
 async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap, settings, totalsMap = {}) {
   const homeId   = fix.teams?.home?.id;
   const awayId   = fix.teams?.away?.id;
@@ -668,7 +675,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   const cfg         = CONTEXT_CONFIG[context];
   const leagueConfig = LEAGUE_CONFIG[parseInt(leagueId, 10)] || null;
   // Use optimised weights if available in settings, otherwise fall back to hand-tuned defaults
-  const weights  = settings.optimisedWeights?.[context] || WEIGHTS_BY_CONTEXT[context];
+  const weights  = _getWeightsForFixture(leagueId, context, settings);
   const competitionPhase = classifyCompetitionPhase(fix, leagueId);
 
   // H2H + injuries in parallel (injuries skipped if pre-fetched at T-60)
@@ -2526,6 +2533,86 @@ app.post('/api/backfill/historical/apply-weights', (req, res) => {
   res.json({ ok: true, optimisedWeights: meta.optimisedWeights });
 });
 
+// Run per-league weight optimisation and store results in settings.leagueWeights
+let _leagueOptRunning = false;
+app.post('/api/optimise/leagues', (req, res) => {
+  if (_leagueOptRunning) return res.status(409).json({ error: 'Optimisation already running' });
+  const data = readJSON('backfill-historical.json');
+  if (!data?.scoredRecords?.length) return res.status(400).json({ error: 'No scored records — run historical backfill first' });
+
+  _leagueOptRunning = true;
+  res.json({ started: true, message: 'Per-league optimisation running in background' });
+
+  setImmediate(async () => {
+    try {
+      const settings     = getSettings();
+      const leagueWeights = { ...(settings.leagueWeights || {}) };
+      const leagueMeta    = {};
+
+      // Gather unique league IDs from records
+      const leagueIds = [...new Set(data.scoredRecords.map(r => r.leagueId).filter(Boolean))];
+      for (const lid of leagueIds) {
+        const result = optimiseLeagueWeights(lid, data.scoredRecords);
+        if (result) {
+          leagueWeights[lid] = result.weights;
+          leagueMeta[lid]    = {
+            weights:         result.weights,
+            defaultWeights:  result.defaultWeights,
+            accuracy:        result.accuracy,
+            baselineAccuracy: result.baselineAccuracy,
+            improvement:     result.improvement,
+            recordCount:     result.recordCount,
+            optimisedAt:     result.optimisedAt,
+          };
+          console.log(`[LeagueOpt] League ${lid}: ${result.recordCount} records · accuracy ${(result.accuracy*100).toFixed(1)}% (Δ${result.improvement >= 0 ? '+' : ''}${result.improvement}pp)`);
+        }
+      }
+
+      settings.leagueWeights     = leagueWeights;
+      settings.leagueWeightsMeta = leagueMeta;
+      writeJSON('settings.json', settings);
+      console.log('[LeagueOpt] Complete — optimised', Object.keys(leagueWeights).length, 'leagues');
+    } catch (e) {
+      console.error('[LeagueOpt] Error:', e.message);
+    } finally {
+      _leagueOptRunning = false;
+    }
+  });
+});
+
+app.get('/api/optimise/leagues/status', (_req, res) => {
+  const settings = getSettings();
+  res.json({
+    running: _leagueOptRunning,
+    leagueWeights: settings.leagueWeights || {},
+    leagueWeightsMeta: settings.leagueWeightsMeta || {},
+  });
+});
+
+// Update per-league weights manually
+app.put('/api/settings/league-weights', (req, res) => {
+  const { leagueId, weights } = req.body;
+  if (!leagueId || !weights) return res.status(400).json({ error: 'leagueId and weights required' });
+  const keys = ['form','homeAdv','xg','h2h','defense','momentum','injuries','standings'];
+  if (!keys.every(k => typeof weights[k] === 'number')) return res.status(400).json({ error: 'weights must include all 8 factors as numbers' });
+  const sum = keys.reduce((a, k) => a + weights[k], 0);
+  if (Math.abs(sum - 100) > 2) return res.status(400).json({ error: `weights must sum to 100 (got ${sum})` });
+  const settings = getSettings();
+  if (!settings.leagueWeights) settings.leagueWeights = {};
+  settings.leagueWeights[String(leagueId)] = weights;
+  writeJSON('settings.json', settings);
+  res.json({ ok: true, leagueId, weights });
+});
+
+// Reset a league back to context defaults
+app.delete('/api/settings/league-weights/:leagueId', (req, res) => {
+  const settings = getSettings();
+  if (settings.leagueWeights) delete settings.leagueWeights[req.params.leagueId];
+  if (settings.leagueWeightsMeta) delete settings.leagueWeightsMeta[req.params.leagueId];
+  writeJSON('settings.json', settings);
+  res.json({ ok: true });
+});
+
 // ─── ODDS HISTORY ENDPOINTS ──────────────────────────────────────────────────
 
 // Stats summary for Settings tab display
@@ -2836,7 +2923,7 @@ app.get('/api/backfill/historical/calibration', (req, res) => {
 
   for (const r of data.scoredRecords) {
     try {
-      const weights = (settings.optimisedWeights?.[r.context]) || WEIGHTS_BY_CONTEXT[r.context] || WEIGHTS_BY_CONTEXT.club_domestic;
+      const weights = _getWeightsForFixture(r.leagueId, r.context, settings);
       const lc      = LEAGUE_CONFIG[parseInt(r.leagueId, 10)] || null;
       const probs   = computeModelProb(r.homeFactors, r.awayFactors, weights, r.context, lc);
       const predP   = probs[r.actualOutcome]; // probability assigned to the outcome that actually happened
@@ -3097,8 +3184,9 @@ app.post('/api/backfill/pir', (req, res) => {
   res.json({ started: true, message: 'PIR fetch running — poll /api/backfill/pir/status' });
   const { execFile } = require('child_process');
   const scriptPath   = path.join(__dirname, 'scripts', 'fetch-pir.js');
+  const force = req.query.force === 'true' || req.body?.force === true;
   execFile(process.execPath, [scriptPath], {
-    env: { ...process.env, DATA_DIR, API_SPORTS_KEY: process.env.API_SPORTS_KEY },
+    env: { ...process.env, DATA_DIR, API_SPORTS_KEY: process.env.API_SPORTS_KEY, PIR_FORCE: force ? '1' : '' },
     timeout: 1800000, // 30 min
   }, (err, stdout, stderr) => {
     _pirRunning = false;
