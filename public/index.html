@@ -2818,6 +2818,129 @@ function switchPerfView(view) {
   if (view === 'combined') renderPerfCombined();
 }
 
+// ─── GO LIVE CONFIDENCE TRACKER ──────────────────────────────────────────────
+function goLiveConfidence(historicalRoi, livePaperRoi, liveBetCount) {
+  if (liveBetCount === 0) return historicalRoi > 0 ? 25 : 0;
+  const historicalSignal = Math.min(40, Math.max(0, historicalRoi * 200));
+  const sampleWeight = Math.min(1, liveBetCount / 35);
+  const liveSignal = Math.min(60, Math.max(0, livePaperRoi * 300)) * sampleWeight;
+  return Math.round(historicalSignal + liveSignal);
+}
+
+function goLiveRecommendation(conf, liveBetCount, livePaperRoi, historicalRoi, leagueName) {
+  const hPct = (historicalRoi * 100).toFixed(1);
+  const lPct = liveBetCount > 0 ? (livePaperRoi * 100).toFixed(1) : null;
+  if (conf >= 80) return `Switch recommended — historical +${hPct}% ROI confirmed by ${liveBetCount} live paper bets at +${lPct}% ROI.`;
+  if (conf >= 60) return `Strong signal — historical +${hPct}% ROI, ${liveBetCount} live paper bets at ${lPct >= 0 ? '+' : ''}${lPct}% ROI. Consider switching after a few more bets.`;
+  if (conf >= 30) {
+    if (liveBetCount === 0) return `Historical edge confirmed (+${hPct}% ROI). 0 live paper bets so far — start paper trading to build confidence.`;
+    return `${liveBetCount} live paper bets, ${lPct >= 0 ? '+' : ''}${lPct}% ROI. Tracking historical signal. Consider switching after ${Math.max(0, 35 - liveBetCount)} more bets.`;
+  }
+  if (historicalRoi <= 0) return `Historical EV negative — model has no confirmed edge in ${leagueName}. Do not switch to real money.`;
+  return `Historical edge confirmed (+${hPct}% ROI). 0 live paper bets so far — start paper trading to build confidence.`;
+}
+
+async function renderGoLiveConfidence() {
+  const body = document.getElementById('go-live-confidence-body');
+  if (!body) return;
+  body.innerHTML = '<div class="empty" style="padding:12px 0">Loading…</div>';
+  try {
+    const TRACKED_LEAGUES = [
+      { id: 39,  name: 'Premier League' },
+      { id: 135, name: 'Serie A'        },
+      { id: 78,  name: 'Bundesliga'     },
+      { id: 140, name: 'La Liga'        },
+      { id: 61,  name: 'Ligue 1'        },
+      { id: 88,  name: 'Eredivisie'     },
+      { id: 179, name: 'Scottish Prem'  },
+    ];
+
+    const [calData, betsData, modesData] = await Promise.all([
+      apiFetch('/api/ev-calibration').catch(() => ({})),
+      apiFetch('/api/bets').catch(() => []),
+      apiFetch('/api/league-modes').catch(() => ({ leagues: [] })),
+    ]);
+
+    const byLeague = {};
+    for (const l of (calData.byLeague || [])) byLeague[l.league] = l;
+
+    const paperTradeOnly = new Set(calData.paperTradeOnly || []);
+    const modeMap = {};
+    for (const l of (modesData.leagues || [])) modeMap[String(l.leagueId)] = l.mode;
+
+    const betsByLeague = {};
+    for (const b of (Array.isArray(betsData) ? betsData : [])) {
+      const lid = String(b.leagueId || '');
+      if (!lid) continue;
+      if (!betsByLeague[lid]) betsByLeague[lid] = [];
+      betsByLeague[lid].push(b);
+    }
+
+    function leaguePaperStats(leagueId) {
+      const bets = (betsByLeague[String(leagueId)] || []).filter(b =>
+        b.betMode === 'paper' && b.status && b.status !== 'pending'
+      );
+      const resolved = bets.filter(b => b.status === 'won' || b.status === 'lost');
+      if (!resolved.length) return { count: 0, roi: 0 };
+      const staked = resolved.reduce((s, b) => s + (b.suggestedStake || 0), 0);
+      const returned = resolved.reduce((s, b) => s + (b.status === 'won' ? (b.suggestedStake || 0) * (b.bookOdds || 1) : 0), 0);
+      return { count: resolved.length, roi: staked > 0 ? (returned - staked) / staked : 0 };
+    }
+
+    const rows = TRACKED_LEAGUES.map(({ id, name }) => {
+      const cal = Object.values(byLeague).find(l => {
+        const lid = Object.entries({ 39:'Premier League',135:'Serie A',78:'Bundesliga',140:'La Liga',61:'Ligue 1',88:'Eredivisie',94:'Primeira Liga',179:'Scottish Prem' }).find(([,n]) => n === l.league)?.[0];
+        return parseInt(lid) === id;
+      });
+      const historicalRoi = cal ? cal.roi : null;
+      const { count: liveCount, roi: liveRoi } = leaguePaperStats(id);
+      const conf = historicalRoi !== null ? goLiveConfidence(historicalRoi, liveRoi, liveCount) : null;
+      const suppressed = paperTradeOnly.has(id);
+      const mode = modeMap[String(id)] || 'paper';
+      const isReal = mode === 'real';
+
+      const confColor = conf === null ? 'var(--muted)' :
+        conf >= 80 ? '#22c55e' :
+        conf >= 60 ? '#4ade80' :
+        conf >= 30 ? 'var(--amber)' : 'var(--red)';
+      const barColor = conf === null ? 'var(--surface3)' :
+        conf >= 80 ? '#22c55e' :
+        conf >= 60 ? '#4ade80' :
+        conf >= 30 ? 'var(--amber)' : 'var(--red)';
+
+      const reco = (historicalRoi !== null)
+        ? goLiveRecommendation(conf, liveCount, liveRoi, historicalRoi, name)
+        : `No EV calibration data yet — closing odds backfill needed before confidence can be assessed.`;
+
+      const showSwitchBtn = conf !== null && conf >= 60 && !isReal && !suppressed;
+
+      return `<div style="padding:12px 0;border-bottom:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
+          <div style="flex:1;font-weight:600;font-size:13px">${name}
+            ${isReal ? '<span style="font-size:10px;font-family:var(--font-head);font-weight:700;padding:2px 8px;border-radius:12px;background:rgba(255,209,102,.2);color:var(--amber);margin-left:6px">LIVE</span>' : ''}
+            ${suppressed ? '<span style="font-size:10px;font-family:var(--font-head);font-weight:700;padding:2px 8px;border-radius:12px;background:rgba(255,82,82,.15);color:var(--red);margin-left:6px">SUPPRESSED</span>' : ''}
+          </div>
+          <div style="font-size:11px;color:var(--muted);text-align:right;min-width:100px">
+            ${historicalRoi !== null ? `Hist. ROI: <span style="color:${historicalRoi>=0?'var(--green)':'var(--red)'};font-weight:600">${historicalRoi>=0?'+':''}${(historicalRoi*100).toFixed(1)}%</span>` : '<span style="color:var(--muted)">No EV data</span>'}
+            &nbsp;|&nbsp;
+            ${liveCount > 0 ? `Live: <span style="color:${liveRoi>=0?'var(--green)':'var(--red)'};font-weight:600">${liveRoi>=0?'+':''}${(liveRoi*100).toFixed(1)}%</span> / ${liveCount} bets` : '<span style="color:var(--muted)">0 live bets</span>'}
+          </div>
+          <div style="font-size:19px;font-weight:700;min-width:44px;text-align:right;color:${confColor}">${conf !== null ? conf + '%' : '—'}</div>
+          ${showSwitchBtn ? `<button class="btn btn-sm" style="background:rgba(74,222,128,.15);color:#4ade80;border:1px solid rgba(74,222,128,.3);white-space:nowrap" onclick="openGoLiveModal('${id}')">Switch to Real £</button>` : ''}
+        </div>
+        <div style="height:6px;border-radius:3px;background:var(--surface3);overflow:hidden;margin-bottom:8px">
+          <div style="height:100%;border-radius:3px;background:${barColor};width:${conf ?? 0}%;transition:width .4s"></div>
+        </div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.5">${reco}</div>
+      </div>`;
+    }).join('');
+
+    body.innerHTML = rows || '<div class="empty" style="padding:12px 0">No league data</div>';
+  } catch (e) {
+    body.innerHTML = `<div class="empty" style="padding:12px 0;color:var(--red)">Failed to load: ${e.message}</div>`;
+  }
+}
+
 // ─── REAL PERFORMANCE VIEW ────────────────────────────────────────────────────
 async function renderPerfReal() {
   const el = document.getElementById('perf-real-view');
@@ -2833,6 +2956,13 @@ async function renderPerfReal() {
     const roi = data.roi != null ? data.roi.toFixed(1) : '—';
     const bets = data.bets || [];
     el.innerHTML = `
+      <div class="card" style="margin-bottom:16px" id="go-live-confidence-card">
+        <div class="card-header">
+          <span class="card-title">Go Live Confidence</span>
+          <span style="font-size:11px;color:var(--muted)">Historical EV + live paper signal combined</span>
+        </div>
+        <div id="go-live-confidence-body"><div class="empty" style="padding:12px 0">Loading…</div></div>
+      </div>
       <div class="stat-grid" style="margin-bottom:16px">
         <div class="stat-card"><div class="stat-label">Real Bankroll</div><div class="stat-value ${rb >= 0 ? 'c-green' : 'c-red'}">£${rb.toFixed(2)}</div></div>
         <div class="stat-card"><div class="stat-label">Real Bets</div><div class="stat-value">${resolved}</div></div>
@@ -2846,6 +2976,7 @@ async function renderPerfReal() {
           ${bets.map(b => `<tr><td>${b.fixture}</td><td>${b.betLabel||b.topPick}</td><td>${b.bookOdds?.toFixed(2)||'—'}</td><td>£${(b.suggestedStake||0).toFixed(2)}</td><td style="color:${b.result==='win'?'var(--green)':b.result==='loss'?'var(--red)':'var(--muted)'}">${b.result||'pending'}</td></tr>`).join('')}
           </tbody></table>`}
       </div>`;
+    renderGoLiveConfidence();
   } catch(e) { el.innerHTML = '<div class="empty">Failed to load real performance</div>'; }
 }
 
