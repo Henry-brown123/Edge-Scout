@@ -4371,16 +4371,22 @@ app.get('/api/ev-calibration', (_req, res) => {
     const kellyChanged = recommendedFraction !== currentFraction && overallKelly !== 'flag_for_review';
     if (kellyChanged) settings.kellyFraction = recommendedFraction;
 
-    // Any league with negative ROI across 30+ positive-edge fixtures → paper trade only
-    const paperLeagues = byLeague
-      .filter(l => l.roi !== null && l.roi < 0 && l.posEdgeN >= 30)
-      .map(l => {
-        const lid = Object.entries(LEAGUE_CONFIG).find(([, v]) => v.name === l.league)?.[0];
-        return lid ? parseInt(lid, 10) : null;
-      })
-      .filter(Boolean);
-    const existingPaper = settings.paperTradeOnly || [];
-    const newPaper = [...new Set([...existingPaper, ...paperLeagues])];
+    // Bidirectional paperTradeOnly management:
+    // Add when ROI < 0 AND posEdgeN >= 30 (sufficient evidence of negative edge)
+    // Remove when ROI > 0 AND posEdgeN >= 50 (higher bar to reinstate than to suppress)
+    // Premier League (39) is never auto-removed regardless of short-term fluctuation
+    const NEVER_AUTO_REMOVE = new Set([39]);
+    const leagueIdByName = Object.fromEntries(
+      Object.entries(LEAGUE_CONFIG).map(([id, v]) => [v.name, parseInt(id, 10)])
+    );
+    const existingPaper = new Set(settings.paperTradeOnly || []);
+    for (const l of byLeague) {
+      const lid = leagueIdByName[l.league];
+      if (!lid || l.roi === null) continue;
+      if (l.roi < 0 && l.posEdgeN >= 30) existingPaper.add(lid);
+      if (l.roi > 0 && l.posEdgeN >= 50 && !NEVER_AUTO_REMOVE.has(lid)) existingPaper.delete(lid);
+    }
+    const newPaper = [...existingPaper];
     settings.paperTradeOnly = newPaper;
     writeJSON('settings.json', settings);
 
