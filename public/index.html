@@ -1139,6 +1139,23 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     <div id="bf-log" class="log-box" style="display:none;margin-top:12px;max-height:140px"></div>
   </div>
 
+  <!-- Per-League Weights -->
+  <div class="card" style="margin-bottom:16px" id="league-weights-card">
+    <div class="card-header">
+      <span class="card-title">Per-League Weights</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span id="lw-status-pill" style="font-size:10px;font-family:var(--font-head);font-weight:700;padding:3px 10px;border-radius:20px;background:var(--surface3);color:var(--muted)">LOADING</span>
+        <button class="btn btn-cyan btn-sm" id="lw-run-btn" onclick="runLeagueOptimisation()">Re-optimise All</button>
+        <button class="btn btn-ghost btn-sm" onclick="loadLeagueWeights()">Refresh</button>
+      </div>
+    </div>
+    <p style="font-size:11px;color:var(--muted);margin-bottom:14px">
+      Gradient descent runs per league (500+ records threshold). League-specific weights override context defaults in live scoring. Champions League and lower-data leagues fall back to club_domestic defaults.
+    </p>
+    <div id="lw-table-wrap"></div>
+    <div id="lw-log" class="log-box" style="display:none;margin-top:12px;max-height:100px"></div>
+  </div>
+
   <!-- Odds History Database -->
   <div class="card" style="margin-bottom:16px">
     <div class="card-header">
@@ -1461,7 +1478,7 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
     if (btn.dataset.tab === 'model')       renderModel();
     if (btn.dataset.tab === 'performance') { switchPerfView('paper'); renderPerformance(); }
-    if (btn.dataset.tab === 'settings')  { renderSettings(); loadBackfillStatus(); loadOddsHistoryStats(); loadStartupStatus(); loadAccounts(); }
+    if (btn.dataset.tab === 'settings')  { renderSettings(); loadBackfillStatus(); loadOddsHistoryStats(); loadStartupStatus(); loadAccounts(); loadLeagueWeights(); }
   });
 });
 
@@ -3737,6 +3754,116 @@ async function applyOptimisedWeights() {
   } catch (e) {
     toast('Failed to apply weights: ' + e.message, 'error');
   }
+}
+
+// ─── PER-LEAGUE WEIGHTS ───────────────────────────────────────────────────────
+const LEAGUE_NAMES = { 39:'Premier League', 140:'La Liga', 135:'Serie A', 78:'Bundesliga', 61:'Ligue 1', 2:'Champions League', 179:'Scottish Prem', 88:'Eredivisie', 94:'Primeira Liga', 3:'Europa League', 848:'Conference League' };
+const WEIGHT_KEYS  = ['form','homeAdv','xg','h2h','defense','momentum','injuries','standings'];
+
+async function loadLeagueWeights() {
+  const pill = document.getElementById('lw-status-pill');
+  const wrap = document.getElementById('lw-table-wrap');
+  if (!pill || !wrap) return;
+  pill.textContent = 'LOADING';
+  pill.style.background = 'var(--surface3)';
+  pill.style.color = 'var(--muted)';
+  try {
+    const d = await apiFetchWithTimeout('/api/optimise/leagues/status');
+    const meta  = d.leagueWeightsMeta  || {};
+    const weights = d.leagueWeights    || {};
+    const lids  = Object.keys({ ...weights, ...meta });
+
+    if (!lids.length) {
+      pill.textContent = 'NOT RUN';
+      wrap.innerHTML = '<p style="font-size:11px;color:var(--muted)">No per-league weights yet. Click Re-optimise All to run gradient descent per league.</p>';
+      return;
+    }
+
+    pill.textContent = lids.length + ' LEAGUES';
+    pill.style.background = 'rgba(56,189,248,.15)';
+    pill.style.color = 'var(--cyan)';
+
+    const rows = lids.map(lid => {
+      const m = meta[lid] || {};
+      const w = weights[lid];
+      const name = LEAGUE_NAMES[parseInt(lid)] || `League ${lid}`;
+      const source = w ? 'Optimised' : 'Default';
+      const sourceColor = w ? 'var(--green)' : 'var(--muted)';
+      const optDate = m.optimisedAt ? new Date(m.optimisedAt).toLocaleDateString() : '—';
+      const acc = m.accuracy != null ? (m.accuracy*100).toFixed(1)+'%' : '—';
+      const delta = m.improvement != null ? (m.improvement >= 0 ? '+' : '') + m.improvement + 'pp' : '';
+      const deltaColor = m.improvement >= 0 ? 'var(--green)' : 'var(--red)';
+
+      const displayW = w || m.defaultWeights || {};
+      const barHtml = WEIGHT_KEYS.map(k => {
+        const val = displayW[k] || 0;
+        return `<div title="${k}: ${val}" style="display:inline-block;width:${val}%;height:6px;background:var(--cyan);opacity:0.6;border-radius:1px;margin-right:1px"></div>`;
+      }).join('');
+
+      return `<tr>
+        <td style="font-weight:600">${name}</td>
+        <td style="color:${sourceColor}">${source}</td>
+        <td>${m.recordCount || '—'}</td>
+        <td>${acc} ${delta ? '<span style="color:'+deltaColor+';font-size:10px">'+delta+'</span>' : ''}</td>
+        <td style="min-width:110px">${barHtml}</td>
+        <td style="color:var(--muted);font-size:10px">${optDate}</td>
+        <td>
+          ${w ? `<button class="btn btn-ghost btn-sm" style="padding:2px 7px;font-size:10px" onclick="resetLeagueWeights('${lid}')">Reset</button>` : ''}
+        </td>
+      </tr>`;
+    }).join('');
+
+    wrap.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:11px;font-family:var(--font-data)">
+      <thead><tr style="color:var(--muted);border-bottom:1px solid var(--border)">
+        <th style="text-align:left;padding:4px 0">League</th>
+        <th style="text-align:left;padding:4px 8px">Source</th>
+        <th style="text-align:left;padding:4px 8px">Records</th>
+        <th style="text-align:left;padding:4px 8px">Accuracy</th>
+        <th style="text-align:left;padding:4px 8px">Weights</th>
+        <th style="text-align:left;padding:4px 8px">Optimised</th>
+        <th></th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  } catch (e) {
+    pill.textContent = 'ERROR';
+    pill.style.color = 'var(--red)';
+    wrap.innerHTML = '<p style="font-size:11px;color:var(--muted)">Could not load league weights</p>';
+  }
+}
+
+async function runLeagueOptimisation() {
+  const btn = document.getElementById('lw-run-btn');
+  const log = document.getElementById('lw-log');
+  btn.disabled = true;
+  btn.textContent = 'Running…';
+  log.style.display = 'block';
+  log.textContent = 'Starting per-league gradient descent…\n';
+  try {
+    await apiFetch('/api/optimise/leagues', { method: 'POST' });
+    log.textContent += 'Optimisation running — polling for results…\n';
+    const poll = setInterval(async () => {
+      const d = await apiFetch('/api/optimise/leagues/status');
+      if (!d.running) {
+        clearInterval(poll);
+        btn.disabled = false;
+        btn.textContent = 'Re-optimise All';
+        toast('Per-league optimisation complete', 'success');
+        await loadLeagueWeights();
+      }
+    }, 3000);
+    setTimeout(() => { clearInterval(poll); btn.disabled = false; btn.textContent = 'Re-optimise All'; }, 600000);
+  } catch (e) {
+    toast('Optimisation failed: ' + e.message, 'error');
+    btn.disabled = false;
+    btn.textContent = 'Re-optimise All';
+  }
+}
+
+async function resetLeagueWeights(leagueId) {
+  await apiFetch(`/api/settings/league-weights/${leagueId}`, { method: 'DELETE' });
+  toast(`League ${LEAGUE_NAMES[parseInt(leagueId)] || leagueId} reset to context defaults`, 'success');
+  await loadLeagueWeights();
 }
 
 async function applyCalFactor(factor) {

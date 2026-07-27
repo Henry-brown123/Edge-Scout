@@ -271,11 +271,96 @@ function optimiseWeights(records, context, iterations = 200) {
   };
 }
 
+// ─── PER-LEAGUE OPTIMISER ─────────────────────────────────────────────────────
+// Runs gradient descent on fixtures from a single league only.
+// Returns null if fewer than 500 scored records (fall back to context defaults).
+
+function optimiseLeagueWeights(leagueId, allRecords) {
+  const leagueRecords = allRecords.filter(r => r.leagueId === String(leagueId));
+  if (leagueRecords.length < 500) {
+    console.log(`[WeightOpt] League ${leagueId}: only ${leagueRecords.length} records — using context defaults`);
+    return null;
+  }
+
+  const context   = leagueRecords[0]?.context || 'club_domestic';
+  const defaultW  = { ...(WEIGHTS_BY_CONTEXT[context] || WEIGHTS_BY_CONTEXT.club_domestic) };
+  const keys      = Object.keys(defaultW);
+
+  // Loss function using only this league's records
+  function lossForLeague(w) {
+    let loss = 0; let totalW = 0;
+    for (const r of leagueRecords) {
+      try {
+        const p = computeModelProb(r.homeFactors, r.awayFactors, w, r.context);
+        loss -= r.recencyWeight * Math.log(Math.max(p[r.actualOutcome], 1e-10));
+        totalW += r.recencyWeight;
+      } catch {}
+    }
+    return totalW > 0 ? loss / totalW : 999;
+  }
+
+  let w        = Object.fromEntries(keys.map(k => [k, Number(defaultW[k])]));
+  let bestLoss = lossForLeague(w);
+  let bestW    = { ...w };
+  const lr     = 2.0;
+  const eps    = 0.5;
+
+  for (let iter = 0; iter < 200; iter++) {
+    const grad = {};
+    for (const k of keys) {
+      const wp = { ...w, [k]: Math.max(0.1, w[k] + eps) };
+      const wm = { ...w, [k]: Math.max(0.1, w[k] - eps) };
+      grad[k]  = (lossForLeague(wp) - lossForLeague(wm)) / (2 * eps);
+    }
+    const nw  = {};
+    for (const k of keys) nw[k] = Math.max(0.1, w[k] - lr * grad[k]);
+    const sum = Object.values(nw).reduce((a, b) => a + b, 0);
+    for (const k of keys) nw[k] = nw[k] * 100 / sum;
+    const newLoss = lossForLeague(nw);
+    if (newLoss < bestLoss) { bestLoss = newLoss; bestW = { ...nw }; }
+    w = nw;
+  }
+
+  const rounded = {};
+  for (const k of keys) rounded[k] = Math.max(1, Math.round(bestW[k]));
+  const drift = 100 - Object.values(rounded).reduce((a, b) => a + b, 0);
+  rounded[keys[0]] += drift;
+
+  // Accuracy on this league's records using the league-specific weights
+  let correct = 0;
+  for (const r of leagueRecords) {
+    try {
+      const p    = computeModelProb(r.homeFactors, r.awayFactors, rounded, r.context);
+      const pred = Object.entries(p).sort((a, b) => b[1] - a[1])[0][0];
+      if (pred === r.actualOutcome) correct++;
+    } catch {}
+  }
+  const accuracy         = parseFloat((correct / leagueRecords.length).toFixed(4));
+  const baselineCorrect  = leagueRecords.filter(r => {
+    try { const p = computeModelProb(r.homeFactors, r.awayFactors, defaultW, r.context); return Object.entries(p).sort((a, b) => b[1] - a[1])[0][0] === r.actualOutcome; } catch { return false; }
+  }).length;
+  const baselineAccuracy = parseFloat((baselineCorrect / leagueRecords.length).toFixed(4));
+
+  return {
+    leagueId:      String(leagueId),
+    context,
+    weights:       rounded,
+    defaultWeights: defaultW,
+    finalLoss:     parseFloat(bestLoss.toFixed(4)),
+    accuracy,
+    baselineAccuracy,
+    improvement:   parseFloat(((accuracy - baselineAccuracy) * 100).toFixed(2)),
+    recordCount:   leagueRecords.length,
+    optimisedAt:   new Date().toISOString(),
+  };
+}
+
 module.exports = {
   buildTeamIndex,
   buildStandingsIndex,
   scoreFixtureFromPool,
   optimiseWeights,
+  optimiseLeagueWeights,
   computeLogLoss,
   computeAccuracy,
   recencyWeight,

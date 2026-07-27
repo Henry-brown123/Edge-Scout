@@ -498,7 +498,7 @@ Never go live based on a small sample or model confidence alone. The EV calibrat
 | Ligue 1 | 61 | ✅ 5 seasons | ✅ Pinnacle | -6.6% | ✅ | ✅ | — | paper_only |
 | Eredivisie | 88 | ⏳ 5 seasons (2020–21 pending) | ✅ 927 matched | -18.6% | ⏳ pending deploy | ⏳ pending | — | paper_only |
 | Primeira Liga | 94 | ⏳ 5 seasons (2020–21 pending) | ✅ 106 matched | -38.9% | ⏳ pending deploy | ⏳ pending | — | paper_only |
-| Scottish Prem | 179 | ✅ 3 seasons | ❌ 0 Pinnacle matches | N/A | — | — | — | paper_only (no EV cal) |
+| Scottish Prem | 179 | ✅ 3 seasons | ⏳ Backfill Aug 1 (key fixed) | N/A | — | — | — | paper_only |
 | Champions League | 2 | ✅ 3 seasons | ✅ Pinnacle | — | — | — | — | paper_only |
 
 ### Notes on specific leagues
@@ -507,4 +507,4 @@ Never go live based on a small sample or model confidence alone. The EV calibrat
 
 **Primeira Liga (94):** Only 106 matched closing odds fixtures (partial backfill — budget ran out). -38.97% ROI but heavily driven by small samples (most positive-edge bands n<10). Inconclusive until more fixtures are matched. 2020–21 seasons added. Re-run closing odds backfill when 100K plan resets on August 1.
 
-**Scottish Premiership (179):** The Odds API has no Pinnacle historical data for this league. EV calibration is impossible via current data source. Remains paper_only indefinitely. If a Pinnacle data source becomes available, restart from Step 2.
+**Scottish Premiership (179):** Previous closing odds backfill returned 0 matches because the wrong sport key was used (`soccer_scotland_premiership` instead of `soccer_spl`). Fixed in commit `9a8d742`. The Odds API has full Pinnacle historical coverage for Scottish Prem under the correct key `soccer_spl` — confirmed live and historical data available. Closing odds backfill to run on August 1 when the 100K plan resets (key: `c2610b30f6f8f96ae468711955098fff`): `POST /api/backfill/closing-odds?leagues=179&budget=50000`. EV calibration will be possible once the backfill completes.
