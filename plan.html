@@ -144,7 +144,7 @@ h1{font-size:22px;font-weight:700;letter-spacing:-0.5px;margin-bottom:4px}
 
 <div id="phases"></div>
 
-<div class="updated">Last updated: 25 July 2026</div>
+<div class="updated">Last updated: 28 July 2026</div>
 
 <script>
 const phases=[
@@ -242,15 +242,21 @@ const phases=[
     {s:"done",t:"Withdrawal / deposit / reset transaction system — separate from betting P&L"},
     {s:"done",t:"New league configuration: Scottish Premiership (179), Eredivisie (88), Primeira Liga (94), Europa League (3), Conference League (848)"},
     {s:"done",t:"5-season backfill extension running — new leagues fetching 3 seasons, existing leagues at 5"},
-    {s:"upcoming",t:"Goals market expansion (Task 3.1) — over/under 2.5 goals, BTTS — next"},
+    {s:"done",t:"Goals market expansion — over/under 2.5 goals, BTTS; pre-match xG estimation from factor scores; merged into allCandidates"},
+    {s:"done",t:"Go Live Confidence tracker in Performance tab — per-league readiness score with historical + live signal"},
+    {s:"done",t:"Per-league weight optimisation UI and API — gradient descent per league, source/accuracy display"},
+    {s:"done",t:"Bidirectional paperTradeOnly management — auto-add ≥30 bets + negative ROI, auto-remove ≥50 bets + positive ROI"},
+    {s:"done",t:"Scottish Prem sport key fixed: soccer_scotland_premiership → soccer_spl (corrected in LEAGUES and CLOSING_ODDS_SPORT_MAP)"},
     {s:"upcoming",t:"PIR system (Task 3.2) — Player Impact Rating using API-Sports per-90 stats"},
-    {s:"upcoming",t:"Per-league weight optimisation (Task 3.3)"},
     {s:"upcoming",t:"La Liga home advantage recalibration — homeAdvBaseWeight 1.02 → 1.10"},
     {s:"upcoming",t:"Historical EV calibration for new leagues — awaiting 100+ matched fixtures with Pinnacle closing odds"},
-    {s:"upcoming",t:"Full system validation (Task 4.1) — pre-season calibration pass across all leagues"},
     {s:"upcoming",t:"Paper trading reset — post World Cup final July 19 (do this manually)"},
+    {s:"upcoming",t:"August 1st — Credits Reset Actions (do these first)",n:"1. Switch Render ODDS_API_KEY to 100K plan key: c2610b30f6f8f96ae468711955098fff<br>2. Scottish Prem closing odds backfill — 5 seasons (2020–2024), sport key soccer_spl: POST /api/backfill/closing-odds?leagues=179&budget=25000<br>3. Extend Scottish Prem fixture backfill to 5 seasons — add 2020 and 2021 to BACKFILL_CONFIG for league 179<br>4. Primeira Liga closing odds completion — 3 seasons: POST /api/backfill/closing-odds?leagues=94&budget=20000<br>5. Extend Eredivisie and Primeira Liga fixture backfill to 5 seasons — add 2020 and 2021 to BACKFILL_CONFIG for leagues 88 and 94<br>6. Champions League closing odds — test sport key soccer_uefa_champs_league, check Pinnacle coverage: POST /api/backfill/closing-odds?leagues=2&budget=10000<br>7. Run /api/ev-calibration after all backfills — SPL, Primeira Liga, CL should appear with meaningful fixture counts<br>8. Run GBDT retrain if scored records crossed 500-record threshold: node scripts/gbdt-train.js<br>9. Re-run per-league weight optimisation after new scored records: POST /api/optimise/leagues"},
   ]},
   {title:"Phase 8 — Premier League season (from Aug 8)",badge:"upcoming",label:"Upcoming",pct:0,tasks:[
+    {s:"upcoming",t:"July 31 — Scottish Prem first matchday: verify Check 4 (new league scoring sensible) and Check 8 (morning scan covers all leagues); report results"},
+    {s:"upcoming",t:"August 7 — Eredivisie and Primeira Liga first fixtures: confirm paper trading active for both leagues"},
+    {s:"upcoming",t:"August 22 — Premier League and Bundesliga first fixtures: full system live across all 11 leagues simultaneously"},
     {s:"upcoming",t:"10–12 leagues live simultaneously from day one",n:"PL, La Liga, Serie A, Bundesliga, Ligue 1, Eredivisie, Primeira Liga, Scottish Prem, Europa League, Conference League + existing 2"},
     {s:"upcoming",t:"Club team profiles fully populated with 5 seasons of domestic data"},
     {s:"upcoming",t:"Real xG data across 11,000+ fixtures via Understat integration"},
