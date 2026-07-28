@@ -491,12 +491,27 @@ function _bttsProb(homeXg, awayXg) {
 // Score goals markets from xG data.
 // totalsOddsMap: "HomeTeam|AwayTeam" → { "2.5": { over, under }, "1.5": {...}, "3.5": {...} }
 // Returns array of goals candidates (market: "goals") or [] if no xG data.
-function scoreGoalsMarkets(homeName, awayName, date, totalsOddsMap, bankroll = 1000, kellyFraction = 0.5) {
+function scoreGoalsMarkets(homeName, awayName, date, totalsOddsMap, bankroll = 1000, kellyFraction = 0.5, homeF = null, awayF = null, leagueConfig = null) {
   const xgEntry = lookupXg(homeName, awayName, date);
-  if (!xgEntry || xgEntry.home == null || xgEntry.away == null) return [];
 
-  const homeXg = xgEntry.home;
-  const awayXg = xgEntry.away;
+  let homeXg, awayXg, xgSource;
+  if (xgEntry && xgEntry.home != null && xgEntry.away != null) {
+    homeXg = xgEntry.home;
+    awayXg = xgEntry.away;
+    xgSource = 'statsbomb';
+  } else if (homeF && awayF) {
+    // Pre-match xG estimate from factor scores when no StatsBomb data available.
+    // Uses league avgGoalsPerGame as base, adjusted by each team's xg attack quality
+    // and opponent's defensive quality. Clamped to plausible xG ranges.
+    const avgGoals  = leagueConfig?.avgGoalsPerGame ?? 2.6;
+    const attackAdj = (xg)  => 1 + 0.5 * (xg  - 50) / 50;   // xg=50 → 1.0, xg=100 → 1.5, xg=0 → 0.5
+    const defenseAdj = (def) => 1 - 0.35 * (def - 50) / 50;  // def=50 → 1.0, def=100 → 0.65, def=0 → 1.35
+    homeXg = Math.max(0.3, Math.min(3.5, avgGoals * 0.54 * attackAdj(homeF.xg ?? 50) * defenseAdj(awayF.defense ?? 50)));
+    awayXg = Math.max(0.3, Math.min(3.5, avgGoals * 0.46 * attackAdj(awayF.xg ?? 50) * defenseAdj(homeF.defense ?? 50)));
+    xgSource = 'estimated';
+  } else {
+    return [];
+  }
   const key    = `${homeName}|${awayName}`;
   const totals = totalsOddsMap?.[key] || {};
 
@@ -544,6 +559,7 @@ function scoreGoalsMarkets(homeName, awayName, date, totalsOddsMap, bankroll = 1
       homeXg:      parseFloat(homeXg.toFixed(3)),
       awayXg:      parseFloat(awayXg.toFixed(3)),
       totalXg:     parseFloat((homeXg + awayXg).toFixed(3)),
+      xgSource,
     });
   }
 

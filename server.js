@@ -983,7 +983,8 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
 
   const goalsCandidates = scoreGoalsMarkets(
     homeName, awayName, fix.fixture?.date,
-    totalsMap, getBankroll().current, settings.kellyFraction
+    totalsMap, getBankroll().current, settings.kellyFraction,
+    homeF, awayF, leagueConfig
   );
 
   return {
@@ -1078,8 +1079,7 @@ async function runMorningScan(leagueIds) {
             successScore:    best.successScore,
             projectedBet:    best.displayLabel || best.bet,
             projectedBetKey: best.bet,
-            candidates:      scored.results,
-            goalsCandidates: scored.goalsCandidates,
+            candidates:      [...scored.results, ...(scored.goalsCandidates || [])],
             betPlaced:    false,
             betId:        null,
             resolved:          false,
@@ -1114,8 +1114,7 @@ async function runMorningScan(leagueIds) {
               edge:            best.edge,
               ev:              best.ev,
               kelly:           best.kelly,
-              allCandidates:   scored.results,
-              goalsCandidates: scored.goalsCandidates,
+              allCandidates:   [...scored.results, ...(scored.goalsCandidates || [])],
               weather:         scored.weather,
               homeF:           scored.homeF,
               awayF:           scored.awayF,
