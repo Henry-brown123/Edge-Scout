@@ -2071,18 +2071,6 @@ app.get('/api/odds/events', async (req, res) => {
   } catch (e) { res.status(e.response?.status || 500).json({ error: e.message }); }
 });
 
-// TEMPORARY diagnostic endpoint — remove after checking SPL odds availability.
-app.get('/api/debug/spl-odds', async (_req, res) => {
-  try {
-    const { data, headers } = await oddsApi.get('/sports/soccer_spl/odds', {
-      params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal' },
-    });
-    res.set('X-Requests-Used', headers['x-requests-used'] || '');
-    res.set('X-Requests-Remaining', headers['x-requests-remaining'] || '');
-    res.json(data);
-  } catch (e) { res.status(e.response?.status || 500).json({ error: e.message }); }
-});
-
 // ── App state API ─────────────────────────────────────────────────────────────
 
 // GET divergence report — fixtures where model and market disagree by >8pp
