@@ -7,6 +7,8 @@ const path     = require('path');
 const fs       = require('fs');
 const cron     = require('node-cron');
 const { v4: uuidv4 } = require('uuid');
+const session  = require('express-session');
+const crypto   = require('crypto');
 
 const {
   classifyFixture, WEIGHTS_BY_CONTEXT, CONTEXT_CONFIG, LEAGUE_CONFIG,
@@ -45,6 +47,13 @@ const API_SPORTS_KEY = process.env.API_SPORTS_KEY || '36e45a67eec7cabd0a51db8f25
 const ODDS_API_KEY   = process.env.ODDS_API_KEY;
 if (!ODDS_API_KEY) console.warn('[Startup] ODDS_API_KEY not set — odds fetching will fail');
 const DATA_DIR       = process.env.DATA_DIR || path.join(__dirname, 'data');
+
+const APP_PASSWORD     = process.env.APP_PASSWORD;
+const SESSION_SECRET   = process.env.SESSION_SECRET || 'dev-secret-change-in-prod';
+const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY;
+if (!APP_PASSWORD) console.warn('[Auth] WARNING: APP_PASSWORD not set — login will fail');
+if (!process.env.SESSION_SECRET) console.warn('[Auth] WARNING: SESSION_SECRET not set — using insecure default');
+if (!INTERNAL_API_KEY) console.warn('[Auth] WARNING: INTERNAL_API_KEY not set — API key auth disabled');
 const RETRAIN_THRESHOLD = 500;
 
 // ─── DATA PERSISTENCE ────────────────────────────────────────────────────────
@@ -2029,6 +2038,172 @@ app.use(cors({
   optionsSuccessStatus: 200,
 }));
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// ── Auth ───────────────────────────────────────────────────────────────────────
+// Render terminates TLS in front of the app; trust proxy so express-session sees
+// the forwarded HTTPS and only marks the cookie Secure when actually in production.
+app.set('trust proxy', 1);
+
+app.use(session({
+  secret: SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production',
+    httpOnly: true,
+    sameSite: 'lax',
+    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+  },
+}));
+
+function timingSafeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+const LOGIN_PAGE_HTML = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Edge Scout — Login</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0a0a0f;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+    .card {
+      background: #1a1a24;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 16px;
+      padding: 40px;
+      width: 100%;
+      max-width: 380px;
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 32px;
+    }
+    .logo-icon {
+      width: 32px; height: 32px;
+      background: linear-gradient(135deg, #4cc9f0, #f72585);
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px;
+    }
+    .logo-text { font-size: 20px; font-weight: 700; }
+    label {
+      display: block;
+      font-size: 11px;
+      letter-spacing: 2px;
+      color: rgba(255,255,255,0.4);
+      margin-bottom: 8px;
+      text-transform: uppercase;
+    }
+    input[type=password] {
+      width: 100%;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 8px;
+      padding: 12px 16px;
+      color: #fff;
+      font-size: 14px;
+      outline: none;
+      margin-bottom: 16px;
+    }
+    input[type=password]:focus {
+      border-color: #4cc9f0;
+    }
+    button {
+      width: 100%;
+      background: #4cc9f0;
+      color: #0a0a0f;
+      border: none;
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover { background: #38b6dc; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">
+      <div class="logo-icon">⚡</div>
+      <div class="logo-text">Edge Scout</div>
+    </div>
+    <form method="POST" action="/login">
+      <label>Password</label>
+      <input type="password" name="password" placeholder="Enter password" autofocus>
+      <button type="submit">Sign in</button>
+    </form>
+  </div>
+</body>
+</html>`;
+
+function requireAuth(req, res, next) {
+  // Allow health check
+  if (req.path === '/health') return next();
+
+  // Allow login routes
+  if (req.path === '/login') return next();
+
+  // Allow API key auth for programmatic access
+  const apiKey = req.headers['x-api-key'];
+  if (INTERNAL_API_KEY && apiKey && timingSafeEqual(apiKey, INTERNAL_API_KEY)) {
+    return next();
+  }
+
+  // Check session for browser requests
+  if (req.session?.authenticated) return next();
+
+  // API requests return 401
+  if (req.path.startsWith('/api/')) {
+    return res.status(401).json({ error: 'Unauthorised' });
+  }
+
+  // Browser requests redirect to login
+  return res.redirect('/login');
+}
+
+app.use(requireAuth);
+
+// GET /login — serve login page
+app.get('/login', (req, res) => {
+  if (req.session?.authenticated) return res.redirect('/');
+  res.send(LOGIN_PAGE_HTML);
+});
+
+// POST /login — handle password submission
+app.post('/login', (req, res) => {
+  const { password } = req.body || {};
+  if (APP_PASSWORD && timingSafeEqual(password, APP_PASSWORD)) {
+    req.session.authenticated = true;
+    return res.redirect('/');
+  }
+  res.send(LOGIN_PAGE_HTML.replace('</form>',
+    '<p style="color:#f72585;margin-top:8px">Incorrect password</p></form>'));
+});
+
+// POST /logout
+app.post('/logout', (req, res) => {
+  req.session.destroy(() => res.redirect('/login'));
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ── API-Sports proxy ──────────────────────────────────────────────────────────
