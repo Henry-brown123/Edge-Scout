@@ -508,3 +508,11 @@ Never go live based on a small sample or model confidence alone. The EV calibrat
 **Primeira Liga (94):** Only 106 matched closing odds fixtures (partial backfill — budget ran out). -38.97% ROI but heavily driven by small samples (most positive-edge bands n<10). Inconclusive until more fixtures are matched. 2020–21 seasons added. Re-run closing odds backfill when 100K plan resets on August 1.
 
 **Scottish Premiership (179):** Previous closing odds backfill returned 0 matches because the wrong sport key was used (`soccer_scotland_premiership` instead of `soccer_spl`). Fixed in commit `9a8d742`. The Odds API has full Pinnacle historical coverage for Scottish Prem under the correct key `soccer_spl` — confirmed live and historical data available. Closing odds backfill to run on August 1 when the 100K plan resets (key: `c2610b30f6f8f96ae468711955098fff`): `POST /api/backfill/closing-odds?leagues=179&budget=50000`. EV calibration will be possible once the backfill completes.
+
+---
+
+## 12. Routing algorithm note — long-term exchange strategy (2026-07-30)
+
+**Status:** Documented — reflects account additions in `data/bookmakers.json` (Orbit Exchange, Betconnect added Tier 1; Pinnacle direct account and SBOBet added/updated Tier 2).
+
+Long-term exchange strategy — priority is building exchange and sharp-book volume over UK soft book volume. Every bet placed on an exchange or sharp book rather than a soft book extends operational longevity and removes the restriction ceiling on returns.
