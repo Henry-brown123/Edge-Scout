@@ -563,3 +563,12 @@ This is the primary reason for the large model/market gap on Rangers vs Dundee U
 3. Apply the away multiplier to reduce (or boost) the away team's probability contribution based on their historical away win rate vs league average
 
 Priority: implement before Premier League day 1 on August 22. This affects every fixture where a strong away team plays a weaker home side.
+
+---
+
+## 16. Scottish Premiership (179) — home advantage calibration
+
+**Finding date:** 2026-07-31  
+**Status:** Partially fixed. Residual home gap flagged for architectural review.
+
+Scottish Premiership (179) — home advantage miscalibration (8.63pp gap, larger than La Liga's 7pp). `homeAdvBaseWeight` lever reaches diminishing returns at 1.5 — home gap closes to 4.95pp at that value (draw −0.06pp ✅, away −4.89pp ✅). Full home gap closure not achievable via `homeAdvBaseWeight` alone — structural limitation of the linear factor model for SPL's larger-than-average home advantage. Residual home gap flagged for architectural review. Re-run EV calibration after August 1st closing odds backfill.
