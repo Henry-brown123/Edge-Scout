@@ -516,3 +516,15 @@ Never go live based on a small sample or model confidence alone. The EV calibrat
 **Status:** Documented — reflects account additions in `data/bookmakers.json` (Orbit Exchange, Betconnect added Tier 1; Pinnacle direct account and SBOBet added/updated Tier 2).
 
 Long-term exchange strategy — priority is building exchange and sharp-book volume over UK soft book volume. Every bet placed on an exchange or sharp book rather than a soft book extends operational longevity and removes the restriction ceiling on returns.
+
+---
+
+## 13. BTTS per-event odds — follow-up (2026-07-31)
+
+**Status:** Deferred. Do not implement before August.
+
+BTTS pricing requires the per-event odds endpoint (`/v4/sports/{sport}/events/{eventId}/odds?markets=btts`) rather than the bulk league endpoint — confirmed the bulk endpoint rejects `btts` (and `both_teams_to_score`, `soccer_btts`) with a 422 regardless of spelling, while the per-event endpoint returns real BTTS prices for the same market key. Restoring BTTS pricing means one extra API call per fixture per scan, not per league.
+
+Credit cost approximately 1,720 per scan day across 12 leagues on a full matchweek.
+
+Implement in August once the 100K credits reset and baseline scan credit consumption is established. Do not implement before then.
