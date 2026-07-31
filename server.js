@@ -3581,6 +3581,40 @@ app.get('/api/backfill/transfers/status', (_req, res) => {
   res.json({ ..._transfersStatus, count: Object.keys(data).length });
 });
 
+// TEMPORARY diagnostic endpoint — remove after Wolfsberger cross-league PIR review.
+// Re-derives the FULL (unfiltered) arrival/departure list with PIR league context —
+// the persisted transfers.json record only keeps the filtered top-5 "key" lists.
+app.get('/api/debug/transfer-detail', async (req, res) => {
+  try {
+    const { findSeasonTransfers, readPIR } = require('./scripts/fetch-transfers');
+    const { getWOWYDeltas } = require('./teamProfiles');
+    const teamId = parseInt(req.query.team, 10);
+    const pirData = readPIR();
+
+    const resp = await apiSports.get('/transfers', { params: { team: teamId } });
+    const players = resp.data?.response || [];
+    const wowyDeltas = getWOWYDeltas(teamId);
+    const arrivals = [];
+    const departures = [];
+    for (const p of players) {
+      const playerId = p.player?.id;
+      if (!playerId) continue;
+      const { arrival, departure } = findSeasonTransfers(p.transfers, teamId);
+      const pirEntry = pirData[String(playerId)] || null;
+      if (arrival) {
+        arrivals.push({ playerId, name: p.player?.name, pir: pirEntry?.pir ?? null, pirLeague: pirEntry?.leagueName ?? null, fromTeam: arrival.teams?.out?.name, date: arrival.date });
+      }
+      if (departure) {
+        const wowy = wowyDeltas[String(playerId)] || null;
+        departures.push({ playerId, name: p.player?.name, pir: pirEntry?.pir ?? null, pirLeague: pirEntry?.leagueName ?? null, wowyDelta: wowy?.delta ?? null, importanceScore: wowy?.importanceScore ?? null, toTeam: departure.teams?.in?.name, date: departure.date });
+      }
+    }
+    res.json({ teamId, allArrivals: arrivals, allDepartures: departures });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/pir/analysis', (_req, res) => {
   const { getPIRData, readProfiles, playerImportanceScore } = require('./teamProfiles');
   const pirData = getPIRData();

@@ -226,6 +226,6 @@ async function run() {
   return all;
 }
 
-module.exports = { run, calculateNetQualityDelta, findSeasonTransfers };
+module.exports = { run, calculateNetQualityDelta, findSeasonTransfers, fetchTeamTransfers, readPIR };
 
 if (require.main === module) run().catch(e => { console.error(e); process.exit(1); });
