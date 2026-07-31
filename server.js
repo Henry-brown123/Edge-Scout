@@ -4893,16 +4893,6 @@ app.get('/api/performance/real', (_req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// TEMPORARY diagnostic endpoint — remove after enriched form pool verification.
-app.get('/api/debug/league-backfill', (req, res) => {
-  const leagueId = req.query.league;
-  const data = readJSON('backfill-historical.json') || { fixtures: [] };
-  const fixtures = (data.fixtures || [])
-    .filter(f => f.fixture?.status?.short === 'FT')
-    .filter(f => String(f.league?.id) === String(leagueId));
-  res.json(fixtures);
-});
-
 const _serverStartedAt = new Date().toISOString();
 
 app.get('/api/server-status', async (_req, res) => {
