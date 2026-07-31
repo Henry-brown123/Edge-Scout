@@ -19,6 +19,7 @@ const {
   kelly, computeSuccessScore, weatherModifier,
   reloadXgStore, getXgStore, lookupXg,
   scoreGoalsMarkets,
+  stalenessMultiplier, applyStalenessPull,
 } = require('./scoring');
 
 const model = require('./models/interface');
@@ -801,6 +802,27 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     injuries:  injuryScore(injuries, awayId),
     standings: standingsScore(standings, awayId, context),
   };
+
+  // Staleness pull: recencyAvg's decay is ordinal (per-game index), not calendar-based —
+  // a fixture 76 days old at index 0 (e.g. the only data available at season start) gets
+  // full weight otherwise. Discount form/momentum/defense/xg toward neutral based on how
+  // long ago each team's most recent form-pool fixture was actually played. Every xG tier
+  // in xgScore() (StatsBomb, API-Sports stats, goals proxy) draws from the same past-match
+  // pool, so there's no separate "live" xG source to gate on here — it gets the same pull.
+  const mostRecentFixtureDate = (teamId) => {
+    const teamFixtures = scoringPool.filter(f => f.teams?.home?.id === teamId || f.teams?.away?.id === teamId);
+    return teamFixtures[0]?.fixture?.date || null; // scoringPool is sorted most-recent-first
+  };
+  const homeStaleness = stalenessMultiplier(mostRecentFixtureDate(homeId));
+  const awayStaleness = stalenessMultiplier(mostRecentFixtureDate(awayId));
+  homeF.form     = applyStalenessPull(homeF.form,     homeStaleness);
+  homeF.momentum = applyStalenessPull(homeF.momentum, homeStaleness);
+  homeF.defense  = applyStalenessPull(homeF.defense,  homeStaleness);
+  homeF.xg       = applyStalenessPull(homeF.xg,       homeStaleness);
+  awayF.form     = applyStalenessPull(awayF.form,     awayStaleness);
+  awayF.momentum = applyStalenessPull(awayF.momentum, awayStaleness);
+  awayF.defense  = applyStalenessPull(awayF.defense,  awayStaleness);
+  awayF.xg       = applyStalenessPull(awayF.xg,       awayStaleness);
 
   // International quality overrides: replace generic form + standings with
   // opponent-quality-weighted form and three-component quality signal.

@@ -544,3 +544,22 @@ API-Sports Pro plan includes a `/transfers` endpoint returning completed transfe
 5. Apply a "transfer adjustment" modifier in `applyTeamProfileModifiers` for the first 10 matchdays of a season — reduces gradually as actual match data replaces the transfer-based estimate
 
 This closes the biggest model/market gap at season start — the market prices in summer transfer activity, the model currently cannot.
+
+---
+
+## 15. Away team strength multiplier (priority fix — implement before August 22)
+
+**Finding date:** 2026-07-31  
+**Status:** Documented. Priority: implement before Premier League day 1 on August 22.
+
+The team profile currently applies a home win rate multiplier only. There is no equivalent for away teams. `awayModifier` exists in `CONTEXT_THRESHOLDS` (`teamProfiles.js`) but is never referenced anywhere else in the codebase — a dead config value. This means an away team's historical strength (e.g. Rangers' 60% away win rate) has zero influence on the model probability beyond what shows up in form/xG/H2H factors.
+
+This is the primary reason for the large model/market gap on Rangers vs Dundee United on opening day — Rangers' structural away strength is completely invisible to the model.
+
+### Fix required
+
+1. Implement `awayWinRateMultiplier` in `applyTeamProfileModifiers`, symmetric to the existing home multiplier — apply when the away team's away record meets the confidence threshold
+2. Reduce the confidence threshold from 10 games to 5 games for all leagues at season start — with only 4 games in the current season pool, the multiplier never activates for any team in any league for the first few matchdays
+3. Apply the away multiplier to reduce (or boost) the away team's probability contribution based on their historical away win rate vs league average
+
+Priority: implement before Premier League day 1 on August 22. This affects every fixture where a strong away team plays a weaker home side.

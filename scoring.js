@@ -218,6 +218,27 @@ function standingsScore(standings, teamId, fixtureContext) {
   return Math.round(((flat.length - entry.rank + 1) / flat.length) * 100);
 }
 
+// Discounts factor confidence based on how long ago a team's most recent fixture
+// in its form pool was played. Ordinal recency decay (recencyAvg) already weights
+// game-to-game, but has no notion of calendar time — a 76-day-old game at index 0
+// (e.g. the only data available at season start) gets full weight otherwise, same
+// class of problem the standings games-played guard addresses.
+function stalenessMultiplier(mostRecentDate) {
+  if (!mostRecentDate) return 0.5; // no data — pull to neutral
+  const daysSince = (Date.now() - new Date(mostRecentDate)) / 86400000;
+  if (daysSince < 14) return 1.0;  // fresh — full confidence
+  if (daysSince < 30) return 0.85; // slightly stale
+  if (daysSince < 60) return 0.65; // moderately stale
+  if (daysSince < 90) return 0.45; // summer break — significant discount
+  return 0.30;                      // very stale — minimal contribution
+}
+
+// Pulls a factor score toward neutral (50) by the staleness multiplier.
+// multiplier 1.0 = no change; 0.0 = fully neutral.
+function applyStalenessPull(rawScore, multiplier) {
+  return Math.round(50 + (rawScore - 50) * multiplier);
+}
+
 function injuryScore(injuries, teamId) {
   if (!injuries?.length) return 50;
   const team = injuries.filter(i => i.team?.id === teamId);
@@ -601,6 +622,7 @@ module.exports = {
   recencyAvg, outcomePoints,
   formScore, homeAdvScore, xgScore, defenseScore,
   momentumScore, h2hScore, standingsScore, injuryScore,
+  stalenessMultiplier, applyStalenessPull,
   internationalFormScore, internationalQualityScore,
   lookupFIFARank, FIFA_RANK_FALLBACK,
   computeModelProb, computeXGProxy, classifyCompetitionPhase,
