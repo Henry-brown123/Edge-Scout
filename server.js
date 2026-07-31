@@ -3596,19 +3596,6 @@ app.get('/api/backfill/transfers/status', (_req, res) => {
   res.json({ ..._transfersStatus, count: Object.keys(data).length });
 });
 
-// TEMPORARY diagnostic endpoint — remove after form-pool investigation.
-app.get('/api/debug/team-fixture-count', (req, res) => {
-  const teamId = parseInt(req.query.team, 10);
-  const data = readJSON('backfill-historical.json');
-  const fixtures = data?.fixtures || [];
-  const teamFixtures = fixtures.filter(f => f.teams?.home?.id === teamId || f.teams?.away?.id === teamId);
-  const byLeagueSeason = {};
-  for (const f of teamFixtures) {
-    const key = `${f.league?.id}_${f.league?.season}`;
-    byLeagueSeason[key] = (byLeagueSeason[key] || 0) + 1;
-  }
-  res.json({ teamId, totalFixturesInStore: fixtures.length, teamFixtureCount: teamFixtures.length, byLeagueSeason });
-});
 
 app.get('/api/pir/analysis', (_req, res) => {
   const { getPIRData, readProfiles, playerImportanceScore } = require('./teamProfiles');
