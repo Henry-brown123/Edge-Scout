@@ -3168,6 +3168,7 @@ app.get('/api/league/diagnostic', (req, res) => {
   const data = readJSON('backfill-historical.json');
   if (!data?.scoredRecords?.length) return res.json({ leagues: {} });
   const filter = req.query.leagues ? new Set(req.query.leagues.split(',').map(s => s.trim())) : null;
+  const settings = getSettings();
 
   const byLeague = {};
   for (const rec of data.scoredRecords) {
@@ -3181,12 +3182,23 @@ app.get('/api/league/diagnostic', (req, res) => {
     if (rec.actualOutcome === 'home') b.home++;
     else if (rec.actualOutcome === 'draw') b.draw++;
     else b.away++;
-    b.modelHomeSum += rec.modelHomeProb || 0;
-    b.modelDrawSum += rec.modelDrawProb || 0;
-    b.modelAwaySum += rec.modelAwayProb || 0;
+
+    // Model probabilities are never pre-computed/stored on scored records — scoreFixtureFromPool
+    // only stores the raw homeFactors/awayFactors. Compute modelProb on the fly here instead,
+    // the same way computeLogLoss (weightOptimiser.js) does. Without this, modelAvg was always
+    // 0/0/0 for every league — this diagnostic never actually worked.
+    if (rec.homeFactors && rec.awayFactors) {
+      try {
+        const weights     = _getWeightsForFixture(lid, rec.context, settings);
+        const leagueConfig = LEAGUE_CONFIG[parseInt(lid, 10)] || null;
+        const p = computeModelProb(rec.homeFactors, rec.awayFactors, weights, rec.context, leagueConfig);
+        b.modelHomeSum += p.home;
+        b.modelDrawSum += p.draw;
+        b.modelAwaySum += p.away;
+      } catch { /* skip malformed records */ }
+    }
   }
 
-  const { LEAGUE_CONFIG } = require('./scoring');
   const result = {};
   for (const [lid, b] of Object.entries(byLeague)) {
     const cfg = LEAGUE_CONFIG[parseInt(lid)] || {};
