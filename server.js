@@ -140,10 +140,9 @@ const SETTINGS_DEFAULTS = {
   activeLeagues: ['1','39','140','78','135','61','2','179','88','94','3','848'], successThreshold: 40,
   calibrationFactor: 1.08,
   wowyActive: true,
-  // Off by default — transfer data must be populated and its netQualityDelta values
-  // confirmed sensible (POST /api/backfill/transfers, then a manual review) before
-  // this is allowed to affect live scoring. Flip to true only after that review.
-  transferModifierActive: false,
+  // Enabled 2026-07-31 after reviewing netQualityDelta across 436 teams and fixing a
+  // cup-competition-PIR artefact (Wolfsberger AC: -22.7 -> -9.4). See docs/july-upgrade-notes.md.
+  transferModifierActive: true,
   preferExchange: true,
   preferExchangeBuffer: 5,
   leagueModes: {
@@ -3579,20 +3578,6 @@ app.get('/api/backfill/transfers/status', (_req, res) => {
   const { getTransfersData } = require('./teamProfiles');
   const data = getTransfersData();
   res.json({ ..._transfersStatus, count: Object.keys(data).length });
-});
-
-// TEMPORARY diagnostic endpoint — remove after re-verifying the PIR discount fix.
-app.get('/api/debug/transfers-summary', (_req, res) => {
-  const { getTransfersData } = require('./teamProfiles');
-  const data = Object.values(getTransfersData());
-  const sorted = [...data].sort((a, b) => b.netQualityDelta - a.netQualityDelta);
-  res.json({
-    totalTeams: data.length,
-    topStrengthened: sorted.slice(0, 5),
-    topWeakened: sorted.slice(-5).reverse(),
-    rangers: data.find(t => t.teamName === 'Rangers') || null,
-    wolfsberger: data.find(t => t.teamName === 'Wolfsberger AC') || null,
-  });
 });
 
 app.get('/api/pir/analysis', (_req, res) => {
