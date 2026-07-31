@@ -91,15 +91,30 @@ function findSeasonTransfers(playerTransfers, teamId) {
   };
 }
 
+// PIR_LEAGUES (fetch-pir.js) only tracks ~11 top leagues + continental cups. A player
+// whose domestic league isn't tracked (e.g. Austrian Bundesliga) gets a PIR entry only
+// if they happened to feature in a cup tie — a tiny, high-variance sample (1-3 games)
+// standing in for what should be a full season's body of work. Confirmed on Wolfsberger
+// AC: 6 of 14 departures showed PIR 65-100 sourced entirely from Conference League
+// cameos. Discount PIR pulled from cup competitions toward neutral before using it.
+const CUP_LEAGUE_IDS = new Set([2, 3, 848]); // Champions/Europa/Conference League
+function reliablePir(pirEntry) {
+  if (!pirEntry || pirEntry.pir == null) return 50;
+  if (CUP_LEAGUE_IDS.has(pirEntry.leagueId)) {
+    return 50 + (pirEntry.pir - 50) * 0.4; // pull 60% of the way back to neutral
+  }
+  return pirEntry.pir;
+}
+
 // arrivals/departures: [{ playerId, wowyDelta? }]. pirData: full pir-data.json store.
 function calculateNetQualityDelta(arrivals, departures, pirData) {
   const arrivalBoost = arrivals.reduce((sum, p) => {
-    const pir = pirData[String(p.playerId)]?.pir ?? 50;
+    const pir = reliablePir(pirData[String(p.playerId)]);
     return sum + (pir - 50) / 10; // above-average arrivals add positive delta
   }, 0);
 
   const departureDrag = departures.reduce((sum, p) => {
-    const pir   = pirData[String(p.playerId)]?.pir ?? 50;
+    const pir   = reliablePir(pirData[String(p.playerId)]);
     const wowy  = p.wowyDelta || 0;
     const importance = (pir - 50) / 10 + wowy * 0.3;
     return sum - Math.max(0, importance); // losing important players = negative
