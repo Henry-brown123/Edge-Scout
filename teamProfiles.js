@@ -36,14 +36,22 @@ const LEAGUE_AVG_HOME_WIN_RATE = {
   international:  0.360,
 };
 
+// Global league average away win rates by fixture context — symmetric counterpart
+// to LEAGUE_AVG_HOME_WIN_RATE, used as the baseline for awayWinRateMultiplier.
+const LEAGUE_AVG_AWAY_WIN_RATE = {
+  club_domestic:  0.290,
+  club_european:  0.260,
+  international:  0.300,
+};
+
 // Minimum data thresholds before each modifier is applied — context-aware.
 // International thresholds are lower because teams play far fewer fixtures
 // per year than club sides. Modifiers are additionally dampened when a
 // profile has fewer than 10 data points (see applyTeamProfileModifiers).
 const CONTEXT_THRESHOLDS = {
   club_domestic: {
-    homeMultiplier:    10,
-    awayModifier:      10,
+    homeMultiplier:    5,  // was 10 — lets the multiplier activate in the first few
+    awayModifier:      5,  // matchdays of a new season instead of waiting ~a quarter in
     oppositionAnomaly: 6,
     momentumPattern:   8,
     congestion:        10,
@@ -162,10 +170,14 @@ function buildProfileFromFixtures(teamId, teamName, fixtures) {
   const overallWinRate = totalPlayed > 0 ? totalWon / totalPlayed : 0.33;
 
   const leagueAvg             = LEAGUE_AVG_HOME_WIN_RATE[context] || 0.463;
+  const leagueAvgAway         = LEAGUE_AVG_AWAY_WIN_RATE[context] || 0.29;
   const homeConfidence        = Math.min(homeRecord.played / 20, 1);
   const awayConfidence        = Math.min(awayRecord.played / 20, 1);
   const homeWinRateMultiplier = homeRecord.played >= thresholds.homeMultiplier
     ? homeWinRate / Math.max(leagueAvg, 0.01)
+    : 1.0;
+  const awayWinRateMultiplier = awayRecord.played >= thresholds.awayModifier
+    ? awayWinRate / Math.max(leagueAvgAway, 0.01)
     : 1.0;
 
   // ── Opposition anomalies ────────────────────────────────────────────────────
@@ -272,6 +284,7 @@ function buildProfileFromFixtures(teamId, teamName, fixtures) {
     homeWinRateMultiplier: parseFloat(homeWinRateMultiplier.toFixed(3)),
     awayRecord,
     awayWinRate:           parseFloat(awayWinRate.toFixed(3)),
+    awayWinRateMultiplier: parseFloat(awayWinRateMultiplier.toFixed(3)),
     homeConfidence:        parseFloat(homeConfidence.toFixed(3)),
     awayConfidence:        parseFloat(awayConfidence.toFixed(3)),
     overallWinRate:        parseFloat(overallWinRate.toFixed(3)),
@@ -401,7 +414,8 @@ function addResultToProfile(teamId, isHome, won, drawn, opponentId, opponentName
   else if (drawn) record.drawn++;
   else record.lost++;
 
-  const leagueAvg  = LEAGUE_AVG_HOME_WIN_RATE[p.context] || 0.463;
+  const leagueAvg     = LEAGUE_AVG_HOME_WIN_RATE[p.context] || 0.463;
+  const leagueAvgAway = LEAGUE_AVG_AWAY_WIN_RATE[p.context] || 0.29;
   const thresholds = CONTEXT_THRESHOLDS[p.context] || CONTEXT_THRESHOLDS.club_domestic;
   p.homeWinRate    = p.homeRecord.played > 0 ? p.homeRecord.won / p.homeRecord.played : 0;
   p.awayWinRate    = p.awayRecord.played > 0 ? p.awayRecord.won / p.awayRecord.played : 0;
@@ -412,6 +426,8 @@ function addResultToProfile(teamId, isHome, won, drawn, opponentId, opponentName
   p.awayConfidence = Math.min(p.awayRecord.played / 20, 1);
   p.homeWinRateMultiplier = p.homeRecord.played >= thresholds.homeMultiplier
     ? p.homeWinRate / Math.max(leagueAvg, 0.01) : 1.0;
+  p.awayWinRateMultiplier = p.awayRecord.played >= thresholds.awayModifier
+    ? p.awayWinRate / Math.max(leagueAvgAway, 0.01) : 1.0;
   p.dataPoints++;
   p.lastUpdated = new Date().toISOString();
 
@@ -435,7 +451,7 @@ function addResultToProfile(teamId, isHome, won, drawn, opponentId, opponentName
     });
   }
 
-  ['homeWinRate','awayWinRate','overallWinRate','homeWinRateMultiplier','homeConfidence','awayConfidence']
+  ['homeWinRate','awayWinRate','overallWinRate','homeWinRateMultiplier','awayWinRateMultiplier','homeConfidence','awayConfidence']
     .forEach(k => { if (typeof p[k] === 'number') p[k] = parseFloat(p[k].toFixed(3)); });
 
   // Update weather sensitivity
@@ -460,7 +476,8 @@ function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dat
   const wowyActive       = opts.wowyActive ?? true; // default true for backwards compat in tests
   const competitionPhase = opts.competitionPhase ?? null;
   const neutralVenue     = competitionPhase === 'group_stage' || competitionPhase === 'knockout';
-  const leagueAvg  = LEAGUE_AVG_HOME_WIN_RATE[context] || 0.463;
+  const leagueAvg     = LEAGUE_AVG_HOME_WIN_RATE[context] || 0.463;
+  const leagueAvgAway = LEAGUE_AVG_AWAY_WIN_RATE[context] || 0.29;
   const thresholds = CONTEXT_THRESHOLDS[context] || CONTEXT_THRESHOLDS.club_domestic;
 
   // For international profiles with fewer than 10 data points, dampen all
@@ -489,6 +506,7 @@ function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dat
       teamName:    awayProfile.teamName,
       dataPoints:  awayProfile.dataPoints,
       awayWinRate: awayProfile.awayWinRate,
+      awayWinRateMultiplier: awayProfile.awayWinRateMultiplier,
       awayConfidence: awayProfile.awayConfidence,
       awayDaysRest,
       congestionCategory: awayDaysRest == null ? 'unknown'
@@ -500,6 +518,7 @@ function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dat
     modifierApplied: false,
     neutralVenue,
     leagueAvgHomeWinRate: leagueAvg,
+    leagueAvgAwayWinRate: leagueAvgAway,
   };
 
   if (!homeProfile || !awayProfile) {
@@ -521,6 +540,22 @@ function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dat
     if (Math.abs(clamped - 1) > 0.02) {
       home = home * clamped;
       notes.push(`Home multiplier ×${clamped.toFixed(2)} (${(homeProfile.homeWinRate * 100).toFixed(0)}% vs ${(leagueAvg * 100).toFixed(0)}% avg, ${homeProfile.homeRecord.played} home matches)`);
+    }
+  }
+
+  // 1b. Away team strength multiplier — symmetric to the home multiplier above.
+  //     Without this, an away team's historical strength (e.g. a strong side that wins
+  //     well on the road) has no influence on the model beyond what shows up in
+  //     form/xG/H2H — skipped at neutral venues for the same reason as the home version.
+  if (!neutralVenue && awayProfile.awayRecord?.played >= thresholds.awayModifier) {
+    const mult     = awayProfile.awayWinRateMultiplier || 1.0;
+    const profConf = Math.max(awayProfile.awayConfidence, dataConf);
+    const blended  = profConf * mult + (1 - profConf);
+    const dampened = 1 + (blended - 1) * intlSparsityDamp(awayProfile);
+    const clamped  = Math.max(0.5, Math.min(2.0, dampened));
+    if (Math.abs(clamped - 1) > 0.02) {
+      away = away * clamped;
+      notes.push(`Away multiplier ×${clamped.toFixed(2)} (${(awayProfile.awayWinRate * 100).toFixed(0)}% vs ${(leagueAvgAway * 100).toFixed(0)}% avg, ${awayProfile.awayRecord.played} away matches)`);
     }
   }
 
@@ -758,6 +793,7 @@ module.exports = {
   reloadPIRCache,
   playerImportanceScore,
   LEAGUE_AVG_HOME_WIN_RATE,
+  LEAGUE_AVG_AWAY_WIN_RATE,
   CONTEXT_THRESHOLDS,
   THRESHOLDS,
 };
