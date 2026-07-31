@@ -576,9 +576,12 @@ function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dat
   // fading to zero as real match data replaces the transfer-based estimate. Requires
   // opts.season and the team's games-played-this-season count (opts.homeMatchday /
   // opts.awayMatchday) — both supplied by the caller from the live standings table.
+  // Gated behind opts.transferModifierActive (settings.transferModifierActive, off by
+  // default) until netQualityDelta values have been reviewed against real production
+  // PIR/WOWY data — see docs/july-upgrade-notes.md.
   const season = opts.season ?? null;
   const transferMultiplier = (profile, matchday) => {
-    if (!season || matchday == null || matchday > 10) return { mult: 1, data: null };
+    if (!opts.transferModifierActive || !season || matchday == null || matchday > 10) return { mult: 1, data: null };
     const data = getTransferData(profile.teamId, season);
     if (!data) return { mult: 1, data: null };
     const decayFactor = 1 - (matchday / 10);

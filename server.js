@@ -140,6 +140,10 @@ const SETTINGS_DEFAULTS = {
   activeLeagues: ['1','39','140','78','135','61','2','179','88','94','3','848'], successThreshold: 40,
   calibrationFactor: 1.08,
   wowyActive: true,
+  // Off by default — transfer data must be populated and its netQualityDelta values
+  // confirmed sensible (POST /api/backfill/transfers, then a manual review) before
+  // this is allowed to affect live scoring. Flip to true only after that review.
+  transferModifierActive: false,
   preferExchange: true,
   preferExchangeBuffer: 5,
   leagueModes: {
@@ -966,7 +970,8 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
 
   const { probs: adjustedProbs, teamIntel } = applyTeamProfileModifiers(
     probs, homeProfile, awayProfile, context, dataConf, homeDays, awayDays, weatherForModifier,
-    { wowyActive, competitionPhase, homeMatchday, awayMatchday, season: currentSeason }
+    { wowyActive, competitionPhase, homeMatchday, awayMatchday, season: currentSeason,
+      transferModifierActive: settings.transferModifierActive === true }
   );
   probs = adjustedProbs;
 
