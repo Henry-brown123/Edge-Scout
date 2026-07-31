@@ -152,6 +152,7 @@ function getSettings() {
   const stored = readJSON('settings.json');
   return stored ? { ...SETTINGS_DEFAULTS, ...stored } : { ...SETTINGS_DEFAULTS };
 }
+function saveSettings(s) { writeJSON('settings.json', s); }
 
 // ── Rate limit — single source of truth ──────────────────────────────────────
 const { setRateLimited, isRateLimited, getRateLimitState, backfillCutoffReached } = require('./rateLimit');
@@ -4934,6 +4935,21 @@ app.listen(PORT, () => {
   if (!readJSON('tournament-seeds.json')) {
     saveTournamentSeeds(WC_2026_SEEDS);
     console.log('[Startup] Seeded tournament-seeds.json with WC 2026 seedings for', Object.keys(WC_2026_SEEDS.teams).length, 'teams');
+  }
+
+  // 5e. Consistency check — auto-sync activeLeagues with LEAGUE_CONFIG so settings.json
+  // on the persistent disk can never silently fall behind the code's league list.
+  {
+    const settings           = getSettings();
+    const configuredLeagues  = Object.keys(LEAGUE_CONFIG);
+    const activeLeagues      = settings.activeLeagues || [];
+    const missingFromActive  = configuredLeagues.filter(id => !activeLeagues.includes(id));
+    if (missingFromActive.length > 0) {
+      console.warn(`[Startup] WARNING: ${missingFromActive.length} leagues in LEAGUE_CONFIG but missing from activeLeagues: ${missingFromActive.join(', ')}`);
+      console.warn(`[Startup] Auto-adding missing leagues to activeLeagues: ${missingFromActive.join(', ')}`);
+      settings.activeLeagues = [...new Set([...activeLeagues, ...missingFromActive])];
+      saveSettings(settings);
+    }
   }
 
   // 6. Queue backfill chain if data is missing/corrupt
