@@ -546,6 +546,50 @@ function _buildOddsMap(events) {
   return map;
 }
 
+// The Odds API and API-Sports use different team-name conventions for the same club
+// (e.g. "Dundee United" vs "Dundee Utd"). An exact "home|away" key match misses these
+// cases and previously fell through to a synthetic odds fallback derived from the
+// model's own probability — silently fabricating "market" odds instead of using real
+// ones. Fall back to fuzzy name matching (teamsMatch, defined below) before giving up.
+function _lookupOddsEntry(oddsMap, homeName, awayName) {
+  const exactKey = `${homeName}|${awayName}`;
+  if (oddsMap[exactKey]) return oddsMap[exactKey];
+
+  let matchedKey = null;
+  for (const key of Object.keys(oddsMap)) {
+    const sep = key.indexOf('|');
+    if (sep === -1) continue;
+    const h = key.slice(0, sep), a = key.slice(sep + 1);
+    if (teamsMatch(h, homeName) && teamsMatch(a, awayName)) { matchedKey = key; break; }
+  }
+  if (!matchedKey) return {};
+
+  const entry = oddsMap[matchedKey];
+  const sep = matchedKey.indexOf('|');
+  const providerHome = matchedKey.slice(0, sep), providerAway = matchedKey.slice(sep + 1);
+  if (providerHome === homeName && providerAway === awayName) return entry;
+
+  // Fuzzy-matched a different-provider name (e.g. "Dundee United" vs "Dundee Utd") —
+  // re-key every price object from the odds provider's team names to the caller's
+  // (API-Sports) names, so downstream `entry[homeName]`-style lookups still resolve.
+  const rekey = (obj) => {
+    if (!obj) return obj;
+    const out = { ...obj };
+    if (providerHome in out && providerHome !== homeName) { out[homeName] = out[providerHome]; delete out[providerHome]; }
+    if (providerAway in out && providerAway !== awayName) { out[awayName] = out[providerAway]; delete out[providerAway]; }
+    return out;
+  };
+  return {
+    ...rekey(entry),
+    _pinnacleStripped: rekey(entry._pinnacleStripped),
+    _pinnacleRaw:      rekey(entry._pinnacleRaw),
+    _exchangeOdds: entry._exchangeOdds
+      ? { ...entry._exchangeOdds, raw: rekey(entry._exchangeOdds.raw), net: rekey(entry._exchangeOdds.net) }
+      : null,
+    _allExchangeOdds: (entry._allExchangeOdds || []).map(ex => ({ ...ex, raw: rekey(ex.raw), net: rekey(ex.net) })),
+  };
+}
+
 // Build totals map: "HomeTeam|AwayTeam" → { "2.5": {over, under}, "1.5": {...}, "3.5": {...} }
 // Uses Pinnacle when available (sharpest lines), falls back to first available bookmaker.
 function _buildTotalsMap(events) {
@@ -897,8 +941,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   // directional labels — "Panama Win" not "Home Win" when neither team is at home.
   const neutralLabels = competitionPhase === 'group_stage' || competitionPhase === 'knockout';
 
-  const oddsKey    = `${homeName}|${awayName}`;
-  const bookOdds   = oddsMap[oddsKey] || {};
+  const bookOdds   = _lookupOddsEntry(oddsMap, homeName, awayName);
   const lookup     = { 'Home Win': homeName, Draw: 'Draw', 'Away Win': awayName };
   const candidates = [
     { label: 'Home Win', displayLabel: neutralLabels ? `${homeName} Win` : null, prob: probs.home },
@@ -1295,6 +1338,7 @@ async function runPreMatchScan(watchingEntry) {
                             best.bookOdds, evKelly, bankrollForKelly);
     const br    = getBankroll();
     const betId = uuidv4();
+    const routingOddsEntry = _lookupOddsEntry(oddsMap, scored.homeName, scored.awayName);
     const computedStake = scored.paperTradeOnly ? 0
       : isReal ? roundStake(realKelly.stake) : roundStake(best.kelly.stake);
     const bet   = {
@@ -1332,8 +1376,8 @@ async function runPreMatchScan(watchingEntry) {
       competitionPhase:    scored.competitionPhase,
       // Bookmaker routing recommendation at lock time
       routingRecommendation: selectBookmaker(roundStake(best.kelly.stake), best.edge, {
-        exchangeOdds:    (oddsMap[`${scored.homeName}|${scored.awayName}`] || {})._exchangeOdds    || null,
-        allExchangeOdds: (oddsMap[`${scored.homeName}|${scored.awayName}`] || {})._allExchangeOdds || [],
+        exchangeOdds:    routingOddsEntry._exchangeOdds    || null,
+        allExchangeOdds: routingOddsEntry._allExchangeOdds || [],
         outcomeName: best.bet === 'Home Win' ? scored.homeName
                    : best.bet === 'Away Win' ? scored.awayName
                    : 'Draw',
@@ -3722,7 +3766,7 @@ app.post('/api/bets/:id/reroute', async (req, res) => {
         }).then(r => { _oddsRawCache[meta.sport] = r.data || []; return r.data || []; });
     const oddsMap = _buildOddsMap(events);
     const [home, away] = (bet.fixture || '').split(' vs ');
-    const entry   = oddsMap[`${home}|${away}`] || {};
+    const entry   = _lookupOddsEntry(oddsMap, home, away);
     const outcomeName = bet.bet === 'Home Win' ? home
                       : bet.bet === 'Away Win' ? away
                       : 'Draw';
