@@ -528,3 +528,19 @@ BTTS pricing requires the per-event odds endpoint (`/v4/sports/{sport}/events/{e
 Credit cost approximately 1,720 per scan day across 12 leagues on a full matchweek.
 
 Implement in August once the 100K credits reset and baseline scan credit consumption is established. Do not implement before then.
+
+---
+
+## 14. Transfer data integration (August backlog)
+
+**Status:** Backlog. Priority: implement before August 2027 season start at the latest, ideally before the January 2027 transfer window closes.
+
+API-Sports Pro plan includes a `/transfers` endpoint returning completed transfer data per team per season. Currently unused. Integrate before each season start:
+
+1. Fetch completed transfers for all active league teams for the current season
+2. For arriving players: look up their PIR from their previous club, apply as a positive squad quality signal
+3. For departing players: flag their absence as a permanent WOWY-style negative modifier until new data accumulates
+4. Store in `data/transfers.json` keyed by teamId and season
+5. Apply a "transfer adjustment" modifier in `applyTeamProfileModifiers` for the first 10 matchdays of a season — reduces gradually as actual match data replaces the transfer-based estimate
+
+This closes the biggest model/market gap at season start — the market prices in summer transfer activity, the model currently cannot.
