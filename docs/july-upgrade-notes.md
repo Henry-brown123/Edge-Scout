@@ -572,3 +572,16 @@ Priority: implement before Premier League day 1 on August 22. This affects every
 **Status:** Partially fixed. Residual home gap flagged for architectural review.
 
 Scottish Premiership (179) — home advantage miscalibration (8.63pp gap, larger than La Liga's 7pp). `homeAdvBaseWeight` lever reaches diminishing returns at 1.5 — home gap closes to 4.95pp at that value (draw −0.06pp ✅, away −4.89pp ✅). Full home gap closure not achievable via `homeAdvBaseWeight` alone — structural limitation of the linear factor model for SPL's larger-than-average home advantage. Residual home gap flagged for architectural review. Re-run EV calibration after August 1st closing odds backfill.
+
+---
+
+## 17. Critical architecture finding — GBDT ignores LEAGUE_CONFIG entirely
+
+**Finding date:** 2026-07-31  
+**Status:** Fixed via post-prediction bias correction.
+
+The GBDT model (`models/gbdt.js`) accepts `leagueConfig` for interface compatibility but discards it — underscore-prefixed `_leagueConfig`. All `LEAGUE_CONFIG` calibration (`avgHomeWinRate`, `avgDrawRate`, `homeAdvBaseWeight` etc.) only reaches the linear model path (`computeModelProb`), which is used by diagnostics and the weight optimiser but NOT by live predictions. This means every per-league calibration effort to date — including sections 10 (La Liga) and 16 (Scottish Premiership) above — never actually affected a single live prediction; it only made the diagnostic tool self-consistent with a model path the live system doesn't run.
+
+A post-prediction per-league bias correction (`applyLeagueBiasCorrection`) has been added to bridge this gap — blends GBDT output 70/30 toward league observed rates (`LEAGUE_CONFIG.avgHomeWinRate/avgDrawRate/avgAwayWinRate`), applied in `scoreOneFixture` immediately after `model.predict()` returns. This means LEAGUE_CONFIG calibration now genuinely affects live predictions for the first time.
+
+Verified on Dundee Utd vs Rangers (SPL) and Villarreal vs Atletico Madrid (La Liga, historical) — both moved in the correct direction toward each league's observed base rates.

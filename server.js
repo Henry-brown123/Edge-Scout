@@ -15,7 +15,7 @@ const {
   formScore, homeAdvScore, xgScore, defenseScore, momentumScore,
   h2hScore, standingsScore, injuryScore,
   internationalFormScore, internationalQualityScore, lookupFIFARank,
-  computeModelProb, computeXGProxy, classifyCompetitionPhase,
+  computeModelProb, applyLeagueBiasCorrection, computeXGProxy, classifyCompetitionPhase,
   kelly, computeSuccessScore, weatherModifier,
   reloadXgStore, getXgStore, lookupXg,
   scoreGoalsMarkets,
@@ -851,7 +851,8 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   const awayDataConf = Math.min(awayFormCount / 15, confCap);
   const dataConf     = Math.min(homeDataConf, awayDataConf); // use the weaker team's confidence
 
-  let probs = model.predict(homeF, awayF, weights, context, leagueConfig);
+  const rawProbs = model.predict(homeF, awayF, weights, context, leagueConfig);
+  let probs = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
 
   // FIFA ranking quality adjustment — anchors model when historical data is thin.
   // scale=0 for club_domestic means rankings have no effect there.

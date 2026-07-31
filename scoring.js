@@ -340,6 +340,44 @@ function computeModelProb(homeFactors, awayFactors, weights, context = 'club_dom
   return { home: homeScore / raw, draw: drawScore / raw, away: awayAdj / raw };
 }
 
+// ─── LEAGUE BIAS CORRECTION ───────────────────────────────────────────────────
+// Live scoring runs on the GBDT model (models/gbdt.js), which accepts leagueConfig
+// for interface compatibility but ignores it entirely — none of LEAGUE_CONFIG's
+// avgHomeWinRate/avgDrawRate/avgAwayWinRate/homeAdvBaseWeight calibration reaches
+// live predictions. This blends the model's raw output toward each league's
+// observed base rates as a post-prediction correction, applied in scoreOneFixture
+// immediately after model.predict().
+function applyLeagueBiasCorrection(probs, leagueId, leagueConfig) {
+  const config = leagueConfig[leagueId];
+  if (!config) return probs; // no correction available
+
+  // Target rates from LEAGUE_CONFIG (observed actual rates)
+  const targetHome = config.avgHomeWinRate;
+  const targetDraw = config.avgDrawRate;
+  const targetAway = config.avgAwayWinRate;
+
+  // Current GBDT output
+  const { home, draw, away } = probs;
+
+  // Blend GBDT output toward league targets
+  // blendFactor 0 = pure GBDT, 1 = pure league average
+  // Use 0.3 — meaningful correction without overriding the model entirely
+  const blendFactor = 0.3;
+
+  const correctedHome = home * (1 - blendFactor) + targetHome * blendFactor;
+  const correctedDraw = draw * (1 - blendFactor) + targetDraw * blendFactor;
+  const correctedAway = away * (1 - blendFactor) + targetAway * blendFactor;
+
+  // Renormalise to sum to 1
+  const total = correctedHome + correctedDraw + correctedAway;
+
+  return {
+    home: correctedHome / total,
+    draw: correctedDraw / total,
+    away: correctedAway / total,
+  };
+}
+
 // ─── KELLY CRITERION ─────────────────────────────────────────────────────────
 
 function kelly(prob, odds, fraction = 0.5, bankroll = 1000) {
@@ -625,7 +663,7 @@ module.exports = {
   stalenessMultiplier, applyStalenessPull,
   internationalFormScore, internationalQualityScore,
   lookupFIFARank, FIFA_RANK_FALLBACK,
-  computeModelProb, computeXGProxy, classifyCompetitionPhase,
+  computeModelProb, applyLeagueBiasCorrection, computeXGProxy, classifyCompetitionPhase,
   kelly, computeSuccessScore,
   historicalWeight, weatherModifier,
   reloadXgStore, getXgStore, lookupXg,
