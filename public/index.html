@@ -3665,7 +3665,7 @@ function openDrawer(w) {
     <button class="drawer-close" onclick="closeDrawer()">✕</button>
     <div class="drawer-title">${w.fixture}</div>
     <div class="drawer-sub">${w.leagueName} · 🇬🇧 KO ${kickoff}${minsOut != null ? ` · <span style="color:var(--amber)">T-${minsOut}m</span>` : ''}</div>
-    ${w.lowConfidence ? `<div style="background:rgba(255,82,82,.12);border:1px solid rgba(255,82,82,.3);border-radius:6px;padding:8px 12px;margin:8px 0;font-size:.78rem;color:var(--red)">⚠ <strong>Low confidence</strong> — model diverges >25pp from bookmaker on at least one outcome. This fixture will not auto-lock. Review manually before placing.</div>` : ''}
+    ${w.lowConfidence ? `<div style="background:rgba(255,82,82,.12);border:1px solid rgba(255,82,82,.3);border-radius:6px;padding:8px 12px;margin:8px 0;font-size:.78rem;color:var(--red)">⚠ <strong>Low confidence</strong> — ${w.lowConfidenceReason || 'model/market divergence'}${w.maxModelBookGap != null ? ` (model diverges ${Math.round(w.maxModelBookGap * 100)}pp from bookmaker on at least one outcome)` : ''}. This fixture will not auto-lock. Review manually before placing.</div>` : ''}
 
     <div class="drawer-section">
       <h4>Model Probabilities</h4>

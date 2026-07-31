@@ -1042,6 +1042,20 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   const lowConfidence  = maxModelBookGap > effectiveGapThreshold || maxModelBookGap > tierThreshold;
   results.forEach(c => { c.lowConfidence = lowConfidence; });
 
+  // Human-readable reason for the frontend — reflects whichever gate actually fired,
+  // scaled to the real minFormCount tier rather than a fixed "<20" assumption (that
+  // tier only applies when minFormCount<20; the 35-fixture and 35+ tiers use different
+  // thresholds and need their own wording).
+  let lowConfidenceReason = null;
+  if (lowConfidence) {
+    if (maxModelBookGap > tierThreshold) {
+      const tierLabel = minFormCount < 20 ? 'fewer than 20' : minFormCount < 35 ? 'fewer than 35' : 'at least 35';
+      lowConfidenceReason = `Insufficient data — ${tierLabel} fixtures in team pool (${minFormCount})`;
+    } else {
+      lowConfidenceReason = 'Large model/market divergence';
+    }
+  }
+
   // WOWY + PIR key player signals — sorted by combined importance score
   const wowyToKeyPlayers = (teamId, isHome) => {
     const deltas = getWOWYDeltas(teamId); // already enriched with pir/importanceScore
@@ -1082,7 +1096,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   return {
     fix, homeName, awayName, homeF, awayF, probs, weather, weatherCondition, results,
     kickoff: fix.fixture?.date,
-    context, competitionPhase, lowConfidence,
+    context, competitionPhase, lowConfidence, maxModelBookGap, lowConfidenceReason,
     homeDataConf, awayDataConf, dataConf,
     homeFormCount, awayFormCount, minFormCount, tierThreshold,
     teamIntel, paperTradeOnly, betMode,
@@ -1212,6 +1226,8 @@ async function runMorningScan(leagueIds) {
               awayF:           scored.awayF,
               calId:           calEntry.id,
               lowConfidence:    scored.lowConfidence,
+              maxModelBookGap:  scored.maxModelBookGap,
+              lowConfidenceReason: scored.lowConfidenceReason,
               context:          scored.context,
               competitionPhase: scored.competitionPhase,
               homeDataConf:     scored.homeDataConf,
@@ -1334,7 +1350,7 @@ async function runPreMatchScan(watchingEntry) {
       return null;
     }
     if (scored.lowConfidence) {
-      console.log(`[PreMatch] ${scored.homeName} vs ${scored.awayName} DROPPED — low confidence (model/book divergence too large for data level)`);
+      console.log(`[PreMatch] ${scored.homeName} vs ${scored.awayName} DROPPED — low confidence: ${scored.lowConfidenceReason} (max gap ${Math.round(scored.maxModelBookGap * 100)}pp)`);
       return null;
     }
 
