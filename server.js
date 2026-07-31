@@ -957,9 +957,16 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     }
   }
 
+  // Games played this season (from the live standings table) — drives the transfer
+  // modifier's 10-matchday decay window in applyTeamProfileModifiers.
+  const standingsFlat  = Array.isArray(standings?.[0]) ? standings.flat() : (standings || []);
+  const homeMatchday   = standingsFlat.find(s => s.team?.id === homeId)?.all?.played ?? null;
+  const awayMatchday   = standingsFlat.find(s => s.team?.id === awayId)?.all?.played ?? null;
+  const currentSeason  = fix.league?.season ?? null;
+
   const { probs: adjustedProbs, teamIntel } = applyTeamProfileModifiers(
     probs, homeProfile, awayProfile, context, dataConf, homeDays, awayDays, weatherForModifier,
-    { wowyActive, competitionPhase }
+    { wowyActive, competitionPhase, homeMatchday, awayMatchday, season: currentSeason }
   );
   probs = adjustedProbs;
 
@@ -3526,6 +3533,49 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
+// Transfer data fetch — completed transfers per team for the current season,
+// used for the first-10-matchdays squad-quality modifier in applyTeamProfileModifiers.
+let _transfersRunning = false;
+const _transfersStatus = { running: false, startedAt: null, completedAt: null, count: 0, error: null };
+
+app.post('/api/backfill/transfers', (req, res) => {
+  if (_transfersRunning) return res.json({ running: true, message: 'Transfers fetch already in progress' });
+  _transfersRunning = true;
+  _transfersStatus.running     = true;
+  _transfersStatus.startedAt   = new Date().toISOString();
+  _transfersStatus.completedAt = null;
+  _transfersStatus.error       = null;
+  res.json({ started: true, message: 'Transfers fetch running — poll /api/backfill/transfers/status' });
+  const { execFile } = require('child_process');
+  const scriptPath   = path.join(__dirname, 'scripts', 'fetch-transfers.js');
+  const season = req.query.season || req.body?.season || undefined;
+  execFile(process.execPath, [scriptPath], {
+    env: { ...process.env, DATA_DIR, API_SPORTS_KEY: process.env.API_SPORTS_KEY, TRANSFER_SEASON: season },
+    timeout: 1800000, // 30 min
+  }, (err, stdout, stderr) => {
+    _transfersRunning = false;
+    _transfersStatus.running = false;
+    _transfersStatus.completedAt = new Date().toISOString();
+    if (err) {
+      _transfersStatus.error = err.message;
+      console.error('[Transfers] Error:', err.message, stderr);
+      return;
+    }
+    const { reloadTransfersCache, getTransfersData } = require('./teamProfiles');
+    reloadTransfersCache();
+    const data = getTransfersData();
+    _transfersStatus.count = Object.keys(data).length;
+    console.log(`[Transfers] Complete — ${_transfersStatus.count} teams in transfers.json`);
+    console.log('[Transfers]', stdout.trim().split('\n').slice(-2).join(' | '));
+  });
+});
+
+app.get('/api/backfill/transfers/status', (_req, res) => {
+  const { getTransfersData } = require('./teamProfiles');
+  const data = getTransfersData();
+  res.json({ ..._transfersStatus, count: Object.keys(data).length });
+});
+
 app.get('/api/pir/analysis', (_req, res) => {
   const { getPIRData, readProfiles, playerImportanceScore } = require('./teamProfiles');
   const pirData = getPIRData();
@@ -4083,6 +4133,32 @@ async function runBackfillChain() {
       }
     } else {
       console.log(`[Backfill] PIR data is ${Math.round(pirAgeDays)} days old — skipping refresh`);
+    }
+
+    // Phase 5: Transfer data refresh — weekly cadence, skip if data is < 7 days old.
+    // Transfers don't change daily, so a weekly cadence matches PIR's pattern.
+    const transfersStore = (() => { try { return JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'transfers.json'), 'utf8')); } catch { return {}; } })();
+    const transfersEntries = Object.values(transfersStore);
+    const transfersNewest  = transfersEntries.reduce((a, b) => (!a || b.updatedAt > a.updatedAt) ? b : a, null);
+    const transfersAgeDays = transfersNewest ? (Date.now() - new Date(transfersNewest.updatedAt).getTime()) / 86400000 : Infinity;
+    if (transfersAgeDays >= 7) {
+      if (backfillCutoffReached()) {
+        console.log('[Backfill] 05:00 UTC cutoff — skipping transfers refresh');
+      } else {
+        _startupStatus.phase = 'transfers';
+        console.log('[Backfill] Phase 5: transfers refresh (data is ' + Math.round(transfersAgeDays) + ' days old)…');
+        try {
+          const { run: runTransfers } = require('./scripts/fetch-transfers');
+          await runTransfers();
+          const { reloadTransfersCache, getTransfersData } = require('./teamProfiles');
+          reloadTransfersCache();
+          console.log(`[Backfill] Phase 5 complete — ${Object.keys(getTransfersData()).length} team transfer entries`);
+        } catch (transfersErr) {
+          console.error('[Backfill] Transfers phase error (non-fatal):', transfersErr.message);
+        }
+      }
+    } else {
+      console.log(`[Backfill] Transfers data is ${Math.round(transfersAgeDays)} days old — skipping refresh`);
     }
 
     _startupStatus.phase = 'complete';
@@ -4859,6 +4935,13 @@ app.get('/api/server-status', async (_req, res) => {
         const { getPIRData } = require('./teamProfiles');
         const pd = getPIRData();
         const entries = Object.values(pd);
+        const mostRecent = entries.reduce((a, b) => (!a || b.updatedAt > a.updatedAt) ? b : a, null);
+        return { count: entries.length, lastUpdated: mostRecent?.updatedAt ?? null };
+      })(),
+      transfers: (() => {
+        const { getTransfersData } = require('./teamProfiles');
+        const td = getTransfersData();
+        const entries = Object.values(td);
         const mostRecent = entries.reduce((a, b) => (!a || b.updatedAt > a.updatedAt) ? b : a, null);
         return { count: entries.length, lastUpdated: mostRecent?.updatedAt ?? null };
       })(),

@@ -3,9 +3,10 @@
 const fs   = require('fs');
 const path = require('path');
 
-const DATA_DIR      = process.env.DATA_DIR || path.join(__dirname, 'data');
-const PROFILES_PATH = path.join(DATA_DIR, 'team-profiles.json');
-const PIR_PATH      = path.join(DATA_DIR, 'pir-data.json');
+const DATA_DIR       = process.env.DATA_DIR || path.join(__dirname, 'data');
+const PROFILES_PATH  = path.join(DATA_DIR, 'team-profiles.json');
+const PIR_PATH       = path.join(DATA_DIR, 'pir-data.json');
+const TRANSFERS_PATH = path.join(DATA_DIR, 'transfers.json');
 
 let _pirCache = null;
 function getPIRData() {
@@ -15,6 +16,18 @@ function getPIRData() {
   return _pirCache;
 }
 function reloadPIRCache() { _pirCache = null; }
+
+let _transfersCache = null;
+function getTransfersData() {
+  if (_transfersCache) return _transfersCache;
+  try { _transfersCache = JSON.parse(fs.readFileSync(TRANSFERS_PATH, 'utf8')); }
+  catch { _transfersCache = {}; }
+  return _transfersCache;
+}
+function reloadTransfersCache() { _transfersCache = null; }
+function getTransferData(teamId, season) {
+  return getTransfersData()[`${teamId}_${season}`] || null;
+}
 
 // Combined importance score: WOWY 60% + PIR 40%.
 // wowyDelta: raw WOWY delta in proportion units (e.g. 0.22 = +22pp).
@@ -559,6 +572,29 @@ function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dat
     }
   }
 
+  // 1c. Transfer quality modifier — active for the first 10 matchdays of a season,
+  // fading to zero as real match data replaces the transfer-based estimate. Requires
+  // opts.season and the team's games-played-this-season count (opts.homeMatchday /
+  // opts.awayMatchday) — both supplied by the caller from the live standings table.
+  const season = opts.season ?? null;
+  const transferMultiplier = (profile, matchday) => {
+    if (!season || matchday == null || matchday > 10) return { mult: 1, data: null };
+    const data = getTransferData(profile.teamId, season);
+    if (!data) return { mult: 1, data: null };
+    const decayFactor = 1 - (matchday / 10);
+    return { mult: 1 + (data.netQualityDelta / 100) * decayFactor, data };
+  };
+  const homeTransfer = transferMultiplier(homeProfile, opts.homeMatchday);
+  if (Math.abs(homeTransfer.mult - 1) > 0.01) {
+    home *= homeTransfer.mult;
+    notes.push(`Transfer modifier ×${homeTransfer.mult.toFixed(2)} (net quality ${homeTransfer.data.netQualityDelta >= 0 ? '+' : ''}${homeTransfer.data.netQualityDelta}, matchday ${opts.homeMatchday}/10)`);
+  }
+  const awayTransfer = transferMultiplier(awayProfile, opts.awayMatchday);
+  if (Math.abs(awayTransfer.mult - 1) > 0.01) {
+    away *= awayTransfer.mult;
+    notes.push(`Transfer modifier ×${awayTransfer.mult.toFixed(2)} (net quality ${awayTransfer.data.netQualityDelta >= 0 ? '+' : ''}${awayTransfer.data.netQualityDelta}, matchday ${opts.awayMatchday}/10)`);
+  }
+
   // 2. Opposition anomaly
   const anomaly = homeProfile.oppositionAnomalies?.find(
     a => a.opponentId === awayProfile.teamId && a.significant && a.matches >= thresholds.oppositionAnomaly
@@ -791,6 +827,9 @@ module.exports = {
   getWOWYDeltas,
   getPIRData,
   reloadPIRCache,
+  getTransferData,
+  getTransfersData,
+  reloadTransfersCache,
   playerImportanceScore,
   LEAGUE_AVG_HOME_WIN_RATE,
   LEAGUE_AVG_AWAY_WIN_RATE,
