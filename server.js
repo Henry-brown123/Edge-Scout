@@ -4806,7 +4806,7 @@ app.get('/api/server-status', async (_req, res) => {
   } catch {}
 
   res.json({
-    server: { uptime: Math.floor(process.uptime()), startedAt: _serverStartedAt, nodeVersion: process.version },
+    server: { uptime: Math.floor(process.uptime()), startedAt: _serverStartedAt, nodeVersion: process.version, buildMarker: 'odds-lookup-fix-v1' },
     disk:   { dataDir: DATA_DIR, writable: diskWritable, files },
     data:   {
       historicalFixtures: hist?.fixtures?.length ?? 0,
