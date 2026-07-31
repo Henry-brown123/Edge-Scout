@@ -625,13 +625,18 @@ function _buildTotalsMap(events) {
 
 async function fetchOddsForLeague(sport) {
   try {
+    // 'both_teams_to_score' (and the correctly-spelled 'btts') are rejected by this
+    // Odds API plan/endpoint with a 422 — requesting either causes the WHOLE call to
+    // fail, silently wiping out real h2h/totals odds for every fixture in the league
+    // and falling back to a synthetic odds placeholder. Request only markets that are
+    // confirmed to work; BTTS totals lines are simply unavailable until that's resolved.
     const { data } = await oddsApi.get(`/sports/${sport}/odds`, {
-      params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h,totals,both_teams_to_score', oddsFormat: 'decimal' },
+      params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h,totals', oddsFormat: 'decimal' },
     });
     const events = data || [];
     _oddsRawCache[sport] = events;
     return { oddsMap: _buildOddsMap(events), totalsMap: _buildTotalsMap(events) };
-  } catch { return { oddsMap: {}, totalsMap: {} }; }
+  } catch (e) { console.error('[Odds] fetchOddsForLeague failed:', e.response?.status, e.response?.data?.message || e.message); return { oddsMap: {}, totalsMap: {} }; }
 }
 
 // Build the per-bookmaker market array for a fixture from cached raw events
@@ -4806,7 +4811,7 @@ app.get('/api/server-status', async (_req, res) => {
   } catch {}
 
   res.json({
-    server: { uptime: Math.floor(process.uptime()), startedAt: _serverStartedAt, nodeVersion: process.version, buildMarker: 'odds-lookup-fix-v1' },
+    server: { uptime: Math.floor(process.uptime()), startedAt: _serverStartedAt, nodeVersion: process.version, buildMarker: 'odds-fetch-fix-v2' },
     disk:   { dataDir: DATA_DIR, writable: diskWritable, files },
     data:   {
       historicalFixtures: hist?.fixtures?.length ?? 0,
