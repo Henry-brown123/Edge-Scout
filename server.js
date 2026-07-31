@@ -3581,6 +3581,20 @@ app.get('/api/backfill/transfers/status', (_req, res) => {
   res.json({ ..._transfersStatus, count: Object.keys(data).length });
 });
 
+// TEMPORARY diagnostic endpoint — remove after re-verifying the PIR discount fix.
+app.get('/api/debug/transfers-summary', (_req, res) => {
+  const { getTransfersData } = require('./teamProfiles');
+  const data = Object.values(getTransfersData());
+  const sorted = [...data].sort((a, b) => b.netQualityDelta - a.netQualityDelta);
+  res.json({
+    totalTeams: data.length,
+    topStrengthened: sorted.slice(0, 5),
+    topWeakened: sorted.slice(-5).reverse(),
+    rangers: data.find(t => t.teamName === 'Rangers') || null,
+    wolfsberger: data.find(t => t.teamName === 'Wolfsberger AC') || null,
+  });
+});
+
 app.get('/api/pir/analysis', (_req, res) => {
   const { getPIRData, readProfiles, playerImportanceScore } = require('./teamProfiles');
   const pirData = getPIRData();
