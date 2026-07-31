@@ -211,6 +211,10 @@ function standingsScore(standings, teamId, fixtureContext) {
   const flat = Array.isArray(standings[0]) ? standings.flat() : standings;
   const entry = flat.find(s => s.team?.id === teamId);
   if (!entry) return 50;
+  // Early-season table positions are arbitrary or carried over from last season's
+  // finish — not meaningful until each team has a real sample of results.
+  const gamesPlayed = entry.all?.played || 0;
+  if (gamesPlayed < 3) return 50;
   return Math.round(((flat.length - entry.rank + 1) / flat.length) * 100);
 }
 
