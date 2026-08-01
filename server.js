@@ -90,19 +90,43 @@ console.log(`[Data] process.env.DATA_DIR=${process.env.DATA_DIR ?? '(unset)'} �
 
 const MIN_VALID_BYTES = 100;
 
+// Per-file structural validators — for small state files, byte count is the wrong
+// corruption signal (a healthy file can legitimately be under MIN_VALID_BYTES).
+// Returns true/false to override the size heuristic, or null to fall back to it.
+function structuralCheck(file, parsed) {
+  if (parsed == null) return false;
+  if (file === 'bankroll.json')     return typeof parsed.initial === 'number';
+  if (file === 'watching.json')     return Array.isArray(parsed);
+  if (file === 'transactions.json') return Array.isArray(parsed);
+  return null;
+}
+
 function readJSON(file) {
   const fullPath = path.join(DATA_DIR, file);
+  let size;
   try {
-    const size = fs.statSync(fullPath).size;
-    if (size < MIN_VALID_BYTES) {
-      console.warn(`[Data] readJSON(${file}): ${size} bytes — possibly corrupt, treating as missing`);
-      return null;
-    }
-    return JSON.parse(fs.readFileSync(fullPath, 'utf8'));
+    size = fs.statSync(fullPath).size;
   } catch (e) {
     if (e.code !== 'ENOENT') console.warn(`[Data] readJSON(${file}): ${e.message}`);
     return null;
   }
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(fullPath, 'utf8'));
+  } catch (e) {
+    console.warn(`[Data] readJSON(${file}): invalid JSON — ${e.message}`);
+    return null;
+  }
+  const structural = structuralCheck(file, parsed);
+  if (structural === false) {
+    console.warn(`[Data] readJSON(${file}): failed structural validation, treating as missing`);
+    return null;
+  }
+  if (structural === null && size < MIN_VALID_BYTES) {
+    console.warn(`[Data] readJSON(${file}): ${size} bytes — possibly corrupt, treating as missing`);
+    return null;
+  }
+  return parsed;
 }
 
 function writeJSON(file, data, options = {}) {
@@ -5130,12 +5154,21 @@ app.listen(PORT, () => {
   migrateCalibrationProjectedBetKey();
   // 5b. Recalculate bankroll from unique resolved bets (fixes duplicate-bet inflation)
   recalculateBankroll();
-  // 5b2. Repair corrupt bankroll.json (< MIN_VALID_BYTES from a partial write)
+  // 5b2. Repair bankroll.json if missing/unparsable/structurally invalid (not just small —
+  // a healthy {initial, lastUpdated} file is legitimately well under MIN_VALID_BYTES)
   {
     const brPath = path.join(DATA_DIR, 'bankroll.json');
+    let brSize = 0;
+    let needsRepair = false;
     try {
-      const brSize = fs.statSync(brPath).size;
-      if (brSize < MIN_VALID_BYTES) {
+      brSize = fs.statSync(brPath).size;
+      const parsed = JSON.parse(fs.readFileSync(brPath, 'utf8'));
+      if (typeof parsed.initial !== 'number') needsRepair = true;
+    } catch {
+      needsRepair = true;
+    }
+    try {
+      if (needsRepair) {
         const repaired = getBankroll();
         writeJSON('bankroll.json', { initial: repaired.initial, lastUpdated: new Date().toISOString() });
         console.log(`[Startup] Repaired corrupt bankroll.json (was ${brSize}b) — initial: ${repaired.initial}, current: ${repaired.current}`);
