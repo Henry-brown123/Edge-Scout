@@ -618,3 +618,17 @@ Scottish Premiership's historical fixture backfill extended from 3 to 5 seasons 
 **Finding date:** 2026-08-01
 
 Scottish Premiership Pinnacle closing odds ceiling: 991 matched fixtures (9 short of the 1,000 standard). The 2020/2021 seasons were fetched and scored but The Odds API has no Pinnacle historical coverage for SPL pre-2022 — confirmed by 100% miss rate on 100 fresh fixture attempts. 991 is the practical ceiling under this data source. The +0.91% ROI on 991 fixtures is treated as directionally useful but borderline-inconclusive per the formal standard. SPL remains in paper mode with quarter_kelly recommendation pending 50 live paper trades.
+
+---
+
+## 20. Maintenance note — hardcoded season boundary in paperTradeOnly auto-management
+
+**Finding date:** 2026-08-01
+
+`getLivePaperTradeCount` in `server.js` (part of the `/api/ev-calibration` `paperTradeOnly` auto-management logic — see section 19's related fix) has a hardcoded season boundary date of `2026-08-01`. This must be updated at the start of each new season or the live paper trade count will be incorrectly calculated — bets from the previous season would continue to count toward the current season's live-trade threshold, allowing a league to clear the 10-live-trade gate on stale data.
+
+Consider making this dynamic by reading from a `settings.currentSeasonStart` field — update that field once per season rather than hardcoding in the function.
+
+### Pre-season checklist (started here — first entry)
+
+- [ ] **August 2027:** Update the season boundary used by `getLivePaperTradeCount` (either the hardcoded date in `server.js` or `settings.currentSeasonStart`, whichever is in place by then) to `2027-08-01`.
