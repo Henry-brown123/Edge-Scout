@@ -105,14 +105,15 @@ function readJSON(file) {
   }
 }
 
-function writeJSON(file, data) {
+function writeJSON(file, data, options = {}) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const dest = path.join(DATA_DIR, file);
   const tmp  = dest + '.tmp';
   try {
     const serialised = JSON.stringify(data, null, 2);
-    // Guard: never overwrite a substantial file with an empty structure
-    if (serialised.length < 10) {
+    // Guard: never overwrite a substantial file with an empty structure, unless
+    // the caller confirms the empty result is intentional (e.g. legitimate expiry).
+    if (!options.allowEmpty && serialised.length < 10) {
       let existingSize = 0;
       try { existingSize = fs.statSync(dest).size; } catch {}
       if (existingSize >= MIN_VALID_BYTES) {
@@ -259,7 +260,7 @@ const WC_2026_SEEDS = {
 };
 
 function saveBets(bets)         { writeJSON('bets.json', bets); }
-function saveWatching(list)     { writeJSON('watching.json', list); }
+function saveWatching(list, options) { writeJSON('watching.json', list, options); }
 function saveBankroll(br)       { writeJSON('bankroll.json', { ...br, lastUpdated: new Date().toISOString() }); }
 function saveCalibration(list)  { writeJSON('calibration.json', list); }
 function saveOddsHistory(list)  { writeJSON('odds-history.json', list); }
@@ -1772,7 +1773,7 @@ function setupScheduler() {
     const rawW = getWatching();
     const futureW = rawW.filter(w => new Date(w.kickoff).getTime() > nowMs2);
     if (futureW.length < rawW.length) {
-      saveWatching(futureW);
+      saveWatching(futureW, { allowEmpty: true });
       console.log(`[Cron:Resolve] Expired ${rawW.length - futureW.length} past-kickoff watching entries`);
     }
     try {
@@ -3686,7 +3687,7 @@ app.post('/api/scan/prematch/:watchId', async (req, res) => {
   if (!entry) return res.status(404).json({ error: 'Not found in watching list' });
   const bet = await runPreMatchScan(entry);
   if (bet) {
-    saveWatching(watching.filter(w => w.id !== entry.id));
+    saveWatching(watching.filter(w => w.id !== entry.id), { allowEmpty: true });
     res.json(bet);
   } else {
     res.json({ dropped: true });
@@ -5121,7 +5122,7 @@ app.listen(PORT, () => {
   const rawWatching = getWatching();
   const future = rawWatching.filter(w => new Date(w.kickoff).getTime() > nowMs);
   if (future.length < rawWatching.length) {
-    saveWatching(future);
+    saveWatching(future, { allowEmpty: true });
     console.log(`[Startup] Expired ${rawWatching.length - future.length} past-kickoff watching entries`);
   }
 
