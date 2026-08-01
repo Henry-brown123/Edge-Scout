@@ -585,3 +585,28 @@ The GBDT model (`models/gbdt.js`) accepts `leagueConfig` for interface compatibi
 A post-prediction per-league bias correction (`applyLeagueBiasCorrection`) has been added to bridge this gap — blends GBDT output 70/30 toward league observed rates (`LEAGUE_CONFIG.avgHomeWinRate/avgDrawRate/avgAwayWinRate`), applied in `scoreOneFixture` immediately after `model.predict()` returns. This means LEAGUE_CONFIG calibration now genuinely affects live predictions for the first time.
 
 Verified on Dundee Utd vs Rangers (SPL) and Villarreal vs Atletico Madrid (La Liga, historical) — both moved in the correct direction toward each league's observed base rates.
+
+---
+
+## 18. Minimum calibration dataset standard
+
+**Established:** 2026-08-01
+
+Every league must have **1,000+ matched Pinnacle closing odds fixtures** before EV calibration results are considered reliable. Leagues below this threshold should be treated as inconclusive regardless of ROI sign — a −53.6% ROI on 106 matched fixtures (Primeira Liga) is not evidence the league is unprofitable, it's evidence there isn't enough data yet to know either way.
+
+Extending to 5+ historical seasons is always preferred over waiting for live data accumulation — it's a one-time API cost against already-supported backfill infrastructure, versus months of waiting for live fixtures to slowly build the same sample size.
+
+Status as of 2026-08-01 (post 100K-plan closing odds backfill):
+
+| League | Matched fixtures | Meets 1,000 threshold? |
+|---|---|---|
+| Serie A | 1,140 | ✅ |
+| Premier League | 1,026 | ✅ |
+| Eredivisie | 927 | ❌ |
+| La Liga | 883 | ❌ |
+| Bundesliga | 853 | ❌ |
+| Ligue 1 | 614 | ❌ |
+| Scottish Premiership | 573 | ❌ |
+| Primeira Liga | 106 | ❌ |
+
+Scottish Premiership's historical fixture backfill extended from 3 to 5 seasons (added 2021, 2020) to work toward this threshold. La Liga, Bundesliga, Ligue 1, and Primeira Liga already had 5 seasons configured in `HISTORICAL_BACKFILL_CONFIG` — their shortfall is in closing-odds matching against the existing fixture pool, not fixture backfill depth.

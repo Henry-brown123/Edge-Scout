@@ -398,7 +398,7 @@ const BACKFILL_CONFIG = [
   { leagueId: '61',  name: 'Ligue 1',                    seasons: [2024, 2023, 2022, 2021, 2020] },
   { leagueId: '2',   name: 'UEFA Champions League',      seasons: [2024, 2023, 2022, 2021, 2020] },
   // New leagues — added July 2026
-  { leagueId: '179', name: 'Scottish Premiership',       seasons: [2024, 2023, 2022] },
+  { leagueId: '179', name: 'Scottish Premiership',       seasons: [2024, 2023, 2022, 2021, 2020] },
   { leagueId: '88',  name: 'Eredivisie',                 seasons: [2024, 2023, 2022, 2021, 2020] },
   { leagueId: '94',  name: 'Primeira Liga',              seasons: [2024, 2023, 2022, 2021, 2020] },
   { leagueId: '3',   name: 'Europa League',              seasons: [2024, 2023, 2022] },
@@ -1893,7 +1893,7 @@ const HISTORICAL_BACKFILL_CONFIG = [
   { leagueId: '5',   name: 'Nations League',    seasons: [2024, 2022] },
   { leagueId: '10',  name: 'Intl Friendlies',   seasons: [2024, 2023, 2022] },
   // New leagues — added July 2026
-  { leagueId: '179', name: 'Scottish Premiership', seasons: [2024, 2023, 2022] },
+  { leagueId: '179', name: 'Scottish Premiership', seasons: [2024, 2023, 2022, 2021, 2020] },
   { leagueId: '88',  name: 'Eredivisie',            seasons: [2024, 2023, 2022, 2021, 2020] },
   { leagueId: '94',  name: 'Primeira Liga',         seasons: [2024, 2023, 2022, 2021, 2020] },
   { leagueId: '3',   name: 'Europa League',         seasons: [2024, 2023, 2022] },
