@@ -3574,6 +3574,16 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
+// TEMPORARY diagnostic endpoint — remove after homeAdvBaseWeight fix verification.
+app.get('/api/debug/league-fixtures', (req, res) => {
+  const leagueId = req.query.league;
+  const hist = readJSON('backfill-historical.json') || { fixtures: [] };
+  const fixtures = (hist.fixtures || [])
+    .filter(f => f.fixture?.status?.short === 'FT')
+    .filter(f => String(f.league?.id) === String(leagueId));
+  res.json(fixtures);
+});
+
 
 // Transfer data fetch — completed transfers per team for the current season,
 // used for the first-10-matchdays squad-quality modifier in applyTeamProfileModifiers.
