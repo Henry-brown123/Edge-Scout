@@ -4750,9 +4750,24 @@ app.get('/api/ev-calibration', (_req, res) => {
 
     // Bidirectional paperTradeOnly management:
     // Add when ROI < 0 AND posEdgeN >= 30 (sufficient evidence of negative edge)
-    // Remove when ROI > 0 AND posEdgeN >= 50 (higher bar to reinstate than to suppress)
-    // Premier League (39) is never auto-removed regardless of short-term fluctuation
-    const NEVER_AUTO_REMOVE = new Set([39]);
+    // Remove when ROI > 0 AND posEdgeN >= 50 AND the league meets the minimum
+    // calibration dataset standard (1,000+ matched Pinnacle fixtures — see
+    // docs/july-upgrade-notes.md section 18) AND has accumulated live paper-trade
+    // evidence this season — backfill ROI alone is not sufficient grounds to lift
+    // the lock, no matter how large the historical sample.
+    // Premier League (39) and Serie A (135) are never auto-removed regardless of
+    // short-term fluctuation — both are already validated, live-eligible leagues.
+    const NEVER_AUTO_REMOVE = new Set([39, 135]);
+    const CURRENT_SEASON_START = new Date('2026-08-01T00:00:00Z');
+    const MIN_CALIBRATION_FIXTURES = 1000;
+    const MIN_LIVE_PAPER_TRADES = 10;
+    function getLivePaperTradeCount(leagueId) {
+      return getBets().filter(b =>
+        parseInt(b.leagueId, 10) === leagueId &&
+        b.mode === 'paper' &&
+        b.lockedAt && new Date(b.lockedAt) >= CURRENT_SEASON_START
+      ).length;
+    }
     const leagueIdByName = Object.fromEntries(
       Object.entries(LEAGUE_CONFIG).map(([id, v]) => [v.name, parseInt(id, 10)])
     );
@@ -4761,7 +4776,11 @@ app.get('/api/ev-calibration', (_req, res) => {
       const lid = leagueIdByName[l.league];
       if (!lid || l.roi === null) continue;
       if (l.roi < 0 && l.posEdgeN >= 30) existingPaper.add(lid);
-      if (l.roi > 0 && l.posEdgeN >= 50 && !NEVER_AUTO_REMOVE.has(lid)) existingPaper.delete(lid);
+      const meetsCalibrationStandard = l.n >= MIN_CALIBRATION_FIXTURES;
+      const hasLivePaperTrades = getLivePaperTradeCount(lid) >= MIN_LIVE_PAPER_TRADES;
+      if (l.roi > 0 && l.posEdgeN >= 50 && meetsCalibrationStandard && hasLivePaperTrades && !NEVER_AUTO_REMOVE.has(lid)) {
+        existingPaper.delete(lid);
+      }
     }
     const newPaper = [...existingPaper];
     settings.paperTradeOnly = newPaper;
