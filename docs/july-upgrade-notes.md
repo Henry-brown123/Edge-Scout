@@ -610,3 +610,11 @@ Status as of 2026-08-01 (post 100K-plan closing odds backfill):
 | Primeira Liga | 106 | ❌ |
 
 Scottish Premiership's historical fixture backfill extended from 3 to 5 seasons (added 2021, 2020) to work toward this threshold. La Liga, Bundesliga, Ligue 1, and Primeira Liga already had 5 seasons configured in `HISTORICAL_BACKFILL_CONFIG` — their shortfall is in closing-odds matching against the existing fixture pool, not fixture backfill depth.
+
+---
+
+## 19. Scottish Premiership Pinnacle closing odds ceiling
+
+**Finding date:** 2026-08-01
+
+Scottish Premiership Pinnacle closing odds ceiling: 991 matched fixtures (9 short of the 1,000 standard). The 2020/2021 seasons were fetched and scored but The Odds API has no Pinnacle historical coverage for SPL pre-2022 — confirmed by 100% miss rate on 100 fresh fixture attempts. 991 is the practical ceiling under this data source. The +0.91% ROI on 991 fixtures is treated as directionally useful but borderline-inconclusive per the formal standard. SPL remains in paper mode with quarter_kelly recommendation pending 50 live paper trades.
