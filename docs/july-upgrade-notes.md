@@ -649,3 +649,9 @@ Applied `homeAdvBaseWeight` and base rate corrections to 6 leagues based on the 
 Premier League and Serie A unchanged — validated positive-ROI leagues, no calibration changes.
 
 Residual home gaps in La Liga, Bundesliga (marginal), and Champions League flagged for the domestic quality anchor implementation — the architectural fix that will properly address home advantage underestimation across all leagues.
+
+---
+
+## 22. La Liga homeAdvBaseWeight finding — August 1
+
+La Liga homeAdvBaseWeight investigation August 1: increasing from 1.10 to 1.80 improved the calibration gap (6.17pp→3.87pp) but worsened ROI from -2.30% to -6.65%. Root cause: the original 180 home picks at 1.10 were genuinely profitable (+8.71% ROI). Raising to 1.80 diluted this set by adding 109 lower-quality home picks while simultaneously degrading the away pick set. Calibration accuracy and betting ROI move in opposite directions for La Liga on this parameter. Reverted to 1.10. Key principle: ROI on a large matched-odds sample (1,457 fixtures) takes precedence over calibration gap reduction when they conflict.
