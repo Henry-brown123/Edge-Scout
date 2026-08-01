@@ -3599,6 +3599,109 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
+// TEMPORARY diagnostic endpoint — preview of the proposed Priority 1+2 fix (real GBDT
+// pipeline + homeAdvBaseWeight wired into bias correction). Read-only: does not touch
+// the real /api/ev-calibration route, settings.json, or calibration.json. Remove once
+// the numbers have been reviewed and a decision is made on whether to ship for real.
+app.get('/api/debug/ev-calibration-gbdt-preview', (req, res) => {
+  try {
+    const gbdtModel = require('./models/interface');
+    const { classifyFixture, LEAGUE_CONFIG } = require('./scoring');
+    const historical    = readJSON('backfill-historical.json') || {};
+    const scoredRecords = historical.scoredRecords || [];
+    const optWeights    = historical.optimisedWeights || {};
+    const closingOdds   = readJSON('closing-odds.json') || {};
+
+    // Proposed replacement for scoring.js's applyLeagueBiasCorrection (Priority 2) —
+    // wires homeAdvBaseWeight into the home target before blending toward it.
+    function previewBiasCorrection(probs, leagueId, leagueConfig) {
+      const config = leagueConfig[leagueId];
+      if (!config) return probs;
+      const homeTarget = config.avgHomeWinRate * (config.homeAdvBaseWeight || 1.0);
+      const drawTarget = config.avgDrawRate;
+      const awayTarget = config.avgAwayWinRate;
+      const targetSum = homeTarget + drawTarget + awayTarget;
+      const normHome = homeTarget / targetSum;
+      const normDraw = drawTarget / targetSum;
+      const normAway = awayTarget / targetSum;
+      const blendFactor = 0.3;
+      const correctedHome = probs.home * (1 - blendFactor) + normHome * blendFactor;
+      const correctedDraw = probs.draw * (1 - blendFactor) + normDraw * blendFactor;
+      const correctedAway = probs.away * (1 - blendFactor) + normAway * blendFactor;
+      const total = correctedHome + correctedDraw + correctedAway;
+      return { home: correctedHome / total, draw: correctedDraw / total, away: correctedAway / total };
+    }
+
+    const BANDS = [
+      { label: '<0%', min: -Infinity, max: 0 },
+      { label: '0-5%', min: 0, max: 0.05 },
+      { label: '5-10%', min: 0.05, max: 0.10 },
+      { label: '10-15%', min: 0.10, max: 0.15 },
+      { label: '15-20%', min: 0.15, max: 0.20 },
+      { label: '20%+', min: 0.20, max: Infinity },
+    ];
+
+    const matched = [];
+    for (const rec of scoredRecords) {
+      const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
+      if (!co) continue;
+      if (!rec.actualOutcome) continue;
+      if (!rec.homeFactors || !rec.awayFactors) continue;
+      const context = rec.context || classifyFixture(rec.leagueId);
+      const weights = optWeights[context] || optWeights.club_domestic;
+      if (!weights) continue;
+      const leagueId = parseInt(rec.leagueId, 10);
+      const leagueConfig = LEAGUE_CONFIG[leagueId];
+      if (!leagueConfig) continue;
+
+      const rawProbs = gbdtModel.predict(rec.homeFactors, rec.awayFactors, weights, context, leagueConfig);
+      const probs = previewBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
+
+      let topOutcome, modelProb, pinnacleOdds;
+      if (probs.home >= probs.draw && probs.home >= probs.away) { topOutcome = 'home'; modelProb = probs.home; pinnacleOdds = co.homeOdds; }
+      else if (probs.away >= probs.draw) { topOutcome = 'away'; modelProb = probs.away; pinnacleOdds = co.awayOdds; }
+      else { topOutcome = 'draw'; modelProb = probs.draw; pinnacleOdds = co.drawOdds; }
+      if (!pinnacleOdds || pinnacleOdds <= 1) continue;
+
+      const pinnacleImplied = 1 / pinnacleOdds;
+      const edge = (modelProb - pinnacleImplied) / pinnacleImplied;
+      const won  = rec.actualOutcome === topOutcome;
+      matched.push({ leagueId, topOutcome, modelProb, pinnacleOdds, edge, won });
+    }
+
+    function roi(arr) { if (!arr.length) return null; return arr.reduce((s, f) => s + (f.won ? (f.pinnacleOdds - 1) : -1), 0) / arr.length; }
+    function bandStats(fxs) {
+      return BANDS.map(b => {
+        const inBand = fxs.filter(f => f.edge >= b.min && f.edge < b.max);
+        return { band: b.label, n: inBand.length, roi: roi(inBand) };
+      });
+    }
+
+    const posEdgeAll = matched.filter(f => f.edge >= 0.05);
+
+    const leagueMap = {};
+    for (const f of matched) {
+      const name = LEAGUE_CONFIG[f.leagueId]?.name || `League ${f.leagueId}`;
+      if (!leagueMap[name]) leagueMap[name] = [];
+      leagueMap[name].push(f);
+    }
+    const byLeague = Object.entries(leagueMap)
+      .filter(([, fxs]) => fxs.length >= 100)
+      .map(([league, fxs]) => {
+        const posE = fxs.filter(f => f.edge >= 0.05);
+        return { league, n: fxs.length, posEdgeN: posE.length, roi: roi(posE), bands: bandStats(fxs) };
+      })
+      .sort((a, b) => b.n - a.n);
+
+    res.json({
+      summary: { totalMatched: matched.length, posEdgeN: posEdgeAll.length, roi: roi(posEdgeAll) },
+      byLeague,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0, 5) });
+  }
+});
+
 // TEMPORARY diagnostic endpoint — remove after avgAwayWinRate bias-correction sweep.
 // Unlike homeAdvBaseWeight (consumed only by computeModelProb, the linear/diagnostic model),
 // avgAwayWinRate is consumed only by applyLeagueBiasCorrection, which blends the LIVE GBDT
