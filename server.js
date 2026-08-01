@@ -4653,7 +4653,7 @@ app.get('/api/ev-calibration', (_req, res) => {
     const optWeights     = historical.optimisedWeights || {};
     const closingOdds    = readJSON('closing-odds.json') || {};   // keyed by fixtureId
 
-    const { computeModelProb, classifyFixture, LEAGUE_CONFIG } = require('./scoring');
+    const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG } = require('./scoring');
 
     const BANDS = [
       { label: '< 0%',   min: -Infinity, max: 0    },
@@ -4675,8 +4675,12 @@ app.get('/api/ev-calibration', (_req, res) => {
       const weights    = optWeights[context] || optWeights.club_domestic;
       if (!weights) continue;
 
-      const leagueConfig = LEAGUE_CONFIG[parseInt(rec.leagueId, 10)] || null;
-      const probs = computeModelProb(rec.homeFactors, rec.awayFactors, weights, context, leagueConfig);
+      // Real live pipeline: GBDT model.predict() -> applyLeagueBiasCorrection(),
+      // matching scoreOneFixture() exactly (server.js:882-883). computeModelProb
+      // (the linear model) is never used for live predictions — see docs/july-upgrade-notes.md.
+      const leagueId  = parseInt(rec.leagueId, 10);
+      const rawProbs  = model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]);
+      const probs     = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
 
       let topOutcome, modelProb, pinnacleOdds;
       if (probs.home >= probs.draw && probs.home >= probs.away) {
