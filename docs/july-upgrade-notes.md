@@ -632,3 +632,20 @@ Consider making this dynamic by reading from a `settings.currentSeasonStart` fie
 ### Pre-season checklist (started here — first entry)
 
 - [ ] **August 2027:** Update the season boundary used by `getLivePaperTradeCount` (either the hardcoded date in `server.js` or `settings.currentSeasonStart`, whichever is in place by then) to `2027-08-01`.
+
+---
+
+## 21. Multi-league calibration — August 1
+
+Applied `homeAdvBaseWeight` and base rate corrections to 6 leagues based on the expanded diagnostic dataset (9,886 matched fixtures):
+
+- **Ligue 1:** 0.96→1.15, `avgDrawRate` corrected — ✅ all targets met
+- **Eredivisie:** 1.00→1.65 — ✅ all targets met
+- **Primeira Liga:** 0.97→1.25 — ✅ all targets met
+- **Bundesliga:** 1.00→1.35 — home gap 4.14pp→2.87pp ✅, away 0.4pp over target (acceptable)
+- **La Liga:** 1.10→1.80 — home gap 6.17pp→3.87pp, improved but residual gap remains. `homeAdvBaseWeight` lever has diminishing returns beyond 1.80. Flagged for architectural review alongside SPL and CL.
+- **Champions League:** 0.94→1.30 — home gap 7.93pp→5.89pp, draw gap fixed ✅. CL has the same weak-lever ceiling as SPL — `homeAdvBaseWeight` cannot close the gap alone. Requires domestic quality anchor architectural fix.
+
+Premier League and Serie A unchanged — validated positive-ROI leagues, no calibration changes.
+
+Residual home gaps in La Liga, Bundesliga (marginal), and Champions League flagged for the domestic quality anchor implementation — the architectural fix that will properly address home advantage underestimation across all leagues.
