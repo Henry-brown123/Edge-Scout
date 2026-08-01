@@ -655,3 +655,9 @@ Residual home gaps in La Liga, Bundesliga (marginal), and Champions League flagg
 ## 22. La Liga homeAdvBaseWeight finding — August 1
 
 La Liga homeAdvBaseWeight investigation August 1: increasing from 1.10 to 1.80 improved the calibration gap (6.17pp→3.87pp) but worsened ROI from -2.30% to -6.65%. Root cause: the original 180 home picks at 1.10 were genuinely profitable (+8.71% ROI). Raising to 1.80 diluted this set by adding 109 lower-quality home picks while simultaneously degrading the away pick set. Calibration accuracy and betting ROI move in opposite directions for La Liga on this parameter. Reverted to 1.10. Key principle: ROI on a large matched-odds sample (1,457 fixtures) takes precedence over calibration gap reduction when they conflict.
+
+---
+
+## 23. Bundesliga homeAdvBaseWeight investigation — August 1
+
+Bundesliga homeAdvBaseWeight investigation August 1: tested 1.00, 1.20, 1.35, 1.50. Unlike La Liga, Bundesliga shows genuine monotonic improvement up to 1.35 (ROI -5.29%→-2.72%, home picks -3.62%→-1.00%). At 1.50, overall ROI continues improving (-1.82%) but the 5-10% edge band deteriorates sharply (-7% to -21% on n=59) alongside the pre-existing 15-20% weakness. Two-band deterioration at 1.50 is an early La Liga-style dilution signal. Held at 1.35 as the best risk-adjusted value. Review again after 500+ live scored records accumulate for Bundesliga.
