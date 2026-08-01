@@ -3112,9 +3112,13 @@ async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null 
       const date  = fix.fixture?.date;
       if (!fid || !sport || !date) continue;
       if (leagueIds && !leagueIds.includes(lid)) { skipped++; continue; }
-      // 3-season window: 2022/23, 2023/24, 2024/25 (calendar year 2022+)
+      // 5-season window: 2020/21 through 2024/25 (calendar year 2020+). Was hardcoded
+      // to 2022+ (3 seasons) independent of HISTORICAL_BACKFILL_CONFIG — leagues with
+      // 5 seasons of fixtures already fetched (La Liga, Bundesliga, Ligue 1, Primeira
+      // Liga) had their 2020/2021 fixtures silently excluded from ever being matched
+      // against Pinnacle closing odds, regardless of budget.
       const year = new Date(date).getUTCFullYear();
-      if (year < 2022) { skipped++; continue; }
+      if (year < 2020) { skipped++; continue; }
       if (alreadyDone.has(fid)) { skipped++; continue; }
       const hourKey = date.slice(0, 13); // "2024-10-05T15"
       const groupKey = `${sport}|${hourKey}`;
