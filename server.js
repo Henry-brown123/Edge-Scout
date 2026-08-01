@@ -3574,20 +3574,6 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
-// TEMPORARY diagnostic endpoint — remove after multi-league diagnostic sweep.
-app.get('/api/debug/league-export', (req, res) => {
-  const leagueId = req.query.league;
-  const hist = readJSON('backfill-historical.json') || { fixtures: [] };
-  const fixtures = (hist.fixtures || [])
-    .filter(f => f.fixture?.status?.short === 'FT')
-    .filter(f => String(f.league?.id) === String(leagueId));
-  const teamIds = new Set();
-  fixtures.forEach(f => { if (f.teams?.home?.id) teamIds.add(f.teams.home.id); if (f.teams?.away?.id) teamIds.add(f.teams.away.id); });
-  const { getTransfersData } = require('./teamProfiles');
-  const allTransfers = getTransfersData();
-  const transfers = Object.values(allTransfers).filter(t => teamIds.has(t.teamId));
-  res.json({ leagueId, fixtureCount: fixtures.length, fixtures, transfers });
-});
 
 // Transfer data fetch — completed transfers per team for the current season,
 // used for the first-10-matchdays squad-quality modifier in applyTeamProfileModifiers.
