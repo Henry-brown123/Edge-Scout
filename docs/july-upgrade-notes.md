@@ -661,3 +661,13 @@ La Liga homeAdvBaseWeight investigation August 1: increasing from 1.10 to 1.80 i
 ## 23. Bundesliga homeAdvBaseWeight investigation — August 1
 
 Bundesliga homeAdvBaseWeight investigation August 1: tested 1.00, 1.20, 1.35, 1.50. Unlike La Liga, Bundesliga shows genuine monotonic improvement up to 1.35 (ROI -5.29%→-2.72%, home picks -3.62%→-1.00%). At 1.50, overall ROI continues improving (-1.82%) but the 5-10% edge band deteriorates sharply (-7% to -21% on n=59) alongside the pre-existing 15-20% weakness. Two-band deterioration at 1.50 is an early La Liga-style dilution signal. Held at 1.35 as the best risk-adjusted value. Review again after 500+ live scored records accumulate for Bundesliga.
+
+---
+
+## 24. Primeira Liga, Eredivisie, Ligue 1 homeAdvBaseWeight investigation — August 1
+
+Primeira Liga homeAdvBaseWeight investigation August 1: baseline home ROI +32.83% (profitable). Raising to 1.25 diluted to +21.68% via La Liga-style mechanism — more home picks, progressively lower quality. Overall ROI improvement (-1.92%→-1.28%) is a mix-shift artifact. Reverted to 0.97 to preserve the profitable home signal.
+
+Eredivisie homeAdvBaseWeight investigation August 1: topline improvement (-11.86%→-10.04%) entirely driven by away side improving, home side gets worse at every step. 20%+ band worsens monotonically (-13.34%→-17.25%). Mix-shift artifact, not genuine improvement. Reverted to 1.00.
+
+Ligue 1 homeAdvBaseWeight at 1.15: near-breakeven result (-0.02% vs baseline -2.10%). No dilution of profitable signal — home was already negative at baseline. Away-side concentration drives improvement. Kept at 1.15.
