@@ -1128,6 +1128,11 @@ async function runMorningScan(leagueIds) {
   // Accumulate deduplicated form fixtures across all leagues for team profile rebuild
   const allFormFixtures = new Map(); // fixtureId → fixture
 
+  // Load historical backfill pool once — shared across all leagues, no API cost.
+  const backfillData = readJSON('backfill-historical.json') || { fixtures: [] };
+  const backfillFixtures = (backfillData.fixtures || [])
+    .filter(f => f.fixture?.status?.short === 'FT');
+
   for (const leagueId of leagueIds) {
     const meta = LEAGUES[leagueId] || { season: 2024 };
     try {
@@ -1147,8 +1152,20 @@ async function runMorningScan(leagueIds) {
         .filter(f => f.fixture?.status?.short === 'FT')
         .sort((a, b) => new Date(b.fixture?.date) - new Date(a.fixture?.date));
 
+      // Blend with historical backfill for this league — gives form/momentum/defense/xG
+      // access to the full backfilled history instead of just the live last=60 pool.
+      // String() coercion: leagueId here is a string (from activeLeagues), but
+      // f.league.id in the parsed JSON backfill store is a number.
+      const leagueBackfill = backfillFixtures.filter(f => String(f.league?.id) === String(leagueId));
+
+      const enrichedFormFixtures = [...formFixtures, ...leagueBackfill]
+        .filter((f, i, arr) =>
+          arr.findIndex(x => x.fixture?.id === f.fixture?.id) === i
+        )
+        .sort((a, b) => new Date(b.fixture?.date) - new Date(a.fixture?.date));
+
       // Accumulate for team profile rebuild (deduplicate by fixture ID)
-      formFixtures.forEach(f => allFormFixtures.set(f.fixture?.id, f));
+      enrichedFormFixtures.forEach(f => allFormFixtures.set(f.fixture?.id, f));
 
       // Standings
       const { data: sd } = await apiSports.get('/standings', { params: { league: leagueId, season: meta.season } });
@@ -1171,7 +1188,7 @@ async function runMorningScan(leagueIds) {
 
       for (const fix of fixtures) {
         try {
-          const scored = await scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap, settings, totalsMap);
+          const scored = await scoreOneFixture(fix, enrichedFormFixtures, standings, statsCache, oddsMap, settings, totalsMap);
           const best   = scored.results.reduce((a, b) => a.successScore > b.successScore ? a : b);
           persistOddsSnapshot(fix, scored, meta.sport || 'soccer_epl', 'morning', leagueId, meta.name, settings);
           const calEntry = {
@@ -4891,6 +4908,16 @@ app.get('/api/performance/real', (_req, res) => {
       bets,
     });
   } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// TEMPORARY diagnostic endpoint — remove after enriched form pool verification.
+app.get('/api/debug/league-backfill', (req, res) => {
+  const leagueId = req.query.league;
+  const data = readJSON('backfill-historical.json') || { fixtures: [] };
+  const fixtures = (data.fixtures || [])
+    .filter(f => f.fixture?.status?.short === 'FT')
+    .filter(f => String(f.league?.id) === String(leagueId));
+  res.json(fixtures);
 });
 
 const _serverStartedAt = new Date().toISOString();
