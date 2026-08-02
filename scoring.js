@@ -261,13 +261,13 @@ function injuryScore(injuries, teamId) {
 
 const LEAGUE_CONFIG = {
   39:  { name: 'Premier League',   avgHomeWinRate: 0.456, avgDrawRate: 0.243, avgAwayWinRate: 0.301, avgGoalsPerGame: 2.68, marketEfficiency: 0.95, drawBaseWeight: 1.00, homeAdvBaseWeight: 1.00 },
-  140: { name: 'La Liga',          avgHomeWinRate: 0.461, avgDrawRate: 0.271, avgAwayWinRate: 0.268, avgGoalsPerGame: 2.58, marketEfficiency: 0.93, drawBaseWeight: 1.12, homeAdvBaseWeight: 1.10 },
+  140: { name: 'La Liga',          avgHomeWinRate: 0.461, avgDrawRate: 0.271, avgAwayWinRate: 0.268, avgGoalsPerGame: 2.58, marketEfficiency: 0.93, drawBaseWeight: 1.12, homeAdvBaseWeight: 1.25 },
   135: { name: 'Serie A',          avgHomeWinRate: 0.449, avgDrawRate: 0.272, avgAwayWinRate: 0.279, avgGoalsPerGame: 2.52, marketEfficiency: 0.91, drawBaseWeight: 1.12, homeAdvBaseWeight: 0.98 },
-  78:  { name: 'Bundesliga',       avgHomeWinRate: 0.454, avgDrawRate: 0.234, avgAwayWinRate: 0.268, avgGoalsPerGame: 3.02, marketEfficiency: 0.92, drawBaseWeight: 0.96, homeAdvBaseWeight: 1.35 },
+  78:  { name: 'Bundesliga',       avgHomeWinRate: 0.454, avgDrawRate: 0.234, avgAwayWinRate: 0.268, avgGoalsPerGame: 3.02, marketEfficiency: 0.92, drawBaseWeight: 0.96, homeAdvBaseWeight: 1.00 },
   61:  { name: 'Ligue 1',          avgHomeWinRate: 0.443, avgDrawRate: 0.244, avgAwayWinRate: 0.299, avgGoalsPerGame: 2.52, marketEfficiency: 0.88, drawBaseWeight: 1.06, homeAdvBaseWeight: 1.15 },
   2:   { name: 'Champions League',      avgHomeWinRate: 0.432, avgDrawRate: 0.215, avgAwayWinRate: 0.297, avgGoalsPerGame: 2.87, marketEfficiency: 0.96, drawBaseWeight: 1.01, homeAdvBaseWeight: 1.30 },
   1:   { name: 'World Cup',             avgHomeWinRate: 0.390, avgDrawRate: 0.224, avgAwayWinRate: 0.386, avgGoalsPerGame: 2.64, marketEfficiency: 0.94, drawBaseWeight: 0.92, homeAdvBaseWeight: 0.80 },
-  179: { name: 'Scottish Premiership',  avgHomeWinRate: 0.472, avgDrawRate: 0.215, avgAwayWinRate: 0.313, avgGoalsPerGame: 2.71, marketEfficiency: 0.78, drawBaseWeight: 1.07, homeAdvBaseWeight: 1.5 },
+  179: { name: 'Scottish Premiership',  avgHomeWinRate: 0.472, avgDrawRate: 0.215, avgAwayWinRate: 0.313, avgGoalsPerGame: 2.71, marketEfficiency: 0.78, drawBaseWeight: 1.07, homeAdvBaseWeight: 1.35 },
   88:  { name: 'Eredivisie',            avgHomeWinRate: 0.445, avgDrawRate: 0.244, avgAwayWinRate: 0.310, avgGoalsPerGame: 3.12, marketEfficiency: 0.80, drawBaseWeight: 1.00, homeAdvBaseWeight: 1.00 },
   94:  { name: 'Primeira Liga',         avgHomeWinRate: 0.453, avgDrawRate: 0.228, avgAwayWinRate: 0.250, avgGoalsPerGame: 2.68, marketEfficiency: 0.79, drawBaseWeight: 0.93, homeAdvBaseWeight: 0.97 },
   3:   { name: 'Europa League',         avgHomeWinRate: 0.431, avgDrawRate: 0.248, avgAwayWinRate: 0.321, avgGoalsPerGame: 2.78, marketEfficiency: 0.88, drawBaseWeight: 1.02, homeAdvBaseWeight: 0.96 },

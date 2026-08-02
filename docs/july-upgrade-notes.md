@@ -679,3 +679,17 @@ Ligue 1 homeAdvBaseWeight at 1.15: near-breakeven result (-0.02% vs baseline -2.
 Serie A 20%+ edge suppression: GBDT pipeline shows 20%+ edge band is the worst performer for Serie A (-11.24% ROI on n=175). Overconfidence at high edge is the pattern. Picks with >20% model edge in Serie A are suppressed below the 40-point lock threshold. Profitable 10-15% band (+9.01%) unaffected.
 
 Bundesliga and Primeira Liga paperTradeOnly status: both show strongly positive GBDT ROI (+5.75%, +9.12%) confirmed on large samples. Removed from paperTradeOnly manually — paper trading active from season start. Real money eligibility gates on MIN_LIVE_PAPER_TRADES (10 live paper trades since 2026-08-01).
+
+---
+
+## 26. Real GBDT homeAdvBaseWeight sweep — August 1
+
+First investigation using real GBDT pipeline (Priority 1+2 now live). All earlier homeAdvBaseWeight decisions today were against the disconnected linear model and have been superseded by these results.
+
+Bundesliga: dilution confirmed at 1.35 — home ROI declines monotonically as volume grows. Reverted to 1.00 (highest home ROI +7.09%, no dilution).
+
+Scottish Prem: strong dilution already underway at 1.50 — home ROI collapses from +6.15% to +1.39% at higher values. Moved to 1.35 (best overall ROI +6.18%). Further testing below 1.35 flagged.
+
+La Liga: no dilution pattern — home ROI flat across all values tested. 1.25 gives best overall ROI (-1.74%) and only positive away split. Moved from 1.10 to 1.25.
+
+Ligue 1: no dilution, current 1.15 is optimal. Unchanged.
