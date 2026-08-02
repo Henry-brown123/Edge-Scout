@@ -671,3 +671,11 @@ Primeira Liga homeAdvBaseWeight investigation August 1: baseline home ROI +32.83
 Eredivisie homeAdvBaseWeight investigation August 1: topline improvement (-11.86%→-10.04%) entirely driven by away side improving, home side gets worse at every step. 20%+ band worsens monotonically (-13.34%→-17.25%). Mix-shift artifact, not genuine improvement. Reverted to 1.00.
 
 Ligue 1 homeAdvBaseWeight at 1.15: near-breakeven result (-0.02% vs baseline -2.10%). No dilution of profitable signal — home was already negative at baseline. Away-side concentration drives improvement. Kept at 1.15.
+
+---
+
+## 25. Serie A edge suppression and Bundesliga/Primeira Liga paperTradeOnly unlock — August 1
+
+Serie A 20%+ edge suppression: GBDT pipeline shows 20%+ edge band is the worst performer for Serie A (-11.24% ROI on n=175). Overconfidence at high edge is the pattern. Picks with >20% model edge in Serie A are suppressed below the 40-point lock threshold. Profitable 10-15% band (+9.01%) unaffected.
+
+Bundesliga and Primeira Liga paperTradeOnly status: both show strongly positive GBDT ROI (+5.75%, +9.12%) confirmed on large samples. Removed from paperTradeOnly manually — paper trading active from season start. Real money eligibility gates on MIN_LIVE_PAPER_TRADES (10 live paper trades since 2026-08-01).

@@ -1037,8 +1037,9 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     let finalScore = Math.round(rawScore * wxMod * effMult);
     // Serie A's 20%+ edge band shows systematic overconfidence in the real GBDT
     // pipeline (-11.24% ROI on n=175, see docs/july-upgrade-notes.md) while the
-    // 10-15% band is profitable — cap only the high-edge picks, not the whole league.
-    if (parseInt(leagueId, 10) === 135 && edge > 0.20) finalScore = Math.min(finalScore, 45);
+    // 10-15% band is profitable — drop only the high-edge picks below the 40-point
+    // lock threshold so they never lock as bets, leaving the rest of the league untouched.
+    if (parseInt(leagueId, 10) === 135 && edge > 0.20) finalScore = Math.min(finalScore, 39);
     const k         = kelly(calProb, displayOdds, settings.kellyFraction, getBankroll().current);
 
     const entry = {
