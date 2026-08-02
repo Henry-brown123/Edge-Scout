@@ -1325,6 +1325,24 @@ async function runPreMatchScan(watchingEntry) {
       .filter(f => f.fixture?.status?.short === 'FT')
       .sort((a, b) => new Date(b.fixture?.date) - new Date(a.fixture?.date));
 
+    // Load historical backfill pool — same enrichment as runMorningScan, so the T-60
+    // rescore sees the same team-pool size as the morning scan instead of falling back
+    // to just the live last=60 fetch (which can trip the low-confidence gate on its own).
+    const backfillData = readJSON('backfill-historical.json') || { fixtures: [] };
+    const backfillFixtures = (backfillData.fixtures || [])
+      .filter(f => f.fixture?.status?.short === 'FT');
+
+    // Filter to current league and blend with live form fixtures
+    const leagueBackfill = backfillFixtures.filter(f =>
+      String(f.league?.id) === String(leagueId)
+    );
+
+    const enrichedFormFixtures = [...formFixtures, ...leagueBackfill]
+      .filter((f, i, arr) =>
+        arr.findIndex(x => x.fixture?.id === f.fixture?.id) === i
+      )
+      .sort((a, b) => new Date(b.fixture?.date) - new Date(a.fixture?.date));
+
     // Stats cache: load from disk first, then fetch any missing from recent 15 fixtures
     const fixtureStatsDb = getFixtureStats();
     const statsCache = {};
@@ -1388,7 +1406,7 @@ async function runPreMatchScan(watchingEntry) {
     const standings = std?.response?.[0]?.league?.standings || [];
     const { oddsMap, totalsMap } = await fetchOddsForLeague(meta.sport || 'soccer_epl');
 
-    const scored = await scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap, settings, totalsMap);
+    const scored = await scoreOneFixture(fix, enrichedFormFixtures, standings, statsCache, oddsMap, settings, totalsMap);
     const best   = scored.results.reduce((a, b) => a.successScore > b.successScore ? a : b);
     persistOddsSnapshot(fix, scored, meta.sport || 'soccer_epl', 'pre_match_lock', leagueId, meta.name, settings);
 
