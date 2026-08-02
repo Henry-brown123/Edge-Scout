@@ -4808,7 +4808,7 @@ function runEvCalibration() {
     // Confirmed-positive-GBDT-ROI leagues that must never be auto-*added* to
     // paperTradeOnly by a single bad calibration run (distinct from NEVER_AUTO_REMOVE,
     // which only guards the removal branch below and does nothing to stop an add).
-    const PROTECT_FROM_AUTO_ADD = new Set([39, 78, 94]);
+    const PROTECT_FROM_AUTO_ADD = new Set([39, 78, 94, 179]);
     const CURRENT_SEASON_START = new Date('2026-08-01T00:00:00Z');
     const MIN_CALIBRATION_FIXTURES = 1000;
     const MIN_LIVE_PAPER_TRADES = 10;
