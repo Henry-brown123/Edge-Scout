@@ -3634,16 +3634,6 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
-// TEMPORARY diagnostic endpoint — check whether a specific fixture has stored closing odds.
-app.get('/api/debug/closing-odds-lookup', (req, res) => {
-  const fixtureId = req.query.fixtureId;
-  const closingOdds = readJSON('closing-odds.json') || {};
-  const co = closingOdds[fixtureId] || closingOdds[String(fixtureId)];
-  const hist = readJSON('backfill-historical.json') || { fixtures: [] };
-  const inHistorical = (hist.fixtures || []).some(f => String(f.fixture?.id) === String(fixtureId));
-  res.json({ fixtureId, found: !!co, entry: co || null, totalStoredFixtures: Object.keys(closingOdds).length, inHistoricalCandidateList: inHistorical });
-});
-
 // Transfer data fetch — completed transfers per team for the current season,
 // used for the first-10-matchdays squad-quality modifier in applyTeamProfileModifiers.
 let _transfersRunning = false;
