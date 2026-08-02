@@ -3616,6 +3616,74 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
+// TEMPORARY diagnostic endpoint — Champions League homeAdvBaseWeight sweep.
+// Real pipeline: GBDT model.predict() -> applyLeagueBiasCorrection() with homeAdvBaseWeight overridden.
+app.get('/api/debug/ev-homeadv-sweep', (req, res) => {
+  try {
+    const leagueId = parseInt(req.query.league, 10);
+    const overrideHomeAdv = req.query.homeAdvBaseWeight != null ? parseFloat(req.query.homeAdvBaseWeight) : null;
+    const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG } = require('./scoring');
+    const historical = readJSON('backfill-historical.json') || {};
+    const scoredRecords = historical.scoredRecords || [];
+    const optWeights = historical.optimisedWeights || {};
+    const closingOdds = readJSON('closing-odds.json') || {};
+
+    const baseConfig = LEAGUE_CONFIG[leagueId] || {};
+    const leagueConfigOverride = {
+      ...LEAGUE_CONFIG,
+      [leagueId]: {
+        ...baseConfig,
+        homeAdvBaseWeight: overrideHomeAdv != null ? overrideHomeAdv : baseConfig.homeAdvBaseWeight,
+      },
+    };
+
+    const matched = [];
+    for (const rec of scoredRecords) {
+      if (parseInt(rec.leagueId, 10) !== leagueId) continue;
+      const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
+      if (!co) continue;
+      if (!rec.actualOutcome) continue;
+      if (!rec.homeFactors || !rec.awayFactors) continue;
+      const context = rec.context || classifyFixture(rec.leagueId);
+      const weights = optWeights[context] || optWeights.club_domestic;
+      if (!weights) continue;
+
+      const rawProbs = model.predict(rec.homeFactors, rec.awayFactors, weights, context, leagueConfigOverride[leagueId]);
+      const probs = applyLeagueBiasCorrection(rawProbs, leagueId, leagueConfigOverride);
+
+      let topOutcome, modelProb, pinnacleOdds;
+      if (probs.home >= probs.draw && probs.home >= probs.away) { topOutcome = 'home'; modelProb = probs.home; pinnacleOdds = co.homeOdds; }
+      else if (probs.away >= probs.draw) { topOutcome = 'away'; modelProb = probs.away; pinnacleOdds = co.awayOdds; }
+      else { topOutcome = 'draw'; modelProb = probs.draw; pinnacleOdds = co.drawOdds; }
+      if (!pinnacleOdds || pinnacleOdds <= 1) continue;
+
+      const pinnacleImplied = 1 / pinnacleOdds;
+      const edge = (modelProb - pinnacleImplied) / pinnacleImplied;
+      const won  = rec.actualOutcome === topOutcome;
+      matched.push({ fixtureId: rec.fixtureId, topOutcome, modelProb, pinnacleOdds, edge, won });
+    }
+
+    function roi(arr) { if (!arr.length) return null; return arr.reduce((s, f) => s + (f.won ? (f.pinnacleOdds - 1) : -1), 0) / arr.length; }
+    const posEdge = matched.filter(f => f.edge >= 0.05);
+    const byOutcome = {};
+    for (const oc of ['home', 'away', 'draw']) {
+      const sub = posEdge.filter(f => f.topOutcome === oc);
+      byOutcome[oc] = { n: sub.length, roi: roi(sub) };
+    }
+
+    res.json({
+      leagueId,
+      homeAdvBaseWeightUsed: leagueConfigOverride[leagueId].homeAdvBaseWeight,
+      totalMatched: matched.length,
+      posEdgeN: posEdge.length,
+      overallRoi: roi(posEdge),
+      byOutcome,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0, 5) });
+  }
+});
+
 // Transfer data fetch — completed transfers per team for the current season,
 // used for the first-10-matchdays squad-quality modifier in applyTeamProfileModifiers.
 let _transfersRunning = false;
