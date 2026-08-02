@@ -343,18 +343,26 @@ function computeModelProb(homeFactors, awayFactors, weights, context = 'club_dom
 // ─── LEAGUE BIAS CORRECTION ───────────────────────────────────────────────────
 // Live scoring runs on the GBDT model (models/gbdt.js), which accepts leagueConfig
 // for interface compatibility but ignores it entirely — none of LEAGUE_CONFIG's
-// avgHomeWinRate/avgDrawRate/avgAwayWinRate/homeAdvBaseWeight calibration reaches
-// live predictions. This blends the model's raw output toward each league's
+// avgHomeWinRate/avgDrawRate/avgAwayWinRate calibration reaches live predictions
+// through the model itself. This blends the model's raw output toward each league's
 // observed base rates as a post-prediction correction, applied in scoreOneFixture
-// immediately after model.predict().
+// immediately after model.predict(). homeAdvBaseWeight is applied here too, scaling
+// the home target before blending — this is its only live-pipeline effect (it also
+// separately feeds computeModelProb, the diagnostic/backtest-only linear model).
 function applyLeagueBiasCorrection(probs, leagueId, leagueConfig) {
   const config = leagueConfig[leagueId];
   if (!config) return probs; // no correction available
 
-  // Target rates from LEAGUE_CONFIG (observed actual rates)
-  const targetHome = config.avgHomeWinRate;
-  const targetDraw = config.avgDrawRate;
-  const targetAway = config.avgAwayWinRate;
+  // Target rates from LEAGUE_CONFIG (observed actual rates), with homeAdvBaseWeight
+  // scaling the home target before the three are renormalised to sum to 1.
+  const rawHomeTarget = config.avgHomeWinRate * (config.homeAdvBaseWeight || 1.0);
+  const drawTarget = config.avgDrawRate;
+  const awayTarget = config.avgAwayWinRate;
+
+  const targetSum = rawHomeTarget + drawTarget + awayTarget;
+  const targetHome = rawHomeTarget / targetSum;
+  const targetDraw = drawTarget / targetSum;
+  const targetAway = awayTarget / targetSum;
 
   // Current GBDT output
   const { home, draw, away } = probs;
