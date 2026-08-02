@@ -1034,7 +1034,11 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     const edge      = calProb - impliedP;
     const pinnacleEdgeVsMarket = pinnStripped ? calProb - (pinnStripped[teamKey] ?? (1 / displayOdds)) : null;
     const rawScore  = computeSuccessScore(calProb, displayOdds, homeFormCount, dataConf, pinnacleEdgeVsMarket, leagueId, context);
-    const finalScore = Math.round(rawScore * wxMod * effMult);
+    let finalScore = Math.round(rawScore * wxMod * effMult);
+    // Serie A's 20%+ edge band shows systematic overconfidence in the real GBDT
+    // pipeline (-11.24% ROI on n=175, see docs/july-upgrade-notes.md) while the
+    // 10-15% band is profitable — cap only the high-edge picks, not the whole league.
+    if (parseInt(leagueId, 10) === 135 && edge > 0.20) finalScore = Math.min(finalScore, 45);
     const k         = kelly(calProb, displayOdds, settings.kellyFraction, getBankroll().current);
 
     const entry = {
@@ -1755,6 +1759,18 @@ function setupScheduler() {
     }
   }, { timezone: 'UTC' });
 
+  // 2b. Monday 06:00 UTC (before the morning scan) — weekly EV calibration refresh.
+  // Keeps ev-calibration.json fresh for canGoLive() and getEvKellyFraction() (real-money
+  // Kelly sizing), which otherwise only refresh when someone manually hits /api/ev-calibration.
+  cron.schedule('0 6 * * 1', () => {
+    try {
+      runEvCalibration();
+      console.log('[Cron:EVCalib] Weekly EV calibration refresh complete.');
+    } catch (e) {
+      console.error(`[Cron:EVCalib] Error: ${e.message}`);
+    }
+  }, { timezone: 'UTC' });
+
   // 3. Every minute — T-60 pre-match locks (±15 min random variation per fixture)
   cron.schedule('* * * * *', async () => {
     if (isRateLimited() || _cronRunning.preMatch) return;
@@ -1856,7 +1872,7 @@ function setupScheduler() {
     }
   });
 
-  console.log('[Scheduler] Crons active: backfill@00:05UTC · scan@07:00UTC · T-60@every-min · resolve@every-5min · CLV@every-min');
+  console.log('[Scheduler] Crons active: backfill@00:05UTC · evCalib@Mon06:00UTC · scan@07:00UTC · T-60@every-min · resolve@every-5min · CLV@every-min');
 }
 
 // ─── PROFILE BACKFILL ────────────────────────────────────────────────────────
@@ -4646,8 +4662,9 @@ app.get('/api/diagnostics/ev-dataset', (_req, res) => {
 
 // ─── EV CALIBRATION ──────────────────────────────────────────────────────────
 
-app.get('/api/ev-calibration', (_req, res) => {
-  try {
+// Extracted so the weekly cron (setupScheduler) can refresh ev-calibration.json
+// without going through HTTP — see the '0 6 * * 1' schedule below.
+function runEvCalibration() {
     const historical     = readJSON('backfill-historical.json') || {};
     const scoredRecords  = historical.scoredRecords || [];
     const optWeights     = historical.optimisedWeights || {};
@@ -4787,6 +4804,10 @@ app.get('/api/ev-calibration', (_req, res) => {
     // Premier League (39) and Serie A (135) are never auto-removed regardless of
     // short-term fluctuation — both are already validated, live-eligible leagues.
     const NEVER_AUTO_REMOVE = new Set([39, 135]);
+    // Confirmed-positive-GBDT-ROI leagues that must never be auto-*added* to
+    // paperTradeOnly by a single bad calibration run (distinct from NEVER_AUTO_REMOVE,
+    // which only guards the removal branch below and does nothing to stop an add).
+    const PROTECT_FROM_AUTO_ADD = new Set([39, 78, 94]);
     const CURRENT_SEASON_START = new Date('2026-08-01T00:00:00Z');
     const MIN_CALIBRATION_FIXTURES = 1000;
     const MIN_LIVE_PAPER_TRADES = 10;
@@ -4804,7 +4825,7 @@ app.get('/api/ev-calibration', (_req, res) => {
     for (const l of byLeague) {
       const lid = leagueIdByName[l.league];
       if (!lid || l.roi === null) continue;
-      if (l.roi < 0 && l.posEdgeN >= 30) existingPaper.add(lid);
+      if (l.roi < 0 && l.posEdgeN >= 30 && !PROTECT_FROM_AUTO_ADD.has(lid)) existingPaper.add(lid);
       const meetsCalibrationStandard = l.n >= MIN_CALIBRATION_FIXTURES;
       const hasLivePaperTrades = getLivePaperTradeCount(lid) >= MIN_LIVE_PAPER_TRADES;
       if (l.roi > 0 && l.posEdgeN >= 50 && meetsCalibrationStandard && hasLivePaperTrades && !NEVER_AUTO_REMOVE.has(lid)) {
@@ -4815,14 +4836,19 @@ app.get('/api/ev-calibration', (_req, res) => {
     settings.paperTradeOnly = newPaper;
     writeJSON('settings.json', settings);
 
-    res.json({
+    return {
       ...result,
       kellyAutoUpdated:      kellyChanged,
       previousKellyFraction: currentFraction,
       paperTradeOnly:        newPaper,
-    });
-  } catch(e) {
-    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0,5) });
+    };
+}
+
+app.get('/api/ev-calibration', (_req, res) => {
+  try {
+    res.json(runEvCalibration());
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0, 5) });
   }
 });
 
