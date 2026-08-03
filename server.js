@@ -1952,10 +1952,13 @@ const HISTORICAL_BACKFILL_CONFIG = [
   { leagueId: '31',  name: 'WC Qual CONCACAF',  seasons: [2026, 2022] },
   { leagueId: '5',   name: 'Nations League',    seasons: [2024, 2022] },
   { leagueId: '10',  name: 'Intl Friendlies',   seasons: [2024, 2023, 2022] },
-  // New leagues — added July 2026
-  { leagueId: '179', name: 'Scottish Premiership', seasons: [2024, 2023, 2022, 2021, 2020] },
-  { leagueId: '88',  name: 'Eredivisie',            seasons: [2024, 2023, 2022, 2021, 2020] },
-  { leagueId: '94',  name: 'Primeira Liga',         seasons: [2024, 2023, 2022, 2021, 2020] },
+  // New leagues — added July 2026. 2026 added here: these three leagues score live
+  // fixtures against season 2026 (see LEAGUES config) but the historical config only
+  // ever listed seasons through 2024, so the active season was never fetched at all —
+  // not a caching-skip problem, a missing-season-entry problem.
+  { leagueId: '179', name: 'Scottish Premiership', seasons: [2026, 2024, 2023, 2022, 2021, 2020] },
+  { leagueId: '88',  name: 'Eredivisie',            seasons: [2026, 2024, 2023, 2022, 2021, 2020] },
+  { leagueId: '94',  name: 'Primeira Liga',         seasons: [2026, 2024, 2023, 2022, 2021, 2020] },
   { leagueId: '3',   name: 'Europa League',         seasons: [2024, 2023, 2022] },
   { leagueId: '848', name: 'Conference League',     seasons: [2024, 2023, 2022] },
 ];
@@ -2016,13 +2019,23 @@ async function runHistoricalBackfill({ rescore = false, onProgress } = {}) {
     const allCombos = HISTORICAL_BACKFILL_CONFIG.flatMap(e => e.seasons.map(s => ({ ...e, season: s })));
     _historicalBackfillStatus.totalLeagues = allCombos.length;
 
-    // ── Phase 1: Fetch missing league/season pairs ─────────────────────────
+    // ── Phase 1: Fetch missing league/season pairs, always refresh the active season ──
+    // A season/league pair is cached forever once fetched — fine for completed past
+    // seasons, but it means an active season's new results (e.g. today's fixtures) never
+    // get added. Force a re-fetch for the current and previous season so new results
+    // keep flowing in; older, genuinely-finished seasons stay skip-cached as before.
+    const currentSeason = new Date().getFullYear();
     for (const entry of allCombos) {
       const key = `${entry.leagueId}_${entry.season}`;
-      if (existing.fetchedLeagues[key]) {
+      const isActiveSeason = entry.season >= currentSeason - 1;
+      if (existing.fetchedLeagues[key] && !isActiveSeason) {
         const msg = `[Skip] ${entry.name} ${entry.season} (${existing.fetchedLeagues[key].count} cached)`;
         console.log(msg); onProgress?.(msg);
       } else {
+        if (isActiveSeason) {
+          const msg = `[Fetch] ${entry.name} ${entry.season} — active season, refreshing`;
+          console.log(msg); onProgress?.(msg);
+        }
         try {
           // status=FT returns all completed fixtures for a league/season in a single
           // response — no page parameter needed or supported on this endpoint.
