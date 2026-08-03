@@ -3647,30 +3647,6 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
-// TEMPORARY diagnostic endpoint — single targeted call to The Odds API's historical
-// odds endpoint, to check SPL coverage without running the bulk closing-odds backfill.
-app.get('/api/debug/odds-history-probe', async (req, res) => {
-  try {
-    const date = req.query.date || '2026-07-31T19:00:00Z';
-    const sport = req.query.sport || 'soccer_spl';
-    const resp = await oddsApi.get(`/historical/sports/${sport}/odds`, {
-      params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', date },
-    });
-    res.json({
-      requestUrl: `/historical/sports/${sport}/odds?date=${date}`,
-      creditsUsedThisCall: resp.headers['x-requests-last'] || null,
-      creditsRemaining: resp.headers['x-requests-remaining'] || null,
-      responseData: resp.data,
-    });
-  } catch (e) {
-    res.status(e.response?.status || 500).json({
-      error: e.message,
-      responseBody: e.response?.data || null,
-      creditsUsedThisCall: e.response?.headers?.['x-requests-last'] || null,
-    });
-  }
-});
-
 // Transfer data fetch — completed transfers per team for the current season,
 // used for the first-10-matchdays squad-quality modifier in applyTeamProfileModifiers.
 let _transfersRunning = false;
