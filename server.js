@@ -3650,36 +3650,6 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
-// TEMPORARY diagnostic endpoint — audit closing-odds.json coverage for a specific league:
-// count, date range, most recent collectedAt timestamps. Read-only, no API credits.
-app.get('/api/debug/closing-odds-audit', (req, res) => {
-  const leagueId = req.query.league;
-  const hist = readJSON('backfill-historical.json') || { fixtures: [] };
-  const closingOdds = readJSON('closing-odds.json') || {};
-  const fixtureIndex = new Map();
-  for (const f of hist.fixtures || []) {
-    fixtureIndex.set(String(f.fixture?.id), f);
-  }
-  const rows = [];
-  for (const [fid, entry] of Object.entries(closingOdds)) {
-    const f = fixtureIndex.get(String(fid));
-    if (!f) continue;
-    if (leagueId && String(f.league?.id) !== String(leagueId)) continue;
-    rows.push({ fixtureId: fid, kickoff: f.fixture?.date, collectedAt: entry.collectedAt, bookmaker: entry.bookmaker });
-  }
-  rows.sort((a, b) => new Date(a.kickoff) - new Date(b.kickoff));
-  const collectedAtSorted = rows.map(r => r.collectedAt).filter(Boolean).sort();
-  res.json({
-    leagueId,
-    count: rows.length,
-    earliestKickoff: rows[0]?.kickoff || null,
-    latestKickoff: rows[rows.length - 1]?.kickoff || null,
-    earliestCollectedAt: collectedAtSorted[0] || null,
-    latestCollectedAt: collectedAtSorted[collectedAtSorted.length - 1] || null,
-    sample: rows.slice(-5),
-  });
-});
-
 // Transfer data fetch — completed transfers per team for the current season,
 // used for the first-10-matchdays squad-quality modifier in applyTeamProfileModifiers.
 let _transfersRunning = false;
