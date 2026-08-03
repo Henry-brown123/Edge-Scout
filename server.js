@@ -3650,6 +3650,142 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
+// TEMPORARY diagnostic endpoint — walk-forward backtest with clean, non-overlapping
+// season chunks. For each season, trains (re-derives avgHome/Draw/AwayWinRate + sweeps
+// homeAdvBaseWeight) on ALL prior seasons only, then tests exclusively on that season.
+// No test window ever overlaps another. Read-only: never touches the real LEAGUE_CONFIG,
+// no writes anywhere, no API credits.
+app.get('/api/debug/walk-forward-backtest', (req, res) => {
+  try {
+    const leagueId = parseInt(req.query.league, 10);
+    const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG } = require('./scoring');
+    const historical = readJSON('backfill-historical.json') || {};
+    const scoredRecords = historical.scoredRecords || [];
+    const optWeights = historical.optimisedWeights || {};
+    const closingOdds = readJSON('closing-odds.json') || {};
+    const liveConfig = LEAGUE_CONFIG[leagueId] || {};
+
+    const pool = [];
+    for (const rec of scoredRecords) {
+      if (parseInt(rec.leagueId, 10) !== leagueId) continue;
+      const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
+      if (!co) continue;
+      if (!rec.actualOutcome) continue;
+      if (!rec.homeFactors || !rec.awayFactors) continue;
+      const context = rec.context || classifyFixture(rec.leagueId);
+      const weights = optWeights[context] || optWeights.club_domestic;
+      if (!weights) continue;
+      const kickoff = rec.date || rec.kickoff;
+      if (!kickoff) continue;
+      const d = new Date(kickoff);
+      // Scottish season convention: Aug–Jul. Month is 0-indexed, so month>=7 (Aug+) belongs
+      // to the season starting that calendar year; Jan–Jul belongs to the prior year's season.
+      const season = d.getUTCMonth() >= 7 ? d.getUTCFullYear() : d.getUTCFullYear() - 1;
+      pool.push({ fixtureId: rec.fixtureId, homeFactors: rec.homeFactors, awayFactors: rec.awayFactors,
+        context, weights, actualOutcome: rec.actualOutcome, co, kickoff: d, season });
+    }
+    pool.sort((a, b) => a.kickoff - b.kickoff);
+
+    const seasons = [...new Set(pool.map(f => f.season))].sort((a, b) => a - b);
+    const bySeasonn = new Map(seasons.map(s => [s, pool.filter(f => f.season === s)]));
+
+    function scoreSet(set, cfg) {
+      const matched = [];
+      for (const f of set) {
+        const rawProbs = model.predict(f.homeFactors, f.awayFactors, f.weights, f.context, cfg);
+        const probs = applyLeagueBiasCorrection(rawProbs, leagueId, { [leagueId]: cfg });
+        let topOutcome, modelProb, pinnacleOdds;
+        if (probs.home >= probs.draw && probs.home >= probs.away) { topOutcome = 'home'; modelProb = probs.home; pinnacleOdds = f.co.homeOdds; }
+        else if (probs.away >= probs.draw) { topOutcome = 'away'; modelProb = probs.away; pinnacleOdds = f.co.awayOdds; }
+        else { topOutcome = 'draw'; modelProb = probs.draw; pinnacleOdds = f.co.drawOdds; }
+        if (!pinnacleOdds || pinnacleOdds <= 1) continue;
+        const pinnacleImplied = 1 / pinnacleOdds;
+        const edge = (modelProb - pinnacleImplied) / pinnacleImplied;
+        const won = f.actualOutcome === topOutcome;
+        matched.push({ edge, won, pinnacleOdds, ret: won ? (pinnacleOdds - 1) : -1 });
+      }
+      const posEdge = matched.filter(m => m.edge >= 0.05);
+      const n = posEdge.length;
+      const roi = n ? posEdge.reduce((s, m) => s + m.ret, 0) / n : null;
+      let se = null, ci95 = null;
+      if (n > 1) {
+        const mean = roi;
+        const variance = posEdge.reduce((s, m) => s + (m.ret - mean) ** 2, 0) / (n - 1);
+        se = Math.sqrt(variance) / Math.sqrt(n);
+        ci95 = [+(mean - 1.96 * se).toFixed(4), +(mean + 1.96 * se).toFixed(4)];
+      }
+      return { totalMatched: matched.length, posEdgeN: n, roi, standardError: se, ci95 };
+    }
+
+    const grid = [1.00, 1.05, 1.10, 1.15, 1.20, 1.25, 1.30, 1.35, 1.40, 1.45, 1.50];
+    const chunks = [];
+    for (let i = 1; i < seasons.length; i++) {
+      const testSeason = seasons[i];
+      const trainSeasons = seasons.slice(0, i);
+      const train = trainSeasons.flatMap(s => bySeasonn.get(s));
+      const test = bySeasonn.get(testSeason);
+
+      const counts = { home: 0, draw: 0, away: 0 };
+      for (const f of train) counts[f.actualOutcome]++;
+      const trainRates = {
+        avgHomeWinRate: +(counts.home / train.length).toFixed(4),
+        avgDrawRate:    +(counts.draw / train.length).toFixed(4),
+        avgAwayWinRate: +(counts.away / train.length).toFixed(4),
+      };
+
+      const sweep = grid.map(v => {
+        const cfg = { ...liveConfig, ...trainRates, homeAdvBaseWeight: v };
+        const r = scoreSet(train, cfg);
+        return { homeAdvBaseWeight: v, roi: r.roi };
+      });
+      const best = sweep.reduce((a, b) => (b.roi != null && (a.roi == null || b.roi > a.roi)) ? b : a);
+      const frozenConfig = { ...liveConfig, ...trainRates, homeAdvBaseWeight: best.homeAdvBaseWeight };
+      const testResult = scoreSet(test, frozenConfig);
+
+      chunks.push({
+        testSeason: `${testSeason}/${String(testSeason + 1).slice(2)}`,
+        trainSeasonsUsed: trainSeasons.map(s => `${s}/${String(s + 1).slice(2)}`),
+        trainCount: train.length,
+        trainDerivedRates: trainRates,
+        bestHomeAdvBaseWeightOnTrain: best.homeAdvBaseWeight,
+        testCount: test.length,
+        testPosEdgeN: testResult.posEdgeN,
+        testRoi: testResult.roi,
+        testCi95: testResult.ci95,
+      });
+    }
+
+    // Simple trend check: Pearson correlation between chunk order and ROI.
+    const validChunks = chunks.filter(c => c.testRoi != null);
+    let trendCorrelation = null;
+    if (validChunks.length >= 3) {
+      const xs = validChunks.map((_, i) => i);
+      const ys = validChunks.map(c => c.testRoi);
+      const n = xs.length;
+      const meanX = xs.reduce((a, b) => a + b, 0) / n;
+      const meanY = ys.reduce((a, b) => a + b, 0) / n;
+      let cov = 0, varX = 0, varY = 0;
+      for (let i = 0; i < n; i++) {
+        cov += (xs[i] - meanX) * (ys[i] - meanY);
+        varX += (xs[i] - meanX) ** 2;
+        varY += (ys[i] - meanY) ** 2;
+      }
+      trendCorrelation = (varX > 0 && varY > 0) ? +(cov / Math.sqrt(varX * varY)).toFixed(3) : null;
+    }
+
+    res.json({
+      leagueId,
+      totalFixtures: pool.length,
+      seasonsAvailable: seasons.map(s => `${s}/${String(s + 1).slice(2)}`),
+      firstSeasonExcluded: `${seasons[0]}/${String(seasons[0] + 1).slice(2)} (no prior data to train on)`,
+      chunks,
+      trendCorrelation,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0, 8) });
+  }
+});
+
 // Transfer data fetch — completed transfers per team for the current season,
 // used for the first-10-matchdays squad-quality modifier in applyTeamProfileModifiers.
 let _transfersRunning = false;
