@@ -3647,20 +3647,6 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
-// TEMPORARY diagnostic endpoint — list distinct team names stored for a league in
-// backfill-historical.json. Read-only, no API credits involved.
-app.get('/api/debug/historical-team-names', (req, res) => {
-  const leagueId = req.query.league;
-  const hist = readJSON('backfill-historical.json') || { fixtures: [] };
-  const names = new Set();
-  for (const f of hist.fixtures || []) {
-    if (String(f.league?.id) !== String(leagueId)) continue;
-    if (f.teams?.home?.name) names.add(f.teams.home.name);
-    if (f.teams?.away?.name) names.add(f.teams.away.name);
-  }
-  res.json({ leagueId, count: names.size, names: [...names].sort() });
-});
-
 // Transfer data fetch — completed transfers per team for the current season,
 // used for the first-10-matchdays squad-quality modifier in applyTeamProfileModifiers.
 let _transfersRunning = false;
