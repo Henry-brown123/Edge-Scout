@@ -3647,6 +3647,32 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
+// TEMPORARY one-off endpoint — clear the active-season fetchedLeagues cache entries so
+// the next runHistoricalBackfill() actually re-fetches them under the new active-season
+// refresh logic. Remove once the active-season cache has been cleared.
+app.post('/api/debug/clear-active-season-cache', (_req, res) => {
+  try {
+    const existing = readJSON('backfill-historical.json');
+    if (!existing) return res.status(404).json({ error: 'backfill-historical.json missing' });
+    const currentSeason = new Date().getFullYear();
+    const seasonsToClear = [currentSeason, currentSeason - 1];
+    const cleared = [];
+    for (const entry of HISTORICAL_BACKFILL_CONFIG) {
+      for (const season of seasonsToClear) {
+        const key = `${entry.leagueId}_${season}`;
+        if (existing.fetchedLeagues[key]) {
+          cleared.push({ key, name: entry.name, previousCount: existing.fetchedLeagues[key].count });
+          delete existing.fetchedLeagues[key];
+        }
+      }
+    }
+    writeJSON('backfill-historical.json', existing);
+    res.json({ clearedKeys: cleared, remainingCachedKeys: Object.keys(existing.fetchedLeagues).length });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0, 5) });
+  }
+});
+
 // Transfer data fetch — completed transfers per team for the current season,
 // used for the first-10-matchdays squad-quality modifier in applyTeamProfileModifiers.
 let _transfersRunning = false;
