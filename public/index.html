@@ -3521,7 +3521,7 @@ function teamIntelSection(w) {
     </div>`;
 }
 
-function valueRow(label, modelP, odds, edge, ev, kelly, stake, isProjected, successScore) {
+function valueRow(label, modelP, odds, impliedProb, edge, ev, kelly, stake, isProjected, successScore) {
   const edgeCol = edge > 0 ? 'var(--green)' : 'var(--red)';
   const scoreCol = successScore >= 60 ? 'var(--green)' : successScore >= 40 ? 'var(--amber)' : 'var(--text2)';
   const tag = isProjected ? `<span style="font-size:.6rem;background:var(--amber);color:#000;border-radius:3px;padding:1px 5px;margin-left:6px;vertical-align:middle">BEST</span>` : '';
@@ -3543,7 +3543,7 @@ function valueRow(label, modelP, odds, edge, ev, kelly, stake, isProjected, succ
           <div style="font-size:.6rem;color:var(--text2);text-transform:uppercase">Model</div>
         </div>
         <div>
-          <div style="font-size:1rem;font-weight:700">${odds ? ((1/odds)*100).toFixed(1)+'%' : '—'}</div>
+          <div style="font-size:1rem;font-weight:700">${impliedProb != null ? (impliedProb*100).toFixed(1)+'%' : '—'}</div>
           <div style="font-size:.6rem;color:var(--text2);text-transform:uppercase">Implied</div>
         </div>
         <div>
@@ -3562,7 +3562,7 @@ function valueRow(label, modelP, odds, edge, ev, kelly, stake, isProjected, succ
     </div>`;
 }
 
-function goalsValueRow(bet, modelProb, bookOdds, edge, ev, kellyStake, successScore, homeXg, awayXg) {
+function goalsValueRow(bet, modelProb, bookOdds, impliedProb, edge, ev, kellyStake, successScore, homeXg, awayXg) {
   const edgeCol = (edge != null && edge > 0) ? 'var(--green)' : 'var(--red)';
   const scoreCol = successScore != null ? (successScore >= 60 ? 'var(--green)' : successScore >= 40 ? 'var(--amber)' : 'var(--text2)') : 'var(--text2)';
   return `
@@ -3582,7 +3582,7 @@ function goalsValueRow(bet, modelProb, bookOdds, edge, ev, kellyStake, successSc
           <div style="font-size:.55rem;color:var(--text2);text-transform:uppercase">Model</div>
         </div>
         <div>
-          <div style="font-size:.9rem;font-weight:700">${bookOdds ? ((1/bookOdds)*100).toFixed(1)+'%' : '—'}</div>
+          <div style="font-size:.9rem;font-weight:700">${impliedProb != null ? (impliedProb*100).toFixed(1)+'%' : '—'}</div>
           <div style="font-size:.55rem;color:var(--text2);text-transform:uppercase">Implied</div>
         </div>
         <div>
@@ -3648,7 +3648,7 @@ function openDrawer(w) {
   const valueRows = candidates.map(c =>
     valueRow(
       labelMap[c.bet] || c.bet,
-      c.modelProb, c.bookOdds, c.edge,
+      c.modelProb, c.bookOdds, c.impliedProb, c.edge,
       c.ev, c.kelly?.fracKelly, c.kelly?.stake,
       c.bet === w.projectedBet,
       c.successScore ?? null
@@ -3697,7 +3697,7 @@ function openDrawer(w) {
       const rows = primaryMarkets.map(name => {
         const c = gc.find(x => x.bet === name);
         if (!c) return '';
-        return goalsValueRow(name, c.modelProb, c.bookOdds, c.edge, c.ev, c.kelly?.stake, c.successScore, c.homeXg, c.awayXg);
+        return goalsValueRow(name, c.modelProb, c.bookOdds, c.impliedProb, c.edge, c.ev, c.kelly?.stake, c.successScore, c.homeXg, c.awayXg);
       }).join('');
       return `<div class="drawer-section">
         <h4>Goals Markets <span style="font-family:'DM Mono',monospace;font-size:.65rem;color:var(--text2);font-weight:400;margin-left:8px">xG ${xgInfo.homeXg} – ${xgInfo.awayXg} (Σ ${xgInfo.totalXg})</span></h4>
