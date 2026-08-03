@@ -693,3 +693,29 @@ Scottish Prem: strong dilution already underway at 1.50 — home ROI collapses f
 La Liga: no dilution pattern — home ROI flat across all values tested. 1.25 gives best overall ROI (-1.74%) and only positive away split. Moved from 1.10 to 1.25.
 
 Ligue 1: no dilution, current 1.15 is optimal. Unchanged.
+
+---
+
+## 27. Bundesliga and Primeira Liga closing-odds 0-match investigation — August 3
+
+Investigated why the closing odds backfill matched 272/418 for Premier League but 0/142 for Bundesliga and 0/201 for Primeira Liga, all using the same fixed `/historical/sports/{sport}/odds` endpoint.
+
+`CLOSING_ODDS_SPORT_MAP` confirmed correct for both: Bundesliga → `soccer_germany_bundesliga`, Primeira Liga → `soccer_portugal_primeira_liga`. Live odds calls to both sport keys returned valid current fixtures with real team names, confirming the sport keys themselves are not the problem.
+
+Comparing those live team names against what's stored in `backfill-historical.json`: the large majority of pairs already match correctly through the existing `teamsMatch()`/`normaliseTeam()` fuzzy logic (exact match, substring match, or shared-4+-letter-token match) — e.g. "Bayern Munich"/"Bayern Munich", "FC Augsburg"/"Augsburg" (fc-strip), "1899 Hoffenheim"/"TSG Hoffenheim" (token overlap on "hoffenheim"), "SC Braga"/"Braga" (sc-strip), "Rio Ave"/"Rio Ave FC" (fc-strip).
+
+One confirmed real bug found: `normaliseTeam()` strips accented characters instead of transliterating them — `.replace(/[^a-z0-9 ]/g, '')` deletes non-ASCII letters entirely rather than converting them to their base form. This breaks matches where one source has diacritics and the other doesn't and there's no shared unaccented token to fall back on — confirmed case: The Odds API's "Famalicao" (with a tilde over the a) vs API-Sports' "Famalicao" (plain) normalise to "famalico" and "famalicao" respectively (the accented letter is deleted, not replaced with its base form), which fail exact, substring, and token-overlap matching. Fix: run `name.normalize('NFD')` first and strip Unicode combining diacritical marks (range U+0300 to U+036F) before the existing non-alphanumeric strip, so accented letters map to their plain ASCII base form instead of vanishing.
+
+However, this accent bug alone doesn't explain a 100% miss rate across every Bundesliga/Primeira Liga fixture — most name pairs have no accent involved and already match fine. The more likely primary cause, not yet confirmed, is a coverage-window/date-availability gap in The Odds API's historical archive specific to the date ranges being requested for these two leagues (unconfirmed — verifying requires a live `/historical/sports/.../odds` probe call, which was intentionally not made this session per the diagnostic-only, no-credits-spent instruction).
+
+Fix to apply before the 1 September backfill: (1) patch `normaliseTeam()` to transliterate diacritics rather than delete them, (2) run one cheap targeted `/historical/sports/soccer_germany_bundesliga/odds` (or Primeira Liga) call for a known past date to confirm whether the coverage-window theory holds before spending backfill budget on either league again.
+
+---
+
+## 28. 1 September backfill checklist
+
+- [ ] Switch `ODDS_API_KEY` to the 100K key (resets 1 September)
+- [ ] Run full closing odds backfill for ALL leagues with the fixed `/historical/sports/` endpoint
+- [ ] Investigate and fix the Bundesliga (78) and Primeira Liga (94) 0-match issue before running (see section 27 — diacritics fix plus a coverage-window probe)
+- [ ] Run `/api/ev-calibration` after all backfills complete
+- [ ] Update project plan with new ROI figures
