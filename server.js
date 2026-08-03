@@ -3212,7 +3212,7 @@ async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null 
       _closingOddsStatus.currentLeague = sport;
 
       try {
-        const resp = await oddsApi.get(`/sports/${sport}/odds-history`, {
+        const resp = await oddsApi.get(`/historical/sports/${sport}/odds`, {
           params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h',
                     oddsFormat: 'decimal', date: kickoffIso },
         });
