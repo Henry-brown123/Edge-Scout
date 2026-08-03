@@ -3141,7 +3141,10 @@ function saveClosingOdds(data) { writeJSON('closing-odds.json', data); }
 
 // Fuzzy team name match: normalise both strings and check overlap.
 function normaliseTeam(name) {
-  return (name || '').toLowerCase()
+  return (name || '')
+    .normalize('NFD')                          // decompose accented chars (ã → a + combining tilde)
+    .replace(/[̀-ͯ]/g, '')           // strip combining diacritical marks
+    .toLowerCase()
     .replace(/\bfc\b|\baf\b|\bsc\b|\bac\b|\bcd\b|\bfk\b/g, '')
     .replace(/[^a-z0-9 ]/g, '')
     .replace(/\s+/g, ' ').trim();
