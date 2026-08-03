@@ -3650,6 +3650,130 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
+// TEMPORARY diagnostic endpoint — time-based train/test backtest for a league. Re-derives
+// avgHomeWinRate/avgDrawRate/avgAwayWinRate and sweeps homeAdvBaseWeight on TRAIN only,
+// then freezes those values and measures ROI on TEST only. Read-only: never touches the
+// real LEAGUE_CONFIG in scoring.js, no writes anywhere, no API credits — this is a backtest
+// using already-cached data, not a deploy.
+app.get('/api/debug/train-test-backtest', (req, res) => {
+  try {
+    const leagueId = parseInt(req.query.league, 10);
+    const trainFrac = req.query.trainFrac ? parseFloat(req.query.trainFrac) : 0.70;
+    const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG } = require('./scoring');
+    const historical = readJSON('backfill-historical.json') || {};
+    const scoredRecords = historical.scoredRecords || [];
+    const optWeights = historical.optimisedWeights || {};
+    const closingOdds = readJSON('closing-odds.json') || {};
+    const liveConfig = LEAGUE_CONFIG[leagueId] || {};
+
+    // Build the same 995-fixture population /api/ev-calibration uses, but keep the raw
+    // homeFactors/awayFactors/actualOutcome/kickoff so we can re-derive rates and re-run
+    // the model per-candidate ourselves, entirely in memory.
+    const pool = [];
+    for (const rec of scoredRecords) {
+      if (parseInt(rec.leagueId, 10) !== leagueId) continue;
+      const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
+      if (!co) continue;
+      if (!rec.actualOutcome) continue;
+      if (!rec.homeFactors || !rec.awayFactors) continue;
+      const context = rec.context || classifyFixture(rec.leagueId);
+      const weights = optWeights[context] || optWeights.club_domestic;
+      if (!weights) continue;
+      const kickoff = rec.date || rec.kickoff;
+      if (!kickoff) continue;
+      pool.push({ fixtureId: rec.fixtureId, homeFactors: rec.homeFactors, awayFactors: rec.awayFactors,
+        context, weights, actualOutcome: rec.actualOutcome, co, kickoff: new Date(kickoff) });
+    }
+    pool.sort((a, b) => a.kickoff - b.kickoff);
+
+    const splitIdx = Math.round(pool.length * trainFrac);
+    const train = pool.slice(0, splitIdx);
+    const test  = pool.slice(splitIdx);
+
+    // Re-derive base rates from TRAIN only — plain observed frequency, same definition
+    // /api/league/diagnostic uses for "actual", just scoped to the train window.
+    const trainCounts = { home: 0, draw: 0, away: 0 };
+    for (const f of train) trainCounts[f.actualOutcome]++;
+    const trainRates = {
+      avgHomeWinRate: +(trainCounts.home / train.length).toFixed(4),
+      avgDrawRate:    +(trainCounts.draw / train.length).toFixed(4),
+      avgAwayWinRate: +(trainCounts.away / train.length).toFixed(4),
+    };
+
+    function scoreSet(set, cfg) {
+      const matched = [];
+      for (const f of set) {
+        const rawProbs = model.predict(f.homeFactors, f.awayFactors, f.weights, f.context, cfg);
+        const probs = applyLeagueBiasCorrection(rawProbs, leagueId, { [leagueId]: cfg });
+        let topOutcome, modelProb, pinnacleOdds;
+        if (probs.home >= probs.draw && probs.home >= probs.away) { topOutcome = 'home'; modelProb = probs.home; pinnacleOdds = f.co.homeOdds; }
+        else if (probs.away >= probs.draw) { topOutcome = 'away'; modelProb = probs.away; pinnacleOdds = f.co.awayOdds; }
+        else { topOutcome = 'draw'; modelProb = probs.draw; pinnacleOdds = f.co.drawOdds; }
+        if (!pinnacleOdds || pinnacleOdds <= 1) continue;
+        const pinnacleImplied = 1 / pinnacleOdds;
+        const edge = (modelProb - pinnacleImplied) / pinnacleImplied;
+        const won = f.actualOutcome === topOutcome;
+        matched.push({ edge, won, pinnacleOdds, ret: won ? (pinnacleOdds - 1) : -1 });
+      }
+      const posEdge = matched.filter(m => m.edge >= 0.05);
+      const n = posEdge.length;
+      const roi = n ? posEdge.reduce((s, m) => s + m.ret, 0) / n : null;
+      let stdReturn = null, se = null, ci95 = null;
+      if (n > 1) {
+        const mean = roi;
+        const variance = posEdge.reduce((s, m) => s + (m.ret - mean) ** 2, 0) / (n - 1);
+        stdReturn = Math.sqrt(variance);
+        se = stdReturn / Math.sqrt(n);
+        ci95 = [+(mean - 1.96 * se).toFixed(4), +(mean + 1.96 * se).toFixed(4)];
+      }
+      return { totalMatched: matched.length, posEdgeN: n, roi, stdReturn, standardError: se, ci95 };
+    }
+
+    function kellyRec(roi) {
+      if (roi === null || roi < 0) return 'flag_for_review';
+      if (roi < 0.02) return 'quarter_kelly';
+      if (roi < 0.05) return 'third_kelly';
+      return 'half_kelly';
+    }
+
+    // Sweep homeAdvBaseWeight on TRAIN only, using train-derived rates for the target.
+    const grid = [1.00, 1.05, 1.10, 1.15, 1.20, 1.25, 1.30, 1.35, 1.40, 1.45, 1.50];
+    const sweep = grid.map(v => {
+      const cfg = { ...liveConfig, ...trainRates, homeAdvBaseWeight: v };
+      const r = scoreSet(train, cfg);
+      return { homeAdvBaseWeight: v, n: r.totalMatched, posEdgeN: r.posEdgeN, roi: r.roi };
+    });
+    const best = sweep.reduce((a, b) => (b.roi != null && (a.roi == null || b.roi > a.roi)) ? b : a);
+
+    // Freeze train-derived rates + best-on-train homeAdvBaseWeight, test on TEST only.
+    const frozenConfig = { ...liveConfig, ...trainRates, homeAdvBaseWeight: best.homeAdvBaseWeight };
+    const testResult = scoreSet(test, frozenConfig);
+
+    res.json({
+      leagueId,
+      splitInfo: {
+        totalFixtures: pool.length,
+        trainCount: train.length,
+        testCount: test.length,
+        splitDateCutoff: test[0]?.kickoff.toISOString() || null,
+        trainDateRange: [train[0]?.kickoff.toISOString(), train[train.length - 1]?.kickoff.toISOString()],
+        testDateRange: [test[0]?.kickoff.toISOString(), test[test.length - 1]?.kickoff.toISOString()],
+      },
+      trainDerivedRates: trainRates,
+      liveRates: {
+        avgHomeWinRate: liveConfig.avgHomeWinRate, avgDrawRate: liveConfig.avgDrawRate,
+        avgAwayWinRate: liveConfig.avgAwayWinRate, homeAdvBaseWeight: liveConfig.homeAdvBaseWeight,
+      },
+      sweepResultsOnTrain: sweep,
+      bestHomeAdvBaseWeightOnTrain: best.homeAdvBaseWeight,
+      frozenConfigUsedForTest: { ...trainRates, homeAdvBaseWeight: best.homeAdvBaseWeight },
+      testResult: { ...testResult, kellyTier: kellyRec(testResult.roi) },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0, 8) });
+  }
+});
+
 // Transfer data fetch — completed transfers per team for the current season,
 // used for the first-10-matchdays squad-quality modifier in applyTeamProfileModifiers.
 let _transfersRunning = false;
