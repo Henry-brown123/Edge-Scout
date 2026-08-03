@@ -3647,6 +3647,14 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
+// TEMPORARY diagnostic endpoint — check closing-odds coverage for specific fixtures.
+app.get('/api/debug/closing-odds-check', (req, res) => {
+  const ids = (req.query.fixtureIds || '').split(',').map(s => s.trim()).filter(Boolean);
+  const closingOdds = readJSON('closing-odds.json') || {};
+  const result = ids.map(id => ({ fixtureId: id, entry: closingOdds[id] || closingOdds[String(id)] || null }));
+  res.json(result);
+});
+
 // Transfer data fetch — completed transfers per team for the current season,
 // used for the first-10-matchdays squad-quality modifier in applyTeamProfileModifiers.
 let _transfersRunning = false;
