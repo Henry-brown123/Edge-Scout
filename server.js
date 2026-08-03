@@ -3647,6 +3647,23 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
+// TEMPORARY diagnostic endpoint — check closing-odds coverage + historical candidate
+// presence for a specific fixture, and surface the raw fixture record for name-matching checks.
+app.get('/api/debug/closing-odds-lookup2', (req, res) => {
+  const fixtureId = req.query.fixtureId;
+  const closingOdds = readJSON('closing-odds.json') || {};
+  const co = closingOdds[fixtureId] || closingOdds[String(fixtureId)];
+  const hist = readJSON('backfill-historical.json') || { fixtures: [] };
+  const rec = (hist.fixtures || []).find(f => String(f.fixture?.id) === String(fixtureId));
+  res.json({
+    fixtureId,
+    foundInClosingOdds: !!co,
+    closingOddsEntry: co || null,
+    foundInHistorical: !!rec,
+    historicalRecord: rec || null,
+  });
+});
+
 // TEMPORARY one-off endpoint — clear the active-season fetchedLeagues cache entries so
 // the next runHistoricalBackfill() actually re-fetches them under the new active-season
 // refresh logic. Remove once the active-season cache has been cleared.
