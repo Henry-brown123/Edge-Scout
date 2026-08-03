@@ -719,3 +719,13 @@ Fix to apply before the 1 September backfill: (1) patch `normaliseTeam()` to tra
 - [ ] Investigate and fix the Bundesliga (78) and Primeira Liga (94) 0-match issue before running (see section 27 — diacritics fix plus a coverage-window probe)
 - [ ] Run `/api/ev-calibration` after all backfills complete
 - [ ] Update project plan with new ROI figures
+
+---
+
+## 29. Hibernian vs Motherwell — documented as a should-have-won, not recorded as a bet
+
+Hibernian vs Motherwell (fixtureId 1556632, kickoff 2026-08-02T15:30:00Z, Scottish Premiership) was blocked from locking as a bet by the T-60 backfill-blend bug (fixed in the commit that ported the historical backfill blend to `runPreMatchScan` — see the form-pool investigation earlier this file). Retrospective scoring with the corrected enriched pool showed successScore 62 on Away Win, clearing the 40-point threshold with no low-confidence flag — it would have locked under the fixed pipeline.
+
+Real Pinnacle closing odds were captured after the fact: Home 2.00 / Draw 3.53 / Away 3.87. Actual result: Motherwell won 2-1 (Away Win) — the pick would have won.
+
+This was deliberately **not** added to `bets.json` as a placed paper bet. Doing so would have counted toward `getLivePaperTradeCount()` (the `MIN_LIVE_PAPER_TRADES` gate that governs real-money eligibility per league) and inflated bankroll/ROI on the Performance tab, based on a decision the live system never actually made in real time — it's hindsight knowledge of a bug-blocked fixture, not a genuine live paper trade. Retroactively "recovering" bug-blocked bets that would have won, without equally recovering ones that would have lost (e.g. ST Johnstone vs Kilmarnock, also blocked, also would have won on its own separate bug), would bias the paper-trading sample the real-money gate depends on. Recorded here for the record only; the bug itself is fixed and will not recur going forward.
