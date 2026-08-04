@@ -262,7 +262,7 @@ function injuryScore(injuries, teamId) {
 const LEAGUE_CONFIG = {
   39:  { name: 'Premier League',   avgHomeWinRate: 0.456, avgDrawRate: 0.243, avgAwayWinRate: 0.301, avgGoalsPerGame: 2.68, marketEfficiency: 0.95, drawBaseWeight: 1.00, homeAdvBaseWeight: 1.00 },
   140: { name: 'La Liga',          avgHomeWinRate: 0.461, avgDrawRate: 0.271, avgAwayWinRate: 0.268, avgGoalsPerGame: 2.58, marketEfficiency: 0.93, drawBaseWeight: 1.12, homeAdvBaseWeight: 1.25 },
-  135: { name: 'Serie A',          avgHomeWinRate: 0.449, avgDrawRate: 0.272, avgAwayWinRate: 0.279, avgGoalsPerGame: 2.52, marketEfficiency: 0.91, drawBaseWeight: 1.12, homeAdvBaseWeight: 0.98 },
+  135: { name: 'Serie A',          avgHomeWinRate: 0.419, avgDrawRate: 0.287, avgAwayWinRate: 0.295, avgGoalsPerGame: 2.52, marketEfficiency: 0.91, drawBaseWeight: 1.12, homeAdvBaseWeight: 0.98 },
   78:  { name: 'Bundesliga',       avgHomeWinRate: 0.454, avgDrawRate: 0.234, avgAwayWinRate: 0.312, avgGoalsPerGame: 3.02, marketEfficiency: 0.92, drawBaseWeight: 0.96, homeAdvBaseWeight: 1.00 },
   61:  { name: 'Ligue 1',          avgHomeWinRate: 0.443, avgDrawRate: 0.258, avgAwayWinRate: 0.299, avgGoalsPerGame: 2.52, marketEfficiency: 0.88, drawBaseWeight: 1.06, homeAdvBaseWeight: 0.96 },
   2:   { name: 'Champions League',      avgHomeWinRate: 0.432, avgDrawRate: 0.245, avgAwayWinRate: 0.323, avgGoalsPerGame: 2.87, marketEfficiency: 0.96, drawBaseWeight: 1.01, homeAdvBaseWeight: 0.94 },
