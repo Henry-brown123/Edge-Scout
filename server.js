@@ -3728,6 +3728,60 @@ app.post('/api/backfill/pir', (req, res) => {
   });
 });
 
+// TEMPORARY diagnostic endpoint — root-cause test for the Pinnacle backfill gap.
+// For a sample of currently-missing fixtures, compares the ORIGINAL backfill's
+// hour-truncated query (e.g. kickoff 19:45 -> query at 19:00:00Z) against the
+// exact-kickoff-minute query, to see whether snapshot-timing granularity (not
+// team-name matching) is the real root cause. Read-only. Remove after Part B.
+app.get('/api/debug/backfill-gap-cause', async (req, res) => {
+  try {
+    const sampleSize = parseInt(req.query.n, 10) || 10;
+    const closingOdds = readJSON('closing-odds.json') || {};
+    const historical   = readJSON('backfill-historical.json') || {};
+    const scoredRecords = historical.scoredRecords || [];
+
+    // Missing fixtures whose kickoff minute is NOT on the hour (the interesting case)
+    const candidates = scoredRecords.filter(rec => {
+      if (closingOdds[String(rec.fixtureId)]) return false;
+      if (!rec.date || !rec.leagueId || !rec.actualOutcome) return false;
+      const min = new Date(rec.date).getUTCMinutes();
+      return min !== 0;
+    }).slice(0, sampleSize);
+
+    const results = [];
+    for (const rec of candidates) {
+      const sport = CLOSING_ODDS_SPORT_MAP[String(rec.leagueId)];
+      if (!sport) continue;
+      const [home, away] = (rec.fixture || '').split(' vs ');
+      const hourTruncated = new Date(rec.date).toISOString().slice(0,13) + ':00:00Z';
+      const exactMinute   = new Date(rec.date).toISOString().split('.')[0] + 'Z';
+
+      async function probe(dateParam) {
+        try {
+          const resp = await oddsApi.get(`/historical/sports/${sport}/odds`, {
+            params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal', date: dateParam },
+          });
+          const events = resp.data?.data || resp.data || [];
+          const ev = events.find(e => teamsMatch(e.home_team, home) && teamsMatch(e.away_team, away));
+          if (!ev) return { queried: dateParam, matched: false, eventCount: events.length };
+          const hasPinnacle = !!ev.bookmakers?.find(b => b.key === 'pinnacle');
+          return { queried: dateParam, matched: true, hasPinnacle, bookmakerCount: ev.bookmakers?.length || 0 };
+        } catch (e) {
+          return { queried: dateParam, error: e.response?.data?.error_code || e.message };
+        }
+      }
+
+      const hourResult  = await probe(hourTruncated);
+      const exactResult = await probe(exactMinute);
+      results.push({ fixture: rec.fixture, leagueId: rec.leagueId, kickoff: rec.date, hourTruncated, exactMinute, hourResult, exactResult });
+    }
+
+    res.json({ sampled: results.length, results });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0,5) });
+  }
+});
+
 app.get('/api/backfill/pir/status', (_req, res) => {
   const { getPIRData } = require('./teamProfiles');
   const data = getPIRData();
