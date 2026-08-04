@@ -3664,7 +3664,30 @@ app.get('/api/debug/clv-recoverability-probe', async (req, res) => {
     const bet = bets.find(b => b.id === req.query.betId) || bets.find(b => b.fixture === req.query.fixture);
     if (!bet) return res.status(404).json({ error: 'bet not found' });
     const result = await fetchClosingOddsForBet(bet);
-    res.json({ fixture: bet.fixture, kickoff: bet.kickoff, betOn: bet.bet, actualOdds: bet.actualOdds, result });
+
+    // Verbose breakdown of which stage failed, without touching the live function.
+    let diag = null;
+    if (req.query.verbose) {
+      const sport = CLOSING_ODDS_SPORT_MAP[String(bet.leagueId)];
+      const kickoffIso = new Date(bet.kickoff).toISOString();
+      const resp = await oddsApi.get(`/historical/sports/${sport}/odds`, {
+        params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h',
+                  oddsFormat: 'decimal', date: kickoffIso },
+      });
+      const events = resp.data?.data || resp.data || [];
+      const [home, away] = (bet.fixture || '').split(' vs ');
+      const ev = events.find(e => teamsMatch(e.home_team, home) && teamsMatch(e.away_team, away));
+      diag = {
+        sport, kickoffIso,
+        snapshotTimestamp: resp.data?.timestamp || null,
+        eventCount: events.length,
+        sampleEventNames: events.slice(0, 5).map(e => `${e.home_team} vs ${e.away_team}`),
+        matchedEvent: !!ev,
+        bookmakersOnMatchedEvent: ev ? (ev.bookmakers || []).map(b => b.key) : null,
+      };
+    }
+
+    res.json({ fixture: bet.fixture, kickoff: bet.kickoff, betOn: bet.bet, actualOdds: bet.actualOdds, result, diag });
   } catch (e) {
     res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0, 5) });
   }
