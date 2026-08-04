@@ -3735,6 +3735,19 @@ app.post('/api/backfill/pir', (req, res) => {
   });
 });
 
+// TEMPORARY diagnostic endpoint — zero API cost. Lists still-missing fixtures for
+// a league, oldest first, to identify what the failing backfill batch actually was.
+app.get('/api/debug/still-missing', (req, res) => {
+  const lid = req.query.league;
+  const closingOdds = readJSON('closing-odds.json') || {};
+  const historical = readJSON('backfill-historical.json') || {};
+  const missing = (historical.fixtures || [])
+    .filter(fix => String(fix.league?.id) === lid && fix.fixture?.id && !closingOdds[fix.fixture.id])
+    .map(fix => ({ id: fix.fixture.id, date: fix.fixture.date, home: fix.teams?.home?.name, away: fix.teams?.away?.name, status: fix.fixture?.status?.short }))
+    .sort((a,b) => new Date(a.date) - new Date(b.date));
+  res.json({ total: missing.length, sample: missing.slice(0, 5), newestSample: missing.slice(-5) });
+});
+
 // TEMPORARY diagnostic endpoint — root-cause test for the Pinnacle backfill gap.
 // For a sample of currently-missing fixtures, compares the ORIGINAL backfill's
 // hour-truncated query (e.g. kickoff 19:45 -> query at 19:00:00Z) against the
