@@ -3748,6 +3748,28 @@ app.get('/api/debug/still-missing', (req, res) => {
   res.json({ total: missing.length, sample: missing.slice(0, 5), newestSample: missing.slice(-5) });
 });
 
+// TEMPORARY diagnostic endpoint — single raw historical-odds call (1 API credit
+// spend), for manually inspecting exactly what a specific sport+date returns when
+// the automated matcher reports zero events found. Remove after Part B.
+app.get('/api/debug/raw-odds-call', async (req, res) => {
+  try {
+    const { sport, date } = req.query;
+    if (!sport || !date) return res.status(400).json({ error: 'sport and date query params required' });
+    const resp = await oddsApi.get(`/historical/sports/${sport}/odds`, {
+      params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal', date },
+    });
+    const events = resp.data?.data || resp.data || [];
+    res.json({
+      queried: date, sport,
+      snapshotTimestamp: resp.data?.timestamp || null,
+      eventCount: events.length,
+      events: events.map(e => ({ home: e.home_team, away: e.away_team, bookmakerCount: e.bookmakers?.length || 0 })),
+    });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ error: e.message, errorBody: e.response?.data || null });
+  }
+});
+
 // TEMPORARY diagnostic endpoint — root-cause test for the Pinnacle backfill gap.
 // For a sample of currently-missing fixtures, compares the ORIGINAL backfill's
 // hour-truncated query (e.g. kickoff 19:45 -> query at 19:00:00Z) against the
