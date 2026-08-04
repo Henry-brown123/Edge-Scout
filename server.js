@@ -3694,6 +3694,16 @@ app.get('/api/debug/clv-recoverability-probe', async (req, res) => {
           apiStatus: apiErr.response?.status || null,
         };
       }
+
+      // Cross-check: is the sport key even active/valid right now, and does a
+      // slightly-earlier date (in case kickoff-instant itself is the problem) work?
+      try {
+        const sportsResp = await oddsApi.get('/sports', { params: { apiKey: ODDS_API_KEY, all: true } });
+        const match = (sportsResp.data || []).find(s => s.key === sport);
+        diag.sportKeyActive = match ? { active: match.active, title: match.title, group: match.group } : 'NOT_FOUND_IN_SPORTS_LIST';
+      } catch (e2) {
+        diag.sportsListError = e2.message;
+      }
     }
 
     res.json({ fixture: bet.fixture, kickoff: bet.kickoff, betOn: bet.bet, actualOdds: bet.actualOdds, result, diag });
