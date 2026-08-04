@@ -724,15 +724,6 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
   <!-- ── Real Money view ──────────────────────────────────────────── -->
   <div id="perf-real-view" style="display:none">
 
-  <!-- Go Live Confidence — real-money only, no paper/combined equivalent -->
-  <div class="card" style="margin-bottom:16px" id="go-live-confidence-card">
-    <div class="card-header">
-      <span class="card-title">Go Live Confidence</span>
-      <span style="font-size:11px;color:var(--muted)">Historical EV + live paper signal combined</span>
-    </div>
-    <div id="go-live-confidence-body"><div class="empty" style="padding:12px 0">Loading…</div></div>
-  </div>
-
   <!-- Summary stats -->
   <div class="grid-4" style="margin-bottom:16px">
     <div class="stat-tile">
@@ -1415,6 +1406,15 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       <div class="empty-icon">📊</div>
       <p>Run EV calibration from the API to populate this section.</p>
     </div>
+  </div>
+
+  <!-- Go Live Confidence — historical EV + live paper signal, per league -->
+  <div class="card" style="margin-top:16px" id="go-live-confidence-card">
+    <div class="card-header">
+      <span class="card-title">Go Live Confidence</span>
+      <span style="font-size:11px;color:var(--muted)">Historical EV + live paper signal combined</span>
+    </div>
+    <div id="go-live-confidence-body"><div class="empty" style="padding:12px 0">Loading…</div></div>
   </div>
 
 </div>
@@ -2407,7 +2407,6 @@ async function renderPerfMode(mode) {
   renderLeaguePerf(mode, prefix);
   renderBmPerf(mode, prefix);
   renderTransactionsInto(prefix);
-  if (mode === 'real') renderGoLiveConfidence();
 }
 
 function toggleBetLogExpanded(mode) {
@@ -2531,6 +2530,7 @@ async function renderModel() {
   renderDivergence();
   renderClv();
   renderEvCal();
+  renderGoLiveConfidence();
   try {
     const s = await apiFetch('/api/server-status');
     if (s?.model) {
