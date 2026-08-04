@@ -2667,10 +2667,13 @@ app.get('/api/model-info', (_req, res) => {
 // CLV report — aggregates CLV across all placed bets that have closing odds
 app.get('/api/clv-report', (req, res) => {
   const bets = getBets();
+  const mode   = req.query.mode || 'paper'; // 'paper' | 'real' | 'all'
   const fromTs = req.query.from ? new Date(req.query.from).getTime() : null;
   const toTs   = req.query.to   ? new Date(req.query.to).getTime()   : null;
   // All placed bets where CLV has been computed (closingOdds fetched, not necessarily resolved)
   const withClv = bets.filter(b => {
+    if (mode === 'paper' && b.mode === 'real') return false;
+    if (mode === 'real'  && b.mode !== 'real') return false;
     if (!((b.placementStatus === 'placed' || b.placementConfirmed) && b.clv != null)) return false;
     if (fromTs || toTs) {
       const t = new Date(b.lockedAt || b.placedAt || 0).getTime();
@@ -2753,11 +2756,14 @@ app.get('/api/clv-report', (req, res) => {
 app.get('/api/bookmaker-performance', (req, res) => {
   const bets  = getBets();
   const books = getBookmakers();
+  const mode   = req.query.mode || 'paper'; // 'paper' | 'real' | 'all'
   const fromTs = req.query.from ? new Date(req.query.from).getTime() : null;
   const toTs   = req.query.to   ? new Date(req.query.to).getTime()   : null;
 
   // Only count placed bets (placed or old placementConfirmed)
   const placed = bets.filter(b => {
+    if (mode === 'paper' && b.mode === 'real') return false;
+    if (mode === 'real'  && b.mode !== 'real') return false;
     if (!(b.placementStatus === 'placed' || b.placementConfirmed)) return false;
     if (fromTs || toTs) {
       const t = new Date(b.lockedAt || b.placedAt || 0).getTime();
@@ -2816,13 +2822,15 @@ app.get('/api/bookmaker-performance', (req, res) => {
   });
 });
 
-// Performance grouped by league — paper trading only, placed bets, period-filterable.
+// Performance grouped by league — placed bets, period-filterable, mode-filterable.
 app.get('/api/league-performance', (req, res) => {
+  const mode   = req.query.mode || 'paper'; // 'paper' | 'real' | 'all'
   const fromTs = req.query.from ? new Date(req.query.from).getTime() : null;
   const toTs   = req.query.to   ? new Date(req.query.to).getTime()   : null;
 
   const placed = getBets().filter(b => {
-    if (b.mode === 'real') return false;
+    if (mode === 'paper' && b.mode === 'real') return false;
+    if (mode === 'real'  && b.mode !== 'real') return false;
     if (!(b.placementStatus === 'placed' || b.placementConfirmed)) return false;
     if (fromTs || toTs) {
       const t = new Date(b.lockedAt || b.placedAt || 0).getTime();

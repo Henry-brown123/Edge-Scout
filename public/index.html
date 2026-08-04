@@ -655,7 +655,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
   <div class="card" style="margin-top:16px">
     <div class="card-header">
       <span class="card-title">Bet Log</span>
-      <button class="btn btn-ghost btn-sm" onclick="exportCSV()">Export CSV</button>
+      <button class="btn btn-ghost btn-sm" onclick="exportCSV('paper')">Export CSV</button>
     </div>
     <div class="table-wrap">
       <table>
@@ -670,7 +670,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       <div class="empty" id="bets-empty"><div class="empty-icon">📋</div><p>No resolved bets yet.</p></div>
     </div>
     <div id="bets-more-row" style="text-align:center;padding:12px 0 2px;display:none">
-      <button class="btn btn-ghost btn-sm" id="bets-more-btn" onclick="toggleBetLogExpanded()"></button>
+      <button class="btn btn-ghost btn-sm" id="bets-more-btn" onclick="toggleBetLogExpanded('paper')"></button>
     </div>
   </div>
 
@@ -723,77 +723,381 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
 
   <!-- ── Real Money view ──────────────────────────────────────────── -->
   <div id="perf-real-view" style="display:none">
-    <div class="grid-4" style="margin-bottom:16px">
-      <div class="stat-tile" style="border-top:2px solid var(--amber)">
-        <div class="stat-label">Real Bankroll</div>
-        <div class="stat-value c-amber" id="real-bankroll-total">—</div>
-        <div class="stat-sub">sum of funded accounts</div>
-      </div>
-      <div class="stat-tile">
-        <div class="stat-label">Real Bets</div>
-        <div class="stat-value" id="real-total-bets">0</div>
-        <div class="stat-sub" id="real-record">0W / 0L</div>
-      </div>
-      <div class="stat-tile">
-        <div class="stat-label">Real ROI</div>
-        <div class="stat-value" id="real-roi">—</div>
-        <div class="stat-sub">return on real money staked</div>
-      </div>
-      <div class="stat-tile">
-        <div class="stat-label">Real P&amp;L</div>
-        <div class="stat-value" id="real-pnl">£0</div>
-        <div class="stat-sub" id="real-staked-sub">£0 staked</div>
-      </div>
-    </div>
 
-    <div class="card" style="margin-bottom:16px">
-      <div class="card-header">
-        <span class="card-title">Bookmaker Balances</span>
-        <span style="font-size:11px;color:var(--muted)">update balances in Accounts section</span>
-      </div>
-      <div id="real-bm-balances" style="display:flex;flex-direction:column;gap:6px"></div>
+  <!-- Go Live Confidence — real-money only, no paper/combined equivalent -->
+  <div class="card" style="margin-bottom:16px" id="go-live-confidence-card">
+    <div class="card-header">
+      <span class="card-title">Go Live Confidence</span>
+      <span style="font-size:11px;color:var(--muted)">Historical EV + live paper signal combined</span>
     </div>
+    <div id="go-live-confidence-body"><div class="empty" style="padding:12px 0">Loading…</div></div>
+  </div>
 
-    <div class="card">
-      <div class="card-header"><span class="card-title">Real Money Bet Log</span></div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr>
-            <th>Fixture</th><th>League</th><th>Bet</th><th>Odds</th>
-            <th>Stake</th><th>P&amp;L</th><th>Result</th>
-          </tr></thead>
-          <tbody id="real-bets-body"></tbody>
-        </table>
-        <div class="empty" id="real-bets-empty"><div class="empty-icon">💰</div><p>No real money bets yet. Switch a league to Real in Settings → Betting Modes.</p></div>
+  <!-- Summary stats -->
+  <div class="grid-4" style="margin-bottom:16px">
+    <div class="stat-tile">
+      <div class="stat-label">Real Bankroll</div>
+      <div class="stat-value c-cyan" id="real-p-bankroll">£0</div>
+      <div class="stat-sub" id="real-p-bankroll-sub">Sum of funded accounts</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Total Bets</div>
+      <div class="stat-value" id="real-p-total">0</div>
+      <div class="stat-sub" id="real-p-record">0W / 0L</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Win Rate</div>
+      <div class="stat-value" id="real-p-winrate">—</div>
+      <div class="stat-sub">resolved bets only</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">ROI</div>
+      <div class="stat-value" id="real-p-roi">—</div>
+      <div class="stat-sub">return on staked</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Total P&amp;L</div>
+      <div class="stat-value" id="real-p-pnl">£0</div>
+      <div class="stat-sub" id="real-p-pnl-pct">0.0% of current bankroll</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Avg CLV</div>
+      <div class="stat-value" id="real-p-avg-clv">—</div>
+      <div class="stat-sub">vs Pinnacle close</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">CLV (Last 10)</div>
+      <div class="stat-value" id="real-p-clv-last10">—</div>
+      <div class="stat-sub" id="real-p-clv-n">— bets with data</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header"><span class="card-title">P&L Curve</span><span style="font-family:'DM Mono',monospace;font-size:.72rem;color:var(--text2)">placed bets only</span></div>
+    <div class="chart-wrap"><canvas id="real-pnl-chart"></canvas></div>
+  </div>
+
+  <!-- League Performance -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-header">
+      <span class="card-title">League Performance</span>
+      <button class="btn btn-ghost btn-sm" onclick="renderLeaguePerf('real','real-')">↻ Refresh</button>
+    </div>
+    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 14px">
+      P&L breakdown by league — placed real-money bets only.
+    </p>
+    <div id="real-league-perf-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px"></div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>League</th>
+            <th style="text-align:right">Bets</th>
+            <th style="text-align:right">W / L</th>
+            <th style="text-align:right">Win %</th>
+            <th style="text-align:right">Staked</th>
+            <th style="text-align:right">P&L</th>
+            <th style="text-align:right">ROI</th>
+            <th style="text-align:right">Avg Odds</th>
+          </tr>
+        </thead>
+        <tbody id="real-league-perf-body"></tbody>
+      </table>
+      <div class="empty" id="real-league-perf-empty" style="display:none">
+        <div class="empty-icon">🏆</div>
+        <p>No placed bets yet — league stats appear once bets are placed.</p>
       </div>
     </div>
+  </div>
+
+  <!-- Bookmaker Performance -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-header">
+      <span class="card-title">Bookmaker Performance</span>
+      <button class="btn btn-ghost btn-sm" onclick="renderBmPerf('real','real-')">↻ Refresh</button>
+    </div>
+    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 14px">
+      P&L breakdown by bookmaker — placed real-money bets only.
+    </p>
+    <div id="real-bm-perf-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px"></div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Bookmaker</th>
+            <th style="text-align:center">Tier</th>
+            <th style="text-align:right">Bets</th>
+            <th style="text-align:right">W / L</th>
+            <th style="text-align:right">Win %</th>
+            <th style="text-align:right">Staked</th>
+            <th style="text-align:right">P&L</th>
+            <th style="text-align:right">ROI</th>
+            <th style="text-align:right">Avg Odds</th>
+            <th style="text-align:center">Status</th>
+          </tr>
+        </thead>
+        <tbody id="real-bm-perf-body"></tbody>
+      </table>
+      <div class="empty" id="real-bm-perf-empty" style="display:none">
+        <div class="empty-icon">📚</div>
+        <p>No placed bets yet — bookmaker stats appear once you confirm placements.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bet Log -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-header">
+      <span class="card-title">Bet Log</span>
+      <button class="btn btn-ghost btn-sm" onclick="exportCSV('real')">Export CSV</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Fixture</th><th>League</th><th>Bet</th><th>Score</th>
+            <th>Odds</th><th>Edge</th><th>Stake</th><th>P&L</th><th>Result</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="real-bets-body"></tbody>
+      </table>
+      <div class="empty" id="real-bets-empty"><div class="empty-icon">📋</div><p>No real money bets yet. Switch a league to Real in Settings → Betting Modes.</p></div>
+    </div>
+    <div id="real-bets-more-row" style="text-align:center;padding:12px 0 2px;display:none">
+      <button class="btn btn-ghost btn-sm" id="real-bets-more-btn" onclick="toggleBetLogExpanded('real')"></button>
+    </div>
+  </div>
+
+  <!-- Transactions -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-header">
+      <span class="card-title">Bankroll Transactions</span>
+      <button class="btn btn-ghost btn-sm" onclick="renderTransactionsInto('real-')">↻ Refresh</button>
+    </div>
+    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 14px">
+      Deposits, withdrawals, and resets on the paper bankroll — there's a single shared ledger, so these figures match the Paper tab.
+    </p>
+    <div id="real-txn-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px"></div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th style="text-align:center">Type</th>
+            <th style="text-align:right">Amount</th>
+            <th style="text-align:right">Bankroll Before</th>
+            <th style="text-align:right">Bankroll After</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody id="real-txn-body"></tbody>
+      </table>
+      <div class="empty" id="real-txn-empty" style="display:none">
+        <div class="empty-icon">💷</div>
+        <p>No transactions yet — use Deposit / Withdraw / Reset in Settings to log bankroll movements.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Profits banked tile — below transactions -->
+  <div class="grid-2" style="margin-top:16px" id="real-profits-banked-row" style="display:none">
+    <div class="stat-tile">
+      <div class="stat-label">Total Withdrawn (Profits Banked)</div>
+      <div class="stat-value c-green" id="real-total-withdrawn">—</div>
+      <div class="stat-sub" id="real-total-deposited-sub">—</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Net Funds In / Out</div>
+      <div class="stat-value" id="real-net-funds">—</div>
+      <div class="stat-sub">deposits minus withdrawals</div>
+    </div>
+  </div>
+
   </div><!-- /perf-real-view -->
 
   <!-- ── Combined view ────────────────────────────────────────────── -->
   <div id="perf-combined-view" style="display:none">
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
-      <div class="card" style="border-top:2px solid var(--cyan)">
-        <div class="card-header"><span class="card-title" style="color:var(--cyan)">Paper Trading</span></div>
-        <div id="combined-paper-stats" style="display:flex;flex-direction:column;gap:8px"></div>
-      </div>
-      <div class="card" style="border-top:2px solid var(--amber)">
-        <div class="card-header"><span class="card-title" style="color:var(--amber)">Real Money</span></div>
-        <div id="combined-real-stats" style="display:flex;flex-direction:column;gap:8px"></div>
+
+  <!-- Summary stats -->
+  <div class="grid-4" style="margin-bottom:16px">
+    <div class="stat-tile">
+      <div class="stat-label">Combined Bankroll</div>
+      <div class="stat-value c-cyan" id="combined-p-bankroll">£0</div>
+      <div class="stat-sub" id="combined-p-bankroll-sub">Paper + real</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Total Bets</div>
+      <div class="stat-value" id="combined-p-total">0</div>
+      <div class="stat-sub" id="combined-p-record">0W / 0L</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Win Rate</div>
+      <div class="stat-value" id="combined-p-winrate">—</div>
+      <div class="stat-sub">resolved bets only</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">ROI</div>
+      <div class="stat-value" id="combined-p-roi">—</div>
+      <div class="stat-sub">return on staked</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Total P&amp;L</div>
+      <div class="stat-value" id="combined-p-pnl">£0</div>
+      <div class="stat-sub" id="combined-p-pnl-pct">0.0% of current bankroll</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Avg CLV</div>
+      <div class="stat-value" id="combined-p-avg-clv">—</div>
+      <div class="stat-sub">vs Pinnacle close</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">CLV (Last 10)</div>
+      <div class="stat-value" id="combined-p-clv-last10">—</div>
+      <div class="stat-sub" id="combined-p-clv-n">— bets with data</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header"><span class="card-title">P&L Curve</span><span style="font-family:'DM Mono',monospace;font-size:.72rem;color:var(--text2)">placed bets only</span></div>
+    <div class="chart-wrap"><canvas id="combined-pnl-chart"></canvas></div>
+  </div>
+
+  <!-- League Performance -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-header">
+      <span class="card-title">League Performance</span>
+      <button class="btn btn-ghost btn-sm" onclick="renderLeaguePerf('combined','combined-')">↻ Refresh</button>
+    </div>
+    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 14px">
+      P&L breakdown by league — placed bets, paper + real combined.
+    </p>
+    <div id="combined-league-perf-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px"></div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>League</th>
+            <th style="text-align:right">Bets</th>
+            <th style="text-align:right">W / L</th>
+            <th style="text-align:right">Win %</th>
+            <th style="text-align:right">Staked</th>
+            <th style="text-align:right">P&L</th>
+            <th style="text-align:right">ROI</th>
+            <th style="text-align:right">Avg Odds</th>
+          </tr>
+        </thead>
+        <tbody id="combined-league-perf-body"></tbody>
+      </table>
+      <div class="empty" id="combined-league-perf-empty" style="display:none">
+        <div class="empty-icon">🏆</div>
+        <p>No placed bets yet — league stats appear once bets are placed.</p>
       </div>
     </div>
-    <div class="card">
-      <div class="card-header"><span class="card-title">All Bets</span><span style="font-size:11px;color:var(--muted)">paper + real</span></div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr>
-            <th>Mode</th><th>Fixture</th><th>League</th><th>Bet</th>
-            <th>Odds</th><th>Stake</th><th>P&amp;L</th><th>Result</th>
-          </tr></thead>
-          <tbody id="combined-bets-body"></tbody>
-        </table>
-        <div class="empty" id="combined-bets-empty"><div class="empty-icon">📊</div><p>No bets yet.</p></div>
+  </div>
+
+  <!-- Bookmaker Performance -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-header">
+      <span class="card-title">Bookmaker Performance</span>
+      <button class="btn btn-ghost btn-sm" onclick="renderBmPerf('combined','combined-')">↻ Refresh</button>
+    </div>
+    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 14px">
+      P&L breakdown by bookmaker — placed bets, paper + real combined.
+    </p>
+    <div id="combined-bm-perf-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px"></div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Bookmaker</th>
+            <th style="text-align:center">Tier</th>
+            <th style="text-align:right">Bets</th>
+            <th style="text-align:right">W / L</th>
+            <th style="text-align:right">Win %</th>
+            <th style="text-align:right">Staked</th>
+            <th style="text-align:right">P&L</th>
+            <th style="text-align:right">ROI</th>
+            <th style="text-align:right">Avg Odds</th>
+            <th style="text-align:center">Status</th>
+          </tr>
+        </thead>
+        <tbody id="combined-bm-perf-body"></tbody>
+      </table>
+      <div class="empty" id="combined-bm-perf-empty" style="display:none">
+        <div class="empty-icon">📚</div>
+        <p>No placed bets yet — bookmaker stats appear once you confirm placements.</p>
       </div>
     </div>
+  </div>
+
+  <!-- Bet Log -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-header">
+      <span class="card-title">Bet Log</span>
+      <button class="btn btn-ghost btn-sm" onclick="exportCSV('combined')">Export CSV</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Mode</th><th>Fixture</th><th>League</th><th>Bet</th><th>Score</th>
+            <th>Odds</th><th>Edge</th><th>Stake</th><th>P&L</th><th>Result</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="combined-bets-body"></tbody>
+      </table>
+      <div class="empty" id="combined-bets-empty"><div class="empty-icon">📋</div><p>No bets yet.</p></div>
+    </div>
+    <div id="combined-bets-more-row" style="text-align:center;padding:12px 0 2px;display:none">
+      <button class="btn btn-ghost btn-sm" id="combined-bets-more-btn" onclick="toggleBetLogExpanded('combined')"></button>
+    </div>
+  </div>
+
+  <!-- Transactions -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-header">
+      <span class="card-title">Bankroll Transactions</span>
+      <button class="btn btn-ghost btn-sm" onclick="renderTransactionsInto('combined-')">↻ Refresh</button>
+    </div>
+    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 14px">
+      Deposits, withdrawals, and resets on the paper bankroll — there's a single shared ledger, so these figures match the Paper tab.
+    </p>
+    <div id="combined-txn-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px"></div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th style="text-align:center">Type</th>
+            <th style="text-align:right">Amount</th>
+            <th style="text-align:right">Bankroll Before</th>
+            <th style="text-align:right">Bankroll After</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody id="combined-txn-body"></tbody>
+      </table>
+      <div class="empty" id="combined-txn-empty" style="display:none">
+        <div class="empty-icon">💷</div>
+        <p>No transactions yet — use Deposit / Withdraw / Reset in Settings to log bankroll movements.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Profits banked tile — below transactions -->
+  <div class="grid-2" style="margin-top:16px" id="combined-profits-banked-row" style="display:none">
+    <div class="stat-tile">
+      <div class="stat-label">Total Withdrawn (Profits Banked)</div>
+      <div class="stat-value c-green" id="combined-total-withdrawn">—</div>
+      <div class="stat-sub" id="combined-total-deposited-sub">—</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Net Funds In / Out</div>
+      <div class="stat-value" id="combined-net-funds">—</div>
+      <div class="stat-sub">deposits minus withdrawals</div>
+    </div>
+  </div>
+
   </div><!-- /perf-combined-view -->
 
 </div>
@@ -1902,7 +2206,7 @@ async function manualResolve(id, result) {
 // ─── PERFORMANCE ─────────────────────────────────────────────────────────────
 // ─── PERFORMANCE PERIOD FILTER ───────────────────────────────────────────────
 const PERF_FILTER = { period: 'all', from: null, to: null };
-let betLogExpanded = false;
+let betLogExpanded = { paper: false, real: false, combined: false };
 const BET_LOG_PAGE_SIZE = 10;
 
 function getPerfWindow() {
@@ -1966,12 +2270,32 @@ function _refreshPerfView() {
   if (combined && combined.style.display !== 'none') renderPerfCombined();
 }
 
-function renderPerformance() {
+function renderPerformance() { return renderPerfMode('paper'); }
+async function renderPerfReal()     { return renderPerfMode('real'); }
+async function renderPerfCombined() { return renderPerfMode('combined'); }
+
+// Single engine driving all three Performance tabs — Paper, Real Money, Combined —
+// so they share one identical layout. `mode` picks the bet filter and API params;
+// `prefix` picks which set of DOM ids to write into (paper keeps unprefixed ids).
+async function renderPerfMode(mode) {
+  const prefix  = mode === 'paper' ? '' : mode === 'real' ? 'real-' : 'combined-';
+  const apiMode = mode === 'combined' ? 'all' : mode;
   const { bankroll, bets } = STATE;
-  // Deduplicate by fixtureId — keep only the first (canonical) bet per fixture
+
+  // Real bankroll (sum of funded bookmaker accounts) — only needed outside paper mode.
+  let realBankroll = 0;
+  if (mode !== 'paper') {
+    try { realBankroll = (await apiFetch('/api/performance/real')).realBankroll || 0; } catch (e) {}
+  }
+  const bankrollCurrent  = mode === 'paper' ? bankroll.current : mode === 'real' ? realBankroll : bankroll.current + realBankroll;
+  const bankrollBaseline = mode === 'paper' ? (bankroll.initial || 0) : bankrollCurrent;
+
+  // Mode-filtered, deduplicated bet set (fixtureId+mode, since combined can hold the
+  // same fixtureId once under paper and once under real — both are legitimate rows).
+  const modeBets = bets.filter(b => mode === 'paper' ? (!b.mode || b.mode === 'paper') : mode === 'real' ? b.mode === 'real' : true);
   const seen = new Set();
-  const allPlaced = bets.filter(b => b.suggestedStake > 0 && (b.result || b.stage === 'RECOMMENDED'))
-    .filter(b => { if (seen.has(b.fixtureId)) return false; seen.add(b.fixtureId); return true; });
+  const allPlaced = modeBets.filter(b => b.suggestedStake > 0 && (b.result || b.stage === 'RECOMMENDED'))
+    .filter(b => { const k = `${b.fixtureId}_${b.mode || 'paper'}`; if (seen.has(k)) return false; seen.add(k); return true; });
 
   // Apply period filter
   const placedBets = filterBetsByWindow(allPlaced);
@@ -1981,39 +2305,40 @@ function renderPerformance() {
   const losses   = resolved.filter(b => b.result === 'loss').length;
   const staked   = resolved.reduce((s, b) => s + b.suggestedStake, 0);
 
-  // Bankroll tile — always shows live bankroll, colored by all-time P&L sign
   const allResolved = allPlaced.filter(b => b.stage === 'RESOLVED');
-  const totalPnl    = allResolved.reduce((s, b) => s + (b.pnl || 0), 0);
-  const periodPnl = resolved.reduce((s, b) => s + (b.pnl || 0), 0);
-  const periodPnlPct = bankroll.initial ? ((periodPnl / bankroll.initial) * 100).toFixed(1) : '0.0';
-
+  const totalPnl     = allResolved.reduce((s, b) => s + (b.pnl || 0), 0);
+  const periodPnl    = resolved.reduce((s, b) => s + (b.pnl || 0), 0);
+  const periodPnlPct = bankrollBaseline ? ((periodPnl / bankrollBaseline) * 100).toFixed(1) : '0.0';
   const roi = staked ? ((periodPnl / staked) * 100).toFixed(1) : '—';
 
-  document.getElementById('p-bankroll').textContent  = `£${bankroll.current.toFixed(2)}`;
-  document.getElementById('p-bankroll').className    = `stat-value ${totalPnl >= 0 ? 'c-green' : 'c-red'}`;
-  document.getElementById('p-bankroll-sub').textContent = `Started at £${(bankroll.initial ?? 0).toFixed(2)}`;
-  document.getElementById('p-total').textContent     = placedBets.length;
-  document.getElementById('p-record').textContent    = `${wins}W / ${losses}L`;
-  document.getElementById('p-winrate').textContent   = resolved.length ? `${((wins/(wins+losses||1))*100).toFixed(0)}%` : '—';
-  document.getElementById('p-winrate').className     = `stat-value ${wins >= losses ? 'c-green' : 'c-red'}`;
-  document.getElementById('p-roi').textContent       = roi !== '—' ? `${roi}%` : '—';
-  document.getElementById('p-roi').className         = `stat-value ${parseFloat(roi) >= 0 ? 'c-green' : 'c-red'}`;
+  document.getElementById(`${prefix}p-bankroll`).textContent  = `£${bankrollCurrent.toFixed(2)}`;
+  document.getElementById(`${prefix}p-bankroll`).className    = `stat-value ${totalPnl >= 0 ? 'c-green' : 'c-red'}`;
+  document.getElementById(`${prefix}p-bankroll-sub`).textContent =
+    mode === 'paper' ? `Started at £${(bankroll.initial ?? 0).toFixed(2)}` :
+    mode === 'real'  ? 'Sum of funded accounts' : 'Paper + real';
+  document.getElementById(`${prefix}p-total`).textContent     = placedBets.length;
+  document.getElementById(`${prefix}p-record`).textContent    = `${wins}W / ${losses}L`;
+  document.getElementById(`${prefix}p-winrate`).textContent   = resolved.length ? `${((wins/(wins+losses||1))*100).toFixed(0)}%` : '—';
+  document.getElementById(`${prefix}p-winrate`).className     = `stat-value ${wins >= losses ? 'c-green' : 'c-red'}`;
+  document.getElementById(`${prefix}p-roi`).textContent       = roi !== '—' ? `${roi}%` : '—';
+  document.getElementById(`${prefix}p-roi`).className         = `stat-value ${parseFloat(roi) >= 0 ? 'c-green' : 'c-red'}`;
 
   // Total P&L tile — period-filtered, same window as Total Bets/Win Rate/ROI above.
   // Equals the all-time P&L figure when the ALL filter is active (no window applied).
-  document.getElementById('p-pnl').textContent       = `${periodPnl >= 0 ? '+' : ''}£${periodPnl.toFixed(2)}`;
-  document.getElementById('p-pnl').className         = `stat-value ${periodPnl >= 0 ? 'c-green' : 'c-red'}`;
-  document.getElementById('p-pnl-pct').textContent   = `${periodPnl >= 0 ? '+' : ''}${periodPnlPct}% of starting bankroll`;
+  document.getElementById(`${prefix}p-pnl`).textContent       = `${periodPnl >= 0 ? '+' : ''}£${periodPnl.toFixed(2)}`;
+  document.getElementById(`${prefix}p-pnl`).className         = `stat-value ${periodPnl >= 0 ? 'c-green' : 'c-red'}`;
+  document.getElementById(`${prefix}p-pnl-pct`).textContent   = `${periodPnl >= 0 ? '+' : ''}${periodPnlPct}% of ${mode === 'paper' ? 'starting bankroll' : 'current bankroll'}`;
 
-  // CLV tiles — pass date window
+  // CLV tiles — pass date window + mode
   const { from, to } = getPerfWindow();
-  const clvParams = new URLSearchParams();
+  const clvParams = new URLSearchParams({ mode: apiMode });
   if (from) clvParams.set('from', from.toISOString());
   if (to)   clvParams.set('to',   to.toISOString());
-  apiFetch(`/api/clv-report${clvParams.toString() ? '?' + clvParams : ''}`).then(clv => {
-    const avgEl    = document.getElementById('p-avg-clv');
-    const l10El    = document.getElementById('p-clv-last10');
-    const nEl      = document.getElementById('p-clv-n');
+  apiFetch(`/api/clv-report?${clvParams}`).then(clv => {
+    const avgEl = document.getElementById(`${prefix}p-avg-clv`);
+    const l10El = document.getElementById(`${prefix}p-clv-last10`);
+    const nEl   = document.getElementById(`${prefix}p-clv-n`);
+    if (!avgEl) return;
     if (clv.n === 0) { avgEl.textContent = '—'; l10El.textContent = '—'; nEl.textContent = '0 bets with data'; return; }
     const fmt = v => v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`;
     avgEl.textContent   = fmt(clv.avgClv);
@@ -2034,17 +2359,17 @@ function renderPerformance() {
     const d = new Date(b.lockedAt || b.kickoff || 0);
     curveLabels.push(d.getFullYear() > 2000 ? d.toLocaleDateString('en-GB', { day:'numeric', month:'short' }) : '');
   });
-  drawPnlChart(curve, bankroll.initial, curveLabels);
+  drawPnlChart(curve, bankrollBaseline, curveLabels, `${prefix}pnl-chart`);
 
   // Bet log — period filtered, newest first; capped at BET_LOG_PAGE_SIZE until expanded
-  const tbody   = document.getElementById('bets-body');
-  const empty   = document.getElementById('bets-empty');
-  const moreRow = document.getElementById('bets-more-row');
-  const moreBtn = document.getElementById('bets-more-btn');
+  const tbody   = document.getElementById(`${prefix}bets-body`);
+  const empty   = document.getElementById(`${prefix}bets-empty`);
+  const moreRow = document.getElementById(`${prefix}bets-more-row`);
+  const moreBtn = document.getElementById(`${prefix}bets-more-btn`);
   tbody.innerHTML = '';
   empty.style.display = placedBets.length ? 'none' : 'block';
 
-  const visibleBets = betLogExpanded ? placedBets : placedBets.slice(0, BET_LOG_PAGE_SIZE);
+  const visibleBets = betLogExpanded[mode] ? placedBets : placedBets.slice(0, BET_LOG_PAGE_SIZE);
 
   visibleBets.forEach(b => {
     const pnlStr = b.pnl != null ? `${b.pnl >= 0 ? '+' : ''}£${b.pnl.toFixed(2)}` : '—';
@@ -2052,8 +2377,12 @@ function renderPerformance() {
     const resultBadge = b.result === 'win' ? '<span class="badge badge-green">WIN</span>'
       : b.result === 'loss' ? '<span class="badge badge-red">LOSS</span>'
       : '<span class="badge badge-muted">PENDING</span>';
+    const modeCell = mode === 'combined'
+      ? `<td><span class="badge ${b.mode === 'real' ? 'badge-real' : 'badge-paper'}">${b.mode === 'real' ? 'REAL £' : 'PAPER'}</span></td>`
+      : '';
     const tr = document.createElement('tr');
     tr.innerHTML = `
+      ${modeCell}
       <td class="mono">${b.fixture}</td>
       <td style="color:var(--muted)">${b.leagueName || '—'}</td>
       <td><span class="badge badge-cyan">${b.bet}</span></td>
@@ -2070,34 +2399,36 @@ function renderPerformance() {
 
   if (placedBets.length > BET_LOG_PAGE_SIZE) {
     moreRow.style.display = 'block';
-    moreBtn.textContent = betLogExpanded ? 'Show less' : `See more (${placedBets.length - BET_LOG_PAGE_SIZE} more)`;
+    moreBtn.textContent = betLogExpanded[mode] ? 'Show less' : `See more (${placedBets.length - BET_LOG_PAGE_SIZE} more)`;
   } else {
     moreRow.style.display = 'none';
   }
 
-  renderLeaguePerf();
-  renderBmPerf();
-  renderTransactions();
+  renderLeaguePerf(mode, prefix);
+  renderBmPerf(mode, prefix);
+  renderTransactionsInto(prefix);
+  if (mode === 'real') renderGoLiveConfidence();
 }
 
-function toggleBetLogExpanded() {
-  betLogExpanded = !betLogExpanded;
-  renderPerformance();
+function toggleBetLogExpanded(mode) {
+  betLogExpanded[mode] = !betLogExpanded[mode];
+  renderPerfMode(mode);
 }
 
-async function renderLeaguePerf() {
+async function renderLeaguePerf(mode = 'paper', prefix = '') {
   let data;
   try {
     const { from, to } = getPerfWindow();
-    const p = new URLSearchParams();
+    const p = new URLSearchParams({ mode: mode === 'combined' ? 'all' : mode });
     if (from) p.set('from', from.toISOString());
     if (to)   p.set('to',   to.toISOString());
-    data = await apiFetch(`/api/league-performance${p.toString() ? '?' + p : ''}`);
+    data = await apiFetch(`/api/league-performance?${p}`);
   } catch(e) { return; }
 
-  const tbody   = document.getElementById('league-perf-body');
-  const emptyEl = document.getElementById('league-perf-empty');
-  const summEl  = document.getElementById('league-perf-summary');
+  const tbody   = document.getElementById(`${prefix}league-perf-body`);
+  const emptyEl = document.getElementById(`${prefix}league-perf-empty`);
+  const summEl  = document.getElementById(`${prefix}league-perf-summary`);
+  if (!tbody) return;
   tbody.innerHTML = '';
 
   if (!data.rows.length) {
@@ -2136,19 +2467,20 @@ async function renderLeaguePerf() {
   });
 }
 
-async function renderBmPerf() {
+async function renderBmPerf(mode = 'paper', prefix = '') {
   let data;
   try {
     const { from, to } = getPerfWindow();
-    const p = new URLSearchParams();
+    const p = new URLSearchParams({ mode: mode === 'combined' ? 'all' : mode });
     if (from) p.set('from', from.toISOString());
     if (to)   p.set('to',   to.toISOString());
-    data = await apiFetch(`/api/bookmaker-performance${p.toString() ? '?' + p : ''}`);
+    data = await apiFetch(`/api/bookmaker-performance?${p}`);
   } catch(e) { return; }
 
-  const tbody   = document.getElementById('bm-perf-body');
-  const emptyEl = document.getElementById('bm-perf-empty');
-  const summEl  = document.getElementById('bm-perf-summary');
+  const tbody   = document.getElementById(`${prefix}bm-perf-body`);
+  const emptyEl = document.getElementById(`${prefix}bm-perf-empty`);
+  const summEl  = document.getElementById(`${prefix}bm-perf-summary`);
+  if (!tbody) return;
   tbody.innerHTML = '';
 
   if (!data.rows.length) {
@@ -2764,8 +3096,8 @@ async function renderFullCalibration() {
   }
 }
 
-function drawPnlChart(data, initial = 1000, labels = []) {
-  const canvas = document.getElementById('pnl-chart');
+function drawPnlChart(data, initial = 1000, labels = [], canvasId = 'pnl-chart') {
+  const canvas = document.getElementById(canvasId);
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   canvas.width  = canvas.parentElement.offsetWidth || 400;
@@ -2889,13 +3221,14 @@ async function deleteBet(id) {
   try {
     await apiFetch(`/api/bets/${id}`, { method: 'DELETE' });
     await loadState();
-    renderPerformance();
+    _refreshPerfView();
   } catch(e) { toast(e.message, 'error'); }
 }
 
-function exportCSV() {
+function exportCSV(mode = 'paper') {
+  const bets = STATE.bets.filter(b => mode === 'paper' ? (!b.mode || b.mode === 'paper') : mode === 'real' ? b.mode === 'real' : true);
   const rows = [['Fixture','League','Bet','Score','Odds','Edge%','Stake','P&L','Result']];
-  STATE.bets.forEach(b => rows.push([
+  bets.forEach(b => rows.push([
     b.fixture, b.leagueName, b.bet, b.successScore,
     b.bookOdds?.toFixed(2), ((b.edge||0)*100).toFixed(2),
     b.suggestedStake?.toFixed(2), b.pnl?.toFixed(2) || '', b.result || 'pending',
@@ -2903,7 +3236,7 @@ function exportCSV() {
   const csv = rows.map(r => r.join(',')).join('\n');
   const a = document.createElement('a');
   a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
-  a.download = `edge-scout-${new Date().toISOString().split('T')[0]}.csv`;
+  a.download = `edge-scout-${mode}-${new Date().toISOString().split('T')[0]}.csv`;
   a.click();
 }
 
@@ -3041,82 +3374,6 @@ async function renderGoLiveConfidence() {
   } catch (e) {
     body.innerHTML = `<div class="empty" style="padding:12px 0;color:var(--red)">Failed to load: ${e.message}</div>`;
   }
-}
-
-// ─── REAL PERFORMANCE VIEW ────────────────────────────────────────────────────
-async function renderPerfReal() {
-  const el = document.getElementById('perf-real-view');
-  if (!el) return;
-  try {
-    const data = await fetch('/api/performance/real').then(r => r.json());
-    const rb = data.realBankroll ?? 0;
-    const bks = data.bookmakerBalances || [];
-    const resolved = data.resolved ?? 0;
-    const wins = data.wins ?? 0;
-    const losses = data.losses ?? 0;
-    const pnl = data.pnl ?? 0;
-    const roi = data.roi != null ? data.roi.toFixed(1) : '—';
-    const bets = data.bets || [];
-    el.innerHTML = `
-      <div class="card" style="margin-bottom:16px" id="go-live-confidence-card">
-        <div class="card-header">
-          <span class="card-title">Go Live Confidence</span>
-          <span style="font-size:11px;color:var(--muted)">Historical EV + live paper signal combined</span>
-        </div>
-        <div id="go-live-confidence-body"><div class="empty" style="padding:12px 0">Loading…</div></div>
-      </div>
-      <div class="stat-grid" style="margin-bottom:16px">
-        <div class="stat-card"><div class="stat-label">Real Bankroll</div><div class="stat-value ${rb >= 0 ? 'c-green' : 'c-red'}">£${rb.toFixed(2)}</div></div>
-        <div class="stat-card"><div class="stat-label">Real Bets</div><div class="stat-value">${resolved}</div></div>
-        <div class="stat-card"><div class="stat-label">Record</div><div class="stat-value">${wins}W / ${losses}L</div></div>
-        <div class="stat-card"><div class="stat-label">ROI</div><div class="stat-value ${parseFloat(roi) >= 0 ? 'c-green' : 'c-red'}">${roi}%</div></div>
-        <div class="stat-card"><div class="stat-label">P&amp;L</div><div class="stat-value ${pnl >= 0 ? 'c-green' : 'c-red'}">${pnl >= 0 ? '+' : ''}£${pnl.toFixed(2)}</div></div>
-      </div>
-      ${bks.length ? `<div class="card" style="margin-bottom:16px"><div class="card-title">Bookmaker Balances</div>${bks.map(b => `<div class="mode-league-row"><span>${b.name}</span><span style="color:${b.balance > 0 ? 'var(--green)':'var(--muted)'}">£${b.balance.toFixed(2)}</span></div>`).join('')}</div>` : ''}
-      <div class="card"><div class="card-title">Real Bet Log</div>
-        ${bets.length === 0 ? '<div class="empty">No real bets yet</div>' : `<table class="bet-log-table"><thead><tr><th>Fixture</th><th>Bet</th><th>Odds</th><th>Stake</th><th>Result</th></tr></thead><tbody>
-          ${bets.map(b => `<tr><td>${b.fixture}</td><td>${b.betLabel||b.topPick}</td><td>${b.bookOdds?.toFixed(2)||'—'}</td><td>£${(b.suggestedStake||0).toFixed(2)}</td><td style="color:${b.result==='win'?'var(--green)':b.result==='loss'?'var(--red)':'var(--muted)'}">${b.result||'pending'}</td></tr>`).join('')}
-          </tbody></table>`}
-      </div>`;
-    renderGoLiveConfidence();
-  } catch(e) { el.innerHTML = '<div class="empty">Failed to load real performance</div>'; }
-}
-
-// ─── COMBINED PERFORMANCE VIEW ────────────────────────────────────────────────
-async function renderPerfCombined() {
-  const el = document.getElementById('perf-combined-view');
-  if (!el) return;
-  try {
-    const [paperData, realData] = await Promise.all([
-      fetch('/api/performance/paper').then(r => r.json()).catch(() => ({})),
-      fetch('/api/performance/real').then(r => r.json()).catch(() => ({})),
-    ]);
-    const allBets = [...(paperData.bets||[]).map(b => ({...b, _src:'paper'})), ...(realData.bets||[]).map(b => ({...b, _src:'real'}))].sort((a,b) => new Date(b.lockedAt||0) - new Date(a.lockedAt||0));
-    el.innerHTML = `
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
-        <div class="card"><div class="card-title" style="color:var(--cyan)">Paper Trading</div>
-          <div class="stat-grid" style="grid-template-columns:1fr 1fr;gap:8px">
-            <div class="stat-card"><div class="stat-label">Bets</div><div class="stat-value">${paperData.resolved??0}</div></div>
-            <div class="stat-card"><div class="stat-label">ROI</div><div class="stat-value ${(paperData.roi??0)>=0?'c-green':'c-red'}">${paperData.roi!=null?paperData.roi.toFixed(1):'—'}%</div></div>
-            <div class="stat-card"><div class="stat-label">Record</div><div class="stat-value">${paperData.wins??0}W / ${paperData.losses??0}L</div></div>
-            <div class="stat-card"><div class="stat-label">P&amp;L</div><div class="stat-value ${(paperData.pnl??0)>=0?'c-green':'c-red'}">${(paperData.pnl??0)>=0?'+':''}£${(paperData.pnl??0).toFixed(2)}</div></div>
-          </div>
-        </div>
-        <div class="card"><div class="card-title" style="color:var(--amber)">Real Money</div>
-          <div class="stat-grid" style="grid-template-columns:1fr 1fr;gap:8px">
-            <div class="stat-card"><div class="stat-label">Bets</div><div class="stat-value">${realData.resolved??0}</div></div>
-            <div class="stat-card"><div class="stat-label">ROI</div><div class="stat-value ${(realData.roi??0)>=0?'c-green':'c-red'}">${realData.roi!=null?realData.roi.toFixed(1):'—'}%</div></div>
-            <div class="stat-card"><div class="stat-label">Record</div><div class="stat-value">${realData.wins??0}W / ${realData.losses??0}L</div></div>
-            <div class="stat-card"><div class="stat-label">P&amp;L</div><div class="stat-value ${(realData.pnl??0)>=0?'c-green':'c-red'}">${(realData.pnl??0)>=0?'+':''}£${(realData.pnl??0).toFixed(2)}</div></div>
-          </div>
-        </div>
-      </div>
-      <div class="card"><div class="card-title">All Bets</div>
-        ${allBets.length === 0 ? '<div class="empty">No bets yet</div>' : `<table class="bet-log-table"><thead><tr><th>Fixture</th><th>Mode</th><th>Bet</th><th>Odds</th><th>Stake</th><th>Result</th></tr></thead><tbody>
-          ${allBets.map(b => `<tr><td>${b.fixture}</td><td><span class="badge ${b._src==='real'?'badge-real':'badge-paper'}">${b._src==='real'?'REAL £':'PAPER'}</span></td><td>${b.betLabel||b.topPick}</td><td>${b.bookOdds?.toFixed(2)||'—'}</td><td>£${(b.suggestedStake||0).toFixed(2)}</td><td style="color:${b.result==='win'?'var(--green)':b.result==='loss'?'var(--red)':'var(--muted)'}">${b.result||'pending'}</td></tr>`).join('')}
-          </tbody></table>`}
-      </div>`;
-  } catch(e) { el.innerHTML = '<div class="empty">Failed to load combined view</div>'; }
 }
 
 // ─── BETTING MODES (SETTINGS) ─────────────────────────────────────────────────
@@ -3431,14 +3688,20 @@ async function confirmWithdraw() {
   } catch(e) { toast(e.message, 'error'); }
 }
 
-async function renderTransactions() {
+function renderTransactions() { return renderTransactionsInto(''); }
+
+// Bankroll Transactions reflects the one paper-bankroll ledger there is — Real and
+// Combined show the exact same figures as Paper, per design (no separate real-money
+// transaction log exists; any bankroll readjustment is treated as withdrawn/deposited).
+async function renderTransactionsInto(prefix) {
   let data;
   try { data = await apiFetch('/api/transactions'); } catch(e) { return; }
 
-  const tbody  = document.getElementById('txn-body');
-  const emptyEl = document.getElementById('txn-empty');
-  const summEl  = document.getElementById('txn-summary');
-  const profRow = document.getElementById('profits-banked-row');
+  const tbody  = document.getElementById(`${prefix}txn-body`);
+  const emptyEl = document.getElementById(`${prefix}txn-empty`);
+  const summEl  = document.getElementById(`${prefix}txn-summary`);
+  const profRow = document.getElementById(`${prefix}profits-banked-row`);
+  if (!tbody) return;
   tbody.innerHTML = '';
 
   if (!data.transactions.length) {
@@ -3458,9 +3721,9 @@ async function renderTransactions() {
   ].join('');
 
   // Profits-banked tiles
-  document.getElementById('total-withdrawn').textContent   = `£${data.totalWithdrawn.toFixed(2)}`;
-  document.getElementById('total-deposited-sub').textContent = `£${data.totalDeposited.toFixed(2)} deposited`;
-  const netEl = document.getElementById('net-funds');
+  document.getElementById(`${prefix}total-withdrawn`).textContent   = `£${data.totalWithdrawn.toFixed(2)}`;
+  document.getElementById(`${prefix}total-deposited-sub`).textContent = `£${data.totalDeposited.toFixed(2)} deposited`;
+  const netEl = document.getElementById(`${prefix}net-funds`);
   netEl.textContent = `${data.netWithdrawn >= 0 ? '+' : ''}£${Math.abs(data.netWithdrawn).toFixed(2)}`;
   netEl.className   = `stat-value ${data.netWithdrawn >= 0 ? 'c-green' : 'c-red'}`;
 
