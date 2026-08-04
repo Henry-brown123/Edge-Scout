@@ -3803,7 +3803,7 @@ app.get('/api/debug/sharp-book-scope', async (req, res) => {
           });
           results[leagueName].sampled.push({ fixture: pick.fixture, date: pick.date, found: true, bookmakerKeys: books.map(b=>b.key), books });
         } catch (e) {
-          results[leagueName].sampled.push({ fixture: pick.fixture, date: pick.date, error: e.message });
+          results[leagueName].sampled.push({ fixture: pick.fixture, date: pick.date, error: e.message, errorBody: e.response?.data || null });
         }
       }
     }
