@@ -3780,7 +3780,7 @@ app.get('/api/debug/sharp-book-scope', async (req, res) => {
 
       for (const pick of picks) {
         try {
-          const kickoffIso = new Date(pick.date).toISOString();
+          const kickoffIso = new Date(pick.date).toISOString().replace(/\.\d{3}Z$/, 'Z');
           const resp = await oddsApi.get(`/historical/sports/${sport}/odds`, {
             params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal', date: kickoffIso },
           });
