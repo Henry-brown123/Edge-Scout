@@ -3742,20 +3742,34 @@ app.get('/api/debug/sharp-book-scope', async (req, res) => {
   try {
     const samplesPerLeague = parseInt(req.query.samplesPerLeague, 10) || 3;
     const leagueFilter = req.query.leagues ? new Set(req.query.leagues.split(',').map(s => s.trim())) : null;
+    const missingOnly = req.query.missingOnly === 'true';
 
     const closingOdds = readJSON('closing-odds.json') || {};
     const historical   = readJSON('backfill-historical.json') || {};
     const scoredById   = {};
     for (const rec of (historical.scoredRecords || [])) scoredById[String(rec.fixtureId)] = rec;
 
-    // Group fixture IDs that have existing Pinnacle closing odds, by league, with dates.
+    // Group fixtures by league — either the existing Pinnacle-matched pool (default)
+    // or, with missingOnly=true, fixtures that have a scored record but NO Pinnacle
+    // closing odds today, to test whether another book covers the gap.
     const byLeague = {};
-    for (const [fixtureId, co] of Object.entries(closingOdds)) {
-      const rec = scoredById[fixtureId];
-      if (!rec || !rec.leagueId || !rec.date) continue;
-      const lid = String(rec.leagueId);
-      if (leagueFilter && !leagueFilter.has(lid)) continue;
-      (byLeague[lid] = byLeague[lid] || []).push({ fixtureId, date: rec.date, fixture: rec.fixture });
+    if (missingOnly) {
+      for (const rec of (historical.scoredRecords || [])) {
+        const fixtureId = String(rec.fixtureId);
+        if (closingOdds[fixtureId]) continue; // already has Pinnacle — not a gap
+        if (!rec.leagueId || !rec.date || !rec.actualOutcome) continue;
+        const lid = String(rec.leagueId);
+        if (leagueFilter && !leagueFilter.has(lid)) continue;
+        (byLeague[lid] = byLeague[lid] || []).push({ fixtureId, date: rec.date, fixture: rec.fixture });
+      }
+    } else {
+      for (const [fixtureId, co] of Object.entries(closingOdds)) {
+        const rec = scoredById[fixtureId];
+        if (!rec || !rec.leagueId || !rec.date) continue;
+        const lid = String(rec.leagueId);
+        if (leagueFilter && !leagueFilter.has(lid)) continue;
+        (byLeague[lid] = byLeague[lid] || []).push({ fixtureId, date: rec.date, fixture: rec.fixture });
+      }
     }
 
     let lastCreditsRemaining = null;
