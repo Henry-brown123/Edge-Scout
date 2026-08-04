@@ -3732,6 +3732,82 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
+// TEMPORARY diagnostic endpoint — Part A of the odds-scoping/calibration task:
+// pure calibration audit using every scored fixture with a final result, NO
+// closing-odds requirement (so this is independent of Pinnacle or any book).
+// Uses the real live pipeline (GBDT + applyLeagueBiasCorrection), not the
+// diagnostic-only linear model. Read-only. Remove after the report is produced.
+app.get('/api/debug/pure-calibration', (_req, res) => {
+  try {
+    const historical    = readJSON('backfill-historical.json') || {};
+    const scoredRecords = historical.scoredRecords || [];
+    const optWeights    = historical.optimisedWeights || {};
+    const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG } = require('./scoring');
+
+    const BINS = [
+      { label: '<40%',   min: 0,    max: 0.40 },
+      { label: '40-50%', min: 0.40, max: 0.50 },
+      { label: '50-60%', min: 0.50, max: 0.60 },
+      { label: '60-70%', min: 0.60, max: 0.70 },
+      { label: '70-80%', min: 0.70, max: 0.80 },
+      { label: '80-90%', min: 0.80, max: 0.90 },
+      { label: '90-100%',min: 0.90, max: 1.001 },
+    ];
+
+    const byLeague = {}; // leagueId -> [{predProb, correct}]
+    let totalSkippedNoFactors = 0, totalSkippedNoWeights = 0;
+
+    for (const rec of scoredRecords) {
+      if (!rec.actualOutcome) continue;
+      if (!rec.homeFactors || !rec.awayFactors) { totalSkippedNoFactors++; continue; }
+      const context = rec.context || classifyFixture(rec.leagueId);
+      const weights  = optWeights[context] || optWeights.club_domestic;
+      if (!weights) { totalSkippedNoWeights++; continue; }
+      const leagueId = parseInt(rec.leagueId, 10);
+
+      const rawProbs = model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]);
+      const probs    = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
+
+      let topOutcome, topProb;
+      if (probs.home >= probs.draw && probs.home >= probs.away) { topOutcome='home'; topProb=probs.home; }
+      else if (probs.away >= probs.draw) { topOutcome='away'; topProb=probs.away; }
+      else { topOutcome='draw'; topProb=probs.draw; }
+
+      const correct = rec.actualOutcome === topOutcome;
+      (byLeague[leagueId] = byLeague[leagueId] || []).push({ predProb: topProb, correct });
+    }
+
+    function bucketStats(records) {
+      return BINS.map(b => {
+        const inBin = records.filter(r => r.predProb >= b.min && r.predProb < b.max);
+        const n = inBin.length;
+        if (n === 0) return { bin: b.label, n: 0, avgPredicted: null, actualHitRate: null, bias: null };
+        const avgPredicted  = inBin.reduce((s,r) => s+r.predProb, 0) / n;
+        const actualHitRate = inBin.filter(r => r.correct).length / n;
+        return {
+          bin: b.label, n,
+          avgPredicted: +avgPredicted.toFixed(4),
+          actualHitRate: +actualHitRate.toFixed(4),
+          bias: +((avgPredicted - actualHitRate) * 100).toFixed(2), // pp, +ve = overconfident
+        };
+      });
+    }
+
+    const result = { overall: null, byLeague: {}, skipped: { noFactors: totalSkippedNoFactors, noWeights: totalSkippedNoWeights } };
+    const allRecords = [];
+    for (const [lid, records] of Object.entries(byLeague)) {
+      const name = LEAGUE_CONFIG[lid]?.name || `League ${lid}`;
+      result.byLeague[name] = { leagueId: parseInt(lid,10), n: records.length, overallAccuracy: +(records.filter(r=>r.correct).length/records.length).toFixed(4), bins: bucketStats(records) };
+      allRecords.push(...records);
+    }
+    result.overall = { n: allRecords.length, overallAccuracy: +(allRecords.filter(r=>r.correct).length/allRecords.length).toFixed(4), bins: bucketStats(allRecords) };
+
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0,5) });
+  }
+});
+
 // Transfer data fetch — completed transfers per team for the current season,
 // used for the first-10-matchdays squad-quality modifier in applyTeamProfileModifiers.
 let _transfersRunning = false;
