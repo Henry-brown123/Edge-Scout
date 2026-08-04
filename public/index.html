@@ -2735,9 +2735,13 @@ async function renderEvCal() {
       const isPaper  = l.roi != null && l.roi < 0 && l.posEdgeN >= 30;
       const paperTag = isPaper ? ' <span style="font-size:.55rem;background:rgba(255,170,0,0.15);color:#ffaa00;border:1px solid rgba(255,170,0,0.4);border-radius:3px;padding:1px 4px;vertical-align:middle">PAPER</span>' : '';
       // House rule 7 (docs/calibration-rules.md) — visible caveat, not just an internal note,
-      // for any league that hasn't passed a clean train/test split.
+      // for any league that hasn't passed a clean train/test split. Validated leagues get an
+      // equally visible positive marker, so "checked and clean" reads differently from "never
+      // flagged" — silence isn't a trust signal.
       const unreliableTag = l.calibrationReliable === false
         ? ` <span style="font-size:.55rem;background:rgba(239,68,68,0.12);color:#ef4444;border:1px solid rgba(239,68,68,0.4);border-radius:3px;padding:1px 4px;vertical-align:middle" title="${l.calibrationNote || ''}">⚠ UNVALIDATED</span>`
+        : l.calibrationReliable === true
+        ? ` <span style="font-size:.55rem;background:rgba(16,185,129,0.12);color:var(--green);border:1px solid rgba(16,185,129,0.4);border-radius:3px;padding:1px 4px;vertical-align:middle" title="${l.calibrationNote || ''}">✓ VALIDATED</span>`
         : '';
       const clickable = l.bands ? `style="cursor:pointer"` : '';
       const slug = l.league.replace(/\s+/g, '-');
@@ -2755,6 +2759,7 @@ async function renderEvCal() {
         <div style="font-size:10px;font-weight:700;color:var(--muted);margin-bottom:6px;letter-spacing:.06em;text-transform:uppercase">${l.league} — ROI by Edge Band</div>
         <div id="ev-band-detail-bars-${slug}"></div>
         ${l.calibrationReliable === false ? `<div style="margin-top:8px;padding:8px 10px;background:rgba(239,68,68,0.08);border-radius:4px;font-size:10.5px;color:var(--text2)"><strong style="color:#ef4444">⚠ Calibration unvalidated (${l.calibrationStatus}):</strong> ${l.calibrationNote}</div>` : ''}
+        ${l.calibrationReliable === true ? `<div style="margin-top:8px;padding:8px 10px;background:rgba(16,185,129,0.08);border-radius:4px;font-size:10.5px;color:var(--text2)"><strong style="color:var(--green)">✓ Calibration validated:</strong> ${l.calibrationNote}</div>` : ''}
       </div>`;
     }).join('');
 
