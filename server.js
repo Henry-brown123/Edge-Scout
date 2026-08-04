@@ -3742,6 +3742,40 @@ app.get('/api/debug/clv-fix-probe', async (req, res) => {
   }
 });
 
+// TEMPORARY one-off recovery endpoint — the ms-bug (not the World Cup sport key,
+// as earlier concluded — see report) blocked CLV for every already-resolved bet
+// whose window passed before the fix. Re-runs the exact same field-writing logic
+// as the live T-5 CLV cron against bets the cron will never revisit (stage has
+// already moved to RESOLVED). Remove after use.
+app.post('/api/debug/clv-recover-resolved', async (req, res) => {
+  try {
+    const bets = getBets();
+    const candidates = bets.filter(b =>
+      b.stage === 'RESOLVED' &&
+      (b.placementStatus === 'placed' || b.placementConfirmed) &&
+      (b.closingOdds === undefined || b.closingOdds === null) &&
+      b.kickoff
+    );
+    const updated = [];
+    for (const bet of candidates) {
+      const result = await fetchClosingOddsForBet(bet);
+      bet.closingOdds          = result.closingOdds;
+      bet.closingOddsBookmaker = result.bookmaker;
+      bet.closingOddsAt        = result.snapshotTs;
+      if (result.closingOdds != null && bet.actualOdds != null) {
+        bet.clv = parseFloat((((bet.actualOdds - result.closingOdds) / result.closingOdds) * 100).toFixed(2));
+      } else {
+        bet.clv = null;
+      }
+      updated.push({ fixture: bet.fixture, closingOdds: bet.closingOdds, bookmaker: bet.closingOddsBookmaker, clv: bet.clv });
+    }
+    if (updated.length) saveBets(bets);
+    res.json({ candidatesFound: candidates.length, updated });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0,5) });
+  }
+});
+
 app.get('/api/backfill/pir/status', (_req, res) => {
   const { getPIRData } = require('./teamProfiles');
   const data = getPIRData();
