@@ -3670,21 +3670,30 @@ app.get('/api/debug/clv-recoverability-probe', async (req, res) => {
     if (req.query.verbose) {
       const sport = CLOSING_ODDS_SPORT_MAP[String(bet.leagueId)];
       const kickoffIso = new Date(bet.kickoff).toISOString();
-      const resp = await oddsApi.get(`/historical/sports/${sport}/odds`, {
-        params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h',
-                  oddsFormat: 'decimal', date: kickoffIso },
-      });
-      const events = resp.data?.data || resp.data || [];
-      const [home, away] = (bet.fixture || '').split(' vs ');
-      const ev = events.find(e => teamsMatch(e.home_team, home) && teamsMatch(e.away_team, away));
-      diag = {
-        sport, kickoffIso,
-        snapshotTimestamp: resp.data?.timestamp || null,
-        eventCount: events.length,
-        sampleEventNames: events.slice(0, 5).map(e => `${e.home_team} vs ${e.away_team}`),
-        matchedEvent: !!ev,
-        bookmakersOnMatchedEvent: ev ? (ev.bookmakers || []).map(b => b.key) : null,
-      };
+      try {
+        const resp = await oddsApi.get(`/historical/sports/${sport}/odds`, {
+          params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h',
+                    oddsFormat: 'decimal', date: kickoffIso },
+        });
+        const events = resp.data?.data || resp.data || [];
+        const [home, away] = (bet.fixture || '').split(' vs ');
+        const ev = events.find(e => teamsMatch(e.home_team, home) && teamsMatch(e.away_team, away));
+        diag = {
+          sport, kickoffIso,
+          snapshotTimestamp: resp.data?.timestamp || null,
+          eventCount: events.length,
+          sampleEventNames: events.slice(0, 5).map(e => `${e.home_team} vs ${e.away_team}`),
+          matchedEvent: !!ev,
+          bookmakersOnMatchedEvent: ev ? (ev.bookmakers || []).map(b => b.key) : null,
+        };
+      } catch (apiErr) {
+        diag = {
+          sport, kickoffIso,
+          apiError: apiErr.message,
+          apiErrorBody: apiErr.response?.data || null,
+          apiStatus: apiErr.response?.status || null,
+        };
+      }
     }
 
     res.json({ fixture: bet.fixture, kickoff: bet.kickoff, betOn: bet.bet, actualOdds: bet.actualOdds, result, diag });
