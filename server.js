@@ -1505,15 +1505,20 @@ async function runPreMatchScan(watchingEntry) {
       }),
       // Per-bookmaker odds snapshot at lock time (for bookmaker selection UI)
       oddsSnapshot: _buildBookmakerMarket(meta.sport || 'soccer_epl', scored.homeName, scored.awayName),
-      // Three-state placement flow
-      placementStatus: 'pending_placement', // 'pending_placement' | 'placed' | 'skipped'
-      // Placement confirmation fields (filled by user after manual placement)
-      placementConfirmed: false,
+      // Three-state placement flow. Real-money bets require manual confirmation via
+      // /api/bets/:id/confirm-placement (there's a real bookmaker to record). Paper bets
+      // have nothing to physically place, so they auto-confirm here using the odds/stake
+      // already captured at lock time — this is what makes them eligible for the T-5 CLV
+      // cron without ever touching the bookmaker-confirmation fields.
+      placementStatus: isReal ? 'pending_placement' : 'placed', // 'pending_placement' | 'placed' | 'skipped'
+      // Placement confirmation fields (filled by user after manual placement for real bets;
+      // auto-filled from lock-time odds/stake for paper bets — no bookmaker involved).
+      placementConfirmed: !isReal,
       bookmakerUsed: null,
       bookmakerId:   null,
-      actualOdds:    null,
-      actualStake:   null,
-      placedAt:      null,
+      actualOdds:    isReal ? null : best.bookOdds,
+      actualStake:   isReal ? null : computedStake,
+      placedAt:      isReal ? null : new Date().toISOString(),
       skippedAt:     null,
       skipReason:    null,
     };
@@ -1703,7 +1708,7 @@ async function fetchClosingOddsForBet(bet) {
 
   const kickoffIso = new Date(bet.kickoff).toISOString();
   try {
-    const resp = await oddsApi.get(`/sports/${sport}/odds-history`, {
+    const resp = await oddsApi.get(`/historical/sports/${sport}/odds`, {
       params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h',
                 oddsFormat: 'decimal', date: kickoffIso },
     });
