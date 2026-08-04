@@ -3655,6 +3655,21 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
+// TEMPORARY diagnostic endpoint — single call to confirm whether a past-kickoff bet's
+// closing odds are recoverable via the historical odds endpoint, using the exact same
+// fetchClosingOddsForBet() logic the live cron uses. Read-only, one cheap API call.
+app.get('/api/debug/clv-recoverability-probe', async (req, res) => {
+  try {
+    const bets = getBets();
+    const bet = bets.find(b => b.id === req.query.betId) || bets.find(b => b.fixture === req.query.fixture);
+    if (!bet) return res.status(404).json({ error: 'bet not found' });
+    const result = await fetchClosingOddsForBet(bet);
+    res.json({ fixture: bet.fixture, kickoff: bet.kickoff, betOn: bet.bet, actualOdds: bet.actualOdds, result });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0, 5) });
+  }
+});
+
 // Transfer data fetch — completed transfers per team for the current season,
 // used for the first-10-matchdays squad-quality modifier in applyTeamProfileModifiers.
 let _transfersRunning = false;
