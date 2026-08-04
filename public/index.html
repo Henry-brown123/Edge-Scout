@@ -301,7 +301,6 @@ td.mono { font-family: var(--font-data); }
 .pf-custom.visible { display:flex; }
 .pf-date { background:var(--surface2); border:1px solid var(--border); border-radius:6px; color:var(--text); font-family:var(--font-mono); font-size:11px; padding:4px 8px; }
 .pf-date:focus { outline:none; border-color:var(--cyan); }
-.pf-period-pnl { font-family:var(--font-mono); font-size:11px; color:var(--muted); margin-left:4px; }
 .active-paper-view { background: rgba(76,201,240,.15); color: var(--cyan) !important; }
 .active-real-view  { background: rgba(255,209,102,.15); color: var(--amber) !important; }
 .active-combined-view { background: var(--surface3); color: var(--text) !important; }
@@ -545,8 +544,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     <div class="stat-tile">
       <div class="stat-label">Current Bankroll</div>
       <div class="stat-value c-cyan" id="p-bankroll">£1,000</div>
-      <div class="stat-sub" id="p-pnl-sub">+£0 (0.0%)</div>
-      <div class="stat-sub pf-period-pnl" id="p-period-pnl" style="display:none"></div>
+      <div class="stat-sub" id="p-bankroll-sub">Started at £1,000.00</div>
     </div>
     <div class="stat-tile">
       <div class="stat-label">Total Bets</div>
@@ -562,6 +560,11 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       <div class="stat-label">ROI</div>
       <div class="stat-value" id="p-roi">—</div>
       <div class="stat-sub">return on staked</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Total P&amp;L</div>
+      <div class="stat-value" id="p-pnl">£0</div>
+      <div class="stat-sub" id="p-pnl-pct">0.0% of starting bankroll</div>
     </div>
     <div class="stat-tile">
       <div class="stat-label">Avg CLV</div>
@@ -1933,17 +1936,15 @@ function renderPerformance() {
 
   // Apply period filter
   const placedBets = filterBetsByWindow(allPlaced);
-  const isFiltered = PERF_FILTER.period !== 'all';
 
   const resolved = placedBets.filter(b => b.stage === 'RESOLVED');
   const wins     = resolved.filter(b => b.result === 'win').length;
   const losses   = resolved.filter(b => b.result === 'loss').length;
   const staked   = resolved.reduce((s, b) => s + b.suggestedStake, 0);
 
-  // Bankroll tile — always shows live bankroll; all-time P&L from summed bet pnl
+  // Bankroll tile — always shows live bankroll, colored by all-time P&L sign
   const allResolved = allPlaced.filter(b => b.stage === 'RESOLVED');
   const totalPnl    = allResolved.reduce((s, b) => s + (b.pnl || 0), 0);
-  const totalPnlPct = bankroll.initial ? ((totalPnl / bankroll.initial) * 100).toFixed(1) : '0.0';
   const periodPnl = resolved.reduce((s, b) => s + (b.pnl || 0), 0);
   const periodPnlPct = bankroll.initial ? ((periodPnl / bankroll.initial) * 100).toFixed(1) : '0.0';
 
@@ -1951,7 +1952,7 @@ function renderPerformance() {
 
   document.getElementById('p-bankroll').textContent  = `£${bankroll.current.toFixed(2)}`;
   document.getElementById('p-bankroll').className    = `stat-value ${totalPnl >= 0 ? 'c-green' : 'c-red'}`;
-  document.getElementById('p-pnl-sub').textContent   = `${totalPnl >= 0 ? '+' : ''}£${totalPnl.toFixed(2)} (${totalPnlPct}%) all time`;
+  document.getElementById('p-bankroll-sub').textContent = `Started at £${(bankroll.initial ?? 0).toFixed(2)}`;
   document.getElementById('p-total').textContent     = placedBets.length;
   document.getElementById('p-record').textContent    = `${wins}W / ${losses}L`;
   document.getElementById('p-winrate').textContent   = resolved.length ? `${((wins/(wins+losses||1))*100).toFixed(0)}%` : '—';
@@ -1959,17 +1960,11 @@ function renderPerformance() {
   document.getElementById('p-roi').textContent       = roi !== '—' ? `${roi}%` : '—';
   document.getElementById('p-roi').className         = `stat-value ${parseFloat(roi) >= 0 ? 'c-green' : 'c-red'}`;
 
-  // Period P&L secondary line on bankroll tile
-  const periodPnlEl = document.getElementById('p-period-pnl');
-  if (periodPnlEl) {
-    if (isFiltered) {
-      periodPnlEl.style.display = '';
-      periodPnlEl.textContent   = `Period P&L: ${periodPnl >= 0 ? '+' : ''}£${periodPnl.toFixed(2)} (${periodPnlPct}%)`;
-      periodPnlEl.style.color   = periodPnl >= 0 ? 'var(--green)' : 'var(--red)';
-    } else {
-      periodPnlEl.style.display = 'none';
-    }
-  }
+  // Total P&L tile — period-filtered, same window as Total Bets/Win Rate/ROI above.
+  // Equals the all-time P&L figure when the ALL filter is active (no window applied).
+  document.getElementById('p-pnl').textContent       = `${periodPnl >= 0 ? '+' : ''}£${periodPnl.toFixed(2)}`;
+  document.getElementById('p-pnl').className         = `stat-value ${periodPnl >= 0 ? 'c-green' : 'c-red'}`;
+  document.getElementById('p-pnl-pct').textContent   = `${periodPnl >= 0 ? '+' : ''}${periodPnlPct}% of starting bankroll`;
 
   // CLV tiles — pass date window
   const { from, to } = getPerfWindow();
