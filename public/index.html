@@ -3385,6 +3385,33 @@ async function renderTransactions() {
 // Poll state every 60s to pick up auto-resolved bets
 setInterval(loadState, 60000);
 
+// ─── IDLE TIMEOUT ─────────────────────────────────────────────────────────────
+// Logs out after IDLE_TIMEOUT_MS of no genuine user interaction. The auto-refresh
+// poll above deliberately does NOT count as activity, so an unattended tab still
+// times out; last-activity is shared via localStorage so multiple tabs agree.
+const IDLE_TIMEOUT_MS  = 10 * 60 * 1000;
+const IDLE_STORAGE_KEY = 'edgescout_last_activity';
+
+function markActivity() {
+  localStorage.setItem(IDLE_STORAGE_KEY, String(Date.now()));
+}
+
+async function idleLogout() {
+  try { await fetch('/logout', { method: 'POST' }); } catch (e) {}
+  window.location.href = '/login';
+}
+
+function checkIdle() {
+  const last = parseInt(localStorage.getItem(IDLE_STORAGE_KEY), 10) || Date.now();
+  if (Date.now() - last > IDLE_TIMEOUT_MS) idleLogout();
+}
+
+['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'click'].forEach(evt =>
+  document.addEventListener(evt, markActivity, { passive: true })
+);
+markActivity();
+setInterval(checkIdle, 15000);
+
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   loadState();
