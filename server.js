@@ -2606,8 +2606,15 @@ app.post('/api/bankroll/withdraw', (req, res) => {
 // GET transactions
 app.get('/api/transactions', (_req, res) => {
   const txns = getTransactions();
-  const totalWithdrawn = txns.filter(t => t.type === 'withdrawal').reduce((s, t) => s + t.amount, 0);
-  const totalDeposited = txns.filter(t => t.type === 'deposit').reduce((s, t) => s + t.amount, 0);
+  // A reset that lowers the bankroll banks the difference as realized profit (counts as
+  // withdrawn); a reset that raises it is a top-up (counts as deposited).
+  let totalWithdrawn = txns.filter(t => t.type === 'withdrawal').reduce((s, t) => s + t.amount, 0);
+  let totalDeposited = txns.filter(t => t.type === 'deposit').reduce((s, t) => s + t.amount, 0);
+  for (const t of txns.filter(t => t.type === 'reset')) {
+    const delta = t.bankrollBefore - t.bankrollAfter;
+    if (delta > 0) totalWithdrawn += delta;
+    else if (delta < 0) totalDeposited += -delta;
+  }
   res.json({
     transactions: txns,
     totalWithdrawn: parseFloat(totalWithdrawn.toFixed(2)),
