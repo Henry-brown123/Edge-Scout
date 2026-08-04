@@ -4879,7 +4879,7 @@ app.get('/api/diagnostics/ev-dataset', (_req, res) => {
 // rules — do not flip this by hand without doing the split.
 const CALIBRATION_AUDIT = {
   39:  { reliable: false, status: 'untested', note: 'Base rates and homeAdvBaseWeight are original defaults, never tuned against any data.' },
-  135: { reliable: false, status: 'untested', note: 'Base rates and homeAdvBaseWeight are original defaults, never tuned against any data.' },
+  135: { reliable: true,  status: 'validated', note: 'Genuine time-based train/test split completed 2026-08-04 (train: 2022-08-13 to 2024-09-15, n=798; test: 2024-09-16 to 2025-05-25, n=342, zero fixture overlap). Base rates tuned on train only, evaluated on test exactly once. The n/posEdgeN/roi below are the held-out test-set result, not the full-population figure — this is the only Serie A number that has never been touched by any tuning decision.' },
   179: { reliable: false, status: 'tainted',  note: 'Base rates fit against the full observed fixture set with no holdout — same pattern as the confirmed SPL circularity finding.' },
   88:  { reliable: false, status: 'tainted',  note: 'Base rates fit against the full observed fixture set with no holdout; homeAdvBaseWeight was reverted before it had any live effect and was never revalidated after the wiring fix.' },
   94:  { reliable: false, status: 'tainted',  note: 'avgAwayWinRate reset 2026-08-04 (was stuck at a pre-pipeline-fix sweep value from 6bdf731, never revalidated) back to the 342893e diagnostic-endpoint fit. Still full-population, no holdout — same class of taint as SPL, just no longer also carrying the dead sweep artifact.' },
@@ -4890,6 +4890,14 @@ const CALIBRATION_AUDIT = {
   1:   { reliable: false, status: 'untested', note: 'Original defaults, never tuned. Too few matched Pinnacle fixtures to compute a reportable ROI at all.' },
   3:   { reliable: false, status: 'untested', note: 'Original defaults, never tuned. Too few matched Pinnacle fixtures to compute a reportable ROI at all.' },
   848: { reliable: false, status: 'untested', note: 'Original defaults, never tuned. Too few matched Pinnacle fixtures to compute a reportable ROI at all.' },
+};
+
+// Leagues with a genuine, documented train/test split (docs/calibration-rules.md
+// rule 9). For these, runEvCalibration() reports the held-out test-set figure only
+// — the fixtures on/after testFrom were never touched during tuning — rather than
+// the full-population figure every other league still shows.
+const VALIDATED_SPLITS = {
+  135: { testFrom: '2024-09-16T00:00:00Z', splitCommit: 'f6f582b' }, // Serie A, 2026-08-04
 };
 
 // Extracted so the weekly cron (setupScheduler) can refresh ev-calibration.json
@@ -4974,11 +4982,15 @@ function runEvCalibration() {
       posRoi = parseFloat((posEdge.reduce((s, f) => s + (f.won ? (f.pinnacleOdds - 1) : -1), 0) / posEdge.length).toFixed(4));
     }
 
-    // Per-league stats with per-band breakdown
+    // Per-league stats with per-band breakdown. Leagues with a VALIDATED_SPLITS
+    // entry only contribute their held-out test-set fixtures here — the train
+    // portion was used for tuning and must never appear in a reported ROI figure.
     const leagueMap = {};
     const leagueIds = {};
     for (const f of matched) {
-      const lid  = parseInt(f.leagueId, 10);
+      const lid   = parseInt(f.leagueId, 10);
+      const split = VALIDATED_SPLITS[lid];
+      if (split && new Date(f.date) < new Date(split.testFrom)) continue;
       const name = LEAGUE_CONFIG[lid]?.name || `League ${f.leagueId}`;
       if (!leagueMap[name]) leagueMap[name] = [];
       leagueMap[name].push(f);
