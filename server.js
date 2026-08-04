@@ -2816,6 +2816,68 @@ app.get('/api/bookmaker-performance', (req, res) => {
   });
 });
 
+// Performance grouped by league — paper trading only, placed bets, period-filterable.
+app.get('/api/league-performance', (req, res) => {
+  const fromTs = req.query.from ? new Date(req.query.from).getTime() : null;
+  const toTs   = req.query.to   ? new Date(req.query.to).getTime()   : null;
+
+  const placed = getBets().filter(b => {
+    if (b.mode === 'real') return false;
+    if (!(b.placementStatus === 'placed' || b.placementConfirmed)) return false;
+    if (fromTs || toTs) {
+      const t = new Date(b.lockedAt || b.placedAt || 0).getTime();
+      if (fromTs && t < fromTs) return false;
+      if (toTs   && t > toTs)   return false;
+    }
+    return true;
+  });
+
+  const byLeague = {};
+  for (const b of placed) {
+    const key  = String(b.leagueId ?? '__unknown__');
+    const name = b.leagueName || 'Unknown';
+    if (!byLeague[key]) byLeague[key] = { leagueId: key, name, bets: 0, wins: 0, losses: 0, staked: 0, pnl: 0, oddsSum: 0 };
+    const row = byLeague[key];
+    row.bets++;
+    row.staked = parseFloat((row.staked + (b.actualStake || b.suggestedStake || 0)).toFixed(2));
+    if (b.result === 'win')  { row.wins++;   row.pnl = parseFloat((row.pnl + (b.pnl || 0)).toFixed(2)); }
+    if (b.result === 'loss') { row.losses++; row.pnl = parseFloat((row.pnl + (b.pnl || 0)).toFixed(2)); }
+    const odds = b.actualOdds || b.bookOdds;
+    if (odds) row.oddsSum += odds;
+  }
+
+  const rows = Object.values(byLeague).map(r => {
+    const resolved = r.wins + r.losses;
+    const roi      = r.staked ? parseFloat(((r.pnl / r.staked) * 100).toFixed(1)) : null;
+    const winRate  = resolved ? parseFloat(((r.wins / resolved) * 100).toFixed(1)) : null;
+    const avgOdds  = r.bets   ? parseFloat((r.oddsSum / r.bets).toFixed(2)) : null;
+    return {
+      leagueId: r.leagueId, name: r.name,
+      bets: r.bets, wins: r.wins, losses: r.losses,
+      pending: r.bets - resolved,
+      staked: r.staked, pnl: r.pnl, roi, winRate, avgOdds,
+    };
+  }).filter(r => r.bets > 0).sort((a, b) => b.bets - a.bets);
+
+  const totalPnl    = rows.reduce((s, r) => s + r.pnl,    0);
+  const totalStaked = rows.reduce((s, r) => s + r.staked,  0);
+  const totalBets   = rows.reduce((s, r) => s + r.bets,    0);
+  const bestLeague  = rows.filter(r => r.roi != null).sort((a, b) => b.roi - a.roi)[0] || null;
+  const worstLeague = rows.filter(r => r.roi != null).sort((a, b) => a.roi - b.roi)[0] || null;
+
+  res.json({
+    rows,
+    summary: {
+      totalBets,
+      totalStaked: parseFloat(totalStaked.toFixed(2)),
+      totalPnl:    parseFloat(totalPnl.toFixed(2)),
+      roi: totalStaked ? parseFloat(((totalPnl / totalStaked) * 100).toFixed(1)) : null,
+      bestLeague:  bestLeague  ? { leagueId: bestLeague.leagueId,  name: bestLeague.name,  roi: bestLeague.roi }  : null,
+      worstLeague: worstLeague ? { leagueId: worstLeague.leagueId, name: worstLeague.name, roi: worstLeague.roi } : null,
+    },
+  });
+});
+
 app.get('/api/team-profile/:teamId', (req, res) => {
   const profiles = getTeamProfiles([parseInt(req.params.teamId, 10)]);
   const profile  = profiles[req.params.teamId] || null;

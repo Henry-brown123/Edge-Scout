@@ -583,22 +583,36 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     <div class="chart-wrap"><canvas id="pnl-chart"></canvas></div>
   </div>
 
-  <div class="card">
+  <!-- League Performance -->
+  <div class="card" style="margin-top:16px">
     <div class="card-header">
-      <span class="card-title">Bet Log</span>
-      <button class="btn btn-ghost btn-sm" onclick="exportCSV()">Export CSV</button>
+      <span class="card-title">League Performance</span>
+      <button class="btn btn-ghost btn-sm" onclick="renderLeaguePerf()">↻ Refresh</button>
     </div>
+    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 14px">
+      P&L breakdown by league — placed paper bets only.
+    </p>
+    <div id="league-perf-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px"></div>
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>Fixture</th><th>League</th><th>Bet</th><th>Score</th>
-            <th>Odds</th><th>Edge</th><th>Stake</th><th>P&L</th><th>Result</th><th></th>
+            <th>League</th>
+            <th style="text-align:right">Bets</th>
+            <th style="text-align:right">W / L</th>
+            <th style="text-align:right">Win %</th>
+            <th style="text-align:right">Staked</th>
+            <th style="text-align:right">P&L</th>
+            <th style="text-align:right">ROI</th>
+            <th style="text-align:right">Avg Odds</th>
           </tr>
         </thead>
-        <tbody id="bets-body"></tbody>
+        <tbody id="league-perf-body"></tbody>
       </table>
-      <div class="empty" id="bets-empty"><div class="empty-icon">📋</div><p>No resolved bets yet.</p></div>
+      <div class="empty" id="league-perf-empty" style="display:none">
+        <div class="empty-icon">🏆</div>
+        <p>No placed bets yet — league stats appear once bets are placed.</p>
+      </div>
     </div>
   </div>
 
@@ -634,6 +648,29 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
         <div class="empty-icon">📚</div>
         <p>No placed bets yet — bookmaker stats appear once you confirm placements.</p>
       </div>
+    </div>
+  </div>
+
+  <!-- Bet Log -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-header">
+      <span class="card-title">Bet Log</span>
+      <button class="btn btn-ghost btn-sm" onclick="exportCSV()">Export CSV</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Fixture</th><th>League</th><th>Bet</th><th>Score</th>
+            <th>Odds</th><th>Edge</th><th>Stake</th><th>P&L</th><th>Result</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="bets-body"></tbody>
+      </table>
+      <div class="empty" id="bets-empty"><div class="empty-icon">📋</div><p>No resolved bets yet.</p></div>
+    </div>
+    <div id="bets-more-row" style="text-align:center;padding:12px 0 2px;display:none">
+      <button class="btn btn-ghost btn-sm" id="bets-more-btn" onclick="toggleBetLogExpanded()"></button>
     </div>
   </div>
 
@@ -1865,6 +1902,8 @@ async function manualResolve(id, result) {
 // ─── PERFORMANCE ─────────────────────────────────────────────────────────────
 // ─── PERFORMANCE PERIOD FILTER ───────────────────────────────────────────────
 const PERF_FILTER = { period: 'all', from: null, to: null };
+let betLogExpanded = false;
+const BET_LOG_PAGE_SIZE = 10;
 
 function getPerfWindow() {
   if (PERF_FILTER.period === 'all') return { from: null, to: null };
@@ -1997,13 +2036,17 @@ function renderPerformance() {
   });
   drawPnlChart(curve, bankroll.initial, curveLabels);
 
-  // Bet log — period filtered
-  const tbody = document.getElementById('bets-body');
-  const empty = document.getElementById('bets-empty');
+  // Bet log — period filtered, newest first; capped at BET_LOG_PAGE_SIZE until expanded
+  const tbody   = document.getElementById('bets-body');
+  const empty   = document.getElementById('bets-empty');
+  const moreRow = document.getElementById('bets-more-row');
+  const moreBtn = document.getElementById('bets-more-btn');
   tbody.innerHTML = '';
   empty.style.display = placedBets.length ? 'none' : 'block';
 
-  placedBets.forEach(b => {
+  const visibleBets = betLogExpanded ? placedBets : placedBets.slice(0, BET_LOG_PAGE_SIZE);
+
+  visibleBets.forEach(b => {
     const pnlStr = b.pnl != null ? `${b.pnl >= 0 ? '+' : ''}£${b.pnl.toFixed(2)}` : '—';
     const pnlCls = b.pnl > 0 ? 'c-green' : b.pnl < 0 ? 'c-red' : '';
     const resultBadge = b.result === 'win' ? '<span class="badge badge-green">WIN</span>'
@@ -2025,8 +2068,72 @@ function renderPerformance() {
     tbody.appendChild(tr);
   });
 
+  if (placedBets.length > BET_LOG_PAGE_SIZE) {
+    moreRow.style.display = 'block';
+    moreBtn.textContent = betLogExpanded ? 'Show less' : `See more (${placedBets.length - BET_LOG_PAGE_SIZE} more)`;
+  } else {
+    moreRow.style.display = 'none';
+  }
+
+  renderLeaguePerf();
   renderBmPerf();
   renderTransactions();
+}
+
+function toggleBetLogExpanded() {
+  betLogExpanded = !betLogExpanded;
+  renderPerformance();
+}
+
+async function renderLeaguePerf() {
+  let data;
+  try {
+    const { from, to } = getPerfWindow();
+    const p = new URLSearchParams();
+    if (from) p.set('from', from.toISOString());
+    if (to)   p.set('to',   to.toISOString());
+    data = await apiFetch(`/api/league-performance${p.toString() ? '?' + p : ''}`);
+  } catch(e) { return; }
+
+  const tbody   = document.getElementById('league-perf-body');
+  const emptyEl = document.getElementById('league-perf-empty');
+  const summEl  = document.getElementById('league-perf-summary');
+  tbody.innerHTML = '';
+
+  if (!data.rows.length) {
+    emptyEl.style.display = 'block';
+    summEl.innerHTML = '';
+    return;
+  }
+  emptyEl.style.display = 'none';
+
+  const s = data.summary;
+  const fmtPnl = v => `${v >= 0 ? '+' : ''}£${Math.abs(v).toFixed(2)}`;
+  summEl.innerHTML = [
+    `<span class="badge badge-muted">${s.totalBets} placed</span>`,
+    `<span class="badge badge-muted">£${s.totalStaked.toFixed(2)} staked</span>`,
+    `<span class="badge ${(s.totalPnl||0) >= 0 ? 'badge-green' : 'badge-red'}">${fmtPnl(s.totalPnl||0)} P&L</span>`,
+    s.roi != null ? `<span class="badge ${s.roi >= 0 ? 'badge-green' : 'badge-red'}">${s.roi >= 0 ? '+' : ''}${s.roi}% ROI</span>` : '',
+    s.bestLeague  ? `<span class="badge badge-cyan">Best: ${s.bestLeague.name} (${s.bestLeague.roi >= 0 ? '+' : ''}${s.bestLeague.roi}%)</span>` : '',
+    s.worstLeague && s.worstLeague.leagueId !== s.bestLeague?.leagueId ? `<span class="badge badge-red" style="opacity:.75">Worst: ${s.worstLeague.name} (${s.worstLeague.roi}%)</span>` : '',
+  ].join('');
+
+  data.rows.forEach(r => {
+    const pnlCls = r.pnl > 0 ? 'c-green' : r.pnl < 0 ? 'c-red' : '';
+    const roiCls = (r.roi || 0) > 0 ? 'c-green' : (r.roi || 0) < 0 ? 'c-red' : '';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td style="font-weight:600">${r.name}</td>
+      <td style="text-align:right" class="mono">${r.bets}${r.pending ? `<span style="color:var(--muted);font-size:.7rem"> (+${r.pending})</span>` : ''}</td>
+      <td style="text-align:right" class="mono">${r.wins}W / ${r.losses}L</td>
+      <td style="text-align:right" class="mono ${r.winRate != null && r.winRate >= 50 ? 'c-green' : 'c-red'}">${r.winRate != null ? r.winRate + '%' : '—'}</td>
+      <td style="text-align:right" class="mono">£${r.staked.toFixed(2)}</td>
+      <td style="text-align:right" class="mono ${pnlCls}">${r.pnl > 0 ? '+' : ''}£${r.pnl.toFixed(2)}</td>
+      <td style="text-align:right" class="mono ${roiCls}">${r.roi != null ? (r.roi >= 0 ? '+' : '') + r.roi + '%' : '—'}</td>
+      <td style="text-align:right" class="mono">${r.avgOdds != null ? r.avgOdds.toFixed(2) : '—'}</td>
+    `;
+    tbody.appendChild(tr);
+  });
 }
 
 async function renderBmPerf() {
