@@ -3732,6 +3732,88 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
+// TEMPORARY diagnostic endpoint — Parts B+C of the odds-scoping task: samples a
+// small number of REAL historical-odds calls per league (oldest/middle/newest
+// fixture with existing closing odds), capturing the FULL bookmakers array (not
+// just Pinnacle) to scope sharp-book availability, and comparing implied
+// probabilities directly against Pinnacle where both are present. Quota-conscious
+// by design — samplesPerLeague defaults to a small number. Remove after the report.
+app.get('/api/debug/sharp-book-scope', async (req, res) => {
+  try {
+    const samplesPerLeague = parseInt(req.query.samplesPerLeague, 10) || 3;
+    const leagueFilter = req.query.leagues ? new Set(req.query.leagues.split(',').map(s => s.trim())) : null;
+
+    const closingOdds = readJSON('closing-odds.json') || {};
+    const historical   = readJSON('backfill-historical.json') || {};
+    const scoredById   = {};
+    for (const rec of (historical.scoredRecords || [])) scoredById[String(rec.fixtureId)] = rec;
+
+    // Group fixture IDs that have existing Pinnacle closing odds, by league, with dates.
+    const byLeague = {};
+    for (const [fixtureId, co] of Object.entries(closingOdds)) {
+      const rec = scoredById[fixtureId];
+      if (!rec || !rec.leagueId || !rec.date) continue;
+      const lid = String(rec.leagueId);
+      if (leagueFilter && !leagueFilter.has(lid)) continue;
+      (byLeague[lid] = byLeague[lid] || []).push({ fixtureId, date: rec.date, fixture: rec.fixture });
+    }
+
+    let lastCreditsRemaining = null;
+    const results = {};
+
+    for (const [lid, fixtures] of Object.entries(byLeague)) {
+      const sport = CLOSING_ODDS_SPORT_MAP[lid];
+      if (!sport) continue;
+      fixtures.sort((a, b) => new Date(a.date) - new Date(b.date));
+      // Pick oldest, middle, newest (or fewer if samplesPerLeague < 3)
+      const picks = [];
+      if (samplesPerLeague === 1) picks.push(fixtures[Math.floor(fixtures.length/2)]);
+      else {
+        for (let i = 0; i < samplesPerLeague; i++) {
+          const idx = Math.floor(i * (fixtures.length - 1) / Math.max(1, samplesPerLeague - 1));
+          picks.push(fixtures[idx]);
+        }
+      }
+
+      const leagueName = LEAGUE_NAMES_MAP[lid] || `League ${lid}`;
+      results[leagueName] = { leagueId: lid, sampled: [] };
+
+      for (const pick of picks) {
+        try {
+          const kickoffIso = new Date(pick.date).toISOString();
+          const resp = await oddsApi.get(`/historical/sports/${sport}/odds`, {
+            params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal', date: kickoffIso },
+          });
+          lastCreditsRemaining = resp.headers['x-requests-remaining'] || lastCreditsRemaining;
+          const events = resp.data?.data || resp.data || [];
+          const [home, away] = (pick.fixture || '').split(' vs ');
+          const ev = events.find(e => teamsMatch(e.home_team, home) && teamsMatch(e.away_team, away));
+          if (!ev) { results[leagueName].sampled.push({ fixture: pick.fixture, date: pick.date, found: false }); continue; }
+
+          const books = (ev.bookmakers || []).map(b => {
+            const mkt = b.markets?.find(m => m.key === 'h2h');
+            const get = name2 => mkt?.outcomes?.find(o => teamsMatch(o.name, name2))?.price ?? (name2 === 'Draw' ? mkt?.outcomes?.find(o=>o.name==='Draw')?.price : null);
+            return {
+              key: b.key,
+              lastUpdate: b.last_update,
+              homeOdds: mkt?.outcomes?.find(o => teamsMatch(o.name, home))?.price ?? null,
+              drawOdds: mkt?.outcomes?.find(o => o.name === 'Draw')?.price ?? null,
+              awayOdds: mkt?.outcomes?.find(o => teamsMatch(o.name, away))?.price ?? null,
+            };
+          });
+          results[leagueName].sampled.push({ fixture: pick.fixture, date: pick.date, found: true, bookmakerKeys: books.map(b=>b.key), books });
+        } catch (e) {
+          results[leagueName].sampled.push({ fixture: pick.fixture, date: pick.date, error: e.message });
+        }
+      }
+    }
+
+    res.json({ creditsRemaining: lastCreditsRemaining, results });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0,5) });
+  }
+});
+
 // TEMPORARY diagnostic endpoint — Part A of the odds-scoping/calibration task:
 // pure calibration audit using every scored fixture with a final result, NO
 // closing-odds requirement (so this is independent of Pinnacle or any book).
