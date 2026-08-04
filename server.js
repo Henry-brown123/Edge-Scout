@@ -4779,6 +4779,33 @@ app.get('/api/diagnostics/ev-dataset', (_req, res) => {
 
 // ─── EV CALIBRATION ──────────────────────────────────────────────────────────
 
+// Per-league calibration reliability audit — docs/calibration-rules.md, 2026-08-04.
+// No league has ever passed a genuine time-based train/test split (rule 1), so every
+// league is calibrationReliable: false today. The status/note explain why per league:
+//   'tainted'   — base rates and/or homeAdvBaseWeight were fit against the full observed
+//                 fixture set with no holdout (same pattern as the confirmed SPL
+//                 circularity finding), and/or were tuned before the EV-calibration
+//                 accuracy fix (35a3028) or the homeAdvBaseWeight live-wiring fix
+//                 (adfb425) landed and never revalidated after either fix.
+//   'untested'  — LEAGUE_CONFIG values are original defaults, never tuned against any
+//                 data at all. Not circular, but not validated either.
+// Flip a league's `reliable` to true only after it passes a clean split per the house
+// rules — do not flip this by hand without doing the split.
+const CALIBRATION_AUDIT = {
+  39:  { reliable: false, status: 'untested', note: 'Base rates and homeAdvBaseWeight are original defaults, never tuned against any data.' },
+  135: { reliable: false, status: 'untested', note: 'Base rates and homeAdvBaseWeight are original defaults, never tuned against any data.' },
+  179: { reliable: false, status: 'tainted',  note: 'Base rates fit against the full observed fixture set with no holdout — same pattern as the confirmed SPL circularity finding.' },
+  88:  { reliable: false, status: 'tainted',  note: 'Base rates fit against the full observed fixture set with no holdout; homeAdvBaseWeight was reverted before it had any live effect and was never revalidated after the wiring fix.' },
+  94:  { reliable: false, status: 'tainted',  note: 'Away-win base rate set by a sweep run before the EV-calibration accuracy fix and never revalidated since.' },
+  61:  { reliable: false, status: 'tainted',  note: 'All calibration values date from a sweep run before both the EV-calibration accuracy fix and the homeAdvBaseWeight live-wiring fix — never touched since.' },
+  2:   { reliable: false, status: 'tainted',  note: 'All calibration values date from a sweep run before both the EV-calibration accuracy fix and the homeAdvBaseWeight live-wiring fix — never touched since.' },
+  78:  { reliable: false, status: 'tainted',  note: 'Away-win base rate set by a pre-fix sweep and never revalidated; homeAdvBaseWeight was tuned after the fixes but still against the full population with no holdout.' },
+  140: { reliable: false, status: 'tainted',  note: 'homeAdvBaseWeight tuned against the full population with no holdout — same overfitting risk as the confirmed SPL case, just with a working pipeline underneath it.' },
+  1:   { reliable: false, status: 'untested', note: 'Original defaults, never tuned. Too few matched Pinnacle fixtures to compute a reportable ROI at all.' },
+  3:   { reliable: false, status: 'untested', note: 'Original defaults, never tuned. Too few matched Pinnacle fixtures to compute a reportable ROI at all.' },
+  848: { reliable: false, status: 'untested', note: 'Original defaults, never tuned. Too few matched Pinnacle fixtures to compute a reportable ROI at all.' },
+};
+
 // Extracted so the weekly cron (setupScheduler) can refresh ev-calibration.json
 // without going through HTTP — see the '0 6 * * 1' schedule below.
 function runEvCalibration() {
@@ -4863,11 +4890,13 @@ function runEvCalibration() {
 
     // Per-league stats with per-band breakdown
     const leagueMap = {};
+    const leagueIds = {};
     for (const f of matched) {
       const lid  = parseInt(f.leagueId, 10);
       const name = LEAGUE_CONFIG[lid]?.name || `League ${f.leagueId}`;
       if (!leagueMap[name]) leagueMap[name] = [];
       leagueMap[name].push(f);
+      leagueIds[name] = lid;
     }
     const byLeague = Object.entries(leagueMap)
     .filter(([, fxs]) => fxs.length >= 100)
@@ -4877,13 +4906,19 @@ function runEvCalibration() {
       if (posE.length > 0) {
         roi = parseFloat((posE.reduce((s, f) => s + (f.won ? (f.pinnacleOdds - 1) : -1), 0) / posE.length).toFixed(4));
       }
+      const lid  = leagueIds[league];
+      const audit = CALIBRATION_AUDIT[lid] || { reliable: false, status: 'unknown', note: 'Not yet audited.' };
       return {
         league,
+        leagueId: lid,
         n:       fxs.length,
         posEdgeN: posE.length,
         roi,
         kelly:   kellyRec(roi),
         bands:   bandStats(fxs),
+        calibrationReliable: audit.reliable,
+        calibrationStatus:   audit.status,
+        calibrationNote:     audit.note,
       };
     }).sort((a, b) => b.n - a.n);
 
