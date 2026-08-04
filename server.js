@@ -3259,9 +3259,16 @@ async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null 
     const closing = getClosingOdds();
     const alreadyDone = new Set(Object.keys(closing).map(Number));
 
-    // Build list of fixtures needing odds, grouped by (sport, kickoff_hour)
+    // Build list of fixtures needing odds, grouped by (sport, kickoff_minute).
+    // Was grouped by HOUR (date.slice(0,13), querying the top of the hour) — for any
+    // fixture not kicking off exactly on the hour, that query landed before Pinnacle
+    // had posted a line yet, silently missing real, available data. Confirmed via
+    // direct comparison on live fixtures: hour-truncated queries showed no Pinnacle
+    // in half of a random sample, while the exact-kickoff-minute query for the SAME
+    // fixture found it every time. Minute-level grouping still batches fixtures that
+    // genuinely kick off simultaneously (e.g. Saturday 3pm) into one API call.
     // Yield every 500 fixtures so the event loop stays responsive during the sync scan.
-    const groups = new Map(); // key = "sport|2024-10-05T15" → [fixture, ...]
+    const groups = new Map(); // key = "sport|2024-10-05T15:30" → [fixture, ...]
     let skipped = 0;
     let scanIdx = 0;
     for (const fix of hist.fixtures) {
@@ -3280,8 +3287,8 @@ async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null 
       const year = new Date(date).getUTCFullYear();
       if (year < 2020) { skipped++; continue; }
       if (alreadyDone.has(fid)) { skipped++; continue; }
-      const hourKey = date.slice(0, 13); // "2024-10-05T15"
-      const groupKey = `${sport}|${hourKey}`;
+      const minuteKey = date.slice(0, 16); // "2024-10-05T15:30"
+      const groupKey = `${sport}|${minuteKey}`;
       if (!groups.has(groupKey)) groups.set(groupKey, []);
       groups.get(groupKey).push(fix);
     }
@@ -3294,8 +3301,8 @@ async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null 
         console.log(`[ClosingOdds] Budget cap reached (${_closingOddsStatus.creditsUsed} credits) — stopping`);
         break;
       }
-      const [sport, hourKey] = groupKey.split('|');
-      const kickoffIso = hourKey + ':00:00Z';
+      const [sport, minuteKey] = groupKey.split('|');
+      const kickoffIso = minuteKey + ':00Z';
       _closingOddsStatus.currentLeague = sport;
 
       try {
