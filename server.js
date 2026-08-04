@@ -1706,7 +1706,9 @@ async function fetchClosingOddsForBet(bet) {
   const sport = CLOSING_ODDS_SPORT_MAP[String(bet.leagueId)];
   if (!sport) return { closingOdds: null, bookmaker: null, snapshotTs: null };
 
-  const kickoffIso = new Date(bet.kickoff).toISOString();
+  // The Odds API's historical endpoint rejects a milliseconds-precision timestamp
+  // with 422 INVALID_HISTORICAL_TIMESTAMP — exact-second precision only.
+  const kickoffIso = new Date(bet.kickoff).toISOString().split('.')[0] + 'Z';
   try {
     const resp = await oddsApi.get(`/historical/sports/${sport}/odds`, {
       params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h',
@@ -3724,6 +3726,20 @@ app.post('/api/backfill/pir', (req, res) => {
     console.log(`[PIR] Complete — ${_pirStatus.count} players in pir-data.json`);
     console.log('[PIR]', stdout.trim().split('\n').slice(-2).join(' | '));
   });
+});
+
+// TEMPORARY diagnostic endpoint — verifies the fetchClosingOddsForBet() ms-fix
+// against a real bet. Remove after confirming CLV populates correctly.
+app.get('/api/debug/clv-fix-probe', async (req, res) => {
+  try {
+    const bets = getBets();
+    const bet = bets.find(b => b.id === req.query.betId) || bets.find(b => b.fixture === req.query.fixture);
+    if (!bet) return res.status(404).json({ error: 'bet not found' });
+    const result = await fetchClosingOddsForBet(bet);
+    res.json({ fixture: bet.fixture, kickoff: bet.kickoff, betOn: bet.bet, result });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0,5) });
+  }
 });
 
 app.get('/api/backfill/pir/status', (_req, res) => {
