@@ -5066,7 +5066,7 @@ const CALIBRATION_AUDIT = {
   179: { reliable: false, status: 'tainted',  note: 'Base rates fit against the full observed fixture set with no holdout — same pattern as the confirmed SPL circularity finding.' },
   88:  { reliable: false, status: 'tainted',  note: 'Base rates fit against the full observed fixture set with no holdout; homeAdvBaseWeight was reverted before it had any live effect and was never revalidated after the wiring fix.' },
   94:  { reliable: false, status: 'tainted',  note: 'avgAwayWinRate reset 2026-08-04 (was stuck at a pre-pipeline-fix sweep value from 6bdf731, never revalidated) back to the 342893e diagnostic-endpoint fit. Still full-population, no holdout — same class of taint as SPL, just no longer also carrying the dead sweep artifact.' },
-  61:  { reliable: false, status: 'untested', note: 'Reset 2026-08-04 — base rate and homeAdvBaseWeight had been stuck at values from 6bdf731 (set before the EV-calibration accuracy fix and before homeAdvBaseWeight had any live effect at all), never revalidated after either fix. Reverted to original never-tuned values; back in the same bucket as Premier League/Serie A.' },
+  61:  { reliable: true,  status: 'validated', note: 'Genuine time-based train/test split completed 2026-08-05 (train: 2020-08-21 to 2023-11-03, n=1227; test: 2023-11-03 to 2025-05-21, n=526, zero fixture overlap). Base rates tuned on train only (home/away rates shifted ~3.4pp each way, same direction as the Premier League cycle), evaluated on test exactly once. The n/posEdgeN/roi below are the held-out test-set result — CI spans zero, posEdgeN below the rule-6 decision-grade floor, so no confirmed edge either way (test ROI landed almost exactly at zero).' },
   2:   { reliable: false, status: 'untested', note: 'Reset 2026-08-04 — base rates and homeAdvBaseWeight had been stuck at values from 6bdf731 (set before the EV-calibration accuracy fix and before homeAdvBaseWeight had any live effect at all), never revalidated after either fix. Reverted to original never-tuned values; back in the same bucket as Premier League/Serie A.' },
   78:  { reliable: false, status: 'tainted',  note: 'avgAwayWinRate reset 2026-08-04 (was stuck at a pre-pipeline-fix sweep value from 6bdf731, never revalidated) back to its original never-tuned value. homeAdvBaseWeight was legitimately re-tuned post-fix (bb57b9f) but still against the full population with no holdout.' },
   140: { reliable: false, status: 'tainted',  note: 'homeAdvBaseWeight tuned against the full population with no holdout — same overfitting risk as the confirmed SPL case, just with a working pipeline underneath it.' },
@@ -5082,6 +5082,7 @@ const CALIBRATION_AUDIT = {
 const VALIDATED_SPLITS = {
   135: { testFrom: '2024-09-16T00:00:00Z', splitCommit: 'f6f582b' }, // Serie A, 2026-08-04
   39:  { testFrom: '2023-12-30T15:00:00Z', splitCommit: '4cdc642' }, // Premier League, 2026-08-05
+  61:  { testFrom: '2023-11-03T20:00:00Z', splitCommit: '27e0e2a' }, // Ligue 1, 2026-08-05
 };
 
 // Extracted so the weekly cron (setupScheduler) can refresh ev-calibration.json
