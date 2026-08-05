@@ -3242,15 +3242,19 @@ function teamsMatch(a, b) {
   return ta.some(w => w.length >= 4 && tb.includes(w));
 }
 
-async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null } = {}) {
+async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null, debug = false } = {}) {
   if (_closingOddsStatus.running) return;
   _closingOddsStatus = {
     running: true, startedAt: new Date().toISOString(), completedAt: null, error: null,
     creditsUsed: 0, creditsRemaining: null,
     fixturesTotal: 0, fixturesMatched: 0, fixturesMissed: 0,
     apiCallsMade: 0, currentLeague: null,
+    // Per-fixture request/response detail, only populated when debug:true — added
+    // to diagnose the EPL anomaly (bulk-loop matching failing where an identical
+    // isolated call succeeds) without relying on aggregate counters alone.
+    debugEntries: debug ? [] : null,
   };
-  console.log(`[ClosingOdds] Starting backfill — budget ${budgetCredits} credits`);
+  console.log(`[ClosingOdds] Starting backfill — budget ${budgetCredits} credits${debug ? ' [DEBUG]' : ''}`);
 
   try {
     const hist = readJSON('backfill-historical.json');
@@ -3304,11 +3308,12 @@ async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null 
       const [sport, minuteKey] = groupKey.split('|');
       const kickoffIso = minuteKey + ':00Z';
       _closingOddsStatus.currentLeague = sport;
+      const requestUrl = `/historical/sports/${sport}/odds`;
+      const requestParams = { apiKey: '***', regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal', date: kickoffIso };
 
       try {
-        const resp = await oddsApi.get(`/historical/sports/${sport}/odds`, {
-          params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h',
-                    oddsFormat: 'decimal', date: kickoffIso },
+        const resp = await oddsApi.get(requestUrl, {
+          params: { ...requestParams, apiKey: ODDS_API_KEY },
         });
         const creditsLast      = parseInt(resp.headers['x-requests-last'] || '0', 10);
         const creditsRemaining = parseInt(resp.headers['x-requests-remaining'] || '0', 10);
@@ -3317,6 +3322,11 @@ async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null 
         _closingOddsStatus.apiCallsMade++;
 
         const events = resp.data?.data || resp.data || [];
+
+        if (debug) {
+          console.log(`[ClosingOdds:DEBUG] REQUEST ${requestUrl} sport=${sport} date=${kickoffIso} -> ${events.length} events, credits ${creditsLast} used / ${creditsRemaining} left`);
+        }
+
         for (const fix of fixtures) {
           const home = fix.teams?.home?.name;
           const away = fix.teams?.away?.name;
@@ -3324,13 +3334,37 @@ async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null 
           const ev   = events.find(e =>
             teamsMatch(e.home_team, home) && teamsMatch(e.away_team, away)
           );
-          if (!ev) { _closingOddsStatus.fixturesMissed++; continue; }
+
+          let debugEntry = null;
+          if (debug) {
+            debugEntry = {
+              fixtureId: fid, home, away, sport, requestUrl, requestParams: { ...requestParams },
+              eventCount: events.length,
+              sampleEventTeams: events.slice(0, 3).map(e => `${e.home_team} vs ${e.away_team}`),
+              matched: !!ev,
+            };
+          }
+
+          if (!ev) {
+            _closingOddsStatus.fixturesMissed++;
+            if (debug) { debugEntry.outcome = 'no_event_match'; _closingOddsStatus.debugEntries.push(debugEntry); console.log(`[ClosingOdds:DEBUG] MISS ${home} vs ${away} — no matching event in ${events.length} returned`); }
+            continue;
+          }
 
           // Prefer Pinnacle; fall back to first available bookmaker
           const bm = ev.bookmakers?.find(b => b.key === 'pinnacle') || ev.bookmakers?.[0];
-          if (!bm) { _closingOddsStatus.fixturesMissed++; continue; }
+          if (debug) { debugEntry.bookmakerKeys = ev.bookmakers?.map(b => b.key) || []; debugEntry.usedBookmaker = bm?.key || null; }
+          if (!bm) {
+            _closingOddsStatus.fixturesMissed++;
+            if (debug) { debugEntry.outcome = 'no_bookmaker'; _closingOddsStatus.debugEntries.push(debugEntry); console.log(`[ClosingOdds:DEBUG] MISS ${home} vs ${away} — event matched but zero bookmakers`); }
+            continue;
+          }
           const mkt = bm.markets?.find(m => m.key === 'h2h');
-          if (!mkt) { _closingOddsStatus.fixturesMissed++; continue; }
+          if (!mkt) {
+            _closingOddsStatus.fixturesMissed++;
+            if (debug) { debugEntry.outcome = 'no_h2h_market'; _closingOddsStatus.debugEntries.push(debugEntry); console.log(`[ClosingOdds:DEBUG] MISS ${home} vs ${away} — bookmaker ${bm.key} has no h2h market`); }
+            continue;
+          }
           const get = name => mkt.outcomes?.find(o => teamsMatch(o.name, name))?.price ?? null;
 
           closing[fid] = {
@@ -3344,6 +3378,7 @@ async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null 
           };
           _closingOddsStatus.fixturesMatched++;
           saveCounter++;
+          if (debug) { debugEntry.outcome = 'matched'; debugEntry.odds = closing[fid]; _closingOddsStatus.debugEntries.push(debugEntry); console.log(`[ClosingOdds:DEBUG] HIT ${home} vs ${away} — bookmaker ${bm.key}`); }
         }
 
         // Save every 200 fixtures matched to guard against crashes
@@ -3352,6 +3387,13 @@ async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null 
         await new Promise(r => setTimeout(r, 250)); // ~4 req/s — well within limits
       } catch (e) {
         console.error(`[ClosingOdds] ${groupKey}: ${e.message}`);
+        if (debug) {
+          _closingOddsStatus.debugEntries.push({
+            groupKey, sport, kickoffIso, requestUrl, requestParams,
+            outcome: 'request_error', error: e.message, errorStatus: e.response?.status || null, errorBody: e.response?.data || null,
+          });
+          console.log(`[ClosingOdds:DEBUG] REQUEST ERROR ${sport} ${kickoffIso} — status ${e.response?.status}, ${JSON.stringify(e.response?.data)}`);
+        }
         await new Promise(r => setTimeout(r, 1000));
       }
     }
@@ -3372,8 +3414,9 @@ app.post('/api/backfill/closing-odds', (req, res) => {
   if (!ODDS_API_KEY) return res.status(500).json({ error: 'ODDS_API_KEY not set' });
   const budget = parseInt(req.query.budget || '80000', 10);
   const leagueIds = req.query.leagues ? req.query.leagues.split(',').map(s => s.trim()) : null;
-  res.json({ started: true, budget, leagueIds, message: `Closing odds backfill starting — budget ${budget} credits${leagueIds ? `, leagues: ${leagueIds.join(',')}` : ''}` });
-  runClosingOddsBackfill({ budgetCredits: budget, leagueIds }).catch(e => console.error('[ClosingOdds]', e.message));
+  const debug = req.query.debug === 'true';
+  res.json({ started: true, budget, leagueIds, debug, message: `Closing odds backfill starting — budget ${budget} credits${leagueIds ? `, leagues: ${leagueIds.join(',')}` : ''}${debug ? ' [DEBUG]' : ''}` });
+  runClosingOddsBackfill({ budgetCredits: budget, leagueIds, debug }).catch(e => console.error('[ClosingOdds]', e.message));
 });
 
 app.get('/api/backfill/closing-odds/status', (req, res) => res.json(_closingOddsStatus));
