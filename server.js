@@ -3310,6 +3310,11 @@ const TEAM_NICKNAME_ALIASES = {
   // API's "Vitória SC" (normaliseTeam strips "SC" as a club suffix, leaving
   // "vitoria" — neither side is a substring/token of the other otherwise).
   'guimaraes': 'vitoria',
+  // Confirmed 2026-08-05 — Scottish Premiership: api-football's official
+  // "Heart Of Midlothian" vs the Odds API's "Hearts". "heart" is a token of the
+  // former but not an exact match of "hearts" (plural), so the token-overlap
+  // check couldn't catch it either.
+  'heart of midlothian': 'hearts',
 };
 function resolveTeamAlias(normalised) {
   return TEAM_NICKNAME_ALIASES[normalised] || normalised;
