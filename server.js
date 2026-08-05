@@ -3272,6 +3272,15 @@ let _closingOddsStatus = {
 function getClosingOdds() { return readJSON('closing-odds.json') || {}; }
 function saveClosingOdds(data) { writeJSON('closing-odds.json', data); }
 
+// Multi-book closing odds — captured from the SAME historical-odds responses the
+// Pinnacle-only backfill already fetches, at zero extra API cost, so the sharp-books
+// consensus benchmark (docs/calibration-rules.md-governed calibration work) can
+// cover fixtures Pinnacle alone misses. Kept in a separate file from closing-odds.json
+// on purpose — the Pinnacle-only EV calibration path must stay untouched.
+const CONSENSUS_BOOKS = ['pinnacle', 'marathonbet', 'matchbook'];
+function getClosingOddsMulti() { return readJSON('closing-odds-multi.json') || {}; }
+function saveClosingOddsMulti(data) { writeJSON('closing-odds-multi.json', data); }
+
 // Fuzzy team name match: normalise both strings and check overlap.
 function normaliseTeam(name) {
   return (name || '')
@@ -3337,6 +3346,7 @@ async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null,
     if (!hist?.fixtures?.length) throw new Error('backfill-historical.json empty or missing');
 
     const closing = getClosingOdds();
+    const closingMulti = getClosingOddsMulti();
     const alreadyDone = new Set(Object.keys(closing).map(Number));
 
     // Build list of fixtures needing odds, grouped by (sport, kickoff_minute).
@@ -3437,6 +3447,22 @@ async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null,
             continue;
           }
 
+          // Sharp-books consensus capture — pulls whichever of Pinnacle/Marathon Bet/
+          // Matchbook are present in this SAME already-fetched response, regardless of
+          // whether Pinnacle specifically matched below. Zero extra API cost. Written
+          // to a separate file so the existing Pinnacle-only EV calibration path never
+          // sees this data — consensus is additive, not a replacement.
+          const multiEntry = {};
+          for (const bookKey of CONSENSUS_BOOKS) {
+            const cbm = ev.bookmakers?.find(b => b.key === bookKey);
+            const cmkt = cbm?.markets?.find(m => m.key === 'h2h');
+            if (!cmkt) continue;
+            const cget = name => cmkt.outcomes?.find(o => teamsMatch(o.name, name))?.price ?? null;
+            const home3 = cget(home), draw3 = cget('Draw'), away3 = cget(away);
+            if (home3 && draw3 && away3) multiEntry[bookKey] = { homeOdds: home3, drawOdds: draw3, awayOdds: away3, lastUpdate: cbm.last_update || kickoffIso };
+          }
+          if (Object.keys(multiEntry).length > 0) closingMulti[fid] = { fixtureId: fid, snapshotTs: kickoffIso, books: multiEntry };
+
           // Prefer Pinnacle; fall back to first available bookmaker
           const bm = ev.bookmakers?.find(b => b.key === 'pinnacle') || ev.bookmakers?.[0];
           if (debug) { debugEntry.bookmakerKeys = ev.bookmakers?.map(b => b.key) || []; debugEntry.usedBookmaker = bm?.key || null; }
@@ -3468,7 +3494,7 @@ async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null,
         }
 
         // Save every 200 fixtures matched to guard against crashes
-        if (saveCounter >= 200) { saveClosingOdds(closing); saveCounter = 0; }
+        if (saveCounter >= 200) { saveClosingOdds(closing); saveClosingOddsMulti(closingMulti); saveCounter = 0; }
 
         await new Promise(r => setTimeout(r, 250)); // ~4 req/s — well within limits
       } catch (e) {
@@ -3493,6 +3519,7 @@ async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null,
     }
 
     saveClosingOdds(closing);
+    saveClosingOddsMulti(closingMulti);
     _closingOddsStatus.running     = false;
     _closingOddsStatus.completedAt = new Date().toISOString();
     console.log(`[ClosingOdds] Done — matched ${_closingOddsStatus.fixturesMatched}, missed ${_closingOddsStatus.fixturesMissed}, credits used ${_closingOddsStatus.creditsUsed}`);
