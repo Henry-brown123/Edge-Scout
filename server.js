@@ -5061,7 +5061,7 @@ app.get('/api/diagnostics/ev-dataset', (_req, res) => {
 // Flip a league's `reliable` to true only after it passes a clean split per the house
 // rules — do not flip this by hand without doing the split.
 const CALIBRATION_AUDIT = {
-  39:  { reliable: false, status: 'untested', note: 'Base rates and homeAdvBaseWeight are original defaults, never tuned against any data.' },
+  39:  { reliable: true,  status: 'validated', note: 'Genuine time-based train/test split completed 2026-08-05 (train: 2020-09-12 to 2023-12-30, n=1330; test: 2023-12-30 to 2025-05-25, n=570, zero fixture overlap). Base rates tuned on train only (away-win rate corrected +4.3pp to match observed data, a documented recent PL trend), evaluated on test exactly once. The n/posEdgeN/roi below are the held-out test-set result — CI spans zero, posEdgeN below the rule-6 decision-grade floor, so no confirmed edge either way.' },
   135: { reliable: true,  status: 'validated', note: 'Genuine time-based train/test split completed 2026-08-04 (train: 2022-08-13 to 2024-09-15, n=798; test: 2024-09-16 to 2025-05-25, n=342, zero fixture overlap). Base rates tuned on train only, evaluated on test exactly once. The n/posEdgeN/roi below are the held-out test-set result, not the full-population figure — this is the only Serie A number that has never been touched by any tuning decision.' },
   179: { reliable: false, status: 'tainted',  note: 'Base rates fit against the full observed fixture set with no holdout — same pattern as the confirmed SPL circularity finding.' },
   88:  { reliable: false, status: 'tainted',  note: 'Base rates fit against the full observed fixture set with no holdout; homeAdvBaseWeight was reverted before it had any live effect and was never revalidated after the wiring fix.' },
@@ -5081,6 +5081,7 @@ const CALIBRATION_AUDIT = {
 // the full-population figure every other league still shows.
 const VALIDATED_SPLITS = {
   135: { testFrom: '2024-09-16T00:00:00Z', splitCommit: 'f6f582b' }, // Serie A, 2026-08-04
+  39:  { testFrom: '2023-12-30T15:00:00Z', splitCommit: '4cdc642' }, // Premier League, 2026-08-05
 };
 
 // Extracted so the weekly cron (setupScheduler) can refresh ev-calibration.json
