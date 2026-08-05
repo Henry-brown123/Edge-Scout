@@ -3735,6 +3735,53 @@ app.post('/api/backfill/pir', (req, res) => {
   });
 });
 
+// TEMPORARY one-off recovery endpoint — the 8 remaining World Cup bets are blocked
+// by TWO historical data gaps, not just the placement-confirmation flag: they also
+// never had actualOdds set (a field that didn't exist yet when they were created).
+// Backfills placementConfirmed/placementStatus (matching the 3 already-recovered
+// bets) and actualOdds = bookOdds (the existing convention for paper bets — a paper
+// fill has no bookmaker slippage, so bookOdds IS the entry price). Then fetches and
+// stores real closingOdds/clv. One-time historical correction only — does not touch
+// the live confirmation flow for new bets. Remove after Part A is verified.
+app.post('/api/debug/wc-bets-recover', async (req, res) => {
+  try {
+    const bets = getBets();
+    const candidates = bets.filter(b =>
+      b.leagueId === '1' && b.stage === 'RESOLVED' &&
+      !(b.placementStatus === 'placed' || b.placementConfirmed) &&
+      (b.closingOdds === undefined || b.closingOdds === null)
+    );
+    const updated = [];
+    for (const bet of candidates) {
+      const before = { placementConfirmed: bet.placementConfirmed, actualOdds: bet.actualOdds };
+      bet.placementStatus  = 'placed';
+      bet.placementConfirmed = true;
+      if (bet.actualOdds == null) bet.actualOdds = bet.bookOdds ?? null;
+      if (bet.actualStake == null) bet.actualStake = bet.suggestedStake ?? null;
+      if (bet.placedAt == null) bet.placedAt = bet.lockedAt ?? null;
+
+      const result = await fetchClosingOddsForBet(bet);
+      bet.closingOdds          = result.closingOdds;
+      bet.closingOddsBookmaker = result.bookmaker;
+      bet.closingOddsAt        = result.snapshotTs;
+      if (result.closingOdds != null && bet.actualOdds != null) {
+        bet.clv = parseFloat((((bet.actualOdds - result.closingOdds) / result.closingOdds) * 100).toFixed(2));
+      } else {
+        bet.clv = null;
+      }
+      updated.push({
+        fixture: bet.fixture, before,
+        actualOddsSet: bet.actualOdds, closingOdds: bet.closingOdds,
+        bookmaker: bet.closingOddsBookmaker, clv: bet.clv,
+      });
+    }
+    if (updated.length) saveBets(bets);
+    res.json({ candidatesFound: candidates.length, updated });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0,5) });
+  }
+});
+
 app.get('/api/backfill/pir/status', (_req, res) => {
   const { getPIRData } = require('./teamProfiles');
   const data = getPIRData();
