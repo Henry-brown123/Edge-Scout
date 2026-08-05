@@ -3782,6 +3782,23 @@ app.post('/api/debug/wc-bets-recover', async (req, res) => {
   }
 });
 
+// TEMPORARY one-call diagnostic — checks the exact raw error (credits vs anything
+// else) behind fetchClosingOddsForBet() returning null, without its swallowing
+// catch block hiding the real cause. Remove after Part A is verified.
+app.get('/api/debug/odds-error-check', async (req, res) => {
+  try {
+    const resp = await oddsApi.get('/historical/sports/soccer_fifa_world_cup/odds', {
+      params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal', date: '2026-07-18T21:00:00Z' },
+    });
+    res.json({ ok: true, creditsRemaining: resp.headers['x-requests-remaining'], eventCount: (resp.data?.data || resp.data || []).length });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({
+      ok: false, status: e.response?.status, errorBody: e.response?.data || null,
+      creditsRemaining: e.response?.headers?.['x-requests-remaining'] || null,
+    });
+  }
+});
+
 app.get('/api/backfill/pir/status', (_req, res) => {
   const { getPIRData } = require('./teamProfiles');
   const data = getPIRData();
