@@ -3305,6 +3305,11 @@ const TEAM_NICKNAME_ALIASES = {
   'gladbach': 'borussia monchengladbach',
   'atleti': 'atletico madrid',
   'psg': 'paris saint germain',
+  // Confirmed 2026-08-05 — Primeira Liga backfill had a 47% miss rate entirely
+  // traced to this one club: api-football's short name "Guimaraes" vs the Odds
+  // API's "Vitória SC" (normaliseTeam strips "SC" as a club suffix, leaving
+  // "vitoria" — neither side is a substring/token of the other otherwise).
+  'guimaraes': 'vitoria',
 };
 function resolveTeamAlias(normalised) {
   return TEAM_NICKNAME_ALIASES[normalised] || normalised;
