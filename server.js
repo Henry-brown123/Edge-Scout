@@ -3854,6 +3854,40 @@ app.post('/api/backfill/pir', (req, res) => {
   });
 });
 
+// TEMPORARY one-off recovery endpoint (Phase 1) — placement/actualOdds already
+// backfilled on these 8 bets in the prior session; only the closingOdds fetch
+// itself was blocked by zero credits. Remove after verified.
+app.post('/api/debug/wc-bets-recover', async (req, res) => {
+  try {
+    const guard = await creditGuard('WC bet CLV recovery (8 bets)', 8 * 20);
+    if (!guard.ok) return res.status(503).json({ error: 'credit_guard_blocked', guard });
+
+    const bets = getBets();
+    const candidates = bets.filter(b =>
+      b.leagueId === '1' && b.stage === 'RESOLVED' &&
+      (b.placementStatus === 'placed' || b.placementConfirmed) &&
+      (b.closingOdds === undefined || b.closingOdds === null)
+    );
+    const updated = [];
+    for (const bet of candidates) {
+      const result = await fetchClosingOddsForBet(bet);
+      bet.closingOdds          = result.closingOdds;
+      bet.closingOddsBookmaker = result.bookmaker;
+      bet.closingOddsAt        = result.snapshotTs;
+      if (result.closingOdds != null && bet.actualOdds != null) {
+        bet.clv = parseFloat((((bet.actualOdds - result.closingOdds) / result.closingOdds) * 100).toFixed(2));
+      } else {
+        bet.clv = null;
+      }
+      updated.push({ fixture: bet.fixture, closingOdds: bet.closingOdds, bookmaker: bet.closingOddsBookmaker, clv: bet.clv });
+    }
+    if (updated.length) saveBets(bets);
+    res.json({ candidatesFound: candidates.length, updated });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0,5) });
+  }
+});
+
 app.get('/api/backfill/pir/status', (_req, res) => {
   const { getPIRData } = require('./teamProfiles');
   const data = getPIRData();
