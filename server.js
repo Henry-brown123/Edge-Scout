@@ -3909,6 +3909,92 @@ app.post('/api/backfill/pir', (req, res) => {
   });
 });
 
+// TEMPORARY diagnostic endpoint — reusable train/test split analysis for the
+// Phase 5 disciplined calibration cycles (docs/calibration-rules.md), generalized
+// from the Serie A one-off. Read-only. Builds the matched population for the given
+// league, sorted chronologically, splits at a configurable fraction, and reports
+// train-only observed rates + both sides' ROI under the CURRENT (untouched)
+// LEAGUE_CONFIG — no tuning happens here. Remove after Phase 5 is done.
+app.get('/api/debug/league-split', async (req, res) => {
+  try {
+    const leagueId  = parseInt(req.query.league, 10);
+    const trainFrac = parseFloat(req.query.trainFrac) || 0.7;
+    const historical    = readJSON('backfill-historical.json') || {};
+    const scoredRecords = historical.scoredRecords || [];
+    const optWeights    = historical.optimisedWeights || {};
+    const closingOdds   = readJSON('closing-odds.json') || {};
+    const { classifyFixture, applyLeagueBiasCorrection, computeModelProb, LEAGUE_CONFIG } = require('./scoring');
+
+    const matched = [];
+    for (const rec of scoredRecords) {
+      if (parseInt(rec.leagueId, 10) !== leagueId) continue;
+      const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
+      if (!co || !rec.actualOutcome || !rec.homeFactors || !rec.awayFactors) continue;
+      const context = rec.context || classifyFixture(rec.leagueId);
+      const weights  = optWeights[context] || optWeights.club_domestic;
+      if (!weights) continue;
+      matched.push({ ...rec, context, weights, co });
+    }
+    matched.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+    const splitIdx = Math.floor(matched.length * trainFrac);
+    const train = matched.slice(0, splitIdx);
+    const test  = matched.slice(splitIdx);
+
+    function evalSet(records, leagueConfigOverride) {
+      const cfg = leagueConfigOverride || LEAGUE_CONFIG;
+      let posEdgeN = 0, posEdgeReturns = [];
+      let home = 0, draw = 0, away = 0;
+      let modelHomeSum = 0, modelDrawSum = 0, modelAwaySum = 0;
+      for (const rec of records) {
+        if (rec.actualOutcome === 'home') home++; else if (rec.actualOutcome === 'draw') draw++; else away++;
+        const rawM = computeModelProb(rec.homeFactors, rec.awayFactors, rec.weights, rec.context, cfg[leagueId]);
+        modelHomeSum += rawM.home; modelDrawSum += rawM.draw; modelAwaySum += rawM.away;
+
+        const rawProbs = model.predict(rec.homeFactors, rec.awayFactors, rec.weights, rec.context, cfg[leagueId]);
+        const probs    = applyLeagueBiasCorrection(rawProbs, leagueId, cfg);
+        let topOutcome, modelProb, pinnacleOdds;
+        if (probs.home >= probs.draw && probs.home >= probs.away) { topOutcome='home'; modelProb=probs.home; pinnacleOdds=rec.co.homeOdds; }
+        else if (probs.away >= probs.draw) { topOutcome='away'; modelProb=probs.away; pinnacleOdds=rec.co.awayOdds; }
+        else { topOutcome='draw'; modelProb=probs.draw; pinnacleOdds=rec.co.drawOdds; }
+        if (!pinnacleOdds || pinnacleOdds <= 1) continue;
+        const edge = (modelProb - (1/pinnacleOdds)) / (1/pinnacleOdds);
+        if (edge < 0.05) continue;
+        posEdgeN++;
+        const won = rec.actualOutcome === topOutcome;
+        posEdgeReturns.push(won ? (pinnacleOdds - 1) : -1);
+      }
+      const n = records.length;
+      const roi = posEdgeReturns.length ? posEdgeReturns.reduce((a,b)=>a+b,0)/posEdgeReturns.length : null;
+      let ciLow = null, ciHigh = null;
+      if (posEdgeReturns.length > 1) {
+        const mean = roi;
+        const variance = posEdgeReturns.reduce((a,b)=>a+(b-mean)**2,0) / (posEdgeReturns.length - 1);
+        const se = Math.sqrt(variance / posEdgeReturns.length);
+        ciLow = +(mean - 1.96*se).toFixed(4); ciHigh = +(mean + 1.96*se).toFixed(4);
+      }
+      return {
+        n, posEdgeN,
+        roi: roi != null ? +roi.toFixed(4) : null, ciLow, ciHigh,
+        observedRates: { home: +(home/n).toFixed(4), draw: +(draw/n).toFixed(4), away: +(away/n).toFixed(4) },
+        modelAvgRates: { home: +(modelHomeSum/n).toFixed(4), draw: +(modelDrawSum/n).toFixed(4), away: +(modelAwaySum/n).toFixed(4) },
+      };
+    }
+
+    res.json({
+      leagueId, trainFrac,
+      totalN: matched.length,
+      splitDate: test[0]?.date || null,
+      dateRange: { first: matched[0]?.date, last: matched[matched.length-1]?.date },
+      currentConfig: LEAGUE_CONFIG[leagueId],
+      train: { dateRange: { first: train[0]?.date, last: train[train.length-1]?.date }, ...evalSet(train) },
+      test:  { dateRange: { first: test[0]?.date,  last: test[test.length-1]?.date },  ...evalSet(test) },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0,5) });
+  }
+});
+
 app.get('/api/backfill/pir/status', (_req, res) => {
   const { getPIRData } = require('./teamProfiles');
   const data = getPIRData();
