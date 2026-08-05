@@ -5191,6 +5191,163 @@ function runEvCalibration() {
     };
 }
 
+// ─── SHARP-BOOKS CONSENSUS EV CALIBRATION ─────────────────────────────────────
+// Additive, parallel path — does NOT replace or alter runEvCalibration() above,
+// which stays the sole input to paperTradeOnly/Kelly auto-management and any
+// real-money gating. This exists purely to expand the usable calibration
+// population beyond Pinnacle-only matches, per docs/calibration-rules.md-governed
+// backtesting work. Validated 2026-08 (Part C of the sharp-books scoping):
+// Marathon Bet and Matchbook both track Pinnacle within <1pp mean deviation,
+// correlation >0.997, full depth back to 2020 — the two candidates judged close
+// enough to Pinnacle to stand in for it, not a general "any book" pool.
+//
+// For a fixture with a strict Pinnacle match, its actual Pinnacle odds are used
+// unchanged (same figure as the Pinnacle-only path). For a fixture WITHOUT a
+// Pinnacle match, if closing-odds-multi.json has Marathon Bet and/or Matchbook
+// for it, this averages their de-vigged (overround-removed) implied
+// probabilities into one blended "fair" probability per outcome, then converts
+// that back to an equivalent no-vig odds figure (1/probability) to use as the
+// stand-in payout price. That's a simplification worth being explicit about:
+// no-vig odds are more generous than any real bookmaker's actual price (real
+// books keep their margin), so this is appropriate for gauging whether edge
+// exists against a fair consensus line — it is NOT a live-stakeable price and
+// must never be treated as one.
+function devigOdds(homeOdds, drawOdds, awayOdds) {
+  const ih = 1 / homeOdds, id = 1 / drawOdds, ia = 1 / awayOdds;
+  const overround = ih + id + ia;
+  return { home: ih / overround, draw: id / overround, away: ia / overround };
+}
+
+function computeConsensusOdds(fixtureId) {
+  const multi = getClosingOddsMulti()[fixtureId];
+  if (!multi?.books) return null;
+  const probs = [];
+  for (const bookKey of CONSENSUS_BOOKS) {
+    const b = multi.books[bookKey];
+    if (!b) continue;
+    probs.push(devigOdds(b.homeOdds, b.drawOdds, b.awayOdds));
+  }
+  if (probs.length === 0) return null;
+  const avg = key => probs.reduce((s, p) => s + p[key], 0) / probs.length;
+  const home = avg('home'), draw = avg('draw'), away = avg('away');
+  return {
+    homeOdds: +(1 / home).toFixed(3),
+    drawOdds: +(1 / draw).toFixed(3),
+    awayOdds: +(1 / away).toFixed(3),
+    booksUsed: Object.keys(multi.books).filter(k => CONSENSUS_BOOKS.includes(k)),
+  };
+}
+
+function runEvCalibrationConsensus() {
+  const historical    = readJSON('backfill-historical.json') || {};
+  const scoredRecords = historical.scoredRecords || [];
+  const optWeights    = historical.optimisedWeights || {};
+  const closingOdds   = readJSON('closing-odds.json') || {};
+  const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG } = require('./scoring');
+
+  const BANDS = [
+    { label: '< 0%',   min: -Infinity, max: 0    },
+    { label: '0–5%',   min: 0,         max: 0.05 },
+    { label: '5–10%',  min: 0.05,      max: 0.10 },
+    { label: '10–15%', min: 0.10,      max: 0.15 },
+    { label: '15–20%', min: 0.15,      max: 0.20 },
+    { label: '20%+',   min: 0.20,      max: Infinity },
+  ];
+
+  const matched = [];
+  let pinnacleN = 0, consensusN = 0;
+  for (const rec of scoredRecords) {
+    if (!rec.actualOutcome || !rec.homeFactors || !rec.awayFactors) continue;
+    const context = rec.context || classifyFixture(rec.leagueId);
+    const weights  = optWeights[context] || optWeights.club_domestic;
+    if (!weights) continue;
+
+    const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
+    let sourceOdds = null, source = null;
+    if (co) { sourceOdds = co; source = 'pinnacle'; }
+    else {
+      const consensus = computeConsensusOdds(String(rec.fixtureId));
+      if (consensus) { sourceOdds = consensus; source = 'consensus'; }
+    }
+    if (!sourceOdds) continue;
+
+    const leagueId  = parseInt(rec.leagueId, 10);
+    const rawProbs  = model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]);
+    const probs     = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
+
+    let topOutcome, modelProb, bookOdds;
+    if (probs.home >= probs.draw && probs.home >= probs.away) { topOutcome = 'home'; modelProb = probs.home; bookOdds = sourceOdds.homeOdds; }
+    else if (probs.away >= probs.draw) { topOutcome = 'away'; modelProb = probs.away; bookOdds = sourceOdds.awayOdds; }
+    else { topOutcome = 'draw'; modelProb = probs.draw; bookOdds = sourceOdds.drawOdds; }
+    if (!bookOdds || bookOdds <= 1) continue;
+
+    const impliedProb = 1 / bookOdds;
+    const edge = (modelProb - impliedProb) / impliedProb;
+    const won  = rec.actualOutcome === topOutcome;
+    if (source === 'pinnacle') pinnacleN++; else consensusN++;
+
+    matched.push({ fixtureId: rec.fixtureId, leagueId: rec.leagueId, context, source,
+      topOutcome, modelProb, bookOdds, impliedProb, edge, won, date: rec.date });
+  }
+
+  function bandStats(fixtures) {
+    return BANDS.map(b => {
+      const inBand = fixtures.filter(f => f.edge >= b.min && f.edge < b.max);
+      const n = inBand.length;
+      let roi = null;
+      if (n > 0) {
+        const total = inBand.reduce((s, f) => s + (f.won ? (f.bookOdds - 1) : -1), 0);
+        roi = parseFloat((total / n).toFixed(4));
+      }
+      return { band: b.label, n, roi, warning: n < 30 ? 'small_sample' : null };
+    });
+  }
+
+  const posEdge = matched.filter(f => f.edge >= 0.05);
+  const posRoi = posEdge.length
+    ? parseFloat((posEdge.reduce((s, f) => s + (f.won ? (f.bookOdds - 1) : -1), 0) / posEdge.length).toFixed(4))
+    : null;
+
+  const leagueMap = {};
+  for (const f of matched) {
+    const lid  = parseInt(f.leagueId, 10);
+    const name = LEAGUE_CONFIG[lid]?.name || `League ${f.leagueId}`;
+    (leagueMap[name] = leagueMap[name] || []).push(f);
+  }
+  const byLeague = Object.entries(leagueMap)
+    .filter(([, fxs]) => fxs.length >= 100)
+    .map(([league, fxs]) => {
+      const posE = fxs.filter(f => f.edge >= 0.05);
+      const roi = posE.length
+        ? parseFloat((posE.reduce((s, f) => s + (f.won ? (f.bookOdds - 1) : -1), 0) / posE.length).toFixed(4))
+        : null;
+      const pinN = fxs.filter(f => f.source === 'pinnacle').length;
+      return {
+        league, n: fxs.length, posEdgeN: posE.length, roi,
+        pinnacleN: pinN, consensusN: fxs.length - pinN,
+        bands: bandStats(fxs),
+      };
+    }).sort((a, b) => b.n - a.n);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    note: 'Additive consensus path — Pinnacle-strict fixtures use real Pinnacle odds; the rest use no-vig fair odds averaged across whichever of Marathon Bet/Matchbook are available. Calibration/backtesting use only, never a live price.',
+    summary: {
+      totalMatched: matched.length, pinnacleN, consensusN,
+      positiveEdge: posEdge.length, positiveEdgeRoi: posRoi,
+    },
+    byLeague,
+  };
+}
+
+app.get('/api/ev-calibration-consensus', (_req, res) => {
+  try {
+    res.json(runEvCalibrationConsensus());
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0, 5) });
+  }
+});
+
 app.get('/api/ev-calibration', (_req, res) => {
   try {
     res.json(runEvCalibration());
