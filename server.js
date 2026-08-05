@@ -3282,8 +3282,26 @@ function normaliseTeam(name) {
     .replace(/[^a-z0-9 ]/g, '')
     .replace(/\s+/g, ' ').trim();
 }
+// Nicknames/shorthand that aren't substrings or shared tokens of the official name,
+// so the checks below can never catch them (e.g. "Wolves" contains none of the
+// same 4+ char tokens as "Wolverhampton Wanderers", despite being the same club).
+// Confirmed root cause of the EPL backfill anomaly (2026-08-05) — api-football's
+// short name "Wolves" never matched the Odds API's "Wolverhampton Wanderers" in
+// ~600 fixtures, the entire aggregate "0 matches" result traced to this one gap.
+// Add more here as they're found — each entry just needs to normaliseTeam() to
+// the same key on both sides.
+const TEAM_NICKNAME_ALIASES = {
+  'wolves': 'wolverhampton wanderers',
+  'spurs': 'tottenham hotspur',
+  'gladbach': 'borussia monchengladbach',
+  'atleti': 'atletico madrid',
+  'psg': 'paris saint germain',
+};
+function resolveTeamAlias(normalised) {
+  return TEAM_NICKNAME_ALIASES[normalised] || normalised;
+}
 function teamsMatch(a, b) {
-  const na = normaliseTeam(a), nb = normaliseTeam(b);
+  const na = resolveTeamAlias(normaliseTeam(a)), nb = resolveTeamAlias(normaliseTeam(b));
   if (na === nb) return true;
   if (na.includes(nb) || nb.includes(na)) return true;
   // token overlap — any shared word ≥4 chars
