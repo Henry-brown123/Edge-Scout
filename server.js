@@ -368,6 +368,55 @@ const oddsApi = axios.create({
   timeout: 15000,
 });
 
+// ─── ODDS API CREDIT GUARD ──────────────────────────────────────────────────
+// Reserve line: never let historical-odds work (backfills, consensus capture,
+// calibration re-runs) consume the account below this many credits — that
+// floor is set aside for ongoing live CLV capture on active leagues.
+const ODDS_CREDITS_RESERVE = 1_000_000;
+let _lastKnownOddsCredits = { remaining: null, checkedAt: null };
+
+// Cheap balance check — /sports is free/near-free on the Odds API (not an odds
+// pull), so this can be called before every batch without burning real quota.
+async function checkOddsApiCredits() {
+  try {
+    const resp = await oddsApi.get('/sports', { params: { apiKey: ODDS_API_KEY } });
+    const remaining = parseInt(resp.headers['x-requests-remaining'], 10);
+    _lastKnownOddsCredits = { remaining: Number.isFinite(remaining) ? remaining : null, checkedAt: new Date().toISOString() };
+    return _lastKnownOddsCredits;
+  } catch (e) {
+    // Fail loud, not silent — a broken balance check must not be mistaken for "plenty left".
+    console.error(`[OddsCredits] Balance check FAILED: ${e.message} — treating as unknown, blocking non-essential work until resolved`);
+    _lastKnownOddsCredits = { remaining: null, checkedAt: new Date().toISOString(), error: e.message };
+    return _lastKnownOddsCredits;
+  }
+}
+
+// Call before any historical-odds batch. Returns { ok, remaining, reason } —
+// ok:false means stop non-essential historical work now (reserve breached,
+// projected to breach, or balance is unknown because the check itself failed).
+async function creditGuard(operationLabel, projectedCost = 0) {
+  const { remaining, error } = await checkOddsApiCredits();
+  if (remaining == null) {
+    console.error(`[OddsCredits] GUARD BLOCKED — ${operationLabel}: balance unknown (${error || 'no data'}). Refusing to spend blind.`);
+    return { ok: false, remaining: null, reason: 'balance_check_failed' };
+  }
+  if (remaining <= ODDS_CREDITS_RESERVE) {
+    console.error(`[OddsCredits] GUARD BLOCKED — ${operationLabel}: ${remaining} remaining is at/below the ${ODDS_CREDITS_RESERVE} reserve line.`);
+    return { ok: false, remaining, reason: 'reserve_breached' };
+  }
+  if (projectedCost > 0 && (remaining - projectedCost) < ODDS_CREDITS_RESERVE) {
+    console.error(`[OddsCredits] GUARD WARNING — ${operationLabel}: projected cost ${projectedCost} would cross the reserve line (${remaining} remaining). Proceeding at reduced/partial scope is the caller's responsibility.`);
+    return { ok: true, remaining, reason: 'would_breach_reserve', warning: true };
+  }
+  console.log(`[OddsCredits] Guard OK — ${operationLabel}: ${remaining} remaining, reserve line ${ODDS_CREDITS_RESERVE}.`);
+  return { ok: true, remaining, reason: 'ok' };
+}
+
+app.get('/api/odds-credits-status', async (_req, res) => {
+  const status = await checkOddsApiCredits();
+  res.json({ ...status, reserveLine: ODDS_CREDITS_RESERVE, belowReserve: status.remaining != null ? status.remaining <= ODDS_CREDITS_RESERVE : null });
+});
+
 // Wire rate-limit detection into all API-Sports calls via interceptors.
 // Response interceptor: detect quota error → setRateLimited() centrally.
 // No request interceptor — existing loop guards handle early exit correctly.
@@ -3256,6 +3305,15 @@ async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null,
   };
   console.log(`[ClosingOdds] Starting backfill — budget ${budgetCredits} credits${debug ? ' [DEBUG]' : ''}`);
 
+  const guard = await creditGuard(`closing-odds backfill (leagues: ${leagueIds ? leagueIds.join(',') : 'all'})`, budgetCredits);
+  if (!guard.ok) {
+    _closingOddsStatus.running = false;
+    _closingOddsStatus.completedAt = new Date().toISOString();
+    _closingOddsStatus.error = `Credit guard blocked this run: ${guard.reason} (${guard.remaining ?? 'unknown'} remaining, reserve ${ODDS_CREDITS_RESERVE})`;
+    console.error(`[ClosingOdds] ABORTED before any calls — ${_closingOddsStatus.error}`);
+    return;
+  }
+
   try {
     const hist = readJSON('backfill-historical.json');
     if (!hist?.fixtures?.length) throw new Error('backfill-historical.json empty or missing');
@@ -3320,6 +3378,16 @@ async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null,
         _closingOddsStatus.creditsUsed      += creditsLast;
         _closingOddsStatus.creditsRemaining  = creditsRemaining;
         _closingOddsStatus.apiCallsMade++;
+        _lastKnownOddsCredits = { remaining: creditsRemaining, checkedAt: new Date().toISOString() };
+
+        // Reserve check on every real response — free (piggybacks the header already
+        // returned), catches the account crossing the line mid-run rather than only
+        // at the very start or at true zero.
+        if (creditsRemaining <= ODDS_CREDITS_RESERVE) {
+          _closingOddsStatus.error = `Stopped: crossed the ${ODDS_CREDITS_RESERVE}-credit reserve line (${creditsRemaining} remaining) mid-run at ${groupKey}`;
+          console.error(`[ClosingOdds] RESERVE LINE CROSSED — ${_closingOddsStatus.error}`);
+          break;
+        }
 
         const events = resp.data?.data || resp.data || [];
 
@@ -3393,6 +3461,14 @@ async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null,
             outcome: 'request_error', error: e.message, errorStatus: e.response?.status || null, errorBody: e.response?.data || null,
           });
           console.log(`[ClosingOdds:DEBUG] REQUEST ERROR ${sport} ${kickoffIso} — status ${e.response?.status}, ${JSON.stringify(e.response?.data)}`);
+        }
+        // Credits exhausted mid-run: stop immediately and fail loud, rather than
+        // silently retrying every remaining group at 1s each (the earlier pattern —
+        // a run left in this state looked "stuck" for minutes with nothing to show).
+        if (e.response?.data?.error_code === 'OUT_OF_USAGE_CREDITS') {
+          _closingOddsStatus.error = 'OUT_OF_USAGE_CREDITS — stopped immediately, did not retry remaining groups';
+          console.error(`[ClosingOdds] CREDITS EXHAUSTED mid-run at ${groupKey} — stopping now (${_closingOddsStatus.fixturesMatched} matched, ${_closingOddsStatus.apiCallsMade} calls made this run)`);
+          break;
         }
         await new Promise(r => setTimeout(r, 1000));
       }
