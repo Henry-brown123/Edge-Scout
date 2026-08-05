@@ -260,7 +260,7 @@ function injuryScore(injuries, teamId) {
 // PL avgDrawRate (0.243) is the baseline — other leagues are expressed relative.
 
 const LEAGUE_CONFIG = {
-  39:  { name: 'Premier League',   avgHomeWinRate: 0.456, avgDrawRate: 0.243, avgAwayWinRate: 0.301, avgGoalsPerGame: 2.68, marketEfficiency: 0.95, drawBaseWeight: 1.00, homeAdvBaseWeight: 1.00 },
+  39:  { name: 'Premier League',   avgHomeWinRate: 0.435, avgDrawRate: 0.221, avgAwayWinRate: 0.344, avgGoalsPerGame: 2.68, marketEfficiency: 0.95, drawBaseWeight: 1.00, homeAdvBaseWeight: 1.00 },
   140: { name: 'La Liga',          avgHomeWinRate: 0.461, avgDrawRate: 0.271, avgAwayWinRate: 0.268, avgGoalsPerGame: 2.58, marketEfficiency: 0.93, drawBaseWeight: 1.12, homeAdvBaseWeight: 1.25 },
   135: { name: 'Serie A',          avgHomeWinRate: 0.419, avgDrawRate: 0.287, avgAwayWinRate: 0.295, avgGoalsPerGame: 2.52, marketEfficiency: 0.91, drawBaseWeight: 1.12, homeAdvBaseWeight: 0.98 },
   78:  { name: 'Bundesliga',       avgHomeWinRate: 0.454, avgDrawRate: 0.234, avgAwayWinRate: 0.312, avgGoalsPerGame: 3.02, marketEfficiency: 0.92, drawBaseWeight: 0.96, homeAdvBaseWeight: 1.00 },
