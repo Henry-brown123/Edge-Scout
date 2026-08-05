@@ -3909,61 +3909,6 @@ app.post('/api/backfill/pir', (req, res) => {
   });
 });
 
-// TEMPORARY diagnostic endpoint — final report table CI computation. For
-// validated leagues, computes CI on the held-out test-set fixtures only
-// (matching VALIDATED_SPLITS); for everything else, on the full matched
-// population (same basis as the original audit). Zero API cost. Remove after
-// the report is produced.
-app.get('/api/debug/final-report-ci', (_req, res) => {
-  try {
-    const historical    = readJSON('backfill-historical.json') || {};
-    const scoredRecords = historical.scoredRecords || [];
-    const optWeights    = historical.optimisedWeights || {};
-    const closingOdds   = readJSON('closing-odds.json') || {};
-    const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG } = require('./scoring');
-
-    const byLeague = {};
-    for (const rec of scoredRecords) {
-      const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
-      if (!co || !rec.actualOutcome || !rec.homeFactors || !rec.awayFactors) continue;
-      const leagueId = parseInt(rec.leagueId, 10);
-      const split = VALIDATED_SPLITS[leagueId];
-      if (split && new Date(rec.date) < new Date(split.testFrom)) continue; // train excluded for validated leagues
-
-      const context = rec.context || classifyFixture(rec.leagueId);
-      const weights  = optWeights[context] || optWeights.club_domestic;
-      if (!weights) continue;
-
-      const rawProbs = model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]);
-      const probs    = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
-      let topOutcome, modelProb, pinnacleOdds;
-      if (probs.home >= probs.draw && probs.home >= probs.away) { topOutcome='home'; modelProb=probs.home; pinnacleOdds=co.homeOdds; }
-      else if (probs.away >= probs.draw) { topOutcome='away'; modelProb=probs.away; pinnacleOdds=co.awayOdds; }
-      else { topOutcome='draw'; modelProb=probs.draw; pinnacleOdds=co.drawOdds; }
-      if (!pinnacleOdds || pinnacleOdds <= 1) continue;
-      const edge = (modelProb - (1/pinnacleOdds)) / (1/pinnacleOdds);
-      if (edge < 0.05) continue;
-      const won = rec.actualOutcome === topOutcome;
-      const ret = won ? (pinnacleOdds - 1) : -1;
-      const name = LEAGUE_CONFIG[leagueId]?.name || `League ${leagueId}`;
-      (byLeague[name] = byLeague[name] || []).push(ret);
-    }
-
-    const result = {};
-    for (const [name, returns] of Object.entries(byLeague)) {
-      const n = returns.length;
-      const mean = returns.reduce((a,b)=>a+b,0) / n;
-      const variance = n > 1 ? returns.reduce((a,b)=>a+(b-mean)**2,0) / (n - 1) : 0;
-      const se = Math.sqrt(variance / n);
-      const ci95 = 1.96 * se;
-      result[name] = { posEdgeN: n, roi: +mean.toFixed(4), ciLow: +(mean-ci95).toFixed(4), ciHigh: +(mean+ci95).toFixed(4) };
-    }
-    res.json(result);
-  } catch (e) {
-    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0,5) });
-  }
-});
-
 app.get('/api/backfill/pir/status', (_req, res) => {
   const { getPIRData } = require('./teamProfiles');
   const data = getPIRData();
