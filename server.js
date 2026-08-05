@@ -3995,6 +3995,62 @@ app.get('/api/debug/league-split', async (req, res) => {
   }
 });
 
+// TEMPORARY diagnostic endpoint — Phase 6 sensitivity check: raw GBDT output vs
+// the bias-corrected (blended) output, across all scored records, to quantify
+// how much applyLeagueBiasCorrection's blendFactor=0.3 compresses top-end
+// confidence. Read-only, zero API cost (uses already-stored scored records).
+// Remove after the writeup is produced.
+app.get('/api/debug/bias-correction-sensitivity', (_req, res) => {
+  try {
+    const historical    = readJSON('backfill-historical.json') || {};
+    const scoredRecords = historical.scoredRecords || [];
+    const optWeights    = historical.optimisedWeights || {};
+    const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG } = require('./scoring');
+
+    const BINS = [0.5, 0.6, 0.7, 0.8, 0.9, 1.001];
+    const rawTop = new Array(BINS.length - 1).fill(0);
+    const correctedTop = new Array(BINS.length - 1).fill(0);
+    let n = 0, rawMax = 0, correctedMax = 0;
+    let rawCorrect = 0, correctedCorrect = 0;
+
+    for (const rec of scoredRecords) {
+      if (!rec.actualOutcome || !rec.homeFactors || !rec.awayFactors) continue;
+      const context = rec.context || classifyFixture(rec.leagueId);
+      const weights  = optWeights[context] || optWeights.club_domestic;
+      if (!weights) continue;
+      const leagueId = parseInt(rec.leagueId, 10);
+
+      const rawProbs = model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]);
+      const corrected = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
+
+      const rawTopProb = Math.max(rawProbs.home, rawProbs.draw, rawProbs.away);
+      const rawTopOutcome = rawProbs.home === rawTopProb ? 'home' : rawProbs.away === rawTopProb ? 'away' : 'draw';
+      const corrTopProb = Math.max(corrected.home, corrected.draw, corrected.away);
+      const corrTopOutcome = corrected.home === corrTopProb ? 'home' : corrected.away === corrTopProb ? 'away' : 'draw';
+
+      n++;
+      rawMax = Math.max(rawMax, rawTopProb);
+      correctedMax = Math.max(correctedMax, corrTopProb);
+      if (rec.actualOutcome === rawTopOutcome) rawCorrect++;
+      if (rec.actualOutcome === corrTopOutcome) correctedCorrect++;
+
+      for (let i = 0; i < BINS.length - 1; i++) {
+        if (rawTopProb >= BINS[i] && rawTopProb < BINS[i+1]) rawTop[i]++;
+        if (corrTopProb >= BINS[i] && corrTopProb < BINS[i+1]) correctedTop[i]++;
+      }
+    }
+
+    const binLabels = ['50-60%', '60-70%', '70-80%', '80-90%', '90-100%'];
+    res.json({
+      n, rawMax: +rawMax.toFixed(4), correctedMax: +correctedMax.toFixed(4),
+      rawAccuracy: +(rawCorrect/n).toFixed(4), correctedAccuracy: +(correctedCorrect/n).toFixed(4),
+      distribution: binLabels.map((label, i) => ({ bin: label, rawCount: rawTop[i], correctedCount: correctedTop[i] })),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0,5) });
+  }
+});
+
 app.get('/api/backfill/pir/status', (_req, res) => {
   const { getPIRData } = require('./teamProfiles');
   const data = getPIRData();
