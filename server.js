@@ -4021,6 +4021,23 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
+// TEMPORARY DIAGNOSTIC — confirm no goals-market (Over/Under, BTTS) fields
+// exist anywhere in the historical backfill population. Read-only, zero new
+// Odds API calls. To be removed once confirmed.
+app.get('/api/debug/market-type-check', (_req, res) => {
+  const historical    = readJSON('backfill-historical.json') || {};
+  const scoredRecords = historical.scoredRecords || [];
+  const sampleKeys = scoredRecords.length ? Object.keys(scoredRecords[0]) : [];
+  const distinctOutcomes = [...new Set(scoredRecords.map(r => r.actualOutcome))];
+  const anyMarketField = scoredRecords.some(r => 'market' in r || 'bet' in r || 'overUnder' in r || 'btts' in r);
+  res.json({
+    totalScoredRecords: scoredRecords.length,
+    sampleRecordKeys: sampleKeys,
+    distinctActualOutcomeValues: distinctOutcomes,
+    anyGoalsOrMarketFieldFound: anyMarketField,
+  });
+});
+
 // ─── LEAGUE × TIER HISTORICAL PERFORMANCE MATRIX ──────────────────────────────
 // Reference/diagnostic view, NOT a live tracker and NOT a gate — see
 // docs/tier-calibration-analysis.md Addendum 6. Static backtest snapshot
