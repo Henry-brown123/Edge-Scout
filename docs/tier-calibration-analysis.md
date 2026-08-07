@@ -428,6 +428,152 @@ indistinguishable from zero per Phase 2, and 0.57 respectively), so "leads
 the validated set" here means "least unproven," not "confirmed profitable."**
 That distinction matters more than the rank order itself.
 
+## Addendum 2 — Platt-scaling recalibration test: is the underconfidence exploitable?
+
+Follow-up to the Addendum's Part A finding (underconfidence in the 45-70%
+band holds and strengthens on test-only data) and to
+[`confidence-ceiling-diagnostic.md`](confidence-ceiling-diagnostic.md)'s own
+recommended next step ("characterize the Platt-scaling step directly... as
+its own calibration cycle... single test look"). This is that cycle, run
+under full `calibration-rules.md` discipline (rules 1-3, 5, 6, 9). Zero new
+Odds API calls — confirmed via unchanged `apiQuotaUsedToday`.
+
+**Scope:** the four leagues with a genuine `VALIDATED_SPLITS` boundary only —
+Premier League (testFrom 2023-12-30), Ligue 1 (2023-11-03), Champions League
+(2024-03-12), Serie A (2024-09-16) — same boundaries the base-rate tuning
+cycle used, unchanged here. The correction is fit and applied only within
+45-70% predicted probability (where the finding was established); outside
+that band, nothing changes.
+
+### Part A: the fit (train data only)
+
+Platt scaling: `corrected = sigmoid(B + A * logit(raw))`, a 2-parameter
+logistic regression with `y = 1{top pick correct}` and `x = logit(raw
+probability)`, fit via Newton-Raphson on each league's train-portion fixtures
+restricted to the 45-70% band (780/650/534/782 fixtures for PL/Ligue
+1/CL/Serie A respectively — Champions League's 534 is the thinnest, expected
+given its structurally smaller volume all week).
+
+**Pooled vs. per-league, decided on train only:** compared via an internal
+80/20 chronological split *within* train (never touches test) — fit each
+candidate on the first 80%, score both on the same held-back 20% (n=550,
+pooled across leagues) using log-loss.
+
+| Candidate | Check-set log-loss |
+|---|---|
+| Pooled (one transform, all 4 leagues) | 0.6554 |
+| Per-league (4 separate transforms) | 0.6561 |
+
+Pooled wins, narrowly. The per-league fits (A: 1.55-2.07, B: 0.04-0.22
+individually) aren't wildly different from each other either, which is the
+football-side reason to trust pooling here as much as the log-loss margin: if
+the four leagues needed meaningfully different corrections, per-league would
+have won by more than a rounding difference, and Champions League's
+particularly thin 534-fixture band population would be the most likely to
+suffer from being forced into someone else's curve — it isn't. **Pooled was
+chosen** and refit on the full train band (all 2,746 fixtures, no further
+test peeking) for Part B:
+
+```
+corrected = sigmoid(0.1585 + 1.8313 * logit(raw))
+```
+
+| Raw | Corrected |
+|---|---|
+| 45% | ~44.8% (roughly unchanged) |
+| 50% | ~54.0% (+4.0pp) |
+| 55% | ~62.9% (+7.9pp) |
+| 60% | ~71.1% (+11.1pp) |
+| 65% | ~78.4% (+13.4pp) |
+| 70% (edge) | ~84.7% (+14.7pp) |
+
+**Flagged directly:** the band's population is heavily front-loaded (most
+fixtures sit in 45-55%; the pooled test-band breakdown below shows n=417 at
+45-50% vs. n=14 at 65-70%), so the curve is well-evidenced in the lower half
+of the band and increasingly extrapolative toward 70% — the +14.7pp
+correction at the top edge rests on far less data than the +4-8pp corrections
+in the middle, and briefly pushes corrected probabilities above the model's
+own ~79% structural ceiling from `confidence-ceiling-diagnostic.md`, which
+that raw ceiling was never designed to produce. Worth remembering when
+reading the 65-70% row below.
+
+### Part B: single test-set look — calibration
+
+Same tiers, test-portion fixtures only, before (raw) vs. after (corrected):
+
+| Tier | n | Before error | After error |
+|---|---|---|---|
+| 45-50% | 417 | −10.5pp | −8.6pp |
+| 50-55% | 272 | −5.1pp | **+0.7pp** |
+| 55-60% | 172 | −9.5pp | **+0.0pp** |
+| 60-65% | 113 | −11.3pp | **+0.9pp** |
+| 65-70% | 14 | −26.7pp | −12.9pp |
+
+**Calibration improves substantially and consistently.** The middle of the
+band (50-65%, n=113-272 per tier) goes from meaningfully underconfident to
+essentially perfectly calibrated. The two edges improve but don't fully
+close — 45-50% roughly halves its error (−10.5pp → −8.6pp), 65-70% also
+roughly halves (−26.7pp → −12.9pp, though n=14 keeps this reading noisy
+regardless). This is exactly what a global logistic fit predicts: best in
+the densely-populated middle, weakest at the sparser edges, consistent with
+the extrapolation caveat above rather than a flaw specific to this fit.
+
+### Part B: single test-set look — EV-backtest ROI, same fixtures
+
+| League | Before: n / posEdgeN / ROI / 95% CI | After: n / posEdgeN / ROI / 95% CI |
+|---|---|---|
+| Premier League | 356 / 69 / +21.3% / [−28.0%, +70.6%] | 356 / 108 / +2.7% / [−30.6%, +36.1%] |
+| Ligue 1 | 282 / 58 / +11.3% / [−20.0%, +42.7%] | 282 / 89 / +12.2% / [−10.8%, +35.1%] |
+| Champions League | 124 / 38 / +16.6% / [−29.5%, +62.7%] | 124 / 54 / +17.0% / [−17.4%, +51.4%] |
+| Serie A | 167 / 38 / +21.8% / [−15.9%, +59.6%] | 167 / 61 / +11.5% / [−15.5%, +38.5%] |
+| **POOLED** | 929 / 203 / +17.7% / [−4.2%, +39.6%] | 929 / **312** / **+9.6%** / [−5.8%, +25.0%] |
+
+All posEdgeN figures are below the ~300-400 decision-grade floor (rule 6)
+**except the pooled after-correction figure, which crosses it for the first
+time (312)** — and its CI still spans zero. Every other cell, before and
+after, is indicative-only by rule 6's own bar; none of the before/after
+comparisons above should be read as more than directional.
+
+**Mechanism, stated plainly:** correcting the probabilities upward doesn't
+just re-price the *same* bets — it pulls new fixtures over the 5%-edge
+threshold that didn't qualify before (pooled posEdgeN rises from 203 to 312,
+a +54% increase in bet volume). The realized ROI drop (pooled +17.7% →
++9.6%, Premier League +21.3% → +2.7%, Serie A +21.8% → +11.5%) is consistent
+with those newly-included bets performing worse on average than the original
+set — plausible given they're drawn from exactly the part of the probability
+range (nearer the edges of the band) where the correction is least
+well-evidenced. Ligue 1 and Champions League are roughly flat either way.
+
+### Verdict
+
+**The underconfidence is real and correctable — calibration error in the
+50-65% core of the band goes from meaningfully wrong to essentially exact.
+But correcting it does not translate into improved, or even confirmed,
+betting performance.** Pooled ROI drops by nearly half once the correction
+is applied, and even the enlarged, now-decision-grade-by-volume sample still
+produces a confidence interval that spans zero. Two of four leagues (Premier
+League, Serie A) show a clear ROI decline; the other two (Ligue 1, Champions
+League) are roughly neutral. Nowhere does correcting this improve ROI with
+anything resembling statistical confidence. This is the "observable but not
+exploitable" outcome flagged as a live possibility going in — confirmed here,
+not assumed.
+
+**Per rule 3, this is the single test-set look for this cycle. No refitting
+was done in response to these numbers** — a disappointing Part B result is
+reported as the finding, not treated as a cue to adjust the band, the
+pooled/per-league choice, or the fit method and re-run.
+
+### Decision flagged
+
+The 45-70% band and 5pp calibration tiers were carried over unchanged from
+the existing addendum rather than re-optimised for this exercise, so results
+here are directly comparable to it. Whether a narrower band (e.g. 50-65%,
+where the fit is best-evidenced and calibration ends up near-perfect) would
+change the ROI verdict was not tested — doing so now would be a second look
+at test data under a changed definition, which rule 3 rules out for this
+cycle. If this is worth pursuing, it needs a fresh train/test cycle with the
+narrower band decided in advance, not a re-slice of today's test result.
+
 ## Decisions made without asking — flagged for review
 
 1. **Bucket width/range** (35-80% in 5pp steps, nesting inside the diagnostic
@@ -466,8 +612,11 @@ That distinction matters more than the rank order itself.
 
 ## Cleanup
 
-The temporary `/api/debug/tier-calibration` and `/api/debug/tier-calibration-v2`
-endpoints have both been removed. `shrinkage.js` is kept as permanent, reusable
-infrastructure — it has no dependency on this specific dataset and is written
-to be called again for any future shrinkage need (e.g. a later per-tier ROI
-cycle, or shrinking home/away base-rate estimates directly).
+The temporary `/api/debug/tier-calibration`, `/api/debug/tier-calibration-v2`,
+and `/api/debug/platt-recalibration` endpoints have all been removed.
+`shrinkage.js` is kept as permanent, reusable infrastructure — it has no
+dependency on this specific dataset and is written to be called again for any
+future shrinkage need (e.g. a later per-tier ROI cycle, or shrinking home/away
+base-rate estimates directly). The Platt-scaling fit from Addendum 2 was
+**not** productionised anywhere — it exists only as the parameters quoted in
+that section, not as code in any live path.

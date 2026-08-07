@@ -109,3 +109,20 @@ worth pursuing:
    calibration cycle under `docs/calibration-rules.md` — train-only tuning,
    single test look, per league or globally, reported the same way the
    base-rate work was today.
+
+## Update: recalibration tested (see `tier-calibration-analysis.md`)
+
+Step 2 above has since been run, on a related but distinct trigger: not the
+79% ceiling directly, but a confirmed systematic *underconfidence* in the
+45-70% band (this doc's ceiling finding and that underconfidence finding are
+two sides of the same coin — a model that can't express confidence above
+~79% will show exactly this kind of compression in the 60-70% range, which is
+what the corrected probabilities in that test partly bear out, reaching into
+the high 70s/low 80s). Full writeup is in
+[`tier-calibration-analysis.md`](tier-calibration-analysis.md#addendum-2--platt-scaling-recalibration-test-is-the-underconfidence-exploitable),
+Addendum 2 — train-only Platt-scaling fit, single test-set look, four
+validated leagues. Short version: **calibration corrects almost perfectly in
+the 50-65% core of the band, but the correction does not improve — and for
+two of the four leagues, measurably hurts — realized EV-backtest ROI.**
+Underconfidence here turned out to be real but not exploitable. Not applied
+to any live path.
