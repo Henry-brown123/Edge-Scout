@@ -4021,109 +4021,59 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
-// TEMPORARY DIAGNOSTIC — league x tier historical performance matrix (raw +
-// shrunk), all 9 validated leagues, full tier range, test-only. Not a fresh
-// data source: same population/methodology as Addenda 2 and 5, broken out
-// per league instead of pooled. Read-only, zero new Odds API calls.
-app.get('/api/debug/league-tier-matrix', (_req, res) => {
-  const { empiricalBayesShrink } = require('./shrinkage');
-  const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG } = require('./scoring');
-  const historical    = readJSON('backfill-historical.json') || {};
-  const scoredRecords = historical.scoredRecords || [];
-  const optWeights    = historical.optimisedWeights || {};
-  const closingOdds   = readJSON('closing-odds.json') || {};
+// ─── LEAGUE × TIER HISTORICAL PERFORMANCE MATRIX ──────────────────────────────
+// Reference/diagnostic view, NOT a live tracker and NOT a gate — see
+// docs/tier-calibration-analysis.md Addendum 6. Static backtest snapshot
+// (same population/methodology as Addenda 2 and 5: raw/uncorrected,
+// test-only per VALIDATED_SPLITS, posEdge>=5%, 5pp tiers), hard-coded
+// deliberately for the same reason HISTORICAL_TIER_BASELINE is — so it can't
+// silently drift without a fresh, documented cycle. `shrunk` per cell is the
+// empirical-Bayes estimate from shrinkage.js, pooling toward that tier's
+// mean across all 9 leagues. `thin` marks n<30 (the same small-sample
+// threshold runEvCalibration()'s bandStats() already uses) — finer-grained
+// than the ~300-400 whole-cycle decision-grade floor, since a single
+// league×tier cell is naturally a much smaller unit than a pooled tier.
+const LEAGUE_TIER_MATRIX = {
+  2:   { name: 'Champions League',      cells: { '35-40%': { n: 7,  roi: 1.3429,  ciLow: -0.3797, ciHigh: 3.0654,  thin: true,  shrunk: 0.2579  }, '40-45%': { n: 27, roi: 0.3737,  ciLow: -0.2844, ciHigh: 1.0318,  thin: true,  shrunk: -0.1404 }, '45-50%': { n: 15, roi: 0.224,   ciLow: -0.5892, ciHigh: 1.0372, thin: true, shrunk: 0.0753  }, '50-55%': { n: 13, roi: 0.2708,  ciLow: -0.5448, ciHigh: 1.0864, thin: true, shrunk: 0.1673  }, '55-60%': { n: 7,  roi: 0.3457,  ciLow: -0.619,  ciHigh: 1.3104, thin: true, shrunk: 0.286   }, '60-65%': { n: 3,  roi: -1,      ciLow: -1,      ciHigh: -1,     thin: true, shrunk: 0.449   } } },
+  39:  { name: 'Premier League',        cells: { '35-40%': { n: 22, roi: -0.6464, ciLow: -1.1389, ciHigh: -0.1539, thin: true,  shrunk: -0.4063 }, '40-45%': { n: 59, roi: -0.08,   ciLow: -0.4314, ciHigh: 0.2714,  thin: false, shrunk: -0.1825 }, '45-50%': { n: 41, roi: 0.3329,  ciLow: -0.2398, ciHigh: 0.9056, thin: false, shrunk: 0.1502  }, '50-55%': { n: 18, roi: -0.5061, ciLow: -0.9477, ciHigh: -0.0645, thin: true, shrunk: -0.3314 }, '55-60%': { n: 8,  roi: 1.2863,  ciLow: -1.5835, ciHigh: 4.156,  thin: true, shrunk: 0.286   }, '60-65%': { n: 1,  roi: -1,      ciLow: -1,      ciHigh: -1,     thin: true, shrunk: 1.0176  }, '65-70%': { n: 1, roi: 0.88, ciLow: 0.88, ciHigh: 0.88, thin: true, shrunk: 0.8175 } } },
+  61:  { name: 'Ligue 1',               cells: { '<35%':   { n: 1,  roi: 2.61,    ciLow: 2.61,    ciHigh: 2.61,    thin: true,  shrunk: 2.61    }, '35-40%': { n: 44, roi: 0.1548,  ciLow: -0.3724, ciHigh: 0.682,   thin: false, shrunk: 0.0665  }, '40-45%': { n: 56, roi: -0.2757, ciLow: -0.6099, ciHigh: 0.0585, thin: false, shrunk: -0.229  }, '45-50%': { n: 37, roi: 0.3462,  ciLow: -0.0637, ciHigh: 0.7562, thin: false, shrunk: 0.1479  }, '50-55%': { n: 10, roi: -0.788,  ciLow: -1.2035, ciHigh: -0.3725, thin: true, shrunk: -0.4062 }, '55-60%': { n: 11, roi: 0.15,    ciLow: -0.506,  ciHigh: 0.806,  thin: true, shrunk: 0.286   } } },
+  78:  { name: 'Bundesliga',            cells: { '35-40%': { n: 26, roi: -0.3315, ciLow: -0.8726, ciHigh: 0.2096,  thin: true,  shrunk: -0.2471 }, '40-45%': { n: 51, roi: -0.3606, ciLow: -0.7028, ciHigh: -0.0183, thin: false, shrunk: -0.2463 }, '45-50%': { n: 39, roi: -0.1741, ciLow: -0.572,  ciHigh: 0.2238, thin: false, shrunk: -0.0341 }, '50-55%': { n: 14, roi: 0.4471,  ciLow: -0.1512, ciHigh: 1.0455, thin: true, shrunk: 0.2791  }, '55-60%': { n: 7,  roi: -0.0986, ciLow: -0.9416, ciHigh: 0.7445, thin: true, shrunk: 0.286   }, '60-65%': { n: 2,  roi: 0.76,    ciLow: 0.662,   ciHigh: 0.858,  thin: true, shrunk: 1.264   } } },
+  88:  { name: 'Eredivisie',            cells: { '35-40%': { n: 19, roi: 0.1195,  ciLow: -0.7801, ciHigh: 1.0191,  thin: true,  shrunk: -0.0084 }, '40-45%': { n: 45, roi: -0.3433, ciLow: -0.7069, ciHigh: 0.0203,  thin: false, shrunk: -0.24   }, '45-50%': { n: 31, roi: 0.1406,  ciLow: -0.3456, ciHigh: 0.6269, thin: false, shrunk: 0.0733  }, '50-55%': { n: 15, roi: -0.712,  ciLow: -1.0968, ciHigh: -0.3272, thin: true, shrunk: -0.4383 }, '55-60%': { n: 5,  roi: -0.206,  ciLow: -1.1674, ciHigh: 0.7554, thin: true, shrunk: 0.286   } } },
+  94:  { name: 'Primeira Liga',         cells: { '35-40%': { n: 36, roi: 0.0317,  ciLow: -0.6003, ciHigh: 0.6636,  thin: false, shrunk: -0.0262 }, '40-45%': { n: 52, roi: -0.2967, ciLow: -0.7272, ciHigh: 0.1338,  thin: false, shrunk: -0.2328 }, '45-50%': { n: 27, roi: -0.7163, ciLow: -1.0264, ciHigh: -0.4062, thin: true, shrunk: -0.1673 }, '50-55%': { n: 18, roi: 0.4556,  ciLow: -0.1041, ciHigh: 1.0152, thin: true, shrunk: 0.3096  }, '55-60%': { n: 5,  roi: 0.222,   ciLow: -0.7594, ciHigh: 1.2034, thin: true, shrunk: 0.286   }, '60-65%': { n: 5,  roi: 6.446,   ciLow: -1.5026, ciHigh: 14.3946, thin: true, shrunk: 4.2229 } } },
+  135: { name: 'Serie A',               cells: { '35-40%': { n: 29, roi: -0.1766, ciLow: -0.7266, ciHigh: 0.3735,  thin: true,  shrunk: -0.1595 }, '40-45%': { n: 39, roi: -0.3108, ciLow: -0.7168, ciHigh: 0.0953,  thin: false, shrunk: -0.2316 }, '45-50%': { n: 18, roi: 0.2061,  ciLow: -0.3698, ciHigh: 0.782,  thin: true, shrunk: 0.0767   }, '50-55%': { n: 14, roi: 0.0164,  ciLow: -0.6266, ciHigh: 0.6594, thin: true, shrunk: 0.017    }, '55-60%': { n: 5,  roi: 1.072,   ciLow: 0.797,   ciHigh: 1.347,  thin: true, shrunk: 0.286   }, '60-65%': { n: 1,  roi: -1,      ciLow: -1,      ciHigh: -1,     thin: true, shrunk: 1.0176  } } },
+  140: { name: 'La Liga',               cells: { '35-40%': { n: 44, roi: -0.3557, ciLow: -0.7403, ciHigh: 0.0289,  thin: false, shrunk: -0.2879 }, '40-45%': { n: 58, roi: -0.3657, ciLow: -0.6754, ciHigh: -0.056,  thin: false, shrunk: -0.2508 }, '45-50%': { n: 39, roi: 0.0795,  ciLow: -0.4093, ciHigh: 0.5683, thin: false, shrunk: 0.0564  }, '50-55%': { n: 30, roi: 0.142,   ciLow: -0.2774, ciHigh: 0.5614, thin: false, shrunk: 0.1133  }, '55-60%': { n: 15, roi: 0.104,   ciLow: -0.4476, ciHigh: 0.6556, thin: true, shrunk: 0.286   }, '60-65%': { n: 9,  roi: 0.9244,  ciLow: -1.6333, ciHigh: 3.4822, thin: true, shrunk: 1.1076  }, '65-70%': { n: 1, roi: 0.81, ciLow: 0.81, ciHigh: 0.81, thin: true, shrunk: 0.8175 } } },
+  179: { name: 'Scottish Premiership',  cells: { '35-40%': { n: 22, roi: -0.4245, ciLow: -0.9531, ciHigh: 0.104,   thin: true,  shrunk: -0.2884 }, '40-45%': { n: 43, roi: 0.0053,  ciLow: -0.4128, ciHigh: 0.4235,  thin: false, shrunk: -0.1736 }, '45-50%': { n: 22, roi: -0.1423, ciLow: -0.6859, ciHigh: 0.4013, thin: true, shrunk: -0.0007  }, '50-55%': { n: 23, roi: 0.3461,  ciLow: -0.2143, ciHigh: 0.9065, thin: true, shrunk: 0.2537   }, '55-60%': { n: 9,  roi: -0.0089, ciLow: -0.8033, ciHigh: 0.7855, thin: true, shrunk: 0.286   }, '60-65%': { n: 5,  roi: 0.438,   ciLow: -0.269,  ciHigh: 1.145,  thin: true, shrunk: 0.9208  }, '65-70%': { n: 2, roi: 0.79, ciLow: 0.6136, ciHigh: 0.9664, thin: true, shrunk: 0.8175 } } },
+};
+const LEAGUE_TIER_MATRIX_TIER_ORDER = ['<35%','35-40%','40-45%','45-50%','50-55%','55-60%','60-65%','65-70%','70-75%','75-80%','80%+'];
 
-  const VALIDATED_LEAGUES = Object.keys(VALIDATED_SPLITS).map(Number);
-  const EDGES = [0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80];
-  const TIER_LABELS = ['<35%', ...EDGES.slice(0, -1).map((e, i) => `${Math.round(e*100)}-${Math.round(EDGES[i+1]*100)}%`), '80%+'];
-  const tierOf = p => {
-    if (p < EDGES[0]) return '<35%';
-    for (let i = 0; i < EDGES.length - 1; i++) if (p >= EDGES[i] && p < EDGES[i+1]) return `${Math.round(EDGES[i]*100)}-${Math.round(EDGES[i+1]*100)}%`;
-    return '80%+';
-  };
-  const SMALL_SAMPLE_N = 30; // same threshold runEvCalibration()'s bandStats() already uses
+app.get('/api/league-tier-matrix', (_req, res) => {
+  const leagueIds = Object.keys(LEAGUE_TIER_MATRIX).map(Number);
 
-  // Every posEdge (>=5%) matched fixture, test-only, tagged by league + tier.
-  const rows = [];
-  for (const rec of scoredRecords) {
-    const leagueId = parseInt(rec.leagueId, 10);
-    if (!VALIDATED_LEAGUES.includes(leagueId)) continue;
-    const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
-    if (!co || !rec.actualOutcome || !rec.homeFactors || !rec.awayFactors) continue;
-    const split = VALIDATED_SPLITS[leagueId];
-    if (new Date(rec.date) < new Date(split.testFrom)) continue; // test-only
-    const context = rec.context || classifyFixture(rec.leagueId);
-    const weights = optWeights[context] || optWeights.club_domestic;
-    if (!weights) continue;
-    const rawProbs = model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]);
-    const probs    = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
-    let topOutcome, modelProb, odds;
-    if (probs.home >= probs.draw && probs.home >= probs.away) { topOutcome = 'home'; modelProb = probs.home; odds = co.homeOdds; }
-    else if (probs.away >= probs.draw)                        { topOutcome = 'away'; modelProb = probs.away; odds = co.awayOdds; }
-    else                                                       { topOutcome = 'draw'; modelProb = probs.draw; odds = co.drawOdds; }
-    if (!odds || odds <= 1) continue;
-    const implied = 1 / odds;
-    const edge = (modelProb - implied) / implied;
-    if (edge < 0.05) continue;
-    const won = rec.actualOutcome === topOutcome;
-    rows.push({ leagueId, tier: tierOf(modelProb), returnPct: won ? (odds - 1) : -1 });
-  }
-
-  function ciFor(returns) {
-    const n = returns.length;
-    if (n === 0) return { n: 0, roi: null, ciLow: null, ciHigh: null, sampleVariance: null };
-    const mean = returns.reduce((s,r)=>s+r,0)/n;
-    const variance = n > 1 ? returns.reduce((s,r)=>s+(r-mean)**2,0)/(n-1) : 0;
-    const se = Math.sqrt(variance/n);
-    return { n, roi: +mean.toFixed(4), ciLow: +(mean-1.96*se).toFixed(4), ciHigh: +(mean+1.96*se).toFixed(4), sampleVariance: variance };
-  }
-
-  // Raw grid: cell[leagueId][tier] = { n, roi, ciLow, ciHigh, sampleVariance, thin }
-  const grid = {};
-  for (const leagueId of VALIDATED_LEAGUES) {
-    grid[leagueId] = {};
-    for (const tier of TIER_LABELS) {
-      const cellRows = rows.filter(r => r.leagueId === leagueId && r.tier === tier);
-      const stats = ciFor(cellRows.map(r => r.returnPct));
-      grid[leagueId][tier] = { ...stats, thin: stats.n < SMALL_SAMPLE_N };
-    }
-  }
-
-  // Shrink each tier's league values toward that tier's pooled mean (same pattern as Addendum 2).
-  const shrunkGrid = {};
-  for (const leagueId of VALIDATED_LEAGUES) shrunkGrid[leagueId] = {};
-  for (const tier of TIER_LABELS) {
-    const cells = VALIDATED_LEAGUES
-      .map(leagueId => ({ id: leagueId, leagueId, n: grid[leagueId][tier].n, value: grid[leagueId][tier].roi ?? 0, sampleVariance: grid[leagueId][tier].sampleVariance }))
-      .filter(c => c.n > 0);
-    if (cells.length === 0) continue;
-    const shrunk = empiricalBayesShrink(cells, c => (typeof c.sampleVariance === 'number' && c.sampleVariance > 0 ? c.sampleVariance : 1));
-    for (const c of shrunk) shrunkGrid[c.leagueId][tier] = { shrunk: c.shrunk, weight: c.weight, k: c.k, pooledMean: c.pooledMean };
-  }
-
-  // Row (per-league) and column (per-tier) shrunk averages, n-weighted.
-  const leagueAverages = VALIDATED_LEAGUES.map(leagueId => {
+  // n-weighted shrunk average per league (row) and per tier (column) — secondary
+  // read only, see the doc addendum for why this shouldn't replace cell-level detail.
+  const leagueAverages = leagueIds.map(id => {
     let wSum = 0, nSum = 0;
-    for (const tier of TIER_LABELS) {
-      const n = grid[leagueId][tier].n;
-      const shrunkVal = shrunkGrid[leagueId][tier]?.shrunk;
-      if (n > 0 && shrunkVal != null) { wSum += shrunkVal * n; nSum += n; }
-    }
-    return { leagueId, name: LEAGUE_CONFIG[leagueId]?.name, n: nSum, avgShrunkRoi: nSum > 0 ? +(wSum/nSum).toFixed(4) : null };
+    for (const cell of Object.values(LEAGUE_TIER_MATRIX[id].cells)) { wSum += cell.shrunk * cell.n; nSum += cell.n; }
+    return { leagueId: id, name: LEAGUE_TIER_MATRIX[id].name, n: nSum, avgShrunkRoi: nSum > 0 ? +(wSum / nSum).toFixed(4) : null };
   });
-  const tierAverages = TIER_LABELS.map(tier => {
+  const tierAverages = LEAGUE_TIER_MATRIX_TIER_ORDER.map(tier => {
     let wSum = 0, nSum = 0;
-    for (const leagueId of VALIDATED_LEAGUES) {
-      const n = grid[leagueId][tier].n;
-      const shrunkVal = shrunkGrid[leagueId][tier]?.shrunk;
-      if (n > 0 && shrunkVal != null) { wSum += shrunkVal * n; nSum += n; }
+    for (const id of leagueIds) {
+      const cell = LEAGUE_TIER_MATRIX[id].cells[tier];
+      if (cell) { wSum += cell.shrunk * cell.n; nSum += cell.n; }
     }
-    return { tier, n: nSum, avgShrunkRoi: nSum > 0 ? +(wSum/nSum).toFixed(4) : null };
-  });
+    return { tier, n: nSum, avgShrunkRoi: nSum > 0 ? +(wSum / nSum).toFixed(4) : null };
+  }).filter(t => t.n > 0);
 
   res.json({
-    scope: { validatedLeagues: VALIDATED_LEAGUES.map(id => ({ id, name: LEAGUE_CONFIG[id]?.name })), tierLabels: TIER_LABELS, smallSampleFloor: SMALL_SAMPLE_N },
-    grid, shrunkGrid, leagueAverages, tierAverages,
+    scope: {
+      validatedLeagues: leagueIds.map(id => ({ id, name: LEAGUE_TIER_MATRIX[id].name })),
+      tierLabels: LEAGUE_TIER_MATRIX_TIER_ORDER,
+      note: 'Reference/diagnostic snapshot, not live-computed and not a gate. Raw = uncorrected posEdge ROI, test-only. Shrunk = empirical-Bayes estimate pooling toward the tier average across all 9 leagues. See docs/tier-calibration-analysis.md Addendum 6.',
+    },
+    matrix: LEAGUE_TIER_MATRIX,
+    leagueAverages,
+    tierAverages,
   });
 });
 

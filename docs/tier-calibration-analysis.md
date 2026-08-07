@@ -974,6 +974,122 @@ outstanding" below.
   none should be read as confirmed edges in either direction, same caveat
   as the original four leagues carried all week.
 
+## Addendum 6 — League × tier matrix: is the 40-45% finding broad or concentrated?
+
+A complementary view to Addendum 4's live-vs-historical tracker: instead of
+one pooled figure per tier, this crosses every validated league against
+every tier so a pattern that's broad (a whole tier bad everywhere) or
+narrow (one league dragging a pooled average) is visible directly, rather
+than needing to be inferred. **Explicitly a reference/diagnostic table, not
+a gate** — same principle as everything else built this week.
+
+**No fresh backtest computation was needed for the underlying population** —
+same test-only, posEdge≥5%, 5pp-tier methodology as Addenda 2 and 5, just
+aggregated per (league, tier) instead of pooled. Zero new Odds API calls
+(confirmed via unchanged `apiQuotaUsedToday`).
+
+### The grid (raw ROI% (n), thin cells marked *)
+
+| League | 35-40% | 40-45% | 45-50% | 50-55% | 55-60% | 60-65% |
+|---|---|---|---|---|---|---|
+| Champions League | +134%(7)* | +37%(27)* | +22%(15)* | +27%(13)* | +35%(7)* | −100%(3)* |
+| Premier League | −65%(22)* | −8%(59) | +33%(41) | −51%(18)* | +129%(8)* | −100%(1)* |
+| Ligue 1 | +15%(44) | −28%(56) | +35%(37) | −79%(10)* | +15%(11)* | — |
+| Bundesliga | −33%(26)* | **−36%(51)** | −17%(39) | +45%(14)* | −10%(7)* | +76%(2)* |
+| Eredivisie | +12%(19)* | −34%(45) | +14%(31) | −71%(15)* | −21%(5)* | — |
+| Primeira Liga | +3%(36) | −30%(52) | −72%(27)* | +46%(18)* | +22%(5)* | +645%(5)* |
+| Serie A | −18%(29)* | −31%(39) | +21%(18)* | +2%(14)* | +107%(5)* | −100%(1)* |
+| La Liga | −36%(44) | **−37%(58)** | +8%(39) | +14%(30) | +10%(15)* | +92%(9)* |
+| Scottish Premiership | −42%(22)* | +1%(43) | −14%(22)* | +35%(23)* | −1%(9)* | +44%(5)* |
+
+(`<35%`, `65-70%`, `70-75%+` all have at most one fixture per league — omitted
+from the grid above for space, included in the raw data behind the endpoint.
+Bundesliga and La Liga's 40-45% cells are bolded — see below.)
+
+**Sample-size flagging, a decision worth naming explicitly:** cells use
+`n<30` as the "thin" threshold — the same figure `runEvCalibration()`'s
+`bandStats()` already uses elsewhere in this codebase — rather than
+reapplying rule 6's ~300-400 whole-cycle floor to a single cell. A
+league×tier cell is a much smaller unit than a pooled tier by construction;
+holding every cell to the pooled-tier bar would mark nearly the entire grid
+"thin" and say nothing. This is a finer instrument for a finer question,
+not a loosening of rule 6 — rule 6's actual floor still governs whether the
+*pooled* tier figures (Addendum 5) are decision-grade.
+
+### Shrunk grid and the answer to the open question
+
+Applying `shrinkage.js` per tier (pooling toward that tier's mean across all
+9 leagues, same pattern as Addendum 2):
+
+| League | 40-45% raw | 40-45% shrunk |
+|---|---|---|
+| Champions League | +37.4% (n=27) | **−14.0%** |
+| Premier League | −8.0% (n=59) | −18.3% |
+| Ligue 1 | −27.6% (n=56) | −22.9% |
+| Bundesliga | **−36.1% (n=51, CI excludes zero)** | −24.6% |
+| Eredivisie | −34.3% (n=45) | −24.0% |
+| Primeira Liga | −29.7% (n=52) | −23.3% |
+| Serie A | −31.1% (n=39) | −23.2% |
+| La Liga | **−36.6% (n=58, CI excludes zero)** | −25.1% |
+| Scottish Premiership | +0.5% (n=43) | **−17.4%** |
+
+**Answer: broad, not concentrated.** Seven of nine leagues show negative
+raw ROI in the 40-45% tier. Two of those seven — Bundesliga and La Liga —
+independently reach a 95% CI that excludes zero *on their own*, without
+pooling. The two apparent exceptions (Champions League +37.4%, Scottish
+Premiership +0.5%) both run on the thinnest samples in the column (n=27,
+n=43) and both flip to negative once shrunk toward the tier average — the
+empirical-Bayes correction is explicitly recognizing that their own evidence
+is too weak to justify standing apart from a strong, consistent, cross-league
+signal. **After shrinkage, all nine leagues show a negative expected ROI in
+this tier.** This is as close to definitive as this week's data gets: the
+40-45% underperformance is a structural feature of that confidence band
+across the model's whole footprint, not an artifact of one or two leagues.
+
+### Row and column summaries (shrunk, n-weighted — secondary read, not a replacement for the cells above)
+
+| League | Avg shrunk ROI (n) |
+|---|---|
+| Primeira Liga | +7.4% (143) |
+| Champions League | +6.5% (72) |
+| Scottish Premiership | +0.7% (126) |
+| Ligue 1 | −1.7% (159) |
+| La Liga | −3.3% (196) |
+| Bundesliga | −8.6% (139) |
+| Serie A | −9.0% (106) |
+| Premier League | −10.3% (150) |
+| Eredivisie | −12.0% (115) |
+
+| Tier | Avg shrunk ROI (n) |
+|---|---|
+| 60-65% | +160.0% (26) — small-n outlier, see Addendum 5 |
+| 55-60% | +28.6% (72) |
+| 65-70% | +81.8% (4) — n too small to read |
+| 45-50% | +4.7% (269) |
+| 50-55% | +2.9% (155) |
+| 35-40% | −14.2% (249) |
+| **40-45%** | **−21.8% (430)** |
+
+**Flagged plainly, as instructed:** these row/column averages blend tiers
+(for the league averages) or leagues (for the tier averages) that behave
+quite differently from each other — a league average is a weaker signal
+than the tier-level pattern within it, since ROI varies far more by tier
+than the averaging suggests. Read them as a first-glance pointer toward
+where to look in the full grid, not as a standalone verdict. No league here
+shows a broad, consistent problem across *all* its tiers the way 40-45%
+shows a problem across *all* leagues — the strongest broad pattern in this
+whole matrix is the tier-level one, not a league-level one.
+
+### Placement
+
+Added as its own card on the Performance tab, titled "Historical Performance
+Matrix — League × Tier" with an explicit "REFERENCE — NOT A RECOMMENDATION"
+badge, positioned above the Paper/Real/Combined toggle (it's static backtest
+data, not affected by that toggle) and visually distinguished (pink accent
+border, different copy) from the "Calibration Tier Performance" live tracker
+below it, so the two — one live-vs-historical at lock time, one a pure
+historical cross-tab — aren't confused for each other.
+
 ## Decisions made without asking — flagged for review
 
 1. **Bucket width/range** (35-80% in 5pp steps, nesting inside the diagnostic
@@ -1014,8 +1130,11 @@ outstanding" below.
 
 The temporary `/api/debug/tier-calibration`, `/api/debug/tier-calibration-v2`,
 `/api/debug/platt-recalibration`, `/api/debug/platt-roi-by-tier`,
-`/api/debug/train-test-cycle`, and `/api/debug/tier-baseline-wide`
-endpoints have all been removed. `shrinkage.js` is kept as permanent, reusable
+`/api/debug/train-test-cycle`, `/api/debug/tier-baseline-wide`, and
+`/api/debug/league-tier-matrix` endpoints have all been removed — the last
+one's output was hard-coded into the permanent `/api/league-tier-matrix`
+endpoint (`LEAGUE_TIER_MATRIX`), same pattern as `HISTORICAL_TIER_BASELINE`.
+`shrinkage.js` is kept as permanent, reusable
 infrastructure — it has no
 dependency on this specific dataset and is written to be called again for any
 future shrinkage need (e.g. a later per-tier ROI cycle, or shrinking home/away

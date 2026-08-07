@@ -544,6 +544,41 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     </div>
   </div>
 
+  <!-- Historical Performance Matrix — static reference/diagnostic, independent of the
+       Paper/Real/Combined toggle above (it's backtest data, not live). Deliberately
+       styled and worded differently from the Calibration Tier Performance tracker
+       below so the two are never confused. -->
+  <div class="card" style="margin-bottom:16px;border-left:3px solid var(--pink)">
+    <div class="card-header">
+      <span class="card-title">Historical Performance Matrix — League × Tier</span>
+      <span class="badge badge-muted" style="letter-spacing:.04em">REFERENCE — NOT A RECOMMENDATION</span>
+    </div>
+    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 6px">
+      Backtest snapshot (raw + shrinkage-corrected), test-only, every validated league
+      crossed with every calibration tier — see <span class="mono">docs/tier-calibration-analysis.md</span>,
+      Addendum 6. This is a diagnostic view for spotting broad patterns across leagues or
+      tiers; it is separate from the "Calibration Tier Performance" tracker below (which
+      compares live bets against history at the point of locking) and does not update with
+      live bets or drive any gating.
+    </p>
+    <div class="table-wrap" style="overflow-x:auto">
+      <table id="ltm-table" style="font-size:11px">
+        <thead><tr id="ltm-header-row"></tr></thead>
+        <tbody id="ltm-body"></tbody>
+      </table>
+    </div>
+    <div style="margin-top:14px;display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Row summary — shrunk avg ROI per league (n-weighted, secondary read only):</div>
+        <div id="ltm-league-avg" style="display:flex;flex-direction:column;gap:4px"></div>
+      </div>
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Column summary — shrunk avg ROI per tier (n-weighted, secondary read only):</div>
+        <div id="ltm-tier-avg" style="display:flex;flex-direction:column;gap:4px"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Paper Trading view (default) -->
   <div id="perf-paper-view">
 
@@ -1940,7 +1975,7 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.classList.add('active');
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
     if (btn.dataset.tab === 'model')       renderModel();
-    if (btn.dataset.tab === 'performance') { switchPerfView('paper'); renderPerformance(); }
+    if (btn.dataset.tab === 'performance') { switchPerfView('paper'); renderPerformance(); renderLeagueTierMatrix(); }
     if (btn.dataset.tab === 'settings')  { renderSettings(); loadBackfillStatus(); loadOddsHistoryStats(); loadStartupStatus(); loadAccounts(); loadLeagueWeights(); }
   });
 });
@@ -2600,6 +2635,62 @@ async function renderPerfMode(mode) {
 // Calibration tier tracker — live ROI by predicted-probability tier vs. the
 // historical backtest baseline (docs/tier-calibration-analysis.md, Addendum 2).
 // Reference view only, no gating logic reads from this.
+// Historical Performance Matrix — static reference/diagnostic snapshot, NOT tied to
+// the paper/real/combined toggle and NOT a gate. See docs/tier-calibration-analysis.md
+// Addendum 6. Loaded once when the Performance tab opens (backtest data doesn't change
+// between page interactions the way live bet data does).
+async function renderLeagueTierMatrix() {
+  let data;
+  try { data = await apiFetch('/api/league-tier-matrix'); } catch (e) { return; }
+
+  const headerRow = document.getElementById('ltm-header-row');
+  const body      = document.getElementById('ltm-body');
+  if (!headerRow || !body) return;
+
+  const populatedTiers = data.scope.tierLabels.filter(t => data.leagueAverages.length && data.matrix &&
+    Object.values(data.matrix).some(l => l.cells[t]));
+
+  headerRow.innerHTML = '<th style="text-align:left">League</th>' +
+    populatedTiers.map(t => `<th style="text-align:center">${t}</th>`).join('');
+
+  const fmtPct = v => `${v >= 0 ? '+' : ''}${(v*100).toFixed(1)}%`;
+
+  body.innerHTML = '';
+  for (const [leagueId, league] of Object.entries(data.matrix)) {
+    const tr = document.createElement('tr');
+    const cellsHtml = populatedTiers.map(tier => {
+      const c = league.cells[tier];
+      if (!c) return '<td style="text-align:center;color:var(--muted)">—</td>';
+      const rawCls = c.roi >= 0 ? 'c-green' : 'c-red';
+      const shrunkCls = c.shrunk >= 0 ? 'c-green' : 'c-red';
+      return `<td style="text-align:center" title="95% CI: [${(c.ciLow*100).toFixed(1)}%, ${(c.ciHigh*100).toFixed(1)}%]${c.thin ? ' — below decision-grade floor (n<30)' : ''}">
+        <div class="mono ${rawCls}" style="font-weight:600">${fmtPct(c.roi)}${c.thin ? '<span style="color:var(--muted)">*</span>' : ''}</div>
+        <div class="mono" style="font-size:9.5px;color:var(--muted)">n=${c.n}</div>
+        <div class="mono ${shrunkCls}" style="font-size:9.5px;opacity:.75">shrunk ${fmtPct(c.shrunk)}</div>
+      </td>`;
+    }).join('');
+    tr.innerHTML = `<td style="font-weight:600;white-space:nowrap">${league.name}</td>${cellsHtml}`;
+    body.appendChild(tr);
+  }
+
+  const leagueAvgEl = document.getElementById('ltm-league-avg');
+  const tierAvgEl   = document.getElementById('ltm-tier-avg');
+  if (leagueAvgEl) {
+    leagueAvgEl.innerHTML = [...data.leagueAverages].sort((a,b) => (b.avgShrunkRoi??-99) - (a.avgShrunkRoi??-99)).map(l =>
+      `<div style="display:flex;justify-content:space-between;font-size:11px;font-family:'DM Mono',monospace">
+        <span>${l.name}</span><span class="${(l.avgShrunkRoi??0) >= 0 ? 'c-green' : 'c-red'}">${l.avgShrunkRoi!=null?fmtPct(l.avgShrunkRoi):'—'} <span style="color:var(--muted)">(n=${l.n})</span></span>
+      </div>`
+    ).join('');
+  }
+  if (tierAvgEl) {
+    tierAvgEl.innerHTML = data.tierAverages.map(t =>
+      `<div style="display:flex;justify-content:space-between;font-size:11px;font-family:'DM Mono',monospace">
+        <span>${t.tier}</span><span class="${(t.avgShrunkRoi??0) >= 0 ? 'c-green' : 'c-red'}">${t.avgShrunkRoi!=null?fmtPct(t.avgShrunkRoi):'—'} <span style="color:var(--muted)">(n=${t.n})</span></span>
+      </div>`
+    ).join('');
+  }
+}
+
 async function renderTierPerf(mode = 'paper', prefix = '') {
   let data;
   try {
