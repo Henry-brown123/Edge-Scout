@@ -3915,6 +3915,204 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
+// TEMPORARY DIAGNOSTIC — Platt-scaling recalibration fit/test for the 45-70%
+// underconfidence band, four validated leagues only. Fit is train-only (per
+// VALIDATED_SPLITS), test-set is looked at exactly once (calibration-rules.md
+// rules 1-3). Read-only, zero Odds API calls. Not wired into any live path —
+// backtest/analysis exercise only. To be removed once the report is written.
+app.get('/api/debug/platt-recalibration', (_req, res) => {
+  const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG } = require('./scoring');
+  const historical    = readJSON('backfill-historical.json') || {};
+  const scoredRecords = historical.scoredRecords || [];
+  const optWeights    = historical.optimisedWeights || {};
+  const closingOdds   = readJSON('closing-odds.json') || {};
+
+  const VALIDATED_LEAGUES = [39, 61, 2, 135]; // PL, Ligue 1, Champions League, Serie A
+  const BAND_MIN = 0.45, BAND_MAX = 0.70;     // where tier-calibration-analysis.md's addendum established the finding
+  const TIER_EDGES = [0.45, 0.50, 0.55, 0.60, 0.65, 0.70];
+  const tierOf = p => {
+    for (let i = 0; i < TIER_EDGES.length - 1; i++) {
+      if (p >= TIER_EDGES[i] && p < TIER_EDGES[i+1]) return `${Math.round(TIER_EDGES[i]*100)}-${Math.round(TIER_EDGES[i+1]*100)}%`;
+    }
+    return null;
+  };
+
+  const EPS = 1e-6;
+  const clip = p => Math.min(Math.max(p, EPS), 1 - EPS);
+  const logit = p => { const c = clip(p); return Math.log(c / (1 - c)); };
+  const sigmoid = z => 1 / (1 + Math.exp(-z));
+
+  // 2-parameter logistic regression (Platt scaling): corrected = sigmoid(B + A*logit(raw))
+  // fit via Newton-Raphson / IRLS — well-conditioned with only 2 parameters.
+  function fitLogReg(pairs, iterations = 25) {
+    let A = 1, B = 0; // start at identity transform
+    for (let iter = 0; iter < iterations; iter++) {
+      let s00 = 0, s01 = 0, s11 = 0, g0 = 0, g1 = 0;
+      for (const { x, y } of pairs) {
+        const mu = sigmoid(B + A * x);
+        const w = mu * (1 - mu) + 1e-9;
+        const resid = y - mu;
+        g0 += resid; g1 += resid * x;
+        s00 += w; s01 += w * x; s11 += w * x * x;
+      }
+      const det = s00 * s11 - s01 * s01;
+      if (Math.abs(det) < 1e-12) break;
+      const dB = ( s11 * g0 - s01 * g1) / det;
+      const dA = (-s01 * g0 + s00 * g1) / det;
+      A += dA; B += dB;
+      if (Math.abs(dA) < 1e-8 && Math.abs(dB) < 1e-8) break;
+    }
+    return { A: +A.toFixed(5), B: +B.toFixed(5) };
+  }
+  function logLoss(pairs, A, B) {
+    let s = 0;
+    for (const { x, y } of pairs) {
+      const p = clip(sigmoid(B + A * x));
+      s += -(y * Math.log(p) + (1 - y) * Math.log(1 - p));
+    }
+    return s / pairs.length;
+  }
+  const toPairs = rows => rows.map(r => ({ x: logit(r.modelProb), y: r.correct ? 1 : 0 }));
+
+  // ── Score every fixture in the 4 validated leagues, tag train/test per VALIDATED_SPLITS ──
+  const scored = [];
+  for (const rec of scoredRecords) {
+    const leagueId = parseInt(rec.leagueId, 10);
+    if (!VALIDATED_LEAGUES.includes(leagueId)) continue;
+    if (!rec.actualOutcome || !rec.homeFactors || !rec.awayFactors) continue;
+    const context = rec.context || classifyFixture(rec.leagueId);
+    const weights = optWeights[context] || optWeights.club_domestic;
+    if (!weights) continue;
+    const rawProbs = model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]);
+    const probs    = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
+    let topOutcome, modelProb;
+    if (probs.home >= probs.draw && probs.home >= probs.away) { topOutcome = 'home'; modelProb = probs.home; }
+    else if (probs.away >= probs.draw)                        { topOutcome = 'away'; modelProb = probs.away; }
+    else                                                       { topOutcome = 'draw'; modelProb = probs.draw; }
+    const split  = VALIDATED_SPLITS[leagueId];
+    const isTest = new Date(rec.date) >= new Date(split.testFrom);
+    scored.push({ fixtureId: rec.fixtureId, leagueId, date: rec.date, league: LEAGUE_CONFIG[leagueId].name, modelProb, correct: rec.actualOutcome === topOutcome, isTest });
+  }
+
+  const trainBand = scored.filter(s => !s.isTest && s.modelProb >= BAND_MIN && s.modelProb < BAND_MAX);
+  const testBand  = scored.filter(s =>  s.isTest && s.modelProb >= BAND_MIN && s.modelProb < BAND_MAX);
+
+  const byLeagueTrainBand = {};
+  for (const lid of VALIDATED_LEAGUES) byLeagueTrainBand[lid] = trainBand.filter(r => r.leagueId === lid).sort((a, b) => new Date(a.date) - new Date(b.date));
+
+  // ── Compare pooled vs per-league structure using an internal 80/20 chronological
+  // split WITHIN train only (never touches test) — rule-2/3 compliant model selection.
+  const fitSlice = {}, checkSlice = {};
+  for (const lid of VALIDATED_LEAGUES) {
+    const rows = byLeagueTrainBand[lid];
+    const cut  = Math.floor(rows.length * 0.8);
+    fitSlice[lid]   = rows.slice(0, cut);
+    checkSlice[lid] = rows.slice(cut);
+  }
+  const pooledFitSlice   = VALIDATED_LEAGUES.flatMap(lid => fitSlice[lid]);
+  const pooledCheckSlice = VALIDATED_LEAGUES.flatMap(lid => checkSlice[lid]);
+
+  const pooledCandidate    = fitLogReg(toPairs(pooledFitSlice));
+  const pooledCheckLoss    = logLoss(toPairs(pooledCheckSlice), pooledCandidate.A, pooledCandidate.B);
+  const perLeagueCandidate = {};
+  for (const lid of VALIDATED_LEAGUES) perLeagueCandidate[lid] = fitLogReg(toPairs(fitSlice[lid]));
+  let perLeagueLossSum = 0;
+  for (const r of pooledCheckSlice) {
+    const { A, B } = perLeagueCandidate[r.leagueId];
+    const p = clip(sigmoid(B + A * logit(r.modelProb)));
+    const y = r.correct ? 1 : 0;
+    perLeagueLossSum += -(y * Math.log(p) + (1 - y) * Math.log(1 - p));
+  }
+  const perLeagueCheckLoss = perLeagueLossSum / pooledCheckSlice.length;
+  const chosen = pooledCheckLoss <= perLeagueCheckLoss ? 'pooled' : 'per-league';
+
+  // Refit the chosen structure on the FULL train band (more data, still zero test peeking)
+  let finalParams;
+  if (chosen === 'pooled') finalParams = fitLogReg(toPairs(trainBand));
+  else { finalParams = {}; for (const lid of VALIDATED_LEAGUES) finalParams[lid] = fitLogReg(toPairs(byLeagueTrainBand[lid])); }
+  const correctedProb = row => {
+    const { A, B } = chosen === 'pooled' ? finalParams : finalParams[row.leagueId];
+    return sigmoid(B + A * logit(row.modelProb));
+  };
+
+  // ── Part B: single test-set look — tier calibration before/after ──
+  function tierTable(rows, useCorrected) {
+    return ['45-50%','50-55%','55-60%','60-65%','65-70%'].map(label => {
+      const cell = rows.filter(r => tierOf(r.modelProb) === label);
+      const n = cell.length;
+      if (n === 0) return { tier: label, n: 0 };
+      const probs = cell.map(r => useCorrected ? correctedProb(r) : r.modelProb);
+      const meanPredicted = probs.reduce((s, p) => s + p, 0) / n;
+      const hitRate = cell.filter(r => r.correct).length / n;
+      return { tier: label, n, meanPredicted: +meanPredicted.toFixed(4), hitRate: +hitRate.toFixed(4), calibrationError: +(meanPredicted - hitRate).toFixed(4) };
+    });
+  }
+  const calibBeforeAfter = {};
+  for (const lid of VALIDATED_LEAGUES) {
+    const rows = testBand.filter(r => r.leagueId === lid);
+    calibBeforeAfter[LEAGUE_CONFIG[lid].name] = { n: rows.length, before: tierTable(rows, false), after: tierTable(rows, true) };
+  }
+  calibBeforeAfter['POOLED'] = { n: testBand.length, before: tierTable(testBand, false), after: tierTable(testBand, true) };
+
+  // ── Part B: single test-set look — EV-backtest ROI before/after, same band+leagues ──
+  function ciFor(returns) {
+    const n = returns.length;
+    if (n === 0) return { n: 0, roi: null, ciLow: null, ciHigh: null };
+    const mean = returns.reduce((s, r) => s + r, 0) / n;
+    const variance = n > 1 ? returns.reduce((s, r) => s + (r - mean) ** 2, 0) / (n - 1) : 0;
+    const se = Math.sqrt(variance / n);
+    return { n, roi: +mean.toFixed(4), ciLow: +(mean - 1.96 * se).toFixed(4), ciHigh: +(mean + 1.96 * se).toFixed(4) };
+  }
+  const roiRows = [];
+  for (const rec of scoredRecords) {
+    const leagueId = parseInt(rec.leagueId, 10);
+    if (!VALIDATED_LEAGUES.includes(leagueId)) continue;
+    const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
+    if (!co || !rec.actualOutcome || !rec.homeFactors || !rec.awayFactors) continue;
+    const split = VALIDATED_SPLITS[leagueId];
+    if (new Date(rec.date) < new Date(split.testFrom)) continue; // test-only
+    const context = rec.context || classifyFixture(rec.leagueId);
+    const weights = optWeights[context] || optWeights.club_domestic;
+    if (!weights) continue;
+    const rawProbs = model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]);
+    const probs    = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
+    let topOutcome, modelProb, odds;
+    if (probs.home >= probs.draw && probs.home >= probs.away) { topOutcome = 'home'; modelProb = probs.home; odds = co.homeOdds; }
+    else if (probs.away >= probs.draw)                        { topOutcome = 'away'; modelProb = probs.away; odds = co.awayOdds; }
+    else                                                       { topOutcome = 'draw'; modelProb = probs.draw; odds = co.drawOdds; }
+    if (!odds || odds <= 1) continue;
+    if (modelProb < BAND_MIN || modelProb >= BAND_MAX) continue; // band-scoped only, per Part A step 3
+    const implied = 1 / odds;
+    const won = rec.actualOutcome === topOutcome;
+    const cp = chosen === 'pooled' ? sigmoid(finalParams.B + finalParams.A * logit(modelProb)) : sigmoid(finalParams[leagueId].B + finalParams[leagueId].A * logit(modelProb));
+    roiRows.push({ leagueId, league: LEAGUE_CONFIG[leagueId].name, modelProb, correctedProb: cp, implied, odds, won });
+  }
+  function roiSummary(rows, useCorrected) {
+    const withEdge = rows.map(r => ({ ...r, edge: ((useCorrected ? r.correctedProb : r.modelProb) - r.implied) / r.implied }));
+    const posEdge  = withEdge.filter(r => r.edge >= 0.05);
+    const returns  = posEdge.map(r => r.won ? (r.odds - 1) : -1);
+    return { totalMatched: rows.length, posEdgeN: posEdge.length, decisionGrade: posEdge.length >= 300, ...ciFor(returns) };
+  }
+  const roiByLeague = {};
+  for (const lid of VALIDATED_LEAGUES) {
+    const rows = roiRows.filter(r => r.leagueId === lid);
+    roiByLeague[LEAGUE_CONFIG[lid].name] = { before: roiSummary(rows, false), after: roiSummary(rows, true) };
+  }
+  roiByLeague['POOLED'] = { before: roiSummary(roiRows, false), after: roiSummary(roiRows, true) };
+
+  res.json({
+    scope: { validatedLeagues: VALIDATED_LEAGUES.map(l => LEAGUE_CONFIG[l].name), band: [BAND_MIN, BAND_MAX] },
+    trainBandCounts: Object.fromEntries(VALIDATED_LEAGUES.map(lid => [LEAGUE_CONFIG[lid].name, byLeagueTrainBand[lid].length])),
+    modelSelection: { pooledCheckLoss: +pooledCheckLoss.toFixed(5), perLeagueCheckLoss: +perLeagueCheckLoss.toFixed(5), chosen, checkSlicePooledN: pooledCheckSlice.length },
+    pooledCandidateParams: pooledCandidate,
+    perLeagueCandidateParams: Object.fromEntries(VALIDATED_LEAGUES.map(lid => [LEAGUE_CONFIG[lid].name, perLeagueCandidate[lid]])),
+    chosen,
+    finalParams: chosen === 'pooled' ? finalParams : Object.fromEntries(VALIDATED_LEAGUES.map(lid => [LEAGUE_CONFIG[lid].name, finalParams[lid]])),
+    calibBeforeAfter,
+    roiByLeague,
+  });
+});
+
 // Transfer data fetch — completed transfers per team for the current season,
 // used for the first-10-matchdays squad-quality modifier in applyTeamProfileModifiers.
 let _transfersRunning = false;
