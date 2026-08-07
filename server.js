@@ -5192,11 +5192,11 @@ const VALIDATED_SPLITS = {
   39:  { testFrom: '2023-12-30T15:00:00Z', splitCommit: '4cdc642' }, // Premier League, 2026-08-05
   61:  { testFrom: '2023-11-03T20:00:00Z', splitCommit: '27e0e2a' }, // Ligue 1, 2026-08-05
   2:   { testFrom: '2024-03-12T20:00:00Z', splitCommit: '6c5ad05' }, // Champions League, 2026-08-05
-  179: { testFrom: '2024-01-02T15:00:00Z', splitCommit: 'PENDING' }, // Scottish Premiership, 2026-08-07 — hash filled in a follow-up commit
-  78:  { testFrom: '2024-01-20T14:30:00Z', splitCommit: 'PENDING' }, // Bundesliga, 2026-08-07
-  140: { testFrom: '2024-01-12T20:00:00Z', splitCommit: 'PENDING' }, // La Liga, 2026-08-07
-  88:  { testFrom: '2024-01-21T13:30:00Z', splitCommit: 'PENDING' }, // Eredivisie, 2026-08-07
-  94:  { testFrom: '2024-01-18T20:45:00Z', splitCommit: 'PENDING' }, // Primeira Liga, 2026-08-07
+  179: { testFrom: '2024-01-02T15:00:00Z', splitCommit: 'ee97ca6' }, // Scottish Premiership, 2026-08-07
+  78:  { testFrom: '2024-01-20T14:30:00Z', splitCommit: 'ee97ca6' }, // Bundesliga, 2026-08-07
+  140: { testFrom: '2024-01-12T20:00:00Z', splitCommit: 'ee97ca6' }, // La Liga, 2026-08-07
+  88:  { testFrom: '2024-01-21T13:30:00Z', splitCommit: 'ee97ca6' }, // Eredivisie, 2026-08-07
+  94:  { testFrom: '2024-01-18T20:45:00Z', splitCommit: 'ee97ca6' }, // Primeira Liga, 2026-08-07
 };
 
 // Extracted so the weekly cron (setupScheduler) can refresh ev-calibration.json
