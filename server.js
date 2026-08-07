@@ -4021,6 +4021,64 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
+// TEMPORARY DIAGNOSTIC — API-Sports plan limits + available-season depth check
+// per LEAGUE_CONFIG league, compared against BACKFILL_CONFIG's configured
+// range and actual ingested date range. Makes 1 /status call + 1 /leagues
+// call per league (~13 calls total, all cheap metadata lookups, no bulk
+// fixture/lineup/stat fetching). Zero Odds API calls. To be removed after review.
+app.get('/api/debug/api-sports-depth-check', async (_req, res) => {
+  try {
+    const { data: statusData } = await apiSports.get('/status');
+
+    const historical = readJSON('backfill-historical.json') || {};
+    const scoredRecords = historical.scoredRecords || [];
+
+    const targetLeagues = Object.keys(LEAGUE_CONFIG).map(Number);
+    const results = [];
+    for (const leagueId of targetLeagues) {
+      const configEntry = BACKFILL_CONFIG.find(c => parseInt(c.leagueId, 10) === leagueId);
+      const configuredSeasons = configEntry?.seasons || [];
+
+      let availableSeasons = [];
+      try {
+        const { data: ld } = await apiSports.get('/leagues', { params: { id: leagueId } });
+        const leagueInfo = ld?.response?.[0];
+        availableSeasons = (leagueInfo?.seasons || []).map(s => s.year);
+      } catch (e) {
+        availableSeasons = [`error: ${e.message}`];
+      }
+
+      const leagueRecords = scoredRecords.filter(r => parseInt(r.leagueId, 10) === leagueId);
+      const dates = leagueRecords.map(r => r.date).filter(Boolean).sort();
+      const ingestedRange = dates.length ? { earliest: dates[0], latest: dates[dates.length - 1], n: leagueRecords.length } : { earliest: null, latest: null, n: 0 };
+
+      const numericAvailable = availableSeasons.filter(s => typeof s === 'number');
+      const configuredMin = configuredSeasons.length ? Math.min(...configuredSeasons) : null;
+      const availableMin  = numericAvailable.length ? Math.min(...numericAvailable) : null;
+      const unconfiguredOlderSeasons = configuredMin != null && availableMin != null
+        ? numericAvailable.filter(y => y < configuredMin)
+        : [];
+
+      results.push({
+        leagueId, name: LEAGUE_CONFIG[leagueId]?.name,
+        configuredSeasons,
+        apiSportsAvailableSeasons: numericAvailable.sort((a,b)=>a-b),
+        unconfiguredOlderSeasonsAvailable: unconfiguredOlderSeasons,
+        ingestedRange,
+      });
+      await new Promise(r => setTimeout(r, 150)); // gentle pacing, not a bulk fetch
+    }
+
+    res.json({
+      apiSportsStatus: statusData?.response || statusData,
+      dataSummary: { historicalFixtures: historical.totalFixtures ?? null, scoredCount: scoredRecords.length, lineupsTarget: undefined },
+      leagues: results,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── LEAGUE × TIER HISTORICAL PERFORMANCE MATRIX ──────────────────────────────
 // Reference/diagnostic view, NOT a live tracker and NOT a gate — see
 // docs/tier-calibration-analysis.md Addendum 6. Static backtest snapshot
