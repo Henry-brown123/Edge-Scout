@@ -1090,6 +1090,73 @@ border, different copy) from the "Calibration Tier Performance" live tracker
 below it, so the two — one live-vs-historical at lock time, one a pure
 historical cross-tab — aren't confused for each other.
 
+## Addendum 7 — Market type check: 1X2 only, no mixing (confirmed, no split needed)
+
+Triggered by a legitimate question worth checking rather than assuming: does
+the historical population behind this whole document — and the live tracker
+built on top of it — mix match-outcome (1X2) bets with goals markets
+(Over/Under, BTTS)? If so, pooling them into one tier/ROI figure would be
+comparing apples to oranges. **Checked directly, both in code and against
+real production data — no mixing exists. Everything in this document, the
+live tracker, and the historical matrix is 1X2 only.** No re-split was
+needed because there was nothing to split.
+
+### Where this was verified
+
+1. **The historical backfill population is structurally 1X2-only.**
+   `scoreFixtureFromPool()` in [`weightOptimiser.js:108`](../weightOptimiser.js) —
+   the *only* function that produces a record in `backfill-historical.json`'s
+   `scoredRecords` array (the population behind `runEvCalibration()`, every
+   addendum in this document, and the league×tier matrix) — has no reference
+   to goals markets, over/under lines, or BTTS anywhere in it. It computes
+   `homeFactors`/`awayFactors` and sets `actualOutcome` to `'home'`/`'away'`/`'draw'`
+   from the final score, full stop. Goals data (`goals: {home, away}`) is
+   stored only as raw match metadata, never as a market outcome.
+2. **Confirmed empirically against live production data** via a temporary
+   diagnostic endpoint (now removed): all 18,392 scored records have exactly
+   three distinct `actualOutcome` values (`home`, `away`, `draw`) and zero
+   records contain any market/goals-market field. No goals-market data has
+   ever entered this population.
+3. **Goals markets exist, but only in a completely separate, live-only,
+   informational code path.** `scoreGoalsMarkets()` in
+   [`scoring.js:565`](../scoring.js) produces Over/Under and BTTS candidates
+   — but it's called only from the live `scoreOneFixture()` pipeline
+   (`server.js`, building `goalsCandidates` for the Scout page's "Watching"
+   display), never from the historical backfill pipeline.
+4. **Goals-market candidates never become an actual bet.** The bet-locking
+   logic (`server.js`, both places a `best` candidate is chosen and written
+   to `bets.json`) selects exclusively from `scored.results` — the
+   match-outcome array — never from `scored.goalsCandidates`. Confirmed
+   against real production data too: all 11 currently logged bets have
+   `bet` values of `Home Win` or `Away Win` only, no Over/Under or BTTS
+   entries.
+
+### What this means for the rest of this document
+
+Every ROI figure, every tier bucket, every shrinkage calculation in Addenda
+1 through 6 — and the live-vs-historical tracker and league×tier matrix
+built on top of them — was already exclusively 1X2 by construction, not by
+a filter that happened to work. There's no hidden goals-market signal
+diluting or distorting the 40-45% finding or anything else in this
+document. If goals markets are ever backtested in the future, that would
+need its own, separate historical population and its own calibration cycle
+under `docs/calibration-rules.md` — it cannot simply be added to the
+existing `scoredRecords` population without first building an equivalent
+"was this Over/Under/BTTS market right" backfill, which does not currently
+exist anywhere in the codebase.
+
+### Cleanup
+
+The temporary `/api/debug/market-type-check` endpoint has been removed. No
+changes were made to scoring, EV, or bet-triggering logic, and no changes
+were needed to the tracker or matrix — both were already correctly scoped.
+Zero new Odds API calls (this task only reads already-stored JSON files);
+the daily `apiQuotaUsedToday` counter did move between checks during this
+task (108 → 227), but that increase comes from the app's own independent
+scheduled/live scanning jobs running in the background on their normal
+cadence, not from anything this task did — no code path touched here calls
+the Odds API.
+
 ## Decisions made without asking — flagged for review
 
 1. **Bucket width/range** (35-80% in 5pp steps, nesting inside the diagnostic
