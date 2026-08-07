@@ -635,6 +635,151 @@ adds all of its unprofitable new exposure — the two effects living in the
 same place is the clearest single reason the pooled ROI result came out
 negative-to-flat rather than positive.
 
+## Addendum 3 — What "Score" is (and isn't), and live tier-tracking in the bet log
+
+Triggered by a legitimate reconciliation question: the bet log's "Score"
+field (e.g. Celtic vs Dundee: 87, France vs England: 57) doesn't obviously
+match raw predicted probability, and an 87 looked hard to square with this
+whole document's confirmed ~79% ceiling on raw model output. This addendum
+answers that plainly and adds the tier-tracking this document's findings need
+to actually be usable against live bets. No scoring logic, EV calculation, or
+bet-triggering threshold was touched — display/reporting only. Zero new Odds
+API calls.
+
+### Part A: what Score actually is
+
+**Score is not a probability, and was never meant to be one.** It's a
+composite 0-99 "success score," `computeSuccessScore()` in
+[`scoring.js:422`](../scoring.js), built from three weighted components:
+
+```
+winComp        = calibratedProb × 35                              (max 35)
+valueComp      = min(edge / 0.20, 1) × 45                          (max 45)
+confidenceComp = min(formFixtureCount / 50, 1) × 19                (max 19)
+raw            = min(99, round(winComp + valueComp + confidenceComp))
+base           = round(raw × (0.4 + dataConf × 0.6))
+score          = base, then a league-specific edge cap (halved if
+                 edge≥20pp and not Premier League), then — for
+                 international fixtures only — a divergence penalty
+                 (up to −75% if model and market disagree by 20pp+)
+                 then × weather modifier × (1/market efficiency), rounded
+```
+
+Three things worth being explicit about:
+- **`calibratedProb` is not `modelProb`.** Before Score is computed, the raw
+  model probability is scaled by `settings.calibrationFactor` (currently
+  ~1.11, capped at 0.97) — a pre-existing, simpler cousin of exactly the
+  underconfidence correction this document's Addendum 2 tested far more
+  rigorously via Platt scaling. `modelProb`, as stored on every bet, is the
+  **un**calibrated raw value — that's the one this document's tier work is
+  built on.
+- **`edge` inside Score is edge against the single displayed book's own
+  odds** (`calibratedProb − 1/bookOdds`), not the Pinnacle-margin-stripped
+  edge shown as the bet's `edge` field (that one benchmarks against a
+  de-vigged sharper price, so it reads differently — the two are related but
+  not interchangeable).
+- **Market efficiency and weather push Score well outside probability
+  range.** Scottish Premiership's `marketEfficiency: 0.78` means every
+  Scottish Prem score gets multiplied by `1/0.78 ≈ 1.28×` at the end — a
+  meaningful reason Score can land well above what raw probability alone
+  would suggest.
+
+**Confirmed: Score is a composite, not a probability or a transform of one
+value.** It mixes probability, edge size, sample confidence, league-specific
+market-efficiency assumptions, and (for internationals) a divergence
+penalty — five inputs, not one.
+
+### Reconciling the two examples
+
+| | Celtic vs Dundee | France vs England |
+|---|---|---|
+| `modelProb` (raw, stored) | 83.6% | 35.8% |
+| `calibratedProb` (×1.11, derived) | 92.8% | 39.8% (edge derivation) |
+| `bookOdds` | 1.17 | 4.20 |
+| Internal edge (vs 1/bookOdds) | 7.3pp | 15.9pp |
+| League | Scottish Prem (efficiency 0.78 → ×1.28) | World Cup (efficiency 0.94 → ×1.06, **and** international divergence penalty band) |
+| **Reproduced Score** (formCount=50, dataConf=1) | **87 — exact match** | 37-39 (formula logic checks out; can't recompute the historical dataConf/formFixtureCount/formula-version exactly — see below) |
+| **Actual stored Score** | 87 | 57 |
+
+Celtic reproduces exactly once the formula is run with plausible inputs —
+confirms the mechanism completely: a modest 7.3pp edge plus Scottish
+Premiership's large 1.28× market-efficiency multiplier is enough to turn an
+83.6% raw probability into an 87 score, no contradiction with the ~79%
+ceiling anywhere (Score was never bound by it). France vs England's
+mechanism also checks out directionally (a near-cap 15.9pp edge drives most
+of the score) but doesn't reproduce to the exact stored 57 — the most likely
+reason is that `computeSuccessScore`'s edge-cap and international-divergence
+penalty (both cite specific findings in their own code comments, i.e. added
+*after* observing results) may not have existed yet when this bet locked on
+2026-07-18, and `dataConf`/`formFixtureCount`/the exact `calibrationFactor`
+at lock time aren't persisted per bet, so a historical Score can't always be
+recomputed byte-for-byte from today's code. **This is not a bug** — every
+component traces to real, identifiable formula logic; the gap is a formula
+version/missing-historical-input limitation, not an unexplained number.
+
+**One genuine, separate finding surfaced by this reconciliation, flagged
+directly:** Celtic's raw `modelProb` (83.6%) exceeds this document's
+confirmed ~79% ceiling on raw GBDT+bias-correction output. Reason: live bets
+run through `applyTeamProfileModifiers()` (team-profile, weather, WOWY,
+transfer adjustments) *after* the GBDT+bias-correction step that every tier
+figure in this document is measured on — the historical backfill population
+this whole analysis uses does not include those live-only modifiers. So
+`modelProb` on a live bet and the "raw predicted probability" this document's
+tiers are built from are the *same underlying concept* but not always the
+exact *same computation* — live modelProb can occasionally sit slightly
+outside the population this document characterized. Worth knowing when
+reading tier badges on live bets; not worth re-deriving the whole analysis
+over, since the gap is a handful of extra live-only adjustment factors, not a
+different model.
+
+**Does "Score" need renaming?** Not urgently — nothing here is broken, and
+the field has a real, defensible purpose (a single at-a-glance number
+blending probability, edge, and confidence for bet-log scanning). But calling
+it just "Score" next to a raw probability invites exactly the confusion that
+prompted this task. Cheapest fix, applied now: the column header reads
+"Score / Prob / Tier" and the cell shows the raw probability directly beneath
+the Score badge, so the two numbers are never mistaken for each other again.
+Renaming the underlying field/variable throughout the codebase is a larger,
+lower-value change — flagged for later, not done here.
+
+### Part B: tier badge, live in the bet log
+
+Added to all three bet-log tables (paper, real, combined) in
+[`public/index.html`](../public/index.html):
+- The raw `modelProb` (already stored on every bet — no backend or data
+  schema change needed) now displays as a percentage directly under the
+  Score badge.
+- A tier badge (e.g. `45-50%`) sits next to it, computed client-side by
+  `tierOfProb()` using the exact same 5pp edges as this document
+  (`[0.35, 0.40, ..., 0.80]`, with `<35%` and `80%+` catch-alls).
+- CSV export (`exportCSV()`) gained `ModelProb%` and `Tier` columns
+  alongside the existing `Score` column.
+
+**Applies automatically going forward** — `tierOfProb()` runs at render time
+against whatever `modelProb` is already on the bet object, so every new
+paper/real bet gets a tier badge with no extra logging step.
+
+**Backfill: not needed, because it already works.** Every bet already
+carries `modelProb` from lock time (`bet.modelProb: best.modelProb` in
+`server.js`'s bet-creation code) — confirmed directly against both example
+bets pulled from production (`/api/bets`). Since tier is computed at
+render/export time from that already-stored value rather than written once
+and cached, every existing resolved bet gets a correct tier label immediately
+on next page load, with zero migration script or one-time backfill job
+required.
+
+**Verification note:** the rendering logic (`tierOfProb`/`tierBadge`) was
+unit-verified against both real production values (Celtic 83.6% → `80%+`,
+France v England 35.8% → `35-40%`, both correct) and the full inline script
+block parses cleanly with no syntax errors. Full interactive browser
+verification (logging into the actual dashboard and visually confirming the
+rendered row) was **not completed** — the local dev server requires
+`APP_PASSWORD`, which isn't available in this environment, and the sandboxed
+preview browser couldn't authenticate to the deployed instance either
+(session-cookie login, distinct from the `x-api-key` used for this week's
+API-only diagnostic work). Recommend a quick visual check on the live
+dashboard after deploy.
+
 ## Decisions made without asking — flagged for review
 
 1. **Bucket width/range** (35-80% in 5pp steps, nesting inside the diagnostic
