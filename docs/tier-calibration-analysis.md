@@ -780,6 +780,55 @@ preview browser couldn't authenticate to the deployed instance either
 API-only diagnostic work). Recommend a quick visual check on the live
 dashboard after deploy.
 
+## Addendum 4 — Live-vs-historical tier tracker, shipped in the UI
+
+This document's per-tier ROI findings are now wired into the product itself,
+not just this file. Display/reporting only — no scoring, EV, or
+bet-triggering logic changed; no gating added. Zero new Odds API calls.
+
+**Performance tab:** a new "Calibration Tier Performance" table (all three
+views — paper, real, combined) shows, per tier, the historical baseline next
+to live ROI computed in real time from resolved bets. The historical column
+is Addendum 2's raw/uncorrected "Before" figures — not the Platt-corrected
+"After" ones, since that correction was never deployed live and every bet is
+still scored on raw `modelProb`. Both columns are restricted to the four
+validated leagues (PL, Ligue 1, Champions League, Serie A); other leagues'
+tier activity is listed separately underneath, never blended in. Status per
+row is descriptive only — Tracking (live n below 10, the same
+`MIN_LIVE_PAPER_TRADES` threshold the codebase already uses elsewhere for
+"enough live evidence"), Consistent (live ROI same sign as historical),
+Diverging (opposite sign), or No baseline (tier outside the 45-70% range
+Addendum 2 covers). Updates automatically on every Performance-tab refresh —
+no manual step.
+
+**Scout page:** every recommended and watching bet now shows its tier badge
+plus a compact reference line (e.g. "Historical: +30.2% (n=111) · Live:
++27.3% (n=125, thin)") at the point a bet is presented — informational only,
+visible before any placement decision, filtering nothing. For non-validated
+leagues or out-of-range tiers, the line says so explicitly ("no historical
+baseline...") rather than showing a blank or borrowing a number from an
+unrelated league.
+
+**Where a bet genuinely has no historical reference, by design:**
+- Any bet in a league outside {PL, Ligue 1, Champions League, Serie A} — no
+  train/test split exists yet for those leagues' base rates, so no baseline
+  is claimed for them at all.
+- Any bet in one of those four leagues but outside the 45-70% tier range
+  (e.g. Celtic vs Dundee's 83.6% modelProb, France vs England's 35.8% —
+  both from the previous task's reconciliation, both outside this range) —
+  Addendum 2 only ever tested that band.
+Both cases render a clear "no baseline" message rather than silently
+omitting context or fabricating one.
+
+**Verification:** the tier-grouping and verdict logic was unit-tested
+locally against synthetic bet data (including the real Celtic vs
+Dundee/France vs England records) before deploy — correctly routes
+non-validated-league bets to the separate "other leagues" line, correctly
+flags thin cells, correctly computes stake-weighted live ROI. Full
+interactive browser verification carries the same limitation noted in
+Addendum 3 (no `APP_PASSWORD` available in this environment) — recommend a
+visual check on the live dashboard after deploy.
+
 ## Decisions made without asking — flagged for review
 
 1. **Bucket width/range** (35-80% in 5pp steps, nesting inside the diagnostic

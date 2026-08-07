@@ -2937,6 +2937,104 @@ app.get('/api/league-performance', (req, res) => {
   });
 });
 
+// ─── TIER PERFORMANCE TRACKER ──────────────────────────────────────────────────
+// Live-vs-historical ROI by calibration tier — see docs/tier-calibration-analysis.md.
+// HISTORICAL_TIER_BASELINE is the "Before" (raw, uncorrected) per-tier ROI table from
+// that doc's Addendum 2, pooled across the four leagues with a genuine train/test
+// split (Premier League, Ligue 1, Champions League, Serie A). It's a static snapshot
+// of a backtest, not live-computed — hard-coded deliberately so it can't silently
+// drift if backtest data changes without a fresh, documented cycle. Scoped to the
+// 45-70% band only (where that analysis was run); tiers outside it have no baseline.
+const HISTORICAL_TIER_BASELINE = {
+  '45-50%': { n: 111, roi: 0.302, ciExcludesZero: true },
+  '50-55%': { n: 55,  roi: -0.241 },
+  '55-60%': { n: 31,  roi: 0.636 },
+  '60-65%': { n: 5,   roi: -1.0 },
+  '65-70%': { n: 1,   roi: 0.88 },
+};
+const TIER_PERF_VALIDATED_LEAGUES = new Set([39, 61, 2, 135]); // PL, Ligue 1, Champions League, Serie A
+// Same threshold the codebase already uses to decide a league has "enough" live
+// paper-trade evidence (see runEvCalibration()'s MIN_LIVE_PAPER_TRADES) — reused
+// here so "enough live data to say something" means the same thing everywhere.
+const TIER_PERF_MIN_LIVE_N = 10;
+const TIER_EDGES_SHARED = [0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80];
+const TIER_LABELS_SHARED = ['<35%', ...TIER_EDGES_SHARED.slice(0, -1).map((e, i) => `${Math.round(e*100)}-${Math.round(TIER_EDGES_SHARED[i+1]*100)}%`), '80%+'];
+function tierOfProbShared(p) {
+  if (p == null || isNaN(p)) return null;
+  if (p < TIER_EDGES_SHARED[0]) return '<35%';
+  for (let i = 0; i < TIER_EDGES_SHARED.length - 1; i++) {
+    if (p >= TIER_EDGES_SHARED[i] && p < TIER_EDGES_SHARED[i+1]) return `${Math.round(TIER_EDGES_SHARED[i]*100)}-${Math.round(TIER_EDGES_SHARED[i+1]*100)}%`;
+  }
+  return '80%+';
+}
+
+app.get('/api/tier-performance', (req, res) => {
+  const mode = req.query.mode || 'paper'; // 'paper' | 'real' | 'all'
+  const resolved = getBets().filter(b => {
+    if (mode === 'paper' && b.mode === 'real') return false;
+    if (mode === 'real'  && b.mode !== 'real') return false;
+    if (!(b.placementStatus === 'placed' || b.placementConfirmed)) return false;
+    return b.result === 'win' || b.result === 'loss';
+  });
+
+  function groupByTier(bets) {
+    const map = {};
+    for (const b of bets) {
+      const tier = tierOfProbShared(b.modelProb);
+      if (!tier) continue;
+      if (!map[tier]) map[tier] = { n: 0, staked: 0, pnl: 0 };
+      map[tier].n++;
+      map[tier].staked += (b.actualStake ?? b.suggestedStake ?? 0);
+      map[tier].pnl    += (b.pnl || 0);
+    }
+    return map;
+  }
+
+  const validatedBets = resolved.filter(b => TIER_PERF_VALIDATED_LEAGUES.has(parseInt(b.leagueId, 10)));
+  const otherBets      = resolved.filter(b => !TIER_PERF_VALIDATED_LEAGUES.has(parseInt(b.leagueId, 10)));
+  const validatedByTier = groupByTier(validatedBets);
+  const otherByTier     = groupByTier(otherBets);
+
+  const rows = TIER_LABELS_SHARED.map(tier => {
+    const hist = HISTORICAL_TIER_BASELINE[tier] || null;
+    const live = validatedByTier[tier] || null;
+    const liveN   = live ? live.n : 0;
+    const liveRoi = live && live.staked ? +(live.pnl / live.staked).toFixed(4) : null;
+    const liveThin = liveN < TIER_PERF_MIN_LIVE_N;
+
+    let status;
+    if (!hist) status = 'No baseline';
+    else if (liveThin || liveRoi === null) status = 'Tracking';
+    else status = ((liveRoi >= 0) === (hist.roi >= 0)) ? 'Consistent' : 'Diverging';
+
+    return {
+      tier,
+      historical: hist ? { n: hist.n, roi: hist.roi, ciExcludesZero: !!hist.ciExcludesZero, thin: hist.n < 60 } : null,
+      live: { n: liveN, roi: liveRoi, thin: liveThin },
+      status,
+    };
+  });
+
+  const otherLeagueActivity = TIER_LABELS_SHARED
+    .map(tier => {
+      const g = otherByTier[tier];
+      if (!g || g.n === 0) return null;
+      return { tier, n: g.n, roi: g.staked ? +(g.pnl / g.staked).toFixed(4) : null };
+    })
+    .filter(Boolean);
+
+  res.json({
+    scope: {
+      validatedLeagueIds: [...TIER_PERF_VALIDATED_LEAGUES],
+      minLiveN: TIER_PERF_MIN_LIVE_N,
+      historicalSource: 'docs/tier-calibration-analysis.md Addendum 2 — raw/uncorrected "Before" figures, Platt correction never deployed live',
+      note: 'Live modelProb runs through applyTeamProfileModifiers (team profile/weather/WOWY) that the historical backfill population did not include — directionally comparable, not a perfect match.',
+    },
+    rows,
+    otherLeagueActivity,
+  });
+});
+
 app.get('/api/team-profile/:teamId', (req, res) => {
   const profiles = getTeamProfiles([parseInt(req.params.teamId, 10)]);
   const profile  = profiles[req.params.teamId] || null;

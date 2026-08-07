@@ -624,6 +624,42 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     </div>
   </div>
 
+  <!-- Calibration Tier Performance -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-header">
+      <span class="card-title">Calibration Tier Performance</span>
+      <button class="btn btn-ghost btn-sm" onclick="renderTierPerf('paper','')">↻ Refresh</button>
+    </div>
+    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 6px">
+      Live ROI by predicted-probability tier vs. the raw (uncorrected) historical backtest baseline —
+      see <span class="mono">docs/tier-calibration-analysis.md</span>, Addendum 2. Both columns are
+      scoped to Premier League, Ligue 1, Champions League and Serie A only — the four leagues with a
+      genuine train/test split — for a fair comparison. This is a reference view, not a gate.
+    </p>
+    <p style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--muted);margin:0 0 14px">
+      ⓘ Live model probability includes team-profile/weather/WOWY adjustments the historical backtest
+      population didn't have — directionally comparable, not a perfect match.
+    </p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Tier</th>
+            <th style="text-align:right">Historical ROI (n)</th>
+            <th style="text-align:right">Live ROI (n)</th>
+            <th style="text-align:center">Status</th>
+          </tr>
+        </thead>
+        <tbody id="tier-perf-body"></tbody>
+      </table>
+      <div class="empty" id="tier-perf-empty" style="display:none">
+        <div class="empty-icon">🎯</div>
+        <p>No resolved bets yet in the four validated leagues.</p>
+      </div>
+    </div>
+    <div id="tier-perf-other" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
+  </div>
+
   <!-- Bookmaker Performance -->
   <div class="card" style="margin-top:16px">
     <div class="card-header">
@@ -809,6 +845,42 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     </div>
   </div>
 
+  <!-- Calibration Tier Performance -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-header">
+      <span class="card-title">Calibration Tier Performance</span>
+      <button class="btn btn-ghost btn-sm" onclick="renderTierPerf('real','real-')">↻ Refresh</button>
+    </div>
+    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 6px">
+      Live ROI by predicted-probability tier vs. the raw (uncorrected) historical backtest baseline —
+      see <span class="mono">docs/tier-calibration-analysis.md</span>, Addendum 2. Both columns are
+      scoped to Premier League, Ligue 1, Champions League and Serie A only — the four leagues with a
+      genuine train/test split — for a fair comparison. This is a reference view, not a gate.
+    </p>
+    <p style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--muted);margin:0 0 14px">
+      ⓘ Live model probability includes team-profile/weather/WOWY adjustments the historical backtest
+      population didn't have — directionally comparable, not a perfect match.
+    </p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Tier</th>
+            <th style="text-align:right">Historical ROI (n)</th>
+            <th style="text-align:right">Live ROI (n)</th>
+            <th style="text-align:center">Status</th>
+          </tr>
+        </thead>
+        <tbody id="real-tier-perf-body"></tbody>
+      </table>
+      <div class="empty" id="real-tier-perf-empty" style="display:none">
+        <div class="empty-icon">🎯</div>
+        <p>No resolved bets yet in the four validated leagues.</p>
+      </div>
+    </div>
+    <div id="real-tier-perf-other" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
+  </div>
+
   <!-- Bookmaker Performance -->
   <div class="card" style="margin-top:16px">
     <div class="card-header">
@@ -992,6 +1064,42 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
         <p>No placed bets yet — league stats appear once bets are placed.</p>
       </div>
     </div>
+  </div>
+
+  <!-- Calibration Tier Performance -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-header">
+      <span class="card-title">Calibration Tier Performance</span>
+      <button class="btn btn-ghost btn-sm" onclick="renderTierPerf('combined','combined-')">↻ Refresh</button>
+    </div>
+    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 6px">
+      Live ROI by predicted-probability tier vs. the raw (uncorrected) historical backtest baseline —
+      see <span class="mono">docs/tier-calibration-analysis.md</span>, Addendum 2. Both columns are
+      scoped to Premier League, Ligue 1, Champions League and Serie A only — the four leagues with a
+      genuine train/test split — for a fair comparison. This is a reference view, not a gate.
+    </p>
+    <p style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--muted);margin:0 0 14px">
+      ⓘ Live model probability includes team-profile/weather/WOWY adjustments the historical backtest
+      population didn't have — directionally comparable, not a perfect match.
+    </p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Tier</th>
+            <th style="text-align:right">Historical ROI (n)</th>
+            <th style="text-align:right">Live ROI (n)</th>
+            <th style="text-align:center">Status</th>
+          </tr>
+        </thead>
+        <tbody id="combined-tier-perf-body"></tbody>
+      </table>
+      <div class="empty" id="combined-tier-perf-empty" style="display:none">
+        <div class="empty-icon">🎯</div>
+        <p>No resolved bets yet in the four validated leagues.</p>
+      </div>
+    </div>
+    <div id="combined-tier-perf-other" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
   </div>
 
   <!-- Bookmaker Performance -->
@@ -1863,8 +1971,13 @@ function apiFetchWithTimeout(url, opts = {}, ms = 5000) {
 
 async function loadState() {
   try {
-    const [s, meta] = await Promise.all([apiFetch('/api/state'), apiFetch('/api/scan-meta').catch(() => null)]);
+    const [s, meta, tierPerf] = await Promise.all([
+      apiFetch('/api/state'),
+      apiFetch('/api/scan-meta').catch(() => null),
+      apiFetch('/api/tier-performance?mode=all').catch(() => null),
+    ]);
     STATE = s;
+    STATE.tierPerf = tierPerf; // used by Scout-page tier context lines — see tierContextLine()
     renderScout();
     updateBankrollBadge();
     syncRerouteInterval();
@@ -1942,6 +2055,39 @@ function tierBadge(modelProb) {
   if (!tier) return '';
   const pct = modelProb != null ? `${(modelProb*100).toFixed(1)}%` : '';
   return `<span class="tier-badge" title="Raw model probability: ${pct}">${tier}</span>`;
+}
+
+// Compact historical-vs-live reference for the Scout page, shown at the moment a bet
+// is presented — informational only, does not filter or block anything. Reads the
+// cached /api/tier-performance response (STATE.tierPerf, mode=all, refreshed each
+// loadState() poll) rather than fetching per-card.
+function scoutTierBlock(modelProb, leagueId) {
+  const tier = tierOfProb(modelProb);
+  if (!tier) return '';
+  const perf = STATE.tierPerf;
+  const isValidated = perf?.scope?.validatedLeagueIds?.includes(parseInt(leagueId, 10));
+  const fmtPct = v => `${v >= 0 ? '+' : ''}${(v*100).toFixed(1)}%`;
+
+  let contextHtml;
+  if (!perf) {
+    contextHtml = `<span style="color:var(--muted)">tier reference unavailable</span>`;
+  } else if (!isValidated) {
+    contextHtml = `<span style="color:var(--muted)">no historical baseline — league not yet train/test validated</span>`;
+  } else {
+    const row = (perf.rows || []).find(r => r.tier === tier);
+    if (!row || !row.historical) {
+      contextHtml = `<span style="color:var(--muted)">no historical baseline for this tier (outside the analysed 45-70% range)</span>`;
+    } else {
+      const h = row.historical, l = row.live;
+      const liveStr = l.n > 0
+        ? `Live: <span class="${l.roi >= 0 ? 'c-green' : 'c-red'}">${fmtPct(l.roi)}</span> (n=${l.n}${l.thin ? ', thin' : ''})`
+        : `Live: <span style="color:var(--muted)">no resolved bets yet</span>`;
+      contextHtml = `Historical: <span class="${h.roi >= 0 ? 'c-green' : 'c-red'}">${fmtPct(h.roi)}</span> (n=${h.n}${h.thin ? ', thin' : ''}) · ${liveStr}`;
+    }
+  }
+  return `<div style="margin-top:4px;font-size:10.5px;font-family:'DM Mono',monospace;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+    ${tierBadge(modelProb)}<span>${contextHtml}</span>
+  </div>`;
 }
 
 function weatherBadge(condition) {
@@ -2115,6 +2261,7 @@ function recommendedCard(b) {
             <span>@${b.bookOdds.toFixed(2)}</span>
             ${b.weather ? `<span title="Weather">🌧 ${b.weather.precipProb}% rain, ${b.weather.windSpeed?.toFixed(0)}km/h</span>` : ''}
           </div>
+          ${scoutTierBlock(b.modelProb, b.leagueId)}
         </div>
         <div class="fixture-right" style="flex-shrink:0">
           <div class="stake-box">
@@ -2156,6 +2303,7 @@ function watchingCard(w) {
           ${minsOut != null ? `<span style="color:var(--amber)">T-${minsOut}m</span>` : ''}
           <span class="badge badge-amber">Projected: ${projLabel}</span>
         </div>
+        ${scoutTierBlock(w.modelProb, w.leagueId)}
       </div>
       <div class="fixture-right">
         <span class="stage-tag tag-watching">WATCHING</span>
@@ -2442,7 +2590,71 @@ async function renderPerfMode(mode) {
 
   renderLeaguePerf(mode, prefix);
   renderBmPerf(mode, prefix);
+  renderTierPerf(mode, prefix);
   renderTransactionsInto(prefix);
+}
+
+// Calibration tier tracker — live ROI by predicted-probability tier vs. the
+// historical backtest baseline (docs/tier-calibration-analysis.md, Addendum 2).
+// Reference view only, no gating logic reads from this.
+async function renderTierPerf(mode = 'paper', prefix = '') {
+  let data;
+  try {
+    const p = new URLSearchParams({ mode: mode === 'combined' ? 'all' : mode });
+    data = await apiFetch(`/api/tier-performance?${p}`);
+  } catch (e) { return; }
+
+  const tbody   = document.getElementById(`${prefix}tier-perf-body`);
+  const emptyEl = document.getElementById(`${prefix}tier-perf-empty`);
+  const otherEl = document.getElementById(`${prefix}tier-perf-other`);
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  const withBaseline = data.rows.filter(r => r.historical);
+  const anyLiveData  = data.rows.some(r => r.live.n > 0);
+  if (!anyLiveData && !withBaseline.some(r => r.historical)) {
+    emptyEl.style.display = 'block';
+  } else {
+    emptyEl.style.display = 'none';
+  }
+
+  const statusBadge = status => {
+    const map = {
+      'Consistent':  ['badge-green',  'Consistent'],
+      'Diverging':   ['badge-red',    'Diverging'],
+      'Tracking':    ['badge-muted',  'Tracking'],
+      'No baseline': ['badge-muted',  'No baseline'],
+    };
+    const [cls, label] = map[status] || ['badge-muted', status];
+    return `<span class="badge ${cls}">${label}</span>`;
+  };
+  const fmtRoi = (roi, thin) => {
+    if (roi == null) return '<span style="color:var(--muted)">—</span>';
+    const cls = roi >= 0 ? 'c-green' : 'c-red';
+    return `<span class="${cls}">${roi >= 0 ? '+' : ''}${(roi*100).toFixed(1)}%</span>${thin ? ' <span style="color:var(--muted);font-size:10px">*thin</span>' : ''}`;
+  };
+
+  // Only show rows that have either a historical baseline or some live activity —
+  // no point listing every empty tier in the far ends of the probability range.
+  data.rows.filter(r => r.historical || r.live.n > 0).forEach(r => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><span class="tier-badge">${r.tier}</span></td>
+      <td style="text-align:right" class="mono">${r.historical ? `${fmtRoi(r.historical.roi, r.historical.thin)} <span style="color:var(--muted)">(n=${r.historical.n})</span>` : '<span style="color:var(--muted)">no baseline</span>'}</td>
+      <td style="text-align:right" class="mono">${fmtRoi(r.live.roi, r.live.thin)} <span style="color:var(--muted)">(n=${r.live.n})</span></td>
+      <td style="text-align:center">${statusBadge(r.status)}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  if (otherEl) {
+    if (data.otherLeagueActivity?.length) {
+      otherEl.innerHTML = 'Other leagues (not in the comparison above): ' +
+        data.otherLeagueActivity.map(o => `<span class="mono">${o.tier} n=${o.n}${o.roi != null ? ` (${o.roi >= 0 ? '+' : ''}${(o.roi*100).toFixed(1)}%)` : ''}</span>`).join(' · ');
+    } else {
+      otherEl.innerHTML = '';
+    }
+  }
 }
 
 function toggleBetLogExpanded(mode) {
