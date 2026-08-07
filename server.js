@@ -4021,6 +4021,40 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
+// TEMPORARY DIAGNOSTIC — Odds API pre-2020 historical floor check. A handful
+// of real historical-odds snapshot calls (not a bulk sweep) against known
+// EPL/La Liga Saturday-kickoff dates in 2015/2017/2019, to see whether the
+// archive actually has anything that far back or hard-floors at ~2020.
+// To be removed after review.
+app.get('/api/debug/odds-history-floor-check', async (_req, res) => {
+  const probes = [
+    { sport: 'soccer_epl',            label: 'EPL 2015',      date: '2015-08-15T14:00:00Z' },
+    { sport: 'soccer_epl',            label: 'EPL 2017',      date: '2017-08-19T14:00:00Z' },
+    { sport: 'soccer_epl',            label: 'EPL 2019',      date: '2019-08-17T14:00:00Z' },
+    { sport: 'soccer_spain_la_liga',  label: 'La Liga 2015',  date: '2015-08-22T18:00:00Z' },
+    { sport: 'soccer_spain_la_liga',  label: 'La Liga 2017',  date: '2017-08-19T18:00:00Z' },
+    { sport: 'soccer_spain_la_liga',  label: 'La Liga 2019',  date: '2019-08-18T18:00:00Z' },
+  ];
+  const results = [];
+  for (const p of probes) {
+    try {
+      const resp = await oddsApi.get(`/historical/sports/${p.sport}/odds`, {
+        params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal', date: p.date },
+      });
+      const events = resp.data?.data || resp.data || [];
+      results.push({
+        label: p.label, date: p.date, httpStatus: resp.status,
+        eventCount: Array.isArray(events) ? events.length : 0,
+        sampleEvent: Array.isArray(events) && events.length ? { home: events[0].home_team, away: events[0].away_team, bookmakers: (events[0].bookmakers || []).length } : null,
+      });
+    } catch (e) {
+      results.push({ label: p.label, date: p.date, error: e.response?.status ? `${e.response.status}: ${e.response?.data?.message || e.message}` : e.message });
+    }
+    await new Promise(r => setTimeout(r, 200));
+  }
+  res.json({ probes: results });
+});
+
 // ─── LEAGUE × TIER HISTORICAL PERFORMANCE MATRIX ──────────────────────────────
 // Reference/diagnostic view, NOT a live tracker and NOT a gate — see
 // docs/tier-calibration-analysis.md Addendum 6. Static backtest snapshot
