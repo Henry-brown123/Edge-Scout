@@ -4109,6 +4109,100 @@ app.get('/api/debug/train-test-cycle', (req, res) => {
   res.json({ threshold: ADJUST_THRESHOLD, results: TARGET_LEAGUES.map(evalLeague) });
 });
 
+// TEMPORARY DIAGNOSTIC — widen the per-tier calibration + ROI breakdown to the
+// full observed probability range, pooled across ALL now-validated leagues,
+// test-only fixtures per each league's own VALIDATED_SPLITS boundary. Extends
+// Addendum 2's "Before" (raw, uncorrected) methodology beyond its original
+// 45-70% scope. Read-only, zero new Odds API calls.
+app.get('/api/debug/tier-baseline-wide', (_req, res) => {
+  const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG } = require('./scoring');
+  const historical    = readJSON('backfill-historical.json') || {};
+  const scoredRecords = historical.scoredRecords || [];
+  const optWeights    = historical.optimisedWeights || {};
+  const closingOdds   = readJSON('closing-odds.json') || {};
+
+  const VALIDATED_LEAGUES = Object.keys(VALIDATED_SPLITS).map(Number);
+  const EDGES = [0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80];
+  const TIER_LABELS = ['<35%', ...EDGES.slice(0, -1).map((e, i) => `${Math.round(e*100)}-${Math.round(EDGES[i+1]*100)}%`), '80%+'];
+  const tierOf = p => {
+    if (p < EDGES[0]) return '<35%';
+    for (let i = 0; i < EDGES.length - 1; i++) if (p >= EDGES[i] && p < EDGES[i+1]) return `${Math.round(EDGES[i]*100)}-${Math.round(EDGES[i+1]*100)}%`;
+    return '80%+';
+  };
+
+  // Calibration: test-only fixtures for each validated league, full range.
+  const calibRows = [];
+  for (const rec of scoredRecords) {
+    const leagueId = parseInt(rec.leagueId, 10);
+    if (!VALIDATED_LEAGUES.includes(leagueId)) continue;
+    if (!rec.actualOutcome || !rec.homeFactors || !rec.awayFactors) continue;
+    const split = VALIDATED_SPLITS[leagueId];
+    if (new Date(rec.date) < new Date(split.testFrom)) continue; // test-only
+    const context = rec.context || classifyFixture(rec.leagueId);
+    const weights = optWeights[context] || optWeights.club_domestic;
+    if (!weights) continue;
+    const rawProbs = model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]);
+    const probs    = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
+    let topOutcome, modelProb;
+    if (probs.home >= probs.draw && probs.home >= probs.away) { topOutcome = 'home'; modelProb = probs.home; }
+    else if (probs.away >= probs.draw)                        { topOutcome = 'away'; modelProb = probs.away; }
+    else                                                       { topOutcome = 'draw'; modelProb = probs.draw; }
+    calibRows.push({ leagueId, modelProb, correct: rec.actualOutcome === topOutcome, tier: tierOf(modelProb) });
+  }
+  const pooledCalibTiers = TIER_LABELS.map(label => {
+    const rows = calibRows.filter(r => r.tier === label);
+    const n = rows.length;
+    if (n === 0) return { tier: label, n: 0 };
+    const meanPredicted = rows.reduce((s, r) => s + r.modelProb, 0) / n;
+    const hitRate = rows.filter(r => r.correct).length / n;
+    return { tier: label, n, meanPredicted: +meanPredicted.toFixed(4), hitRate: +hitRate.toFixed(4), calibrationError: +(meanPredicted - hitRate).toFixed(4) };
+  });
+
+  // ROI: test-only, Pinnacle-matched, posEdge>=5%, full range, pooled across validated leagues.
+  const matched = [];
+  for (const rec of scoredRecords) {
+    const leagueId = parseInt(rec.leagueId, 10);
+    if (!VALIDATED_LEAGUES.includes(leagueId)) continue;
+    const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
+    if (!co || !rec.actualOutcome || !rec.homeFactors || !rec.awayFactors) continue;
+    const split = VALIDATED_SPLITS[leagueId];
+    if (new Date(rec.date) < new Date(split.testFrom)) continue; // test-only
+    const context = rec.context || classifyFixture(rec.leagueId);
+    const weights = optWeights[context] || optWeights.club_domestic;
+    if (!weights) continue;
+    const rawProbs = model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]);
+    const probs    = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
+    let topOutcome, modelProb, odds;
+    if (probs.home >= probs.draw && probs.home >= probs.away) { topOutcome = 'home'; modelProb = probs.home; odds = co.homeOdds; }
+    else if (probs.away >= probs.draw)                        { topOutcome = 'away'; modelProb = probs.away; odds = co.awayOdds; }
+    else                                                       { topOutcome = 'draw'; modelProb = probs.draw; odds = co.drawOdds; }
+    if (!odds || odds <= 1) continue;
+    const implied = 1 / odds;
+    const edge = (modelProb - implied) / implied;
+    if (edge < 0.05) continue;
+    const won = rec.actualOutcome === topOutcome;
+    matched.push({ tier: tierOf(modelProb), returnPct: won ? (odds - 1) : -1 });
+  }
+  function ciFor(returns) {
+    const n = returns.length;
+    if (n === 0) return { n: 0, roi: null, ciLow: null, ciHigh: null };
+    const mean = returns.reduce((s,r)=>s+r,0)/n;
+    const variance = n > 1 ? returns.reduce((s,r)=>s+(r-mean)**2,0)/(n-1) : 0;
+    const se = Math.sqrt(variance/n);
+    return { n, roi: +mean.toFixed(4), ciLow: +(mean-1.96*se).toFixed(4), ciHigh: +(mean+1.96*se).toFixed(4) };
+  }
+  const pooledRoiTiers = TIER_LABELS.map(label => {
+    const rows = matched.filter(m => m.tier === label);
+    return { tier: label, ...ciFor(rows.map(r => r.returnPct)) };
+  });
+
+  res.json({
+    validatedLeagues: VALIDATED_LEAGUES.map(id => ({ id, name: LEAGUE_CONFIG[id]?.name })),
+    pooledCalibTiers,
+    pooledRoiTiers,
+  });
+});
+
 // Transfer data fetch — completed transfers per team for the current season,
 // used for the first-10-matchdays squad-quality modifier in applyTeamProfileModifiers.
 let _transfersRunning = false;
