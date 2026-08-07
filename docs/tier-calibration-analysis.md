@@ -574,6 +574,67 @@ at test data under a changed definition, which rule 3 rules out for this
 cycle. If this is worth pursuing, it needs a fresh train/test cycle with the
 narrower band decided in advance, not a re-slice of today's test result.
 
+### Extension: is the ROI drag spread evenly, or concentrated?
+
+**This is not a new rule-3 test-set look.** It reuses the exact
+already-chosen pooled parameters above (`A=1.83126, B=0.15854`, decided and
+fixed in Part A) against the identical test-set population from Part B —
+just disaggregated by tier instead of pooled, plus a split of which bets
+were already positive-edge before correction vs. newly pulled over the
+threshold by it. No refitting, no new correction, nothing that could count as
+a second look informing a new decision. Confirmed the underlying per-bet
+results didn't need to come from a stored artifact — they're fully
+reproducible on demand from the same deterministic inputs (same fixtures,
+same fixed parameters), so no new fitting was at risk here either way. Pooled
+totals below sum exactly to Part B's reported figures (before posEdgeN
+111+55+31+5+1=203, after 125+92+63+31+1=312), confirming this is the same
+result, just split finer.
+
+| Tier | Total matched | Before posEdgeN / ROI / 95% CI | After posEdgeN / ROI / 95% CI | Newly-qualified n / ROI |
+|---|---|---|---|---|
+| 45-50% | 386 | 111 / **+30.2%** / [+1.5%, +58.9%] | 125 / +27.3% / [+1.1%, +53.5%] | 14 / +4.2% |
+| 50-55% | 259 | 55* / −24.1% / [−55.2%, +7.0%] | 92 / −15.9% / [−38.2%, +6.4%] | 37 / −3.7% |
+| 55-60% | 165 | 31* / +63.6% / [−15.2%, +142.5%] | 63* / +26.8% / [−15.6%, +69.1%] | 32 / **−9.0%** |
+| 60-65% | 105 | 5* / −100%† | 31* / −23.5% / [−50.1%, +3.1%] | 26 / **−8.8%** |
+| 65-70% | 14 | 1* / +88%† | 1* / +88%† | 0 / — |
+
+`*` below the proportional decision-grade floor (rule 6's ~300-400 whole-cycle
+bar, scaled to ~60 per tier for five tiers — indicative only, not a
+confirmed result). `†` n≤5, a coin-flip-sized sample; the "CI" collapses to a
+point because every bet in it happened to land the same way, not because the
+result is precise. **droppedOutN is 0 in every tier** — a direct structural
+consequence of `A>1, B>0`: correction only ever raises probability inside
+this band, so it can add bets to the positive-edge set but never remove one
+already there. That means "after" ROI in every tier is exactly the volume-
+weighted blend of "before" ROI (on the unchanged original bets) and
+"newly-qualified" ROI (on the new ones) — nothing is being replaced, only
+added.
+
+**The drag is concentrated, not spread evenly, and it's concentrated exactly
+where Part B's mechanism hypothesis predicted.** The newly-qualified cohort
+loses money or is roughly break-even in every tier that has one (+4.2%,
+−3.7%, **−9.0%**, **−8.8%**), while 45-50% — the tier with by far the
+most volume (111-125 posEdge, the only cells anywhere in this exercise, before
+or after, whose CI excludes zero) — is barely touched by the correction at
+all (+30.2% → +27.3%, still solidly positive both ways). The pooled
+after-figure's drop from +17.7% to +9.6% isn't a uniform erosion of a real
+edge; it's the 45-50% tier's genuine, well-evidenced edge getting diluted by
+three tiers of newly-added bets (50-65%) that individually never manage a
+positive newly-qualified return. 55-60% and 60-65% additionally show their
+*already-qualified* bets doing well too (+63.6%, though n=31) or terribly
+(−100%, n=5) — both too thin to trust either way — but the newly-qualified
+numbers next to them are the most consistent finding on this page: three
+independent tiers, all negative or flat, all pointing the same direction.
+
+**Practical read:** if this correction were ever revisited, 45-50% is the
+one part of the band where the underlying evidence (both calibration and
+ROI) is strong and consistent enough to take seriously on its own — and it's
+exactly the tier the Platt correction changes least. The 50-70% range is
+where the correction does its work on calibration (Part B) and where it also
+adds all of its unprofitable new exposure — the two effects living in the
+same place is the clearest single reason the pooled ROI result came out
+negative-to-flat rather than positive.
+
 ## Decisions made without asking — flagged for review
 
 1. **Bucket width/range** (35-80% in 5pp steps, nesting inside the diagnostic
@@ -613,8 +674,9 @@ narrower band decided in advance, not a re-slice of today's test result.
 ## Cleanup
 
 The temporary `/api/debug/tier-calibration`, `/api/debug/tier-calibration-v2`,
-and `/api/debug/platt-recalibration` endpoints have all been removed.
-`shrinkage.js` is kept as permanent, reusable infrastructure — it has no
+`/api/debug/platt-recalibration`, and `/api/debug/platt-roi-by-tier`
+endpoints have all been removed. `shrinkage.js` is kept as permanent, reusable
+infrastructure — it has no
 dependency on this specific dataset and is written to be called again for any
 future shrinkage need (e.g. a later per-tier ROI cycle, or shrinking home/away
 base-rate estimates directly). The Platt-scaling fit from Addendum 2 was
