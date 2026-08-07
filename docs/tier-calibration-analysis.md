@@ -300,6 +300,11 @@ flagged below for review.
 
 World Cup excluded (zero pure-calibration population — see Scope above).
 
+**A reliability-aware second version of this table is in the Addendum below**
+— the raw ranking above mixes validated and tainted-calibration leagues in a
+way that's easy to misread at a glance; the addendum makes that distinction
+impossible to skip past.
+
 **Read this table carefully, not literally.** Scottish Premiership and
 Primeira Liga rank near the top on a *tainted* base-rate configuration
 (fitted against the full population with no holdout) — their calibration
@@ -334,6 +339,95 @@ the 34 viable cells (see decisions below) — the underlying shrunk figures are
 in the endpoint output this doc was generated from, but turning them into a
 second ranked table was judged to add more surface area than value tonight.
 
+## Addendum — test-only recheck and reliability-aware ranking
+
+Follow-up to judgment calls #2 and #6 above. Zero new Odds API calls here
+either — same two data files, confirmed via `apiQuotaUsedToday` unchanged
+across the run.
+
+### Part A: does the underconfidence finding survive on test-only data?
+
+Judgment call #2 used mixed (train+test) data for Phase 1's calibration
+table, on the reasoning that nothing was being tuned so train/test purity
+didn't bind. The concern worth re-checking directly: tuning the four
+validated leagues' base rates *on train* to match observed outcomes could, in
+principle, make train-slice calibration look artificially good, flattering
+the mixed-population numbers and *understating* the true underconfidence
+gap. This section re-runs Phase 1's exact tier bucketing restricted to each
+league's held-out test fixtures only (`VALIDATED_SPLITS[leagueId].testFrom`
+onward), and compares directly against the original mixed-population figures.
+
+**Pooled across all four validated leagues, mixed vs. test-only (`*` = n<30, small-sample):**
+
+| Tier | Mixed n | Mixed calib. error | Test-only n | Test-only calib. error |
+|---|---|---|---|---|
+| 35-40% | 1,066 | −0.2pp | 232 | +1.8pp |
+| 40-45% | 1,813 | −0.9pp | 501 | +0.2pp |
+| 45-50% | 1,626 | −5.0pp | 417 | **−10.5pp** |
+| 50-55% | 1,004 | −3.6pp | 272 | −5.1pp |
+| 55-60% | 662 | −8.4pp | 172 | −9.5pp |
+| 60-65% | 398 | −13.5pp | 113 | −11.3pp |
+| 65-70% | 44 | −27.2pp | 14* | −26.7pp |
+
+**Verdict: the underconfidence pattern is robust on genuinely out-of-sample
+data — it does not weaken, and at the highest-volume mid-tier (45-50%,
+n=417 test-only, comfortably above any small-sample threshold) it's
+*substantially stronger* on test-only data than on mixed** (−10.5pp vs
+−4.98pp originally). 50-55% and 55-60% also come out slightly more
+underconfident test-only. 60-65% and 65-70% land within a couple points of
+the original mixed figures, same direction, same rough magnitude. Only the
+two lowest tiers (35-40%, 40-45%) flip from slightly-underconfident to
+slightly-overconfident on test-only — both are small flips (≤1.8pp) inside
+what the original report already called "roughly well-calibrated" territory,
+not a reversal of the finding.
+
+The practical read: judgment call #2's choice to use mixed data was *not*
+flattering the calibration numbers in the direction feared — if anything the
+opposite, since the biggest, most trustworthy test-only cell (45-50%) shows a
+bigger gap than the mixed figure did. The original headline finding stands
+on its own without needing the mixed-population caveat to prop it up.
+
+Per-league detail (all four leagues, all tiers, with small-sample flags) is
+in the endpoint output this addendum was generated from; the pattern above
+holds individually for Champions League, Ligue 1, and Serie A as well as
+pooled — Premier League is the only one of the four where a couple of
+mid-tiers (50-55%, 55-60%, 60-65%) actually show *less* underconfidence
+test-only, though still in the same direction and comfortably within
+plausible sampling noise at n=47-96 per cell.
+
+### Part B: reliability-aware second ranking
+
+**Chosen approach: filter, not down-weight.** A visible penalty term would
+need its own magnitude to be chosen and defended (how much should
+`calibrationReliable: false` cost a league?) — another arbitrary constant on
+top of the three already in the formula. A filter needs no new parameter,
+can't be second-guessed on magnitude, and answers the exact question this
+follow-up asked ("how does the ranking look once tainted leagues are properly
+discounted") directly: it removes them rather than approximating their
+absence. The composite scores below are **identical** to the raw table above
+— filtering, not recomputing — so the two tables are directly comparable.
+
+| Rank | League | Composite | calibScore | roiScore | tradeScore |
+|---|---|---|---|---|---|
+| 1 | Champions League | 0.819 | 0.938 | 1.000 | 0.00 |
+| 2 | Ligue 1 | 0.655 | 0.909 | 0.573 | 0.00 |
+| 3 | Serie A | 0.555 | 0.819 | 0.415 | 0.00 |
+| 4 | Premier League | 0.536 | 0.726 | 0.494 | 0.00 |
+
+Side by side with the raw table: Scottish Premiership (1st raw), Primeira
+Liga (3rd raw), and Bundesliga (5th raw) — three of the raw top five — drop
+out entirely once restricted to validated calibration. Champions League was
+already 2nd raw and becomes 1st; the other three validated leagues keep their
+relative order (Ligue 1 > Serie A > Premier League) in both tables, since
+filtering doesn't touch their scores or each other's relative position. The
+practical takeaway: **among leagues whose calibration numbers can actually be
+trusted today, Champions League and Ligue 1 lead — but both do so on
+calibration quality (calibScore 0.94 and 0.91) while sitting near or below
+average on ROI (1.00 driven by a shrunk ROI that's statistically
+indistinguishable from zero per Phase 2, and 0.57 respectively), so "leads
+the validated set" here means "least unproven," not "confirmed profitable."**
+That distinction matters more than the rank order itself.
+
 ## Decisions made without asking — flagged for review
 
 1. **Bucket width/range** (35-80% in 5pp steps, nesting inside the diagnostic
@@ -346,9 +440,10 @@ second ranked table was judged to add more surface area than value tonight.
    train/test-purity requirement (aimed at preventing tuning circularity)
    doesn't bind the same way. Restricting to test-only would have thrown away
    most of the data (e.g. Premier League would drop from 1,900 to ~570
-   fixtures) for no protection against a decision that isn't being made. If
-   this reasoning is wrong, the fix is mechanical — re-run with the same
-   `VALIDATED_SPLITS` filter Phase 1.4 already uses.
+   fixtures) for no protection against a decision that isn't being made.
+   **Re-checked directly in the Addendum, Part A** — test-only figures show
+   the same or a larger underconfidence gap than mixed, so this choice was
+   not flattering the headline finding.
 3. **Tier-level viability threshold** (n≥200) is used only to flag which
    cells could support tier-level analysis, not built into a full nested
    composite ranking — see "Tier-level granularity" above.
@@ -364,12 +459,15 @@ second ranked table was judged to add more surface area than value tonight.
    prose rather than corrected inside the composite formula, to keep the
    formula itself simple and inspectable. A human reading the ranking should
    apply the `calibrationReliable` flag as a mental filter, not treat rank
-   order alone as a readiness signal.
+   order alone as a readiness signal. **Addressed directly in the Addendum,
+   Part B** — a filtered second table shows the four validated leagues
+   ranked against each other only, using the same scores, not a re-weighted
+   formula.
 
 ## Cleanup
 
-The temporary `/api/debug/tier-calibration` endpoint has been removed.
-`shrinkage.js` is kept as permanent, reusable infrastructure — it has no
-dependency on this specific dataset and is written to be called again for any
-future shrinkage need (e.g. a later per-tier ROI cycle, or shrinking home/away
-base-rate estimates directly).
+The temporary `/api/debug/tier-calibration` and `/api/debug/tier-calibration-v2`
+endpoints have both been removed. `shrinkage.js` is kept as permanent, reusable
+infrastructure — it has no dependency on this specific dataset and is written
+to be called again for any future shrinkage need (e.g. a later per-tier ROI
+cycle, or shrinking home/away base-rate estimates directly).
