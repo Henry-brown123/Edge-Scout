@@ -4021,6 +4021,112 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
+// TEMPORARY DIAGNOSTIC — league x tier historical performance matrix (raw +
+// shrunk), all 9 validated leagues, full tier range, test-only. Not a fresh
+// data source: same population/methodology as Addenda 2 and 5, broken out
+// per league instead of pooled. Read-only, zero new Odds API calls.
+app.get('/api/debug/league-tier-matrix', (_req, res) => {
+  const { empiricalBayesShrink } = require('./shrinkage');
+  const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG } = require('./scoring');
+  const historical    = readJSON('backfill-historical.json') || {};
+  const scoredRecords = historical.scoredRecords || [];
+  const optWeights    = historical.optimisedWeights || {};
+  const closingOdds   = readJSON('closing-odds.json') || {};
+
+  const VALIDATED_LEAGUES = Object.keys(VALIDATED_SPLITS).map(Number);
+  const EDGES = [0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80];
+  const TIER_LABELS = ['<35%', ...EDGES.slice(0, -1).map((e, i) => `${Math.round(e*100)}-${Math.round(EDGES[i+1]*100)}%`), '80%+'];
+  const tierOf = p => {
+    if (p < EDGES[0]) return '<35%';
+    for (let i = 0; i < EDGES.length - 1; i++) if (p >= EDGES[i] && p < EDGES[i+1]) return `${Math.round(EDGES[i]*100)}-${Math.round(EDGES[i+1]*100)}%`;
+    return '80%+';
+  };
+  const SMALL_SAMPLE_N = 30; // same threshold runEvCalibration()'s bandStats() already uses
+
+  // Every posEdge (>=5%) matched fixture, test-only, tagged by league + tier.
+  const rows = [];
+  for (const rec of scoredRecords) {
+    const leagueId = parseInt(rec.leagueId, 10);
+    if (!VALIDATED_LEAGUES.includes(leagueId)) continue;
+    const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
+    if (!co || !rec.actualOutcome || !rec.homeFactors || !rec.awayFactors) continue;
+    const split = VALIDATED_SPLITS[leagueId];
+    if (new Date(rec.date) < new Date(split.testFrom)) continue; // test-only
+    const context = rec.context || classifyFixture(rec.leagueId);
+    const weights = optWeights[context] || optWeights.club_domestic;
+    if (!weights) continue;
+    const rawProbs = model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]);
+    const probs    = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
+    let topOutcome, modelProb, odds;
+    if (probs.home >= probs.draw && probs.home >= probs.away) { topOutcome = 'home'; modelProb = probs.home; odds = co.homeOdds; }
+    else if (probs.away >= probs.draw)                        { topOutcome = 'away'; modelProb = probs.away; odds = co.awayOdds; }
+    else                                                       { topOutcome = 'draw'; modelProb = probs.draw; odds = co.drawOdds; }
+    if (!odds || odds <= 1) continue;
+    const implied = 1 / odds;
+    const edge = (modelProb - implied) / implied;
+    if (edge < 0.05) continue;
+    const won = rec.actualOutcome === topOutcome;
+    rows.push({ leagueId, tier: tierOf(modelProb), returnPct: won ? (odds - 1) : -1 });
+  }
+
+  function ciFor(returns) {
+    const n = returns.length;
+    if (n === 0) return { n: 0, roi: null, ciLow: null, ciHigh: null, sampleVariance: null };
+    const mean = returns.reduce((s,r)=>s+r,0)/n;
+    const variance = n > 1 ? returns.reduce((s,r)=>s+(r-mean)**2,0)/(n-1) : 0;
+    const se = Math.sqrt(variance/n);
+    return { n, roi: +mean.toFixed(4), ciLow: +(mean-1.96*se).toFixed(4), ciHigh: +(mean+1.96*se).toFixed(4), sampleVariance: variance };
+  }
+
+  // Raw grid: cell[leagueId][tier] = { n, roi, ciLow, ciHigh, sampleVariance, thin }
+  const grid = {};
+  for (const leagueId of VALIDATED_LEAGUES) {
+    grid[leagueId] = {};
+    for (const tier of TIER_LABELS) {
+      const cellRows = rows.filter(r => r.leagueId === leagueId && r.tier === tier);
+      const stats = ciFor(cellRows.map(r => r.returnPct));
+      grid[leagueId][tier] = { ...stats, thin: stats.n < SMALL_SAMPLE_N };
+    }
+  }
+
+  // Shrink each tier's league values toward that tier's pooled mean (same pattern as Addendum 2).
+  const shrunkGrid = {};
+  for (const leagueId of VALIDATED_LEAGUES) shrunkGrid[leagueId] = {};
+  for (const tier of TIER_LABELS) {
+    const cells = VALIDATED_LEAGUES
+      .map(leagueId => ({ id: leagueId, leagueId, n: grid[leagueId][tier].n, value: grid[leagueId][tier].roi ?? 0, sampleVariance: grid[leagueId][tier].sampleVariance }))
+      .filter(c => c.n > 0);
+    if (cells.length === 0) continue;
+    const shrunk = empiricalBayesShrink(cells, c => (typeof c.sampleVariance === 'number' && c.sampleVariance > 0 ? c.sampleVariance : 1));
+    for (const c of shrunk) shrunkGrid[c.leagueId][tier] = { shrunk: c.shrunk, weight: c.weight, k: c.k, pooledMean: c.pooledMean };
+  }
+
+  // Row (per-league) and column (per-tier) shrunk averages, n-weighted.
+  const leagueAverages = VALIDATED_LEAGUES.map(leagueId => {
+    let wSum = 0, nSum = 0;
+    for (const tier of TIER_LABELS) {
+      const n = grid[leagueId][tier].n;
+      const shrunkVal = shrunkGrid[leagueId][tier]?.shrunk;
+      if (n > 0 && shrunkVal != null) { wSum += shrunkVal * n; nSum += n; }
+    }
+    return { leagueId, name: LEAGUE_CONFIG[leagueId]?.name, n: nSum, avgShrunkRoi: nSum > 0 ? +(wSum/nSum).toFixed(4) : null };
+  });
+  const tierAverages = TIER_LABELS.map(tier => {
+    let wSum = 0, nSum = 0;
+    for (const leagueId of VALIDATED_LEAGUES) {
+      const n = grid[leagueId][tier].n;
+      const shrunkVal = shrunkGrid[leagueId][tier]?.shrunk;
+      if (n > 0 && shrunkVal != null) { wSum += shrunkVal * n; nSum += n; }
+    }
+    return { tier, n: nSum, avgShrunkRoi: nSum > 0 ? +(wSum/nSum).toFixed(4) : null };
+  });
+
+  res.json({
+    scope: { validatedLeagues: VALIDATED_LEAGUES.map(id => ({ id, name: LEAGUE_CONFIG[id]?.name })), tierLabels: TIER_LABELS, smallSampleFloor: SMALL_SAMPLE_N },
+    grid, shrunkGrid, leagueAverages, tierAverages,
+  });
+});
+
 // Transfer data fetch — completed transfers per team for the current season,
 // used for the first-10-matchdays squad-quality modifier in applyTeamProfileModifiers.
 let _transfersRunning = false;
