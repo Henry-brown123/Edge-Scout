@@ -2676,16 +2676,22 @@ async function renderLeagueTierMatrix() {
   const leagueAvgEl = document.getElementById('ltm-league-avg');
   const tierAvgEl   = document.getElementById('ltm-tier-avg');
   if (leagueAvgEl) {
+    // Label-then-value, both left-aligned as a tight pair (justify-content default:
+    // flex-start) — dead space falls at the row's right edge (the card's middle),
+    // not between the label and its number.
     leagueAvgEl.innerHTML = [...data.leagueAverages].sort((a,b) => (b.avgShrunkRoi??-99) - (a.avgShrunkRoi??-99)).map(l =>
-      `<div style="display:flex;justify-content:space-between;font-size:11px;font-family:'DM Mono',monospace">
+      `<div style="display:flex;gap:8px;font-size:11px;font-family:'DM Mono',monospace">
         <span>${l.name}</span><span class="${(l.avgShrunkRoi??0) >= 0 ? 'c-green' : 'c-red'}">${l.avgShrunkRoi!=null?fmtPct(l.avgShrunkRoi):'—'} <span style="color:var(--muted)">(n=${l.n})</span></span>
       </div>`
     ).join('');
   }
   if (tierAvgEl) {
+    // Value-then-label, both right-aligned as a tight pair (justify-content: flex-end)
+    // — dead space falls at the row's left edge (the card's middle), mirroring the
+    // league table so both tables' dead space meets in the middle of the card.
     tierAvgEl.innerHTML = data.tierAverages.map(t =>
-      `<div style="display:flex;justify-content:space-between;font-size:11px;font-family:'DM Mono',monospace">
-        <span>${t.tier}</span><span class="${(t.avgShrunkRoi??0) >= 0 ? 'c-green' : 'c-red'}">${t.avgShrunkRoi!=null?fmtPct(t.avgShrunkRoi):'—'} <span style="color:var(--muted)">(n=${t.n})</span></span>
+      `<div style="display:flex;justify-content:flex-end;gap:8px;font-size:11px;font-family:'DM Mono',monospace">
+        <span class="${(t.avgShrunkRoi??0) >= 0 ? 'c-green' : 'c-red'}">${t.avgShrunkRoi!=null?fmtPct(t.avgShrunkRoi):'—'} <span style="color:var(--muted)">(n=${t.n})</span></span><span>${t.tier}</span>
       </div>`
     ).join('');
   }
