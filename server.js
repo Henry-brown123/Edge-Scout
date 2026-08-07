@@ -4034,6 +4034,9 @@ app.get('/api/debug/odds-history-floor-check', async (_req, res) => {
     { sport: 'soccer_spain_la_liga',  label: 'La Liga 2015',  date: '2015-08-22T18:00:00Z' },
     { sport: 'soccer_spain_la_liga',  label: 'La Liga 2017',  date: '2017-08-19T18:00:00Z' },
     { sport: 'soccer_spain_la_liga',  label: 'La Liga 2019',  date: '2019-08-18T18:00:00Z' },
+    // Control — known-good date (PL's earliest already-ingested fixture this week),
+    // confirming the request format itself returns real data when data should exist.
+    { sport: 'soccer_epl',            label: 'EPL 2020 (control)', date: '2020-09-12T11:30:00Z' },
   ];
   const results = [];
   for (const p of probes) {
@@ -4042,9 +4045,15 @@ app.get('/api/debug/odds-history-floor-check', async (_req, res) => {
         params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal', date: p.date },
       });
       const events = resp.data?.data || resp.data || [];
+      // previous_timestamp/next_timestamp are the API's own nearest-available-snapshot
+      // pointers — far more definitive than eventCount alone for "is there an archive
+      // here at all" vs "just no snapshot at this exact guessed minute".
       results.push({
         label: p.label, date: p.date, httpStatus: resp.status,
         eventCount: Array.isArray(events) ? events.length : 0,
+        apiTimestamp: resp.data?.timestamp ?? null,
+        previousTimestamp: resp.data?.previous_timestamp ?? null,
+        nextTimestamp: resp.data?.next_timestamp ?? null,
         sampleEvent: Array.isArray(events) && events.length ? { home: events[0].home_team, away: events[0].away_team, bookmakers: (events[0].bookmakers || []).length } : null,
       });
     } catch (e) {
