@@ -1996,13 +1996,25 @@ async function runProfileBackfill(onProgress) {
 // Persists raw fixtures + scored records to data/backfill-historical.json so
 // re-runs only fetch missing league/season pairs.
 
+// Domestic + Champions League extended to 2010 and Europa League to 2014 (2026-08-07):
+// confirmed available via API-Sports' /leagues endpoint (season-depth check this week)
+// and confirmed NOT to unlock any additional Odds API matching (their historical
+// archive hard-floors at 2020-06-06 — verified via /historical/.../odds' own
+// previous_timestamp/next_timestamp pointers returning null/2020-06-06 for six probed
+// pre-2020 dates across two leagues). This grows the pure-calibration population only;
+// it does not touch or require redoing any of the four validated leagues' train/test
+// splits (PL/Ligue1/CL/Serie A) — those splits are defined by a testFrom date only,
+// and every fixture added here is older than every one of those testFrom dates, so it
+// can only enlarge the train side, never touch test. See docs/tier-calibration-analysis.md.
+const HIST_SEASONS_2010 = [2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013, 2012, 2011, 2010];
+const HIST_SEASONS_EUROPA_2014 = [2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014];
 const HISTORICAL_BACKFILL_CONFIG = [
-  { leagueId: '39',  name: 'Premier League',   seasons: [2024, 2023, 2022, 2021, 2020] },
-  { leagueId: '140', name: 'La Liga',           seasons: [2024, 2023, 2022, 2021, 2020] },
-  { leagueId: '135', name: 'Serie A',           seasons: [2024, 2023, 2022, 2021, 2020] },
-  { leagueId: '78',  name: 'Bundesliga',        seasons: [2024, 2023, 2022, 2021, 2020] },
-  { leagueId: '61',  name: 'Ligue 1',           seasons: [2024, 2023, 2022, 2021, 2020] },
-  { leagueId: '2',   name: 'Champions League',  seasons: [2024, 2023, 2022, 2021, 2020] },
+  { leagueId: '39',  name: 'Premier League',   seasons: HIST_SEASONS_2010 },
+  { leagueId: '140', name: 'La Liga',           seasons: HIST_SEASONS_2010 },
+  { leagueId: '135', name: 'Serie A',           seasons: HIST_SEASONS_2010 },
+  { leagueId: '78',  name: 'Bundesliga',        seasons: HIST_SEASONS_2010 },
+  { leagueId: '61',  name: 'Ligue 1',           seasons: HIST_SEASONS_2010 },
+  { leagueId: '2',   name: 'Champions League',  seasons: HIST_SEASONS_2010 },
   { leagueId: '32',  name: 'WC Qual UEFA',      seasons: [2024, 2020] },
   { leagueId: '34',  name: 'WC Qual CONMEBOL',  seasons: [2026, 2022] },
   { leagueId: '31',  name: 'WC Qual CONCACAF',  seasons: [2026, 2022] },
@@ -2012,11 +2024,14 @@ const HISTORICAL_BACKFILL_CONFIG = [
   // fixtures against season 2026 (see LEAGUES config) but the historical config only
   // ever listed seasons through 2024, so the active season was never fetched at all —
   // not a caching-skip problem, a missing-season-entry problem.
-  { leagueId: '179', name: 'Scottish Premiership', seasons: [2026, 2024, 2023, 2022, 2021, 2020] },
-  { leagueId: '88',  name: 'Eredivisie',            seasons: [2026, 2024, 2023, 2022, 2021, 2020] },
-  { leagueId: '94',  name: 'Primeira Liga',         seasons: [2026, 2024, 2023, 2022, 2021, 2020] },
-  { leagueId: '3',   name: 'Europa League',         seasons: [2024, 2023, 2022] },
-  { leagueId: '848', name: 'Conference League',     seasons: [2024, 2023, 2022] },
+  { leagueId: '179', name: 'Scottish Premiership', seasons: [2026, ...HIST_SEASONS_2010] },
+  { leagueId: '88',  name: 'Eredivisie',            seasons: [2026, ...HIST_SEASONS_2010] },
+  { leagueId: '94',  name: 'Primeira Liga',         seasons: [2026, ...HIST_SEASONS_2010] },
+  { leagueId: '3',   name: 'Europa League',         seasons: HIST_SEASONS_EUROPA_2014 },
+  // Conference League: UEFA competition only existed from the 2021-22 season —
+  // API-Sports' own /leagues data confirms 2021 is the earliest season it has, so
+  // there is no deeper archive to extend into here (checked, not assumed).
+  { leagueId: '848', name: 'Conference League',     seasons: [2024, 2023, 2022, 2021] },
 ];
 
 const OPTIMISE_EVERY = 500; // run weight optimisation after every N scored records
@@ -4019,49 +4034,6 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   const { getPIRData } = require('./teamProfiles');
   const data = getPIRData();
   res.json({ ..._pirStatus, count: Object.keys(data).length });
-});
-
-// TEMPORARY DIAGNOSTIC — Odds API pre-2020 historical floor check. A handful
-// of real historical-odds snapshot calls (not a bulk sweep) against known
-// EPL/La Liga Saturday-kickoff dates in 2015/2017/2019, to see whether the
-// archive actually has anything that far back or hard-floors at ~2020.
-// To be removed after review.
-app.get('/api/debug/odds-history-floor-check', async (_req, res) => {
-  const probes = [
-    { sport: 'soccer_epl',            label: 'EPL 2015',      date: '2015-08-15T14:00:00Z' },
-    { sport: 'soccer_epl',            label: 'EPL 2017',      date: '2017-08-19T14:00:00Z' },
-    { sport: 'soccer_epl',            label: 'EPL 2019',      date: '2019-08-17T14:00:00Z' },
-    { sport: 'soccer_spain_la_liga',  label: 'La Liga 2015',  date: '2015-08-22T18:00:00Z' },
-    { sport: 'soccer_spain_la_liga',  label: 'La Liga 2017',  date: '2017-08-19T18:00:00Z' },
-    { sport: 'soccer_spain_la_liga',  label: 'La Liga 2019',  date: '2019-08-18T18:00:00Z' },
-    // Control — known-good date (PL's earliest already-ingested fixture this week),
-    // confirming the request format itself returns real data when data should exist.
-    { sport: 'soccer_epl',            label: 'EPL 2020 (control)', date: '2020-09-12T11:30:00Z' },
-  ];
-  const results = [];
-  for (const p of probes) {
-    try {
-      const resp = await oddsApi.get(`/historical/sports/${p.sport}/odds`, {
-        params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal', date: p.date },
-      });
-      const events = resp.data?.data || resp.data || [];
-      // previous_timestamp/next_timestamp are the API's own nearest-available-snapshot
-      // pointers — far more definitive than eventCount alone for "is there an archive
-      // here at all" vs "just no snapshot at this exact guessed minute".
-      results.push({
-        label: p.label, date: p.date, httpStatus: resp.status,
-        eventCount: Array.isArray(events) ? events.length : 0,
-        apiTimestamp: resp.data?.timestamp ?? null,
-        previousTimestamp: resp.data?.previous_timestamp ?? null,
-        nextTimestamp: resp.data?.next_timestamp ?? null,
-        sampleEvent: Array.isArray(events) && events.length ? { home: events[0].home_team, away: events[0].away_team, bookmakers: (events[0].bookmakers || []).length } : null,
-      });
-    } catch (e) {
-      results.push({ label: p.label, date: p.date, error: e.response?.status ? `${e.response.status}: ${e.response?.data?.message || e.message}` : e.message });
-    }
-    await new Promise(r => setTimeout(r, 200));
-  }
-  res.json({ probes: results });
 });
 
 // ─── LEAGUE × TIER HISTORICAL PERFORMANCE MATRIX ──────────────────────────────
