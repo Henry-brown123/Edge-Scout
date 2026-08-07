@@ -4013,6 +4013,102 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
+// TEMPORARY DIAGNOSTIC — train/test calibration cycle for the remaining
+// unvalidated leagues, same methodology as the PL/Ligue1/CL/Serie A cycles.
+// Chronological 70/30 split by fixture count, base-rate correction decided
+// from TRAIN data only (2pp-threshold rule, documented below), single
+// test-set ROI look. Read-only except for the response — no LEAGUE_CONFIG
+// write happens here; the caller applies the result manually after review,
+// per calibration-rules.md rule 3 (look once, don't auto-loop on it).
+app.get('/api/debug/train-test-cycle', (req, res) => {
+  const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG } = require('./scoring');
+  const historical    = readJSON('backfill-historical.json') || {};
+  const scoredRecords = historical.scoredRecords || [];
+  const optWeights    = historical.optimisedWeights || {};
+  const closingOdds   = readJSON('closing-odds.json') || {};
+
+  const TARGET_LEAGUES = (req.query.leagues || '179,78,140,88,94').split(',').map(Number);
+  const ADJUST_THRESHOLD = 0.02; // 2pp — same magnitude as the PL/Ligue1 corrections this week
+
+  function evalLeague(leagueId) {
+    const all = scoredRecords
+      .filter(r => parseInt(r.leagueId, 10) === leagueId && r.actualOutcome && r.homeFactors && r.awayFactors)
+      .sort((a, b) => new Date(a.date) - new Date(b.date));
+    if (all.length < 100) return { leagueId, error: 'insufficient population', n: all.length };
+
+    const splitIdx = Math.floor(all.length * 0.7);
+    const train = all.slice(0, splitIdx);
+    const test  = all.slice(splitIdx);
+    const testFrom = test[0].date;
+
+    const trainN = train.length;
+    const homeN = train.filter(r => r.actualOutcome === 'home').length;
+    const drawN = train.filter(r => r.actualOutcome === 'draw').length;
+    const awayN = train.filter(r => r.actualOutcome === 'away').length;
+    const trainRates = { home: homeN/trainN, draw: drawN/trainN, away: awayN/trainN };
+
+    const current = LEAGUE_CONFIG[leagueId];
+    const proposed = { ...current };
+    const adjustments = [];
+    for (const [key, rateKey] of [['avgHomeWinRate','home'],['avgDrawRate','draw'],['avgAwayWinRate','away']]) {
+      const diff = trainRates[rateKey] - current[key];
+      if (Math.abs(diff) >= ADJUST_THRESHOLD) {
+        adjustments.push({ field: key, from: current[key], to: +trainRates[rateKey].toFixed(4), diffPp: +(diff*100).toFixed(2) });
+        proposed[key] = +trainRates[rateKey].toFixed(4);
+      }
+    }
+    // Renormalise so the three rates still sum to 1 after any adjustment.
+    const sum = proposed.avgHomeWinRate + proposed.avgDrawRate + proposed.avgAwayWinRate;
+    proposed.avgHomeWinRate = +(proposed.avgHomeWinRate / sum).toFixed(4);
+    proposed.avgDrawRate    = +(proposed.avgDrawRate    / sum).toFixed(4);
+    proposed.avgAwayWinRate = +(proposed.avgAwayWinRate / sum).toFixed(4);
+
+    // Single test-set look — score every test fixture with the PROPOSED config only
+    // (never re-run against test with alternate proposals; this is the one look).
+    const proposedConfigMap = { ...LEAGUE_CONFIG, [leagueId]: proposed };
+    const matched = [];
+    for (const rec of test) {
+      const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
+      if (!co) continue;
+      const context = rec.context || classifyFixture(rec.leagueId);
+      const weights = optWeights[context] || optWeights.club_domestic;
+      if (!weights) continue;
+      const rawProbs = model.predict(rec.homeFactors, rec.awayFactors, weights, context, proposedConfigMap[leagueId]);
+      const probs    = applyLeagueBiasCorrection(rawProbs, leagueId, proposedConfigMap);
+      let topOutcome, modelProb, odds;
+      if (probs.home >= probs.draw && probs.home >= probs.away) { topOutcome = 'home'; modelProb = probs.home; odds = co.homeOdds; }
+      else if (probs.away >= probs.draw)                        { topOutcome = 'away'; modelProb = probs.away; odds = co.awayOdds; }
+      else                                                       { topOutcome = 'draw'; modelProb = probs.draw; odds = co.drawOdds; }
+      if (!odds || odds <= 1) continue;
+      const implied = 1 / odds;
+      const edge = (modelProb - implied) / implied;
+      const won = rec.actualOutcome === topOutcome;
+      matched.push({ edge, won, odds });
+    }
+    const posEdge = matched.filter(m => m.edge >= 0.05);
+    let roi = null, ciLow = null, ciHigh = null;
+    if (posEdge.length > 0) {
+      const returns = posEdge.map(m => m.won ? (m.odds - 1) : -1);
+      const mean = returns.reduce((s,r)=>s+r,0) / returns.length;
+      const variance = returns.length > 1 ? returns.reduce((s,r)=>s+(r-mean)**2,0)/(returns.length-1) : 0;
+      const se = Math.sqrt(variance / returns.length);
+      roi = +mean.toFixed(4); ciLow = +(mean-1.96*se).toFixed(4); ciHigh = +(mean+1.96*se).toFixed(4);
+    }
+
+    return {
+      leagueId, name: current.name,
+      trainN, testN: test.length, testFrom,
+      trainRates: { home: +trainRates.home.toFixed(4), draw: +trainRates.draw.toFixed(4), away: +trainRates.away.toFixed(4) },
+      currentConfig: { avgHomeWinRate: current.avgHomeWinRate, avgDrawRate: current.avgDrawRate, avgAwayWinRate: current.avgAwayWinRate },
+      adjustments,
+      proposedConfig: { avgHomeWinRate: proposed.avgHomeWinRate, avgDrawRate: proposed.avgDrawRate, avgAwayWinRate: proposed.avgAwayWinRate },
+      testResult: { matchedN: matched.length, posEdgeN: posEdge.length, roi, ciLow, ciHigh, decisionGrade: posEdge.length >= 300 },
+    };
+  }
+
+  res.json({ threshold: ADJUST_THRESHOLD, results: TARGET_LEAGUES.map(evalLeague) });
+});
+
 // Transfer data fetch — completed transfers per team for the current season,
 // used for the first-10-matchdays squad-quality modifier in applyTeamProfileModifiers.
 let _transfersRunning = false;
