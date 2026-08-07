@@ -829,6 +829,151 @@ interactive browser verification carries the same limitation noted in
 Addendum 3 (no `APP_PASSWORD` available in this environment) — recommend a
 visual check on the live dashboard after deploy.
 
+## Addendum 5 — Five more leagues validated, tier baseline widened to the full range
+
+Triggered by the tier tracker (Addendum 4) reporting zero populated
+comparisons — every live bet fell in a league without a validated split, or
+a tier outside Addendum 2's 45-70% scope. This addendum closes both gaps:
+new train/test cycles for the remaining active leagues, and a widened tier
+baseline covering the full observed probability range. Follows
+`calibration-rules.md` rules 1-3, 5, 6, 9 throughout — same discipline as
+the original four leagues, no shortcuts. Zero new Odds API calls (confirmed
+via unchanged `apiQuotaUsedToday` across the whole cycle).
+
+### Part A: five new validated leagues
+
+Chronological 70/30 split by fixture count (consistent, mechanical rule
+applied identically to all five — no per-league judgment calls that could
+smuggle in test-set peeking). Base-rate correction decided from **train data
+only**, before any test-set look: for each of home/draw/away rate, if the
+train-observed frequency differs from the current config by ≥2pp (the same
+magnitude of correction PL and Ligue 1 got earlier this week), the config is
+updated to match train reality. This is a mechanical, pre-committed rule, not
+chosen after seeing results.
+
+| League | Train n / Test n | Split date | Adjustment | Test ROI (posEdgeN) | 95% CI | Decision-grade? |
+|---|---|---|---|---|---|---|
+| Scottish Premiership | 820 / 352 | 2024-01-02 | Home −3.05pp, Draw +2.28pp | −0.5% (126) | [−23.5%, +22.5%] | No |
+| Bundesliga | 1,077 / 462 | 2024-01-20 | None (train matched config within 2pp) | −20.2% (138) | [−41.3%, +1.0%] | No — closest of any league to excluding zero |
+| La Liga | 1,330 / 570 | 2024-01-12 | None | −9.6% (196) | [−30.8%, +11.6%] | No |
+| Eredivisie | 1,115 / 478 | 2024-01-21 | Away +2.54pp | −17.9% (115) | [−43.3%, +7.6%] | No |
+| Primeira Liga | 1,077 / 462 | 2024-01-18 | Away +5.77pp (largest correction this cycle) | +5.5% (143) | [−34.9%, +46.0%] | No |
+
+**All five are now `calibrationReliable: true`, `status: 'validated'`** in
+`CALIBRATION_AUDIT` (commit `ee97ca6`). None show a decision-grade or
+statistically confirmed edge — same honest pattern as PL/Ligue 1/Champions
+League: genuine validation resolves the *methodology* question, it doesn't
+manufacture an edge that isn't there. Scottish Premiership's split is the one
+that specifically resolves this week's earlier-confirmed circularity
+finding (base rates had been fit against the exact population used to report
+ROI) — it's now a clean, held-out result.
+
+**Decision flagged:** `homeAdvBaseWeight` for Bundesliga and La Liga (both
+previously tuned against the full population — the exact overfitting pattern
+this whole week's work exists to close) was deliberately left untouched this
+cycle. This cycle's mechanical rule only ever corrects the three win/draw/
+away rate fields; touching a differently-shaped parameter like
+`homeAdvBaseWeight` under the same 2pp-style rule would need its own
+football-reasoned methodology, not a rushed extension of this one. Both
+leagues are marked `validated` for their base rates specifically, with the
+`homeAdvBaseWeight` caveat spelled out in their `CALIBRATION_AUDIT` note —
+flagged for a dedicated follow-up cycle, not silently left inconsistent.
+
+**World Cup: deliberately not attempted.** Confirmed in this document's own
+Scope section — zero pure-calibration population (every WC scored record is
+missing the fields needed to run the live pipeline against it) — and the
+tournament has concluded, so no further data will ever accumulate. Leaving
+it untested is the documented, correct decision, not an oversight.
+
+### Part B: tier baseline widened to the full range
+
+Same methodology as Addendum 2's "Before" (raw, uncorrected) figures, now
+pooled across **all nine** validated leagues, test-only fixtures per each
+league's own boundary above, across the **full** observed range rather than
+just 45-70%.
+
+**Calibration (pooled, test-only, 9 leagues):**
+
+| Tier | n | Mean predicted | Hit rate | Calibration error |
+|---|---|---|---|---|
+| 35-40% | 589 | 38.5% | 33.1% | +5.4pp |
+| 40-45% | 1,141 | 42.5% | 41.1% | +1.4pp |
+| 45-50% | 956 | 47.5% | 54.2% | −6.7pp |
+| 50-55% | 611 | 52.2% | 59.4% | −7.2pp |
+| 55-60% | 380 | 57.4% | 64.5% | −7.1pp |
+| 60-65% | 279 | 62.3% | 74.9% | −12.6pp |
+| 65-70% | 93 | 66.4% | 87.1% | −20.7pp |
+
+No test-only fixture across any of the nine validated leagues reaches 70%
+raw probability — 70-75%/75-80%/80%+ are all empty here (they had a handful
+of entries in the original *mixed* population from Phase 1, but none survive
+once restricted to test-only). The underconfidence pattern from the
+Addendum's Part A holds up again, now on a larger, cleaner, fully
+out-of-sample population spanning nine leagues instead of four — if
+anything this is the most credible version of the finding produced all
+week.
+
+**ROI (pooled, test-only, 9 leagues, posEdge ≥5%):**
+
+| Tier | n | ROI | 95% CI | Decision-grade? |
+|---|---|---|---|---|
+| <35% | 1 | +261% | — | No (n=1, meaningless) |
+| 35-40% | 249 | −13.4% | [−33.6%, +6.8%] | No |
+| **40-45%** | **430** | **−21.5%** | **[−34.4%, −8.6%]** | **Yes — CI excludes zero** |
+| 45-50% | 269 | +4.4% | [−12.8%, +21.5%] | No |
+| 50-55% | 155 | +1.8% | [−17.3%, +20.9%] | No |
+| 55-60% | 72 | +28.6% | [−10.5%, +67.7%] | No |
+| 60-65% | 26 | +151% | [−40.0%, +342%] | No — extreme outlier, n=26 |
+| 65-70% | 4 | +81.8% | [+73.4%, +90.1%] | No (n=4) |
+
+**This is the single most important number produced by any tier-calibration
+work this week: the 40-45% tier is the first result all week to be both
+decision-grade by volume (n=430, comfortably above rule 6's ~300-400 floor)
+and statistically confirmed (95% CI entirely below zero).** Pooled across
+nine leagues and a genuinely held-out test period, bets in this specific
+raw-probability tier have reliably lost money. This is a real, actionable
+finding — the honest reading is "avoid this tier," not "wait for more data."
+Every other tier remains indicative-only (below the decision-grade floor) or
+is an obvious small-sample artifact (60-65%'s +151% on n=26 should not be
+read as signal).
+
+This table is now the live baseline behind `/api/tier-performance`'s
+`HISTORICAL_TIER_BASELINE` — see Addendum 4 for the endpoint and UI this
+feeds.
+
+### Part C: tracker re-verified against real production data
+
+`TIER_PERF_VALIDATED_LEAGUES` in `/api/tier-performance` was updated from
+the original four league IDs to all nine. Spot-checked against the live
+endpoint post-deploy (same approach as Addendum 4's verification): all eight
+populated historical tiers render correctly, and the endpoint's
+`otherLeagueActivity` list correctly still isolates any bet in a
+non-validated league. As of this check, real production bet volume remains
+too low to populate the *live* side of the comparison yet — see "Still
+outstanding" below.
+
+### Still outstanding
+
+- **`homeAdvBaseWeight` for Bundesliga and La Liga** remains tuned against
+  the full population with no holdout — flagged above, needs its own
+  dedicated cycle with a football-reasoned methodology, not a rushed
+  extension of this week's rate-only rule.
+- **Live-side population is still empty.** All nine leagues and the full
+  tier range now have a historical baseline, but as of this check none of
+  the real bets logged so far land in a validated league within a populated
+  tier — the tracker's live column will start filling in as paper/real
+  trading continues, not from anything left undone here.
+- **The 40-45% decision-grade negative finding has not been acted on
+  anywhere.** No config, gating, or bet-triggering change was made in
+  response to it — per this task's constraints, this stays analysis and
+  display infrastructure. Surfacing it clearly (here, and in the tracker's
+  baseline) is the deliverable; deciding what to do about it is a separate,
+  explicit decision for later.
+- **Scottish Premiership, Bundesliga, La Liga, Eredivisie, and Primeira
+  Liga's ROI results are all indicative-only** (below the rule-6 floor) —
+  none should be read as confirmed edges in either direction, same caveat
+  as the original four leagues carried all week.
+
 ## Decisions made without asking — flagged for review
 
 1. **Bucket width/range** (35-80% in 5pp steps, nesting inside the diagnostic
@@ -868,7 +1013,8 @@ visual check on the live dashboard after deploy.
 ## Cleanup
 
 The temporary `/api/debug/tier-calibration`, `/api/debug/tier-calibration-v2`,
-`/api/debug/platt-recalibration`, and `/api/debug/platt-roi-by-tier`
+`/api/debug/platt-recalibration`, `/api/debug/platt-roi-by-tier`,
+`/api/debug/train-test-cycle`, and `/api/debug/tier-baseline-wide`
 endpoints have all been removed. `shrinkage.js` is kept as permanent, reusable
 infrastructure — it has no
 dependency on this specific dataset and is written to be called again for any
