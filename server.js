@@ -4036,6 +4036,84 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
+// TEMPORARY DIAGNOSTIC — re-run of the original pooled + per-league tier
+// calibration check (5pp bins, 35-80%+) against the expanded post-2010
+// historical population, plus per-league before/after fixture counts.
+// Same methodology as the original Phase 1 check and Addendum 5's widened
+// range. Read-only, zero new Odds API calls (uses backfill-historical.json
+// only). To be removed after review.
+app.get('/api/debug/expanded-tier-check', (_req, res) => {
+  const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG } = require('./scoring');
+  const historical    = readJSON('backfill-historical.json') || {};
+  const scoredRecords = historical.scoredRecords || [];
+  const optWeights    = historical.optimisedWeights || {};
+
+  const EDGES = [0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80];
+  const TIER_LABELS = ['<35%', ...EDGES.slice(0, -1).map((e, i) => `${Math.round(e*100)}-${Math.round(EDGES[i+1]*100)}%`), '80%+'];
+  const tierOf = p => {
+    if (p < EDGES[0]) return '<35%';
+    for (let i = 0; i < EDGES.length - 1; i++) if (p >= EDGES[i] && p < EDGES[i+1]) return `${Math.round(EDGES[i]*100)}-${Math.round(EDGES[i+1]*100)}%`;
+    return '80%+';
+  };
+
+  const BEFORE_COUNTS = {
+    39: 1900, 140: 1900, 78: 1539, 135: 1901, 61: 1757, 2: 1057,
+    179: 1172, 88: 1593, 94: 1539, 3: 592, 848: 1149, 1: 0,
+  };
+
+  const scored = [];
+  for (const rec of scoredRecords) {
+    const leagueId = parseInt(rec.leagueId, 10);
+    if (!LEAGUE_CONFIG[leagueId]) continue; // same 12-league scope as the original check
+    if (!rec.actualOutcome || !rec.homeFactors || !rec.awayFactors) continue;
+    const context = rec.context || classifyFixture(rec.leagueId);
+    const weights = optWeights[context] || optWeights.club_domestic;
+    if (!weights) continue;
+    const rawProbs = model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]);
+    const probs    = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
+    let topOutcome, modelProb;
+    if (probs.home >= probs.draw && probs.home >= probs.away) { topOutcome = 'home'; modelProb = probs.home; }
+    else if (probs.away >= probs.draw)                        { topOutcome = 'away'; modelProb = probs.away; }
+    else                                                       { topOutcome = 'draw'; modelProb = probs.draw; }
+    scored.push({ leagueId, modelProb, correct: rec.actualOutcome === topOutcome, tier: tierOf(modelProb) });
+  }
+
+  const afterCounts = {};
+  for (const lid of Object.keys(LEAGUE_CONFIG).map(Number)) {
+    afterCounts[lid] = scored.filter(s => s.leagueId === lid).length;
+  }
+
+  const pooledTiers = TIER_LABELS.map(label => {
+    const rows = scored.filter(s => s.tier === label);
+    const n = rows.length;
+    if (n === 0) return { tier: label, n: 0 };
+    const meanPredicted = rows.reduce((s, r) => s + r.modelProb, 0) / n;
+    const hitRate = rows.filter(r => r.correct).length / n;
+    return { tier: label, n, meanPredicted: +meanPredicted.toFixed(4), hitRate: +hitRate.toFixed(4), calibrationError: +(meanPredicted - hitRate).toFixed(4) };
+  });
+
+  const tierLeagueRaw = {};
+  for (const label of TIER_LABELS) {
+    const pooled = pooledTiers.find(t => t.tier === label);
+    const cells = [];
+    for (const lid of Object.keys(LEAGUE_CONFIG).map(Number)) {
+      const rows = scored.filter(s => s.tier === label && s.leagueId === lid);
+      const n = rows.length;
+      if (n === 0) continue;
+      const hitRate = rows.filter(r => r.correct).length / n;
+      cells.push({ league: LEAGUE_CONFIG[lid].name, leagueId: lid, n, hitRate: +hitRate.toFixed(4), deviation: pooled ? +(hitRate - pooled.hitRate).toFixed(4) : null });
+    }
+    tierLeagueRaw[label] = cells;
+  }
+
+  res.json({
+    scope: { totalScoredRecords: scoredRecords.length, inScopeFixtures: scored.length, beforeTotal: Object.values(BEFORE_COUNTS).reduce((a,b)=>a+b,0) },
+    perLeagueCounts: Object.keys(LEAGUE_CONFIG).map(Number).map(lid => ({ leagueId: lid, name: LEAGUE_CONFIG[lid].name, before: BEFORE_COUNTS[lid] ?? null, after: afterCounts[lid], delta: afterCounts[lid] - (BEFORE_COUNTS[lid] ?? 0) })),
+    pooledTiers,
+    tierLeagueRaw,
+  });
+});
+
 // ─── LEAGUE × TIER HISTORICAL PERFORMANCE MATRIX ──────────────────────────────
 // Reference/diagnostic view, NOT a live tracker and NOT a gate — see
 // docs/tier-calibration-analysis.md Addendum 6. Static backtest snapshot
