@@ -10,13 +10,29 @@ const { computeModelProb, WEIGHTS_BY_CONTEXT, LEAGUE_CONFIG } = require('../scor
 
 const WEIGHTS_PATH = path.join(__dirname, 'gbdt-weights.json');
 
+// Bug fixed 2026-08-08 (docs/model-versioning.md): caching _model forever and relying
+// on server.js's checkAndRetrain()/runGbdtRetrain() to `delete require.cache[...]` after
+// a retrain does NOT actually hot-reload anything — server.js holds a permanent
+// `const model = require('./models/interface')` reference bound once at process
+// startup, and clearing require.cache only affects *future* require() calls, not that
+// existing binding. A retrain would silently write new weights to disk while every
+// live prediction kept using the old in-memory model until the whole process happened
+// to restart. Fixed by checking the weights file's mtime on every load and reloading
+// whenever it changes — a cheap stat() call, no restart dependency either way.
 let _model = null;
+let _modelMtimeMs = null;
 function loadModel() {
-  if (_model) return _model;
-  if (!fs.existsSync(WEIGHTS_PATH)) throw new Error('gbdt-weights.json not found — run models/gbdt-train.js first');
+  let mtimeMs;
+  try {
+    mtimeMs = fs.statSync(WEIGHTS_PATH).mtimeMs;
+  } catch {
+    throw new Error('gbdt-weights.json not found — run models/gbdt-train.js first');
+  }
+  if (_model && _modelMtimeMs === mtimeMs) return _model;
   _model = JSON.parse(fs.readFileSync(WEIGHTS_PATH, 'utf8'));
+  _modelMtimeMs = mtimeMs;
   const m = _model.metrics;
-  console.log(`[model] GBDT loaded — trainedAt=${_model.trainedAt} trainN=${_model.trainN} testN=${_model.testN}`);
+  console.log(`[model] GBDT (re)loaded — trainedAt=${_model.trainedAt} trainN=${_model.trainN} testN=${_model.testN}`);
   console.log(`[model] Validation: log-loss ${m.logLossGBDT.toFixed(4)} (linear ${m.logLossLinear.toFixed(4)}) | Brier ${m.brierGBDT.toFixed(4)} (linear ${m.brierLinear.toFixed(4)})`);
   return _model;
 }

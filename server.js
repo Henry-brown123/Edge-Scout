@@ -2327,7 +2327,7 @@ function runGbdtRetrain(reason) {
   const SAFETY_TIMEOUT_MS = 40 * 60 * 1000;
   const killTimer = setTimeout(() => {
     if (_retrainProcess === child) {
-      console.error('[GBDT] Retrain exceeded 20-minute safety timeout — killing');
+      console.error('[GBDT] Retrain exceeded 40-minute safety timeout — killing');
       child.kill('SIGKILL');
     }
   }, SAFETY_TIMEOUT_MS);
@@ -2337,11 +2337,11 @@ function runGbdtRetrain(reason) {
     _retrainProcess = null;
     const finishedAt = new Date().toISOString();
     if (code === 0) {
-      console.log('[GBDT] Retraining complete — reloading model weights');
-      const iface = path.join(__dirname, 'models/interface.js');
-      const gbdt  = path.join(__dirname, 'models/gbdt.js');
-      delete require.cache[require.resolve(iface)];
-      delete require.cache[require.resolve(gbdt)];
+      // No require.cache trick needed here — models/gbdt.js's loadModel() checks the
+      // weights file's mtime on every call and reloads itself when it changes (fixed
+      // 2026-08-08, docs/model-versioning.md). The next model.predict()/getVersion()
+      // call anywhere in this same process picks up the new weights automatically.
+      console.log('[GBDT] Retraining complete — new weights will be picked up on next predict()');
       writeJSON('retrain-pending.json', { pending: false });
       writeJSON('retrain-status.json', { status: 'success', reason, startedAt, finishedAt, error: null, exitCode: code, tail: output.slice(-4000) });
     } else {
@@ -5813,6 +5813,18 @@ app.get('/api/debug/league-backfill', (req, res) => {
 });
 
 const _serverStartedAt = new Date().toISOString();
+
+// TEMP diagnostic — confirms the actual live `model` object server.js uses for real
+// predictions (not just gbdt-weights.json on disk) reports the post-retrain version.
+// Verifies the mtime-reload fix in models/gbdt.js actually works in this running
+// process. Zero side effects. Temporary, removed once confirmed.
+app.get('/api/debug/model-version-check', (_req, res) => {
+  try {
+    res.json({ liveModelVersion: model.getVersion ? model.getVersion() : 'no getVersion()' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 app.get('/api/server-status', async (_req, res) => {
   // Disk writability check
