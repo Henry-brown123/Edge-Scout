@@ -2319,10 +2319,12 @@ function runGbdtRetrain(reason) {
   child.stdout.on('data', d => { output += d; process.stdout.write(d); });
   child.stderr.on('data', d => { output += d; process.stderr.write(d); });
 
-  // Safety cap — training this population has never been timed at this scale before,
-  // so this is a generous ceiling rather than a tuned figure. Kill rather than let a
-  // runaway process hold the slot open forever.
-  const SAFETY_TIMEOUT_MS = 20 * 60 * 1000;
+  // Safety cap. First real attempt at this population size (50,253 records: 40,202
+  // train / 10,051 test) finished home+draw and was ~75% through away's 200 trees at
+  // the 20-minute mark before being killed — so real end-to-end time is a bit over 20
+  // minutes, not wildly beyond it. 40 minutes gives real headroom without leaving a
+  // runaway process to hold the slot open indefinitely.
+  const SAFETY_TIMEOUT_MS = 40 * 60 * 1000;
   const killTimer = setTimeout(() => {
     if (_retrainProcess === child) {
       console.error('[GBDT] Retrain exceeded 20-minute safety timeout — killing');
