@@ -21,8 +21,16 @@ const SUBSAMPLE = 0.70; // stochastic subsampling per tree — reduces overfitti
 const L2_LAMBDA = 1.0;  // L2 regularisation on leaf values (Newton step)
 
 // ─── DATA LOADING ─────────────────────────────────────────────────────────────
+// Bug fixed 2026-08-08 (docs/model-versioning.md): this used to always read the
+// checked-in local data/backfill-historical.json snapshot regardless of DATA_DIR,
+// so the live model silently never trained on production data. server.js passes
+// DATA_DIR into this script's env (checkAndRetrain / runGbdtRetrain) specifically
+// so this resolves the same way server.js's own DATA_DIR does — falls back to the
+// local data/ dir only when DATA_DIR truly isn't set (e.g. run standalone in dev).
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../data');
+
 function loadData() {
-  const raw = JSON.parse(fs.readFileSync(path.join(__dirname, '../data/backfill-historical.json'), 'utf8'));
+  const raw = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'backfill-historical.json'), 'utf8'));
   const records = raw.scoredRecords || [];
   return records
     .filter(r => r.homeFactors && r.awayFactors && r.actualOutcome && r.context)
@@ -250,7 +258,7 @@ function bandAccuracy(records, probFn) {
   console.log('║  GBDT + Platt Scaling — Training & Validation   ║');
   console.log('╚══════════════════════════════════════════════════╝\n');
 
-  console.log('Loading data...');
+  console.log(`Loading data... (DATA_DIR=${DATA_DIR}, env DATA_DIR=${process.env.DATA_DIR ?? '(unset)'})`);
   const all    = loadData();
   const { train, test } = splitData(all);
   console.log(`  Total: ${all.length}  |  Train: ${train.length}  |  Test (held-out): ${test.length}`);
