@@ -1301,6 +1301,108 @@ none of which repeat or scale with the ingestion work in Part B/C. Part B
 and C are pure API-Sports (fixture fetch) and local computation (scoring,
 tier analysis) respectively.
 
+## Addendum 9 — Dataset integrity confirmed clean; a significant GBDT training-data finding
+
+Follow-up to Addendum 8, verifying the 47,960-fixture expansion is a trustworthy
+baseline before any further work builds on it. Two parts: a data-integrity
+check on the expanded dataset itself, and — a materially bigger finding —
+where the live GBDT model's training data actually comes from.
+
+### Part A: no duplicates, no malformed records, stable across repeats
+
+Checked directly against the live 50,253-record `scoredRecords` population
+(not assumed clean because the code *should* prevent duplicates):
+
+- **Total records: 50,253. Unique fixture IDs (numeric): 50,253. Unique
+  fixture IDs (string): 50,253.** No duplicates of any kind, and no
+  numeric/string type-mismatch duplicates either.
+- **Zero malformed records** — every record has `fixtureId`, `date`,
+  `leagueId`, `context`, `homeFactors`, `awayFactors`, and `actualOutcome`
+  populated. No partial/torn writes from the 5 forced restarts.
+- **Spot-checked all 5 restart-boundary regions directly** (approximate
+  insertion-order positions 27,500 / 35,000 / 41,500 / 45,000 / 47,000 /
+  49,500, plus the first and last records) — every sample carries a real,
+  valid fixture ID, a genuine date somewhere in the 2013–2026 range, and all
+  required fields present.
+- **Re-ran the full check twice** — identical totals and identical
+  per-league breakdown both times, confirming the dataset is stable, not an
+  artifact of read timing.
+
+**Why this held up cleanly, structurally, not just by luck:** every place
+`scoredRecords` gets built or persisted — the main scoring loop, this
+week's new checkpoint save, and the final Phase 4 persist — goes through a
+`Map` keyed by `fixtureId`. Setting the same key twice overwrites in place;
+a `Map` cannot hold two entries under one key. Each restart rebuilds that
+Map fresh from whatever was last saved to disk and only adds fixtures not
+already present. Duplication was never structurally possible via this code
+path — this check confirms that design assumption held under real restart
+conditions, rather than taking it on faith.
+
+**Confirmed: the ~47,960/50,253 figures reported in Addendum 8 are accurate
+and stable.** Nothing needs cleaning up.
+
+### Part B: the live GBDT model has not trained on any of this week's data — confirmed with certainty, not "unknown"
+
+This is a real, previously-undocumented finding, not a null result.
+
+**The model currently in production was trained 2026-07-25, on `trainN:
+6,652` records, and has not been retrained since** — confirmed directly via
+`/api/server-status`'s `model.trainedAt`. This alone was surprising: the
+codebase has an automatic retrain trigger (`checkAndRetrain()`, server.js)
+that fires whenever `scoredCount` crosses a 500-record boundary, and this
+week's expansion crossed *dozens* of those boundaries. It never fired
+successfully.
+
+**Root cause, found in `models/gbdt-train.js`:** the training script's
+`loadData()` reads
+```js
+fs.readFileSync(path.join(__dirname, '../data/backfill-historical.json'), ...)
+```
+— a path resolved relative to the training script's own location, landing
+on the repository's checked-in `data/backfill-historical.json`. This is a
+**different file** from the one the live server reads and writes via
+`DATA_DIR` (the Render persistent disk, `/data/backfill-historical.json`).
+The training script's spawning code (`checkAndRetrain()`) does pass
+`DATA_DIR` into the child process's environment, but `gbdt-train.js` never
+reads `process.env.DATA_DIR` — it ignores it entirely.
+
+**Verified, not inferred:** the checked-in local file has exactly 8,316
+scored records, spanning 2020-10-08 to 2026-03-31. `Math.floor(8316 × 0.8) =
+6,652` — an exact match to the model's reported `trainN`. This confirms with
+certainty (arithmetic, not assumption) that the live model has always
+trained on this static, ~8,300-fixture snapshot, not the growing production
+dataset.
+
+**Practical consequence:** every automatic retrain attempt this week trained
+on the *same unchanged file* it always has, produced a statistically
+near-identical model each time (modulo the trainer's random subsampling),
+and was almost certainly rejected by the trainer's own improvement gate
+(`gbdt-train.js`: a new model is only written if its log-loss beats the
+current one by more than 0.001) — explaining why `trainedAt`/`trainN` never
+moved despite the retrain trigger firing repeatedly.
+
+**Direct answer to the question this task asked:** the newly-ingested
+2010–2019 fixtures (and, in fact, all growth in the production dataset since
+whenever that local snapshot was last regenerated) are **definitively
+outside the GBDT's entire training history — not held out of a specific
+split, never seen by the model in any form.** This is the strongest possible
+version of "out-of-sample" for this week's underconfidence finding: it
+isn't just that a particular league's test set was clean, it's that the
+live model currently making predictions has not been touched by any of the
+data this whole document's tier-calibration analysis is built on.
+
+**Not fixed in this task, per its own scope** — this is a real bug worth a
+dedicated follow-up (`gbdt-train.js` should honor `DATA_DIR` so retraining
+actually uses production data), but changing it is a live-model change,
+explicitly out of scope for an investigation task. Flagged here plainly so
+it's a known, documented issue rather than a silent gap.
+
+### Zero new API calls
+
+Both checks read only the already-stored `backfill-historical.json` and
+already-committed `data/backfill-historical.json` / `gbdt-weights.json`
+files. No Odds API or API-Sports calls were made.
+
 ## Decisions made without asking — flagged for review
 
 1. **Bucket width/range** (35-80% in 5pp steps, nesting inside the diagnostic
@@ -1342,8 +1444,9 @@ tier analysis) respectively.
 The temporary `/api/debug/tier-calibration`, `/api/debug/tier-calibration-v2`,
 `/api/debug/platt-recalibration`, `/api/debug/platt-roi-by-tier`,
 `/api/debug/train-test-cycle`, `/api/debug/tier-baseline-wide`,
-`/api/debug/league-tier-matrix`, `/api/debug/odds-history-floor-check`, and
-`/api/debug/expanded-tier-check` endpoints have all been removed — the
+`/api/debug/league-tier-matrix`, `/api/debug/odds-history-floor-check`,
+`/api/debug/expanded-tier-check`, and `/api/debug/dataset-integrity-check`
+endpoints have all been removed — the
 league-tier-matrix one's output was hard-coded into the permanent
 `/api/league-tier-matrix` endpoint (`LEAGUE_TIER_MATRIX`), same pattern as
 `HISTORICAL_TIER_BASELINE`. `shrinkage.js` is kept as permanent, reusable
