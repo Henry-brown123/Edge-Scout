@@ -694,6 +694,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       </div>
     </div>
     <div id="tier-perf-other" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
+    <div id="tier-perf-model-versions" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
   </div>
 
   <!-- Bookmaker Performance -->
@@ -916,6 +917,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       </div>
     </div>
     <div id="real-tier-perf-other" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
+    <div id="real-tier-perf-model-versions" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
   </div>
 
   <!-- Bookmaker Performance -->
@@ -1138,6 +1140,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       </div>
     </div>
     <div id="combined-tier-perf-other" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
+    <div id="combined-tier-perf-model-versions" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
   </div>
 
   <!-- Bookmaker Performance -->
@@ -2755,6 +2758,22 @@ async function renderTierPerf(mode = 'paper', prefix = '') {
       otherEl.innerHTML = '';
     }
   }
+
+  // Per-model-version sample floor tracking (docs/model-versioning.md) — a brand-new
+  // model version's early results are flagged below decision-grade rather than shown
+  // with the same confidence as an established version.
+  const versionsEl = document.getElementById(`${prefix}tier-perf-model-versions`);
+  if (versionsEl) {
+    if (data.byModelVersion?.length) {
+      versionsEl.innerHTML = 'By model version: ' + data.byModelVersion.map(v => {
+        const roiStr = v.roi != null ? ` (${v.roi >= 0 ? '+' : ''}${(v.roi*100).toFixed(1)}%)` : '';
+        const grade  = v.decisionGrade ? '' : ` <span style="color:var(--warn,#c97a1f)">*below ${data.modelVersionDecisionFloor}-bet decision-grade floor</span>`;
+        return `<span class="mono">${v.modelVersion} n=${v.n}${roiStr}${grade}</span>`;
+      }).join(' · ');
+    } else {
+      versionsEl.innerHTML = '';
+    }
+  }
 }
 
 function toggleBetLogExpanded(mode) {
@@ -3586,12 +3605,13 @@ async function deleteBet(id) {
 
 function exportCSV(mode = 'paper') {
   const bets = STATE.bets.filter(b => mode === 'paper' ? (!b.mode || b.mode === 'paper') : mode === 'real' ? b.mode === 'real' : true);
-  const rows = [['Fixture','League','Bet','Score','ModelProb%','Tier','Odds','Edge%','Stake','P&L','Result']];
+  const rows = [['Fixture','League','Bet','Score','ModelProb%','Tier','Odds','Edge%','Stake','P&L','Result','ModelVersion']];
   bets.forEach(b => rows.push([
     b.fixture, b.leagueName, b.bet, b.successScore,
     b.modelProb != null ? (b.modelProb*100).toFixed(1) : '', tierOfProb(b.modelProb) || '',
     b.bookOdds?.toFixed(2), ((b.edge||0)*100).toFixed(2),
     b.suggestedStake?.toFixed(2), b.pnl?.toFixed(2) || '', b.result || 'pending',
+    b.modelVersion || '',
   ]));
   const csv = rows.map(r => r.join(',')).join('\n');
   const a = document.createElement('a');

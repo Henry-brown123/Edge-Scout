@@ -105,10 +105,18 @@ function buildStandingsIndex(fixtures) {
 //
 // Note: standings computed from in-pool rolling points (no look-ahead).
 
+// Statuses that mean the fixture has a final, confirmed result — never a live/in-progress
+// score. Resolve-before-train guarantee: the historical-backfill fetch (server.js) already
+// requests status=FT and filters to this same set before fixtures reach this function, but
+// that filtering happens in the caller, not here — this function is called from more than
+// one place, so it defends itself rather than trusting every caller to have pre-filtered.
+const FINAL_RESULT_STATUSES = new Set(['FT', 'AET', 'PEN']);
+
 function scoreFixtureFromPool(fix, teamIndex, standingsIndex) {
   const homeId = fix.teams?.home?.id;
   const awayId = fix.teams?.away?.id;
   if (!homeId || !awayId) return null;
+  if (!FINAL_RESULT_STATUSES.has(fix.fixture?.status?.short)) return null;
 
   const hg = Number(fix.goals?.home ?? fix.score?.fulltime?.home);
   const ag = Number(fix.goals?.away ?? fix.score?.fulltime?.away);

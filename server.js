@@ -930,6 +930,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
 
   const rawProbs = model.predict(homeF, awayF, weights, context, leagueConfig);
   let probs = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
+  const modelVersion = model.getVersion ? model.getVersion() : 'unknown';
 
   // FIFA ranking quality adjustment — anchors model when historical data is thin.
   // scale=0 for club_domestic means rankings have no effect there.
@@ -1179,7 +1180,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     homeDataConf, awayDataConf, dataConf,
     homeFormCount, awayFormCount, minFormCount, tierThreshold,
     teamIntel, paperTradeOnly, betMode,
-    goalsCandidates,
+    goalsCandidates, modelVersion,
   };
 }
 
@@ -1279,6 +1280,7 @@ async function runMorningScan(leagueIds) {
             kickoff:      fix.fixture?.date,
             scoredAt:     new Date().toISOString(),
             successScore:    best.successScore,
+            modelVersion:    scored.modelVersion,
             projectedBet:    best.displayLabel || best.bet,
             projectedBetKey: best.bet,
             candidates:      [...scored.results, ...(scored.goalsCandidates || [])],
@@ -1521,6 +1523,7 @@ async function runPreMatchScan(watchingEntry) {
       bet:          best.bet,
       successScore: best.successScore,
       modelProb:    best.modelProb,
+      modelVersion: scored.modelVersion,
       bookOdds:     best.bookOdds,
       impliedProb:  best.impliedProb,
       edge:         best.edge,
@@ -2262,11 +2265,30 @@ async function runHistoricalBackfill({ rescore = false, onProgress } = {}) {
   }
 }
 
+// Gated per docs/model-versioning.md: the every-500-record threshold below is
+// checked automatically, but firing a real retrain requires settings.autoRetrainEnabled
+// === true (default false/unset — manual trigger via POST /api/admin/trigger-retrain
+// is the only path today). Automating this safely is future work; for now, manual
+// control is the priority — a crossed threshold with auto-retrain off just records
+// that a retrain is due, it does not run one.
 function checkAndRetrain(previousCount, newCount) {
   const prevBucket = Math.floor(previousCount / RETRAIN_THRESHOLD);
   const newBucket  = Math.floor(newCount      / RETRAIN_THRESHOLD);
   if (newBucket <= prevBucket) return;
-  console.log(`[GBDT] Retrain threshold crossed (${previousCount} → ${newCount}) — starting retraining`);
+
+  const settings = readJSON('settings.json') || {};
+  if (settings.autoRetrainEnabled !== true) {
+    console.log(`[GBDT] Retrain threshold crossed (${previousCount} → ${newCount}) — auto-retrain is gated off (settings.autoRetrainEnabled is not true). Awaiting manual trigger via POST /api/admin/trigger-retrain.`);
+    writeJSON('retrain-pending.json', { pending: true, thresholdCrossedAt: new Date().toISOString(), previousCount, newCount });
+    return;
+  }
+  runGbdtRetrain(`auto-trigger, threshold crossed (${previousCount} → ${newCount})`);
+}
+
+// Actually runs the retrain — shared by the (gated-off-by-default) auto-trigger above
+// and the manual POST /api/admin/trigger-retrain endpoint.
+function runGbdtRetrain(reason) {
+  console.log(`[GBDT] Starting retrain — ${reason}`);
   try {
     const { execSync } = require('child_process');
     execSync('node scripts/gbdt-train.js', {
@@ -2281,8 +2303,11 @@ function checkAndRetrain(previousCount, newCount) {
     const gbdt  = path.join(__dirname, 'models/gbdt.js');
     delete require.cache[require.resolve(iface)];
     delete require.cache[require.resolve(gbdt)];
+    writeJSON('retrain-pending.json', { pending: false });
+    return { success: true };
   } catch (e) {
     console.error('[GBDT] Retraining failed:', e.message);
+    return { success: false, error: e.message };
   }
 }
 
@@ -3034,6 +3059,34 @@ app.get('/api/tier-performance', (req, res) => {
     return map;
   }
 
+  // Per-model-version sample floor tracking (docs/model-versioning.md). A brand-new
+  // model version's early live results must be visibly flagged as below decision-grade
+  // rather than read with the same confidence as an established version — same rule-6
+  // ~300-400 posEdge floor used throughout this week's calibration work, midpoint used
+  // as a single threshold since this is a whole-version count, not a per-tier cell.
+  const MODEL_VERSION_DECISION_FLOOR = 350;
+  const byVersionMap = {};
+  for (const b of resolved) {
+    const v = b.modelVersion || 'pre-versioning';
+    if (!byVersionMap[v]) byVersionMap[v] = { n: 0, staked: 0, pnl: 0, firstSeen: b.lockedAt, lastSeen: b.lockedAt };
+    const g = byVersionMap[v];
+    g.n++;
+    g.staked += (b.actualStake ?? b.suggestedStake ?? 0);
+    g.pnl    += (b.pnl || 0);
+    if (b.lockedAt && (!g.firstSeen || b.lockedAt < g.firstSeen)) g.firstSeen = b.lockedAt;
+    if (b.lockedAt && (!g.lastSeen  || b.lockedAt > g.lastSeen))  g.lastSeen  = b.lockedAt;
+  }
+  const byModelVersion = Object.entries(byVersionMap)
+    .map(([modelVersion, g]) => ({
+      modelVersion,
+      n: g.n,
+      roi: g.staked ? +(g.pnl / g.staked).toFixed(4) : null,
+      decisionGrade: g.n >= MODEL_VERSION_DECISION_FLOOR,
+      firstSeen: g.firstSeen,
+      lastSeen: g.lastSeen,
+    }))
+    .sort((a, b) => new Date(b.lastSeen) - new Date(a.lastSeen));
+
   const validatedBets = resolved.filter(b => TIER_PERF_VALIDATED_LEAGUES.has(parseInt(b.leagueId, 10)));
   const otherBets      = resolved.filter(b => !TIER_PERF_VALIDATED_LEAGUES.has(parseInt(b.leagueId, 10)));
   const validatedByTier = groupByTier(validatedBets);
@@ -3076,6 +3129,8 @@ app.get('/api/tier-performance', (req, res) => {
     },
     rows,
     otherLeagueActivity,
+    byModelVersion,
+    modelVersionDecisionFloor: MODEL_VERSION_DECISION_FLOOR,
   });
 });
 
@@ -5756,6 +5811,8 @@ app.get('/api/server-status', async (_req, res) => {
     const wp = path.join(__dirname, 'models/gbdt-weights.json');
     if (fs.existsSync(wp)) gbdtMeta = JSON.parse(fs.readFileSync(wp, 'utf8'));
   } catch {}
+  const retrainPending    = readJSON('retrain-pending.json') || { pending: false };
+  const autoRetrainEnabled = (readJSON('settings.json') || {}).autoRetrainEnabled === true;
 
   res.json({
     server: { uptime: Math.floor(process.uptime()), startedAt: _serverStartedAt, nodeVersion: process.version, buildMarker: 'odds-fetch-fix-v2' },
@@ -5792,8 +5849,36 @@ app.get('/api/server-status', async (_req, res) => {
       logLoss:       gbdtMeta?.validation?.logLoss ?? gbdtMeta?.metrics?.logLossGBDT ?? null,
       scoredCount,
       nextRetrainAt,
+      autoRetrainEnabled,
+      retrainPending: retrainPending.pending === true,
+      retrainPendingSince: retrainPending.thresholdCrossedAt ?? null,
     },
     apiQuotaUsedToday,
+  });
+});
+
+// Manual, explicit retrain trigger — the only way a real retrain runs while
+// settings.autoRetrainEnabled is not true (docs/model-versioning.md). Reuses the
+// exact same code path the (gated-off) auto-trigger would use.
+app.post('/api/admin/trigger-retrain', (_req, res) => {
+  const hist = readJSON('backfill-historical.json') || {};
+  const scoredCount = hist.scoredRecords?.length ?? 0;
+  const result = runGbdtRetrain(`manual trigger via POST /api/admin/trigger-retrain (scoredCount=${scoredCount})`);
+  if (!result.success) return res.status(500).json({ success: false, error: result.error });
+
+  let gbdtMeta = null;
+  try {
+    const wp = path.join(__dirname, 'models/gbdt-weights.json');
+    gbdtMeta = JSON.parse(fs.readFileSync(wp, 'utf8'));
+  } catch (e) {
+    return res.status(500).json({ success: false, error: `Retrain script exited cleanly but gbdt-weights.json could not be read: ${e.message}` });
+  }
+  res.json({
+    success:  true,
+    trainedAt: gbdtMeta.trainedAt,
+    trainN:    gbdtMeta.trainN,
+    testN:     gbdtMeta.testN,
+    metrics:   gbdtMeta.metrics,
   });
 });
 

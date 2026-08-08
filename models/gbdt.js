@@ -80,4 +80,12 @@ function predict(homeFactors, awayFactors, _weights, context = 'club_domestic', 
   return { home: pHome / sum, draw: pDraw / sum, away: pAway / sum };
 }
 
-module.exports = { predict, buildFeatures };
+// Version identifier for this model — the trainedAt timestamp it was written with.
+// Used to tag every live prediction (and the bet it produces) with which model
+// version generated it, so live results can be grouped/compared per version.
+function getVersion() {
+  const m = loadModel();
+  return m.trainedAt;
+}
+
+module.exports = { predict, buildFeatures, getVersion };

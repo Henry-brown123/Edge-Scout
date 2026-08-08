@@ -9,4 +9,12 @@ function predict(homeFactors, awayFactors, weights, context = 'club_domestic', l
   return computeModelProb(homeFactors, awayFactors, weights, context, leagueConfig);
 }
 
-module.exports = { predict };
+// The linear model has no training run/timestamp — it's config-driven (LEAGUE_CONFIG
+// + hand-tuned weights), only ever active as interface.js's fallback when
+// gbdt-weights.json is missing. Fixed version string so bets logged under it are
+// still distinguishable from any real GBDT version.
+function getVersion() {
+  return 'linear-fallback';
+}
+
+module.exports = { predict, getVersion };

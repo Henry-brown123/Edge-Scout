@@ -1,7 +1,9 @@
 'use strict';
 // Active model interface.
 // Contract: module must export predict(homeFactors, awayFactors, weights, context, leagueConfig)
-// returning { home, draw, away } probability triple summing to 1.
+// returning { home, draw, away } probability triple summing to 1, and
+// getVersion() returning a string identifying which model/training run produced
+// predictions — threaded onto every bet as `modelVersion` (see server.js scoreOneFixture).
 //
 // Falls back to linear model if gbdt-weights.json is missing so the server
 // can start cleanly on a fresh deploy before weights are present.
