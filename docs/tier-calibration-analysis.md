@@ -1637,6 +1637,135 @@ current state. Worth knowing for any future league-sizing question in this
 codebase: don't trust that endpoint's numbers without checking when the
 cache was last refreshed.
 
+## Addendum 12 — Final Pre-Retrain Baseline
+
+This is the capstone read this whole document has been building toward: a
+one-time, unrepeatable measurement of the frozen live GBDT model
+(`trainedAt: 2026-07-25T08:59:19Z`, `trainN: 6,652`) against the full
+current population, before the `gbdt-train.js` DATA_DIR bug is fixed and
+the model is retrained on everything. Once that happens, none of this
+population is "unseen" again — this is the last chance to read it cleanly.
+**Every future model version gets compared against the numbers in this
+section.**
+
+At capture time, live `scoredCount` stood at **50,253** (all leagues) /
+**47,960** (12-league in-scope population), against a `nextRetrainAt` of
+50,500 — only ~250 records from the existing (bugged, effectively inert)
+auto-retrain trigger firing on its own. This is exactly the race condition
+Phase 2's gating step exists to close before Phase 3 fixes the bug.
+
+Methodology: the exact live pipeline (`model.predict()` → GBDT →
+`applyLeagueBiasCorrection()`, the same call shape `runEvCalibration()` and
+every prior tier-calibration endpoint this week has used — this whole
+document has always been evaluating the live GBDT model, not the diagnostic
+linear one, confirmed by checking the actual code of the original Phase 1
+endpoint). Unlike every prior addendum, **both the calibration table and
+the ROI matrix are restricted to held-out test-only fixtures** for the 9
+leagues with a `VALIDATED_SPLITS` boundary (Premier League, La Liga, Serie
+A, Bundesliga, Ligue 1, Champions League, Scottish Premiership, Eredivisie,
+Primeira Liga) — the cleanest version of this read this project will ever
+produce, since Phase 2 retires the reserved-test-portion concept
+immediately afterward.
+
+### Pooled calibration, held-out test only (n=4,054 across 9 leagues)
+
+| Tier | n | Mean predicted | Actual hit rate | Calibration error |
+|---|---|---|---|---|
+| 35-40% | 589 | 38.5% | 33.1% | +5.4pp |
+| 40-45% | 1,142 | 42.5% | 41.1% | +1.4pp |
+| 45-50% | 957 | 47.5% | 54.2% | −6.7pp |
+| 50-55% | 611 | 52.2% | 59.4% | −7.2pp |
+| 55-60% | 380 | 57.4% | 64.5% | −7.1pp |
+| 60-65% | 279 | 62.3% | 74.9% | −12.6pp |
+| 65-70% | 94 | 66.4% | 87.2% | −20.8pp |
+
+**The underconfidence finding holds on genuinely held-out data, for the
+first time in this document's life.** Every previous read of this pattern
+(original Phase 1, Addendum 8) used the full population, including
+fixtures the model's weights/config had some historical relationship to.
+This table uses only fixtures on or after each league's `testFrom` date —
+zero overlap with anything used to shape the system all week. The shape is
+the same: near-perfect calibration through 45%, then a widening
+underconfidence gap that reaches −20.8pp at 65-70%. At the individual
+league level, **every one of the 9 validated leagues is independently
+underconfident in the 60-65% tier** (errors ranging from Premier League's
+−5.8pp to Serie A's −22.6pp) — this is not a pooling artifact.
+
+### ROI matrix, held-out test only — unchanged from Addendum 6
+
+Pooled (posEdge≥5%, n=1,206 across all tiers):
+
+| Tier | n | ROI |
+|---|---|---|
+| 35-40% | 249 | −13.4% |
+| 40-45% | 430 | −21.5% |
+| 45-50% | 269 | +4.4% |
+| 50-55% | 155 | +1.8% |
+| 55-60% | 72 | +28.6% |
+| 60-65% | 26 | +151.0% |
+
+The per-league 40-45% figures — the tier with the strongest, most
+consistent negative signal — are **numerically identical to Addendum 6**
+(Champions League +37.4%(27), Premier League −8.0%(59), Ligue 1
+−27.6%(56), Bundesliga −36.1%(51), Eredivisie −34.3%(45), Primeira Liga
+−29.7%(52), Serie A −31.1%(39), La Liga −36.6%(58), Scottish Premiership
++0.5%(43)) and the shrunk figures likewise reproduce exactly. This is
+expected, not a bug: the entire pre-2020 expansion (Addendum 8) can only
+ever land on the train side of a `testFrom` boundary from 2023-2024
+onward, so the test-only ROI population has not changed by a single
+fixture since Addendum 6 was written. **This section's role is to confirm,
+formally and for the last time, that Addendum 6's numbers are the correct
+final pre-retrain figure** — not to produce new ones. All nine leagues
+still show a negative shrunk-ROI in the 40-45% tier (see Addendum 6 for
+the full shrunk table); that conclusion is unchanged and is the ROI half
+of this baseline.
+
+### Europa League and Conference League — reported separately, not held-out
+
+Neither league has a `VALIDATED_SPLITS` entry, so neither can contribute
+to the test-only figures above without contaminating them. Reported here
+against their **full** population instead, explicitly caveated:
+
+| League | Tier | n | Mean predicted | Hit rate | Error |
+|---|---|---|---|---|---|
+| Europa League | 55-60% | 468 | 57.3% | 57.3% | +0.1pp |
+| Europa League | 60-65% | 233 | 61.9% | 62.2% | −0.3pp |
+| Conference League | 55-60% | 180 | 57.5% | 66.1% | −8.6pp |
+| Conference League | 60-65% | 114 | 62.1% | 71.9% | −9.8pp |
+
+Europa League looks close to perfectly calibrated across every populated
+tier; Conference League shows the same underconfidence direction as the
+validated leagues, milder in places. Neither number should be read with
+the same trust as the validated-league table above — full-population
+figures reflect whatever historical relationship the system already has
+to this data, which is a real methodological difference from the rest of
+this section, not a footnote. ROI (full population, posEdge≥5%): Europa
+League −2.5% (n=178), Conference League +1.3% (n=141) — both far below
+rule 6's decision-grade floor, informational only.
+
+### Conference League 2021-2022: permanent, accepted limitation
+
+Documented in full in Addendum 10 (real coverage gap: only 22% Pinnacle-matched,
+2021-2022 specifically returns zero events for any bookmaker — provider-level,
+not bookmaker-specific) and Addendum 11 (no alternative vendor closes it;
+this looks like a genuine industry-wide blind spot for that competition's
+first two seasons, not a solvable vendor-selection problem). **This is now
+closed as an accepted limitation, not an open question** — no further
+vendor scoping or coverage-chasing is planned for this specific gap. Future
+work on Conference League should proceed with this ceiling in mind rather
+than re-litigating it.
+
+### What this baseline is, precisely
+
+A read of the GBDT model trained 2026-07-25 (`trainN=6,652`, drawn from a
+stale local snapshot the live pipeline never actually fed — see Addendum
+9) against 47,960 in-scope fixtures, the overwhelming majority of which
+that model has never trained on in any capacity. It is not a new tuning
+cycle — no weights, base rates, or config changed as a result of this
+read. It exists so that the model produced in Phase 3 has something
+concrete and fully-documented to be judged against, later, once it has
+accumulated enough live decisions of its own.
+
 ## Decisions made without asking — flagged for review
 
 1. **Bucket width/range** (35-80% in 5pp steps, nesting inside the diagnostic
