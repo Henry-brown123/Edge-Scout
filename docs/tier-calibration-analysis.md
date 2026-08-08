@@ -1403,6 +1403,116 @@ Both checks read only the already-stored `backfill-historical.json` and
 already-committed `data/backfill-historical.json` / `gbdt-weights.json`
 files. No Odds API or API-Sports calls were made.
 
+## Addendum 11 — Alternative odds-vendor scoping: no candidate closes either gap
+
+Pure research task (no API calls, no code, no signups) — scoped four
+candidate vendors against the two confirmed gaps from Addendum 8/10: the
+pre-2020 depth floor and the Conference League 2021-2022 provider-level
+blackout. `LEAGUE_CONFIG` covers 12 leagues: Premier League, La Liga, Serie
+A, Bundesliga, Ligue 1, Scottish Premiership, Eredivisie, Primeira Liga,
+World Cup, and the three UEFA club competitions (Champions League, Europa
+League, Conference League).
+
+**ParlayAPI** — free tier confirmed genuinely free (1,000 credits/month, no
+card required); paid tiers $5-$200/month. Claims "22 soccer leagues from
+2005+," but its own historical-coverage page states this is delivered via
+**football-data.co.uk's bookmaker grid** as the soccer source — i.e. it
+appears to be a wrapper/aggregator over exactly the free source separately
+evaluated below, not an independent feed for soccer. Since football-data.co.uk
+carries domestic league data only (see below), Conference League — a UEFA
+competition, not a domestic league — is very unlikely to be among the 22.
+Could not confirm the exact 22-league list or per-league start dates without
+an account (no page enumerates them; the coverage table loads dynamically).
+Not pursued further given the pass-through relationship to a source already
+ruled out for the UEFA gap.
+
+**OpticOdds** — pricing is fully sales-gated (multi-step contact form, no
+tier or dollar figures published, no free trial). Coverage claims ("25+
+sports, 400+ leagues," "several years of complete price history" for tier-one
+leagues/books) are marketing-level only; no soccer-specific or
+Conference-League-specific depth is documented anywhere public. Getting a
+real answer would require entering a sales conversation, which is a
+credentials/commercial-relationship step this task's constraints ask to
+flag rather than initiate — flagging rather than proceeding.
+
+**SportsDataIO** — resolved the discrepancy: the "2010 onwards" figure comes
+from their **general historical stats/scores product** page
+(`/historical-sports-data`, "detailed statistics across all major sports,
+from 2010 onwards"), not from odds data. Their dedicated
+`/historical-odds` page is explicit and separate: "historical betting lines
+for all major sports from 2019 onwards, with props and futures from 2020."
+The academic/third-party listing the task asked to check against was almost
+certainly citing the stats product, not odds — SportsDataIO's real odds
+floor (2019) is actually slightly worse than Odds API's confirmed 2020-06-06
+floor, not better. Their competition list does name Champions League and
+Europa League but not Conference League explicitly. Pricing is fully
+sales-gated, same caveat as OpticOdds.
+
+**football-data.co.uk** — genuinely free, no signup, plain CSV/Excel
+download, usable programmatically (flat files, not an API — would need
+scheduled bulk-download-and-parse handling rather than a live client).
+Confirmed via their own leagues page: 11 "main" countries + 16 "extra"
+countries, all **domestic league divisions only** — no Champions League,
+Europa League, or Conference League file exists at all. This is a hard,
+structural exclusion, not a depth gap: the site has never tracked UEFA
+competitions in any season. For the leagues it does carry (includes
+Premier League, La Liga, Bundesliga, Serie A, Ligue 1, Eredivisie, Primeira
+Liga, and Scottish football), seasons run back to 1993/94 — comfortably
+covering the pre-2020 gap for 7 of the 8 domestic legs in `LEAGUE_CONFIG`
+(World Cup is not a domestic league and isn't covered either).
+
+### Part B — Ranking and recommendation
+
+| Vendor | Pre-2020 depth | Conference League 2021-22 | Cost | Integration |
+|---|---|---|---|---|
+| football-data.co.uk | **Strong** — domestic legs back to 1993/94 | **None** — UEFA competitions never tracked | Free | Bulk CSV, manual/scheduled parsing |
+| ParlayAPI | Unconfirmed, likely inherits football-data.co.uk's floor for soccer | **Unlikely** — same reasoning as above, unverified | Free tier available | API, real-time + historical endpoints |
+| SportsDataIO | Worse than current (2019 vs Odds API's 2020-06-06) | Not documented; CL/EL named, Conference League not | Sales-gated | API/S3, likely highest integration cost |
+| OpticOdds | Undocumented, marketed as "several years" for tier-one only | Not documented at all | Sales-gated | API |
+
+Neither named gap is closed by any candidate:
+
+- **Pre-2020 depth**: football-data.co.uk is the only one that clearly beats
+  Odds API's 2020-06-06 floor, and it does so for exactly the 7-8 domestic
+  legs where the pure-calibration/ROI population lives — but it's
+  **match-result-and-closing-odds only** (a handful of bookmakers per row,
+  not the live multi-book snapshot structure the current pipeline is built
+  around), so it would need its own ingestion path, not a drop-in extension
+  of `HISTORICAL_BACKFILL_CONFIG`.
+- **Conference League 2021-2022**: no candidate closes this. It's a
+  structural gap (the competition is young and thinly tracked industry-wide,
+  not just by Odds API) rather than a vendor-selection problem.
+  football-data.co.uk never carries UEFA competitions at all; ParlayAPI's
+  soccer data appears to inherit that same limitation; SportsDataIO and
+  OpticOdds don't document Conference League coverage at all, sales-gated or
+  otherwise.
+
+**Recommendation: no vendor here justifies a deeper proof-of-concept trial
+for the Conference League gap** — it looks like a genuine industry-wide
+blind spot for 2021-2022, not a vendor-selection problem, so no PoC is worth
+scoping for that half of the task.
+
+For the **pre-2020 depth** question, football-data.co.uk is the one
+candidate worth a minimal PoC if the pre-2020 population is ever considered
+valuable enough to extend further back than the 2010 cutoff already ingested
+in Addendum 8 (e.g. reaching into the 1990s/2000s) — a check would look like:
+pull 20 real fixtures from a single free CSV (e.g. 2015/16 Premier League),
+confirm real closing-odds fields are populated and team names are matchable
+against existing fixture records, and estimate the bulk-download/parsing
+effort against the payoff. Not executed here, per the task's scope — this is
+purely a note that it's the only candidate with a plausible reason to revisit
+later, not a general endorsement of a new vendor integration now.
+
+No signups, contact-form submissions, or payment-gated pages were initiated
+for OpticOdds or SportsDataIO's real pricing, per the constraint that any
+vendor requiring payment/credential entry to see real coverage detail should
+be flagged rather than pursued. Both are flagged here rather than acted on.
+
+### Cleanup
+
+None needed — no code, no endpoints, no live-data-source changes. Read-only
+web research only.
+
 ## Addendum 10 — Soft-book coverage scoping: real gaps are narrower and different than assumed
 
 Investigates whether mainstream/soft bookmakers on the *same* Odds API
