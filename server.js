@@ -2170,7 +2170,16 @@ async function runHistoricalBackfill({ rescore = false, onProgress } = {}) {
 
       for (const fix of allFixtures) {
         if (scoredMap.has(fix.fixture?.id)) continue;
-        const record = scoreFixtureFromPool(fix, teamIndex, standingsIndex);
+        // One malformed fixture (e.g. from an older season with unexpected API shape)
+        // must not silently kill the whole batch — isolate per-fixture so a single bad
+        // record is skipped and logged rather than aborting everything after it.
+        let record;
+        try {
+          record = scoreFixtureFromPool(fix, teamIndex, standingsIndex);
+        } catch (e) {
+          console.error(`[HistoricalBackfill] scoreFixtureFromPool failed for fixture ${fix.fixture?.id} (${fix.league?.id}/${fix.league?.season}): ${e.message}`);
+          continue;
+        }
         if (record) {
           scoredMap.set(record.fixtureId, record);
           scored++;
