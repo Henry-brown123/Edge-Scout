@@ -5562,6 +5562,154 @@ app.get('/api/ev-calibration', (_req, res) => {
   }
 });
 
+// TEMP diagnostic — Final Pre-Retrain Baseline (task: "Final historical snapshot,
+// permanent walk-forward infrastructure, bug fix, and first controlled retrain").
+// Runs the exact live pipeline (model.predict + applyLeagueBiasCorrection, the
+// same call shape as runEvCalibration() and every prior tier-calibration temp
+// endpoint this week) over the current full scored population, restricted to
+// each of the 9 VALIDATED_SPLITS leagues' held-out test-only fixtures — the
+// last read before that split's purpose is retired and everything merges into
+// train for the retrain. Europa League / Conference League have no validated
+// split, so they're reported separately against their full population with an
+// explicit non-held-out caveat, not mixed into the pooled/validated figures.
+// Zero API calls — pure local computation over already-ingested data.
+app.get('/api/debug/final-pretrain-baseline', (_req, res) => {
+  try {
+    const historical    = readJSON('backfill-historical.json') || {};
+    const scoredRecords = historical.scoredRecords || [];
+    const optWeights    = historical.optimisedWeights || {};
+    const closingOdds   = readJSON('closing-odds.json') || {};
+    const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG } = require('./scoring');
+    const { empiricalBayesShrink, varianceForRoi } = require('./shrinkage');
+
+    const WORLD_CUP_ID = 1;
+    const TIERS = [
+      { label: '<35%',   lo: -Infinity, hi: 0.35 },
+      { label: '35-40%', lo: 0.35, hi: 0.40 },
+      { label: '40-45%', lo: 0.40, hi: 0.45 },
+      { label: '45-50%', lo: 0.45, hi: 0.50 },
+      { label: '50-55%', lo: 0.50, hi: 0.55 },
+      { label: '55-60%', lo: 0.55, hi: 0.60 },
+      { label: '60-65%', lo: 0.60, hi: 0.65 },
+      { label: '65-70%', lo: 0.65, hi: 0.70 },
+      { label: '70-75%', lo: 0.70, hi: 0.75 },
+      { label: '75-80%', lo: 0.75, hi: 0.80 },
+      { label: '80%+',   lo: 0.80, hi: Infinity },
+    ];
+    const ROI_TIER_LABELS = ['<35%', '35-40%', '40-45%', '45-50%', '50-55%', '55-60%', '60-65%', '65-70%'];
+
+    // ── Score every in-scope fixture through the real live pipeline ──
+    const scored = [];
+    for (const rec of scoredRecords) {
+      const lid = parseInt(rec.leagueId, 10);
+      if (!LEAGUE_CONFIG[lid] || lid === WORLD_CUP_ID) continue;
+      if (!rec.homeFactors || !rec.awayFactors || !rec.actualOutcome) continue;
+
+      const context = rec.context || classifyFixture(lid);
+      const weights = optWeights[context] || optWeights.club_domestic;
+      if (!weights) continue;
+
+      let probs;
+      try {
+        const rawProbs = model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[lid]);
+        probs = applyLeagueBiasCorrection(rawProbs, lid, LEAGUE_CONFIG);
+      } catch { continue; }
+
+      let topOutcome, modelProb;
+      if (probs.home >= probs.draw && probs.home >= probs.away) { topOutcome = 'home'; modelProb = probs.home; }
+      else if (probs.away >= probs.draw)                        { topOutcome = 'away'; modelProb = probs.away; }
+      else                                                       { topOutcome = 'draw'; modelProb = probs.draw; }
+      const won = rec.actualOutcome === topOutcome;
+
+      let pinnacleOdds = null, edge = null;
+      const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
+      if (co) {
+        pinnacleOdds = topOutcome === 'home' ? co.homeOdds : topOutcome === 'away' ? co.awayOdds : co.drawOdds;
+        if (pinnacleOdds && pinnacleOdds > 1) edge = (modelProb - (1 / pinnacleOdds)) / (1 / pinnacleOdds);
+        else pinnacleOdds = null;
+      }
+
+      scored.push({ fixtureId: rec.fixtureId, leagueId: lid, date: rec.date, topOutcome, modelProb, won, pinnacleOdds, edge });
+    }
+
+    const validatedIds = Object.keys(VALIDATED_SPLITS).map(Number);
+    const validatedTest = scored.filter(r => {
+      const s = VALIDATED_SPLITS[r.leagueId];
+      return s && new Date(r.date) >= new Date(s.testFrom);
+    });
+    const unvalidated = { 3: scored.filter(r => r.leagueId === 3), 848: scored.filter(r => r.leagueId === 848) };
+
+    // ── Calibration tables ──
+    function calibTable(pop) {
+      return TIERS.map(t => {
+        const inTier = pop.filter(r => r.modelProb >= t.lo && r.modelProb < t.hi);
+        const n = inTier.length;
+        if (!n) return { tier: t.label, n: 0 };
+        const meanPred = inTier.reduce((s, r) => s + r.modelProb, 0) / n;
+        const hitRate  = inTier.filter(r => r.won).length / n;
+        return { tier: t.label, n, meanPred: +(meanPred * 100).toFixed(1), hitRate: +(hitRate * 100).toFixed(1), errorPp: +((meanPred - hitRate) * 100).toFixed(1) };
+      });
+    }
+    const pooledCalibValidated = calibTable(validatedTest);
+    const perLeagueCalibValidated = {};
+    for (const lid of validatedIds) perLeagueCalibValidated[lid] = calibTable(validatedTest.filter(r => r.leagueId === lid));
+    const calibUnvalidated = { 3: calibTable(unvalidated[3]), 848: calibTable(unvalidated[848]) };
+
+    // ── ROI (posEdge >= 5%, same threshold as runEvCalibration/Addendum 6) ──
+    function roiFor(pop) {
+      const posEdge = pop.filter(r => r.edge != null && r.edge >= 0.05);
+      const n = posEdge.length;
+      if (!n) return { n: 0, roi: null, sampleVariance: null };
+      const returns = posEdge.map(r => r.won ? (r.pinnacleOdds - 1) : -1);
+      const roi = returns.reduce((s, x) => s + x, 0) / n;
+      const sampleVariance = returns.reduce((s, x) => s + (x - roi) ** 2, 0) / n;
+      return { n, roi: +(roi * 100).toFixed(1), sampleVariance };
+    }
+    const roiPooled = {};
+    const roiGrid = {};
+    for (const label of ROI_TIER_LABELS) {
+      const t = TIERS.find(x => x.label === label);
+      roiPooled[label] = roiFor(validatedTest.filter(r => r.modelProb >= t.lo && r.modelProb < t.hi));
+      roiGrid[label] = {};
+      for (const lid of validatedIds) {
+        roiGrid[label][lid] = roiFor(validatedTest.filter(r => r.leagueId === lid && r.modelProb >= t.lo && r.modelProb < t.hi));
+      }
+    }
+    // Shrinkage per tier, pooling across the 9 validated leagues (same pattern as Addendum 6)
+    const shrunkGrid = {};
+    for (const label of ROI_TIER_LABELS) {
+      const cells = validatedIds
+        .map(lid => ({ id: lid, n: roiGrid[label][lid].n, value: (roiGrid[label][lid].roi ?? 0) / 100, sampleVariance: roiGrid[label][lid].sampleVariance }))
+        .filter(c => c.n > 0);
+      shrunkGrid[label] = empiricalBayesShrink(cells, varianceForRoi);
+    }
+    const roiUnvalidated = {
+      3:   roiFor(unvalidated[3]),
+      848: roiFor(unvalidated[848]),
+    };
+
+    res.json({
+      scope: {
+        validatedLeagueIds:   validatedIds,
+        unvalidatedLeagueIds: [3, 848],
+        totalScoredInScope:   scored.length,
+        validatedTestN:       validatedTest.length,
+        europaN:              unvalidated[3].length,
+        conferenceN:          unvalidated[848].length,
+      },
+      pooledCalibValidated,
+      perLeagueCalibValidated,
+      calibUnvalidated,
+      roiPooled,
+      roiGrid,
+      shrunkGrid,
+      roiUnvalidated,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0, 8) });
+  }
+});
+
 // ─── LEAGUE MODES ─────────────────────────────────────────────────────────────
 
 const LEAGUE_NAMES_MAP = {
