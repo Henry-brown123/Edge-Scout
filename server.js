@@ -4057,6 +4057,52 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
+// TEMPORARY DIAGNOSTIC — duplicate/integrity check on scoredRecords and the
+// raw fixtures pool after the 2010-extension backfill's 5 forced restarts.
+// Checks both numeric and string fixtureId to catch type-mismatch
+// "duplicates". Read-only, zero new API calls. To be removed after review.
+app.get('/api/debug/dataset-integrity-check', (_req, res) => {
+  const historical    = readJSON('backfill-historical.json') || {};
+  const scoredRecords = historical.scoredRecords || [];
+  const fixtures       = historical.fixtures || [];
+
+  function dupeCheck(list, idFn) {
+    const numericIds = list.map(idFn);
+    const stringIds   = numericIds.map(String);
+    const uniqueNumeric = new Set(numericIds);
+    const uniqueString  = new Set(stringIds);
+    // Find which IDs actually repeat, and how many times
+    const counts = {};
+    for (const id of stringIds) counts[id] = (counts[id] || 0) + 1;
+    const dupes = Object.entries(counts).filter(([, c]) => c > 1).map(([id, c]) => ({ id, count: c }));
+    return {
+      total: list.length,
+      uniqueByNumericValue: uniqueNumeric.size,
+      uniqueByStringValue: uniqueString.size,
+      duplicateIds: dupes.slice(0, 50), // cap for response size
+      duplicateIdCount: dupes.length,
+      totalDuplicateRecords: dupes.reduce((s, d) => s + (d.count - 1), 0),
+    };
+  }
+
+  const scoredCheck   = dupeCheck(scoredRecords, r => r.fixtureId);
+  const fixturesCheck = dupeCheck(fixtures, f => f.fixture?.id);
+
+  // Per-league counts, for the "re-run count twice" stability check (client re-calls this endpoint)
+  const perLeague = {};
+  for (const r of scoredRecords) {
+    const lid = String(r.leagueId);
+    perLeague[lid] = (perLeague[lid] || 0) + 1;
+  }
+
+  res.json({
+    scoredRecords: scoredCheck,
+    fixturesPool: fixturesCheck,
+    perLeagueScoredCounts: perLeague,
+    generatedAt: new Date().toISOString(),
+  });
+});
+
 // ─── LEAGUE × TIER HISTORICAL PERFORMANCE MATRIX ──────────────────────────────
 // Reference/diagnostic view, NOT a live tracker and NOT a gate — see
 // docs/tier-calibration-analysis.md Addendum 6. Static backtest snapshot
