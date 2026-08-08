@@ -1403,6 +1403,130 @@ Both checks read only the already-stored `backfill-historical.json` and
 already-committed `data/backfill-historical.json` / `gbdt-weights.json`
 files. No Odds API or API-Sports calls were made.
 
+## Addendum 10 — Soft-book coverage scoping: real gaps are narrower and different than assumed
+
+Investigates whether mainstream/soft bookmakers on the *same* Odds API
+provider could close the remaining 2020–2026 coverage gaps, without a new
+vendor. Confirmed real API calls (51 total: 3 live enumeration + 48
+historical), no scoring/EV/`LEAGUE_CONFIG` changes.
+
+### Part A: 40 bookmakers available; Bet365 is not one of them
+
+A live enumeration across 3 sports (EPL, Eredivisie, Conference League)
+found **40 distinct bookmakers** in uk/eu regions, including the mainstream
+names this task named as candidates — William Hill, Ladbrokes, Coral, Paddy
+Power, Sky Bet, Unibet (UK/FR/NL/SE variants), Betway, Bet Victor, 888sport,
+BoyleSports, Grosvenor, Virgin Bet, Betano, LeoVegas, Casumo, Coolbet, plus
+the sharp/exchange books already known (Pinnacle, Marathon Bet, Matchbook,
+Betfair, Smarkets). **Bet365 is not available through this provider at
+all** — absent from all 40 keys returned. This is a known industry
+limitation (Bet365 restricts third-party odds licensing broadly), not a
+configuration issue on this app's side.
+
+Picked three candidates to investigate in depth: **William Hill,
+Ladbrokes UK, Unibet UK** — all present, all genuinely mainstream/soft
+retail books.
+
+### Part B: the real gap is Conference League, not Eredivisie — and it isn't a bookmaker problem
+
+Checked matched-vs-gap counts directly against the current 2020+ population
+(not the stale cached `ev-calibration.json` figures, which understated both
+leagues significantly — see caveat below):
+
+| League | Fixtures in 2020+ window | Pinnacle-matched | Pinnacle-gap | Match rate |
+|---|---|---|---|---|
+| Eredivisie | 1,594 | 1,546 | 48 | **97%** |
+| Conference League | 1,548 | 342 | 1,206 | **22%** |
+
+**Eredivisie was never a real coverage problem.** Its low all-time match
+rate reported earlier this week (462/4,630 ≈ 10%) was almost entirely an
+artifact of the 2010–2019 expansion — fixtures from that era can't match
+any bookmaker by construction (Addendum 8's confirmed 2020-06-06 floor).
+Within the window where matching is even possible, Pinnacle already covers
+97% of it. Sampled 9 of Eredivisie's remaining 48 gap fixtures directly: 7
+had **zero matching event at all** in the historical snapshot (despite the
+snapshot returning 9-18 other events at that timestamp — likely
+postponements, rescheduled kickoffs, or playoff fixtures with non-standard
+timing), and the 2 that did resolve to a real event had **no soft-book data
+either**. These are not bookmaker-coverage gaps a different book would fix.
+
+**Conference League's gap is real, large, and provider-level, not
+bookmaker-level.** Sampled 12 of its 1,206 gap fixtures spread across
+2021–2024: **8 of 12 returned zero events at all** — the historical
+snapshot had no data for *any* bookmaker at that timestamp, not just no
+Pinnacle. All 8 zero-event fixtures were from 2021–2022 (the competition's
+first two seasons). The 3 fixtures that did resolve were all 2023-2024,
+and Pinnacle was present in all 3 — soft books (`unibet_uk`) only in 2 of
+those 3. **The pattern points to the Odds API provider not tracking
+Conference League comprehensively until roughly mid-2023**, not to
+Pinnacle specifically under-covering a competition other books cover
+better. Adding a soft book would not recover the 2021–2022 gap, because
+the data isn't there for anyone.
+
+### Part C: where both books do have data, soft-book edge tracks Pinnacle-implied edge extremely well
+
+On the 43 (fixture, book) pairs where both Pinnacle and a candidate soft
+book had a genuine h2h price for the same fixture (12 Eredivisie + 12
+Conference League overlap fixtures × up to 3 books each):
+
+| Book | n | Pearson r (edge vs. edge) | Same-direction rate |
+|---|---|---|---|
+| William Hill | 18 | **0.997** | 94.4% |
+| Unibet UK | 13 | **0.998** | 100% |
+| Ladbrokes UK | 12 | **0.997** | 91.7% |
+| **Pooled** | **43** | **0.995** | **95.3%** |
+
+This is the sharper test the task asked for — implied *edge* (model
+probability vs. that book's price), not just raw price correlation. The
+correlation is about as strong as two independent price sources of the
+same event can be expected to agree, and **the only two sign
+disagreements found are both the same fixture** (Club Brugge vs PAOK,
+2024-04-11), where Pinnacle's own edge was +0.39% — essentially zero, a
+case where any book's slightly different price trivially flips the sign.
+This is noise-around-a-null-result, not a real ranking failure. **Which
+bets look best according to a soft book is, in practice, the same answer
+Pinnacle would give**, for these three books specifically.
+
+### Part D: recommendation
+
+**Soft-book data is not worth integrating for Conference League or
+Eredivisie specifically** — the gaps in those two leagues are either
+already closed (Eredivisie) or provider-level and unfixable by adding a
+bookmaker (Conference League's 2021-2022 seasons). Adding soft-book
+capture would not meaningfully grow the matched population for the two
+leagues this task set out to fix.
+
+**However, the edge-direction validation (Part C) is a genuinely positive,
+reusable result**, independent of the coverage-gap question: William Hill,
+Ladbrokes UK, and Unibet UK all track Pinnacle-implied edge with r≈0.995+
+and 92-100% direction agreement. If a *future* need arises for a larger-n,
+secondary ROI signal in some other context — the correlation work done
+here says these three books would be trustworthy for that purpose, **used
+and labeled explicitly as a secondary/less-reliable signal, never blended
+into the Pinnacle-based figure**. Not acted on in this task, since it
+wasn't what the coverage-gap question actually needed.
+
+**On the new-vendor question this task was scoped to help answer:**
+soft-book integration does **not** solve the matched-population problem —
+it doesn't meaningfully help the two named gap leagues, and by
+construction (all mainstream books draw from the same real-money market,
+generally tracking a similar timeline of provider coverage) it's unlikely
+to unlock a different set of gaps elsewhere either. **A new odds vendor
+remains the only lever identified so far that could plausibly close
+provider-level gaps like Conference League's missing 2021-2022 data** —
+this task doesn't evaluate whether that's worth pursuing on its own
+merits (cost, integration effort), only confirms that soft-book data on
+the *existing* provider isn't a substitute for it.
+
+**Caveat flagged:** the earlier-referenced `ev-calibration.json`-derived
+per-league "n" figures (e.g. Eredivisie n=462) used in framing this task
+are a stale cache, not live-recomputed on each `/api/ev-calibration` call
+— this document's own Part B figures (computed directly from
+`backfill-historical.json` + `closing-odds.json`, fresh) are the accurate
+current state. Worth knowing for any future league-sizing question in this
+codebase: don't trust that endpoint's numbers without checking when the
+cache was last refreshed.
+
 ## Decisions made without asking — flagged for review
 
 1. **Bucket width/range** (35-80% in 5pp steps, nesting inside the diagnostic
@@ -1445,7 +1569,8 @@ The temporary `/api/debug/tier-calibration`, `/api/debug/tier-calibration-v2`,
 `/api/debug/platt-recalibration`, `/api/debug/platt-roi-by-tier`,
 `/api/debug/train-test-cycle`, `/api/debug/tier-baseline-wide`,
 `/api/debug/league-tier-matrix`, `/api/debug/odds-history-floor-check`,
-`/api/debug/expanded-tier-check`, and `/api/debug/dataset-integrity-check`
+`/api/debug/expanded-tier-check`, `/api/debug/dataset-integrity-check`,
+`/api/debug/bookmaker-enumeration`, and `/api/debug/softbook-coverage-check`
 endpoints have all been removed — the
 league-tier-matrix one's output was hard-coded into the permanent
 `/api/league-tier-matrix` endpoint (`LEAGUE_TIER_MATRIX`), same pattern as
