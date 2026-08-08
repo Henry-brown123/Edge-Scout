@@ -2287,28 +2287,75 @@ function checkAndRetrain(previousCount, newCount) {
 
 // Actually runs the retrain — shared by the (gated-off-by-default) auto-trigger above
 // and the manual POST /api/admin/trigger-retrain endpoint.
+//
+// Runs the training script via spawn(), not execSync(): with the DATA_DIR bug fixed,
+// training now runs against the full ~50k-record live population instead of the old
+// 8,316-record stale file, and takes long enough that execSync's synchronous wait was
+// both blocking Node's entire event loop for the live app (freezing every other
+// request) for the whole duration AND exceeding the request/proxy timeout on the
+// triggering HTTP call before the child process itself finished (discovered the hard
+// way: a first attempt via the synchronous version dropped after ~11 minutes with no
+// response, though the server itself stayed up throughout). spawn() keeps the event
+// loop free; progress/completion is tracked in retrain-status.json and polled via
+// GET /api/admin/retrain-status rather than waited on synchronously.
+let _retrainProcess = null;
 function runGbdtRetrain(reason) {
-  console.log(`[GBDT] Starting retrain — ${reason}`);
-  try {
-    const { execSync } = require('child_process');
-    execSync('node scripts/gbdt-train.js', {
-      cwd:     __dirname,
-      env:     { ...process.env, DATA_DIR: process.env.DATA_DIR },
-      timeout: 300000,
-      stdio:   'inherit',
-    });
-    console.log('[GBDT] Retraining complete — reloading model weights');
-    // Clear the require cache so interface.js re-evaluates on next predict()
-    const iface = path.join(__dirname, 'models/interface.js');
-    const gbdt  = path.join(__dirname, 'models/gbdt.js');
-    delete require.cache[require.resolve(iface)];
-    delete require.cache[require.resolve(gbdt)];
-    writeJSON('retrain-pending.json', { pending: false });
-    return { success: true };
-  } catch (e) {
-    console.error('[GBDT] Retraining failed:', e.message);
-    return { success: false, error: e.message };
+  if (_retrainProcess) {
+    return { success: false, error: 'A retrain is already in progress.' };
   }
+  console.log(`[GBDT] Starting retrain — ${reason}`);
+  const startedAt = new Date().toISOString();
+  writeJSON('retrain-status.json', { status: 'running', reason, startedAt, finishedAt: null, error: null });
+
+  const { spawn } = require('child_process');
+  const child = spawn('node', ['scripts/gbdt-train.js'], {
+    cwd: __dirname,
+    env: { ...process.env, DATA_DIR: process.env.DATA_DIR },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  _retrainProcess = child;
+
+  let output = '';
+  child.stdout.on('data', d => { output += d; process.stdout.write(d); });
+  child.stderr.on('data', d => { output += d; process.stderr.write(d); });
+
+  // Safety cap — training this population has never been timed at this scale before,
+  // so this is a generous ceiling rather than a tuned figure. Kill rather than let a
+  // runaway process hold the slot open forever.
+  const SAFETY_TIMEOUT_MS = 20 * 60 * 1000;
+  const killTimer = setTimeout(() => {
+    if (_retrainProcess === child) {
+      console.error('[GBDT] Retrain exceeded 20-minute safety timeout — killing');
+      child.kill('SIGKILL');
+    }
+  }, SAFETY_TIMEOUT_MS);
+
+  child.on('close', (code) => {
+    clearTimeout(killTimer);
+    _retrainProcess = null;
+    const finishedAt = new Date().toISOString();
+    if (code === 0) {
+      console.log('[GBDT] Retraining complete — reloading model weights');
+      const iface = path.join(__dirname, 'models/interface.js');
+      const gbdt  = path.join(__dirname, 'models/gbdt.js');
+      delete require.cache[require.resolve(iface)];
+      delete require.cache[require.resolve(gbdt)];
+      writeJSON('retrain-pending.json', { pending: false });
+      writeJSON('retrain-status.json', { status: 'success', reason, startedAt, finishedAt, error: null, exitCode: code, tail: output.slice(-4000) });
+    } else {
+      console.error(`[GBDT] Retraining failed — exit code ${code}`);
+      writeJSON('retrain-status.json', { status: 'failed', reason, startedAt, finishedAt, error: `exit code ${code}`, exitCode: code, tail: output.slice(-4000) });
+    }
+  });
+
+  child.on('error', (e) => {
+    clearTimeout(killTimer);
+    _retrainProcess = null;
+    console.error('[GBDT] Retraining failed to start:', e.message);
+    writeJSON('retrain-status.json', { status: 'failed', reason, startedAt, finishedAt: new Date().toISOString(), error: e.message });
+  });
+
+  return { success: true, started: true };
 }
 
 // Run weight optimisation for all three contexts and mutate `existing` in place.
@@ -5859,27 +5906,20 @@ app.get('/api/server-status', async (_req, res) => {
 
 // Manual, explicit retrain trigger — the only way a real retrain runs while
 // settings.autoRetrainEnabled is not true (docs/model-versioning.md). Reuses the
-// exact same code path the (gated-off) auto-trigger would use.
+// exact same code path the (gated-off) auto-trigger would use. Returns immediately
+// once the training process has started — training the full live population takes
+// long enough that waiting for it synchronously is unreliable (see runGbdtRetrain's
+// comment). Poll GET /api/admin/retrain-status for completion.
 app.post('/api/admin/trigger-retrain', (_req, res) => {
   const hist = readJSON('backfill-historical.json') || {};
   const scoredCount = hist.scoredRecords?.length ?? 0;
   const result = runGbdtRetrain(`manual trigger via POST /api/admin/trigger-retrain (scoredCount=${scoredCount})`);
-  if (!result.success) return res.status(500).json({ success: false, error: result.error });
+  if (!result.success) return res.status(409).json({ success: false, error: result.error });
+  res.json({ success: true, started: true, message: 'Retrain started — poll GET /api/admin/retrain-status for completion.' });
+});
 
-  let gbdtMeta = null;
-  try {
-    const wp = path.join(__dirname, 'models/gbdt-weights.json');
-    gbdtMeta = JSON.parse(fs.readFileSync(wp, 'utf8'));
-  } catch (e) {
-    return res.status(500).json({ success: false, error: `Retrain script exited cleanly but gbdt-weights.json could not be read: ${e.message}` });
-  }
-  res.json({
-    success:  true,
-    trainedAt: gbdtMeta.trainedAt,
-    trainN:    gbdtMeta.trainN,
-    testN:     gbdtMeta.testN,
-    metrics:   gbdtMeta.metrics,
-  });
+app.get('/api/admin/retrain-status', (_req, res) => {
+  res.json(readJSON('retrain-status.json') || { status: 'never_run' });
 });
 
 // Cache expensive WOWY count — recompute only when profiles change (startup/backfill)
