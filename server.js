@@ -2176,11 +2176,23 @@ async function runHistoricalBackfill({ rescore = false, onProgress } = {}) {
           scored++;
         }
 
-        // Incremental optimisation checkpoint
+        // Incremental optimisation + persistence checkpoint. Scoring has no per-record
+        // save unlike Phase 1's per-league fetch writes — on a large catch-up run (e.g.
+        // extending HISTORICAL_BACKFILL_CONFIG to cover many more seasons at once) a
+        // process restart mid-scoring previously lost 100% of that run's scoring
+        // progress, since only Phase 4 persisted scoredRecords. Saving here too means a
+        // restart loses at most one checkpoint's worth of scoring, matching Phase 1's
+        // resilience.
         if (scoredMap.size >= nextOptimiseAt && scoredMap.size >= OPTIMISE_EVERY) {
           const msg = `[Optimise] Checkpoint at ${scoredMap.size} records — running optimisation…`;
           console.log(msg); onProgress?.(msg);
           _runOptimisation([...scoredMap.values()], existing, onProgress);
+          existing.scoredRecords = [...scoredMap.values()];
+          existing.scoredCount   = scoredMap.size;
+          const histPath = path.join(DATA_DIR, 'backfill-historical.json');
+          const histTmp  = histPath + '.tmp';
+          fs.writeFileSync(histTmp, JSON.stringify(existing));
+          fs.renameSync(histTmp, histPath);
           nextOptimiseAt += OPTIMISE_EVERY;
         }
       }
