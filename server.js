@@ -4095,10 +4095,36 @@ app.get('/api/debug/dataset-integrity-check', (_req, res) => {
     perLeague[lid] = (perLeague[lid] || 0) + 1;
   }
 
+  // Malformed-record check: any scoredRecords entry missing a field
+  // scoreFixtureFromPool() always sets would indicate a torn/partial write —
+  // e.g. a checkpoint save that raced with a restart mid-write (atomic
+  // rename should prevent this, but verify rather than assume).
+  const REQUIRED_FIELDS = ['fixtureId', 'date', 'leagueId', 'context', 'homeFactors', 'awayFactors', 'actualOutcome'];
+  const malformed = scoredRecords.filter(r => REQUIRED_FIELDS.some(f => r[f] == null));
+
+  // Spot-check near the 5 restart-boundary indices from this week's run
+  // (approximate positions in insertion order: 500, 27500, 35000, 38000,
+  // 41500, 45000, 47000, 49500, and the final record).
+  const boundaryIdx = [500, 27500, 35000, 38000, 41500, 45000, 47000, 49500, scoredRecords.length - 1]
+    .filter(i => i >= 0 && i < scoredRecords.length);
+  const boundarySamples = boundaryIdx.map(i => {
+    const r = scoredRecords[i];
+    return {
+      index: i,
+      fixtureId: r.fixtureId,
+      date: r.date,
+      leagueId: r.leagueId,
+      hasAllFields: REQUIRED_FIELDS.every(f => r[f] != null),
+    };
+  });
+
   res.json({
     scoredRecords: scoredCheck,
     fixturesPool: fixturesCheck,
     perLeagueScoredCounts: perLeague,
+    malformedRecordCount: malformed.length,
+    malformedSample: malformed.slice(0, 10).map(r => ({ fixtureId: r.fixtureId, missingFields: REQUIRED_FIELDS.filter(f => r[f] == null) })),
+    boundarySamples,
     generatedAt: new Date().toISOString(),
   });
 });
