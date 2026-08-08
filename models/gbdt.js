@@ -8,7 +8,11 @@ const path = require('path');
 const fs   = require('fs');
 const { computeModelProb, WEIGHTS_BY_CONTEXT, LEAGUE_CONFIG } = require('../scoring');
 
-const WEIGHTS_PATH = path.join(__dirname, 'gbdt-weights.json');
+// Lives on DATA_DIR (the persistent disk), not in this directory — see
+// docs/model-versioning.md for why a code-directory / git-tracked location silently
+// erased every retrain's output on the next deploy.
+const DATA_DIR     = process.env.DATA_DIR || path.join(__dirname, '../data');
+const WEIGHTS_PATH = path.join(DATA_DIR, 'gbdt-weights.json');
 
 // Bug fixed 2026-08-08 (docs/model-versioning.md): caching _model forever and relying
 // on server.js's checkAndRetrain()/runGbdtRetrain() to `delete require.cache[...]` after

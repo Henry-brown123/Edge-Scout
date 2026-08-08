@@ -367,7 +367,7 @@ function bandAccuracy(records, probFn) {
   }
 
   // ── Improvement gate: only replace deployed weights if new log-loss is meaningfully better ──
-  const outPath = path.join(__dirname, 'gbdt-weights.json');
+  const outPath = path.join(DATA_DIR, 'gbdt-weights.json');
   if (fs.existsSync(outPath)) {
     try {
       const current = JSON.parse(fs.readFileSync(outPath, 'utf8'));
