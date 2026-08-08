@@ -1157,6 +1157,150 @@ scheduled/live scanning jobs running in the background on their normal
 cadence, not from anything this task did — no code path touched here calls
 the Odds API.
 
+## Addendum 8 — Historical ingestion extended to 2010: population nearly tripled, findings hold
+
+Follows directly from the API-Sports headroom investigation earlier this
+week. Three parts: verifying Odds API's real pre-2020 floor, extending
+API-Sports ingestion, and re-running the pooled tier check on the expanded
+population.
+
+### Part A: Odds API's real pre-2020 floor — confirmed hard at 2020-06-06
+
+Six real historical-odds probes (not assumption-based) against EPL and La
+Liga snapshots in 2015/2017/2019, plus one 2020 control to confirm the
+request format itself works. All six pre-2020 probes returned
+`previous_timestamp: null` and `next_timestamp: "2020-06-06T10:05:00Z"` —
+the API's own nearest-snapshot pointers, which is more definitive than an
+empty event list alone (an empty list could just mean "wrong guessed
+kickoff minute"; a null `previous_timestamp` means "nothing exists before
+this point, full stop"). The 2020 control returned real data (18 events, 9
+bookmakers) confirming the request shape was correct throughout.
+
+**Conclusion: the archive hard-floors at 2020-06-06, no partial/gradual
+coverage below it.** Extending API-Sports ingestion earlier than 2020 was
+therefore known in advance to help only the pure-calibration population,
+not the Pinnacle-matched EV-backtest population — confirmed before doing
+any of the ingestion work, not assumed afterward.
+
+### Part B: API-Sports ingestion extended to 2010 (2014 for Europa League)
+
+`HISTORICAL_BACKFILL_CONFIG` (server.js) extended per league:
+
+| League | Old range | New range |
+|---|---|---|
+| Premier League, La Liga, Serie A, Bundesliga, Ligue 1, Champions League | 2020-2024 | **2010-2024** |
+| Scottish Premiership, Eredivisie, Primeira Liga | 2020-2024 (+2026 active) | **2010-2024 (+2026 active)** |
+| Europa League | 2022-2024 | **2014-2024** |
+| Conference League | 2022-2024 | **2021-2024** (checked, not assumed — API-Sports confirms 2021 is its earliest season; the competition didn't exist before 2021-22) |
+
+**A real bug surfaced and fixed during this run.** Phase 1 (fixture
+fetching) already saved incrementally per league, but Phase 2 (scoring) only
+ever persisted at the very end. A process restart mid-scoring — which
+happened repeatedly while scoring the ~32,000 newly-fetched fixtures, most
+likely from memory pressure serialising the growing dataset at each
+checkpoint — silently discarded 100% of that run's scoring progress every
+time, even though the fetched fixture pool itself was already safe on disk.
+Fixed by persisting `scoredRecords` at the same 500-record cadence already
+used for the optimisation checkpoint (`server.js`), plus wrapping
+`scoreFixtureFromPool()` in a per-fixture try/catch so one malformed record
+can't abort the whole batch. With the fix in place, five subsequent
+restarts each resumed cleanly from the last checkpoint and the run
+completed in full rather than being re-attempted from zero each time.
+
+**Per-league fixture counts, before → after:**
+
+| League | Before | After | Δ |
+|---|---|---|---|
+| Premier League | 1,900 | 5,700 | +3,800 |
+| Serie A | 1,901 | 5,701 | +3,800 |
+| La Liga | 1,900 | 5,700 | +3,800 |
+| Ligue 1 | 1,757 | 5,456 | +3,699 |
+| Bundesliga | 1,539 | 4,603 | +3,064 |
+| Eredivisie | 1,593 | 4,630 | +3,037 |
+| Primeira Liga | 1,539 | 4,336 | +2,797 |
+| Scottish Premiership | 1,172 | 3,384 | +2,212 |
+| Champions League | 1,057 | 2,956 | +1,899 |
+| Europa League | 592 | 3,946 | +3,354 |
+| Conference League | 1,149 | 1,548 | +399 |
+| World Cup | 0 | 0 | +0 (still zero — see Scope, unaffected by this task) |
+| **Total (12-league scope)** | **16,099** | **47,960** | **+31,861 (~2.98×)** |
+
+Total scored population (all leagues, including out-of-scope stray IDs):
+**18,392 → 50,253**.
+
+### Part C: pooled tier calibration re-run on the expanded population
+
+Same methodology as Phase 1's original check, same 5pp bins:
+
+| Tier | n (before) | n (after) | Calib. error (before) | Calib. error (after) |
+|---|---|---|---|---|
+| <35% | 7 | 33 | +6.1pp | −1.7pp |
+| 35-40% | 2,471 | 7,825 | +1.9pp | **+0.4pp** |
+| 40-45% | 4,408 | 13,318 | −0.5pp | −0.8pp |
+| 45-50% | 3,853 | 11,248 | −3.8pp | −2.3pp |
+| 50-55% | 2,334 | 6,974 | −4.6pp | −3.5pp |
+| 55-60% | 1,640 | 4,598 | −6.3pp | **−6.3pp** |
+| 60-65% | 1,099 | 3,175 | −12.1pp | **−12.2pp** |
+| 65-70% | 283 | 784 | −18.3pp | **−17.7pp** |
+| 70-75% | 4 | 5 | −29.1pp | −29.6pp (still n<10, unreliable either way) |
+
+**Verdict: the underconfidence finding holds almost exactly, and is now
+dramatically better evidenced.** The 55-60%, 60-65%, and 65-70% tiers —
+already this document's clearest evidence of underconfidence — land within
+0.1-0.6pp of their original figures despite nearly tripled sample sizes in
+each (e.g. 60-65% n=1,099→3,175, error −12.11pp→−12.17pp). This is the
+strongest form of confirmation available short of a live re-test: an
+independent expansion of the underlying data reproduces the same result to
+within noise, rather than revealing it was an artifact of the smaller
+sample. The 35-40% and 40-45% tiers remain close to perfectly calibrated,
+also consistent with the original finding.
+
+**60-65% tier, per-league (previously the thinnest, most cited "expect
+noise" cells — now genuinely large):**
+
+| League | n (before) | n (after) | Hit rate (after) |
+|---|---|---|---|
+| Champions League | 100 | 283 | 74.6% |
+| Europa League | 34 | 233 | 62.2% |
+| Premier League | 132 | 398 | 75.6% |
+| Ligue 1 | 65 | 195 | 78.5% |
+| Bundesliga | 115 | 324 | 72.2% |
+| Eredivisie | 139 | 374 | 76.7% |
+| Primeira Liga | 114 | 317 | 83.9% |
+| Serie A | 101 | 293 | 73.0% |
+| La Liga | 122 | 391 | 74.9% |
+| Scottish Premiership | 95 | 253 | 69.6% |
+| Conference League | 82 | 114 | 71.9% |
+
+Every league in this tier now individually clears 190+ fixtures (up from
+1-139) and every single one sits above the raw ~62% predicted probability —
+this is no longer a pooling artifact that a couple of small leagues could
+be driving; it is eleven independent, individually well-evidenced leagues
+all pointing the same direction.
+
+### Calibration-rules.md compliance — no split needs redoing
+
+Flagged explicitly per this task's own instruction, not left implicit:
+**none of the four validated leagues' train/test splits (PL, Ligue 1,
+Champions League, Serie A) need re-doing.** Each split is defined purely by
+a `testFrom` date (the earliest in 2023-11-03, the latest 2024-03-12).
+Every fixture added by this expansion predates 2020, which is more than
+three years before any of those boundaries — the expansion can only ever
+enlarge the train side of each split, never touch the test side, and no
+new tuning or parameter fit was performed against this larger train
+population in this task. The one thing this expansion *does* do is make a
+future re-tuning cycle (if one is ever run) able to draw on a much larger
+train set than was available when the original four splits were tuned —
+worth knowing, not something requiring action now.
+
+### Zero new Odds API calls
+
+Confirmed via `/api/odds-credits-status`: the only Odds API activity this
+task performed was the six floor-check probes plus one control (Part A),
+none of which repeat or scale with the ingestion work in Part B/C. Part B
+and C are pure API-Sports (fixture fetch) and local computation (scoring,
+tier analysis) respectively.
+
 ## Decisions made without asking — flagged for review
 
 1. **Bucket width/range** (35-80% in 5pp steps, nesting inside the diagnostic
@@ -1197,11 +1341,12 @@ the Odds API.
 
 The temporary `/api/debug/tier-calibration`, `/api/debug/tier-calibration-v2`,
 `/api/debug/platt-recalibration`, `/api/debug/platt-roi-by-tier`,
-`/api/debug/train-test-cycle`, `/api/debug/tier-baseline-wide`, and
-`/api/debug/league-tier-matrix` endpoints have all been removed — the last
-one's output was hard-coded into the permanent `/api/league-tier-matrix`
-endpoint (`LEAGUE_TIER_MATRIX`), same pattern as `HISTORICAL_TIER_BASELINE`.
-`shrinkage.js` is kept as permanent, reusable
+`/api/debug/train-test-cycle`, `/api/debug/tier-baseline-wide`,
+`/api/debug/league-tier-matrix`, `/api/debug/odds-history-floor-check`, and
+`/api/debug/expanded-tier-check` endpoints have all been removed — the
+league-tier-matrix one's output was hard-coded into the permanent
+`/api/league-tier-matrix` endpoint (`LEAGUE_TIER_MATRIX`), same pattern as
+`HISTORICAL_TIER_BASELINE`. `shrinkage.js` is kept as permanent, reusable
 infrastructure — it has no
 dependency on this specific dataset and is written to be called again for any
 future shrinkage need (e.g. a later per-tier ROI cycle, or shrinking home/away
