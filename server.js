@@ -4057,6 +4057,35 @@ app.get('/api/backfill/pir/status', (_req, res) => {
   res.json({ ..._pirStatus, count: Object.keys(data).length });
 });
 
+// TEMPORARY DIAGNOSTIC — enumerate every bookmaker Odds API returns for
+// uk/eu regions, live (cheap) snapshot, across a few sports. Read-only,
+// small number of real API calls. To be removed after review.
+app.get('/api/debug/bookmaker-enumeration', async (_req, res) => {
+  const sports = ['soccer_epl', 'soccer_netherlands_eredivisie', 'soccer_uefa_europa_conference_league'];
+  const results = [];
+  const allBookKeys = new Set();
+  for (const sport of sports) {
+    try {
+      const resp = await oddsApi.get(`/sports/${sport}/odds`, {
+        params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal' },
+      });
+      const events = resp.data || [];
+      const bookSet = new Map();
+      for (const ev of events) {
+        for (const bm of (ev.bookmakers || [])) {
+          bookSet.set(bm.key, bm.title);
+          allBookKeys.add(bm.key);
+        }
+      }
+      results.push({ sport, eventCount: events.length, bookmakers: [...bookSet.entries()].map(([key, title]) => ({ key, title })) });
+    } catch (e) {
+      results.push({ sport, error: e.response?.status ? `${e.response.status}: ${e.response?.data?.message || e.message}` : e.message });
+    }
+    await new Promise(r => setTimeout(r, 250));
+  }
+  res.json({ perSport: results, allBookmakerKeys: [...allBookKeys].sort() });
+});
+
 // ─── LEAGUE × TIER HISTORICAL PERFORMANCE MATRIX ──────────────────────────────
 // Reference/diagnostic view, NOT a live tracker and NOT a gate — see
 // docs/tier-calibration-analysis.md Addendum 6. Static backtest snapshot
