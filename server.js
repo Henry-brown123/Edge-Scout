@@ -4297,6 +4297,125 @@ app.get('/api/pre-retrain-calibration-matrix', (_req, res) => {
   });
 });
 
+// TEMP diagnostic — deep dive on the 50-55% tier specifically (task: "Deep dive on
+// the 50-55% tier"). Reuses the EXACT same population/model/methodology as
+// Addendum 14/15 (no new odds/API calls, no re-fit, same single test-set look,
+// re-sliced by league, pick-type, and date). See docs/tier-calibration-analysis.md
+// Addendum 14/15 extension for the write-up this feeds.
+app.get('/api/debug/tier-5055-deep-dive', (_req, res) => {
+  try {
+    const HOLDOUT_START = '2024-08-07T00:00:00.000Z';
+    const TIER_LO = 0.50, TIER_HI = 0.55;
+    const EDGE_THRESHOLD = 0.01;
+    const historical = readJSON('backfill-historical.json') || {};
+    const scoredRecords = historical.scoredRecords || [];
+    const optWeights = historical.optimisedWeights || {};
+    const closingOdds = readJSON('closing-odds.json') || {};
+    const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG } = require('./scoring');
+    const proxyModel = require('./models/gbdt-proxy');
+
+    const WORLD_CUP_ID = 1;
+
+    // ── Score every in-scope fixture through the PROXY model — identical to Addendum 14/15 ──
+    const scored = [];
+    for (const rec of scoredRecords) {
+      const lid = parseInt(rec.leagueId, 10);
+      if (!LEAGUE_CONFIG[lid] || lid === WORLD_CUP_ID) continue;
+      if (!rec.homeFactors || !rec.awayFactors || !rec.actualOutcome || !rec.date) continue;
+
+      const context = rec.context || classifyFixture(lid);
+      const weights = optWeights[context] || optWeights.club_domestic;
+      if (!weights) continue;
+
+      let probs;
+      try {
+        const rawProbs = proxyModel.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[lid]);
+        probs = applyLeagueBiasCorrection(rawProbs, lid, LEAGUE_CONFIG);
+      } catch { continue; }
+
+      let topOutcome, modelProb;
+      if (probs.home >= probs.draw && probs.home >= probs.away) { topOutcome = 'home'; modelProb = probs.home; }
+      else if (probs.away >= probs.draw)                        { topOutcome = 'away'; modelProb = probs.away; }
+      else                                                       { topOutcome = 'draw'; modelProb = probs.draw; }
+      const won = rec.actualOutcome === topOutcome;
+
+      let pinnacleOdds = null, edge = null;
+      const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
+      if (co) {
+        pinnacleOdds = topOutcome === 'home' ? co.homeOdds : topOutcome === 'away' ? co.awayOdds : co.drawOdds;
+        if (pinnacleOdds && pinnacleOdds > 1) edge = (modelProb - (1 / pinnacleOdds)) / (1 / pinnacleOdds);
+        else pinnacleOdds = null;
+      }
+
+      scored.push({ fixtureId: rec.fixtureId, leagueId: lid, date: rec.date, topOutcome, modelProb, won, pinnacleOdds, edge });
+    }
+
+    const validatedIds = Object.keys(VALIDATED_SPLITS).map(Number);
+    const names = {2:'Champions League',39:'Premier League',61:'Ligue 1',78:'Bundesliga',88:'Eredivisie',94:'Primeira Liga',135:'Serie A',140:'La Liga',179:'Scottish Premiership'};
+
+    // ── Calibration population: EVERY scored fixture in the tier, holdout window, regardless of odds ──
+    const tierCalibPop = scored.filter(r =>
+      r.date >= HOLDOUT_START && validatedIds.includes(r.leagueId) && r.modelProb >= TIER_LO && r.modelProb < TIER_HI
+    );
+
+    function calibStats(pop) {
+      const n = pop.length;
+      if (!n) return { n: 0 };
+      const meanPred = pop.reduce((s, r) => s + r.modelProb, 0) / n;
+      const hitRate  = pop.filter(r => r.won).length / n;
+      return { n, meanPred: +(meanPred * 100).toFixed(1), hitRate: +(hitRate * 100).toFixed(1), errorPp: +((meanPred - hitRate) * 100).toFixed(1), thin: n < 30 };
+    }
+
+    const calibByLeague = validatedIds.map(lid => ({ leagueId: lid, name: names[lid], ...calibStats(tierCalibPop.filter(r => r.leagueId === lid)) }));
+    const calibByPickType = ['home', 'draw', 'away'].map(ot => ({ pickType: ot, ...calibStats(tierCalibPop.filter(r => r.topOutcome === ot)) }));
+
+    // ── ROI/edge population: matched-odds subset of the same tier ──
+    const tierMatched = tierCalibPop.filter(r => r.edge != null);
+    const cleared = tierMatched.filter(r => r.edge >= EDGE_THRESHOLD);
+
+    function roiStats(pop) {
+      const n = pop.length;
+      if (!n) return { n: 0, roi: null, ci95: null, thin: true };
+      const returns = pop.map(r => r.won ? (r.pinnacleOdds - 1) : -1);
+      const mean = returns.reduce((s, x) => s + x, 0) / n;
+      const variance = n > 1 ? returns.reduce((s, x) => s + (x - mean) ** 2, 0) / (n - 1) : 0;
+      const se = Math.sqrt(variance / n);
+      const ci95 = [+((mean - 1.96 * se) * 100).toFixed(1), +((mean + 1.96 * se) * 100).toFixed(1)];
+      return { n, roi: +(mean * 100).toFixed(1), ci95, thin: n < 30 };
+    }
+
+    const roiByLeague = validatedIds.map(lid => ({ leagueId: lid, name: names[lid], ...roiStats(cleared.filter(r => r.leagueId === lid)) }));
+    const roiByPickType = ['home', 'draw', 'away'].map(ot => ({ pickType: ot, ...roiStats(cleared.filter(r => r.topOutcome === ot)) }));
+
+    // ── Date distribution: month buckets, for both the full tier calib pop and the cleared subset ──
+    function monthBuckets(pop) {
+      const byMonth = {};
+      for (const r of pop) {
+        const m = r.date.slice(0, 7); // "2024-08"
+        byMonth[m] = (byMonth[m] || 0) + 1;
+      }
+      return Object.entries(byMonth).sort(([a], [b]) => a.localeCompare(b)).map(([month, n]) => ({ month, n }));
+    }
+
+    res.json({
+      holdoutStart: HOLDOUT_START,
+      tierLabel: '50-55%',
+      edgeThreshold: EDGE_THRESHOLD,
+      calibPopN: tierCalibPop.length,
+      matchedOddsN: tierMatched.length,
+      clearedN: cleared.length,
+      calibByLeague,
+      calibByPickType,
+      roiByLeague,
+      roiByPickType,
+      dateDistributionFullTier: monthBuckets(tierCalibPop),
+      dateDistributionCleared: monthBuckets(cleared),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0, 10) });
+  }
+});
+
 app.get('/api/league-tier-matrix', (_req, res) => {
   const leagueIds = Object.keys(LEAGUE_TIER_MATRIX).map(Number);
 
