@@ -2215,6 +2215,117 @@ in the future without rebuilding the mechanism from scratch). No changes
 to `models/interface.js`, live scoring, the live EV threshold, or
 `LEAGUE_CONFIG`.
 
+### Extension — cleared vs. blocked: is the threshold excluding real value?
+
+Addendum 14's continuous-ROI column blended fixtures that would become a
+real recommended bet with fixtures that were blocked from ever becoming
+one. This disaggregates that column, per tier, into the two groups
+explicitly — not inferred by subtraction, computed directly from the same
+per-fixture holdout-window population Addendum 14 already scored (zero
+new odds/API calls, zero re-fit, same single test-set look, just split a
+different way).
+
+**The actual EV threshold, from the code, stated plainly.** There is
+**no direct "edge ≥ X%" gate** in the live bet-creation path. The real
+gate is `successScore < settings.successThreshold` (server.js's pre-match
+lock, `scoring.js`'s `computeSuccessScore()`) — a **single global value,
+currently 40**, not per-league. `successScore` is a composite, not a raw
+edge percentage:
+
+```
+winComp        = modelProb × 35
+valueComp      = min(edge / 0.20, 1) × 45        // edge-vs-book, capped at 20%+
+confidenceComp = min(formFixtureCount / 50, 1) × 19
+base            = round(min(99, winComp+valueComp+confidenceComp)) × (0.4 + dataConf×0.6)
+→ applyEdgeCap(base, edge, leagueId)              // Premier League exempted; others halved above 20% edge
+→ applyDivergencePenalty(..., context)            // international only, large model–market gaps penalised
+```
+
+**Every prior addendum in this document — including Addendum 14's
+"threshold-ROI" and this extension's "cleared" group — uses `edge ≥ 5%`
+vs Pinnacle as an analytical proxy for "would become a bet", not this
+literal formula.** That's a deliberate, longstanding simplification, not
+an error introduced here: `computeSuccessScore()` needs
+`formFixtureCount` and `dataConf`, neither of which is stored in the
+historical calibration population (`scoredRecords` only carries
+`homeFactors`/`awayFactors`/`actualOutcome`/context). Reproducing the
+literal live gate offline isn't possible with the data this whole
+document has ever used — flagging the distinction explicitly now because
+this task specifically asked for the real code-level threshold, not
+because the proxy convention has changed.
+
+**Pooled split, every tier** (cleared = edge≥5%, matches Addendum 14's
+threshold-ROI n exactly at every tier — confirmed as the requested sanity
+check; blocked = 0%≤edge<5%; negative = edge<0%, reported for
+transparency so the three sum back to Addendum 14's continuous-ROI total):
+
+| Tier | Cleared: n, ROI, 95% CI | Blocked: n, ROI, 95% CI | Negative: n, ROI |
+|---|---|---|---|
+| 35-40% | 197, −7.0%, [−28.9, +14.9] | 20, −6.9%, [−64.0, +50.3]* | 205, −3.4% |
+| 40-45% | 312, −6.5%, [−23.0, +10.1] | **49, −60.9%, [−86.0, −35.8]** | 376, −3.1% |
+| 45-50% | 178, −4.8%, [−24.8, +15.1] | 51, −27.8%, [−56.2, +0.5] | 359, −3.6% |
+| 50-55% | 90, +10.3%, [−24.1, +44.8] | 36, −12.9%, [−45.2, +19.4] | 314, −2.8% |
+| 55-60% | 38, −12.3%, [−47.8, +23.2] | 22, −2.6%, [−40.6, +35.5]* | 189, −2.4% |
+| 60-65% | 21, +47.0%, [−65.8, +159.8]* | 11, −41.3%, [−89.4, +6.9]* | 135, −2.3% |
+| 65-70% | 10, +158.6%, [−162.9, +480.1]* | 5, −8.2%, [−81.7, +65.3]* | 107, −3.7% |
+
+*Below the n<30 decision-grade floor for that specific cell.
+
+**The one tier with enough blocked-group volume to say something real:
+40-45% (n=49, CI [−86.0%, −35.8%] — excludes zero entirely).** Blocked
+bets at this tier didn't just underperform cleared bets (−6.5%), they
+were catastrophic — worse than doing nothing, worse than the negative-edge
+group. 45-50% (n=51) points the same direction (−27.8%) with a CI that
+nearly excludes zero (upper bound +0.5%). Every other tier's blocked
+group is too thin (n=5-36, several starred) to support a real
+conclusion — this is not a case of "no signal anywhere," it's "real
+signal at the one tier with real volume, genuine uncertainty elsewhere."
+
+**Edge-size distribution within the blocked group (pooled, n=195):**
+
+| Sub-band | n | ROI | 95% CI |
+|---|---|---|---|
+| 0-1% | 40 | −4.9% | [−37.0, +27.1] |
+| 1-2% | 38 | **−39.7%** | [−68.6, −10.7] |
+| 2-3% | 43 | −29.7% | [−61.1, +1.7] |
+| 3-4% | 41 | −21.8% | [−54.0, +10.4] |
+| 4-5% | 33 | **−53.9%** | [−84.9, −22.9] |
+
+Mean edge 2.42%, median 2.52% — **roughly uniform across the whole 0-5%
+range, not clustered just under the threshold.** If blocked bets were
+mostly "almost qualified" (edges bunched near 4-5%), that would suggest
+the threshold sits slightly too high. That isn't what this shows: volume
+is spread evenly from 0% to 5%, and returns are negative in every
+sub-band, including two (1-2%, 4-5%) whose CIs exclude zero outright.
+
+**Answer to the question this task asked: no evidence the threshold is
+wrongly excluding real value.** Where there's enough volume to judge
+(40-45%, and suggestively 45-50%), blocked bets performed as badly or
+worse than cleared bets in the same tier, across the full range of
+sub-threshold edge sizes — not concentrated at the boundary in a way that
+would argue for lowering it. This reads as the threshold correctly
+filtering weak edges at those tiers, not as a too-conservative cutoff
+leaving money on the table. Every other tier remains genuinely
+inconclusive on current volume — a fact to carry forward, not paper over.
+
+**Per-league**: computed and available, but not reproduced here in full —
+essentially every per-league blocked cell is n<15 (many n=0-2), far below
+even the n<30 single-cell flag, let alone rule 6's ~300-400 floor. The
+one partial exception, 40-45% pooled across leagues, is broadly consistent
+in direction across leagues that have any volume there (Ligue 1, Premier
+League, Eredivisie all −100% on n=4-6; Bundesliga −20.8%; Primeira Liga
+−40.1%; Serie A −50.7%; La Liga −65.6%; one n=1 Scottish Premiership
+outlier at +128%) — not one league driving the pooled result.
+
+**Compliance**: single test-set look, disaggregating Addendum 14's
+already-computed population — no re-fit, no new criteria applied to the
+proxy model, no change to the live threshold, scoring, or bet-triggering
+logic. Zero new Odds API or API-Sports calls (confirmed — this used only
+already-cached `closing-odds.json` from Addendum 14's backfill).
+
+**Cleanup**: temporary `/api/debug/threshold-split` endpoint removed after
+this write-up.
+
 ## Decisions made without asking — flagged for review
 
 1. **Bucket width/range** (35-80% in 5pp steps, nesting inside the diagnostic
