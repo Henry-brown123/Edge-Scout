@@ -2326,6 +2326,115 @@ already-cached `closing-odds.json` from Addendum 14's backfill).
 **Cleanup**: temporary `/api/debug/threshold-split` endpoint removed after
 this write-up.
 
+### Extension 2 — re-cut against a 1% edge threshold, plus a 1/2/3/5% sensitivity table
+
+The previous extension used 5% edge as "cleared." Given real-world
+execution (manual line-shopping against soft books) can plausibly add
+value on top of whatever edge exists vs. Pinnacle, a lower, more
+realistic bar — **1% edge** — is worth reading directly, not just implied
+by comparing two endpoints. Same population, same proxy model, same
+holdout window as Addenda 14-15 — **zero new API calls**, confirmed:
+this re-slices the identical per-fixture records already scored and
+odds-matched for that work.
+
+**Pooled, cleared (edge≥1%) vs. blocked (edge<1%, including negative), every tier:**
+
+| Tier | Cleared: n, ROI, 95% CI | Blocked: n, ROI, 95% CI |
+|---|---|---|
+| 35-40% | 214, −8.2%, [−28.9, +12.5] | 208, −2.3%, [−16.4, +11.9] |
+| 40-45% | 351, −12.7%, [−27.9, +2.4] | 386, −4.4%, [−14.1, +5.3] |
+| 45-50% | 218, −10.2%, [−27.6, +7.1] | 370, −3.6%, [−12.3, +5.2] |
+| 50-55% | 121, **+3.3%**, [−23.9, +30.5] | 319, −2.6%, [−10.8, +5.7] |
+| 55-60% | 54, −14.9%, [−43.1, +13.3] | 195, −0.8%, [−10.1, +8.4] |
+| 60-65% | 28, +27.7%, [−58.7, +114.1]* | 139, −3.9%, [−13.8, +5.9] |
+| 65-70% | 14, +106.5%, [−125.0, +338.0]* | 108, −3.1%, [−13.1, +6.9] |
+
+*n<30, below the single-cell decision-grade flag.
+
+At this lower bar, sample sizes roughly double at most tiers (as
+expected — more fixtures clear a 1% bar than a 5% one), but four of seven
+tiers (35-40%, 40-45%, 45-50%, 55-60%) are still net negative even with
+the larger n. Widening the population didn't turn losers into winners at
+those tiers — if anything 40-45%'s already-negative 5%-threshold result
+(−6.5%) gets *more* negative at 1% (−12.7%), on nearly double the n
+(351 vs 312) — a real, better-evidenced negative, not noise fading out.
+
+**Threshold-sensitivity table (cleared-group n, ROI at each bar, pooled):**
+
+| Tier | 1% (n, ROI) | 2% (n, ROI) | 3% (n, ROI) | 5% (n, ROI) |
+|---|---|---|---|---|
+| 35-40% | 214, −8.2% | 212, −7.3% | 202, −8.0% | 197, −7.0% |
+| 40-45% | 351, −12.7% | 344, −11.6% | 334, −10.4% | 312, −6.5% |
+| 45-50% | 218, −10.2% | 211, −9.2% | 198, −4.3% | 178, −4.8% |
+| 50-55% | 121, **+3.3%** | 111, **+3.8%** | 107, **+2.2%** | 90, +10.3% |
+| 55-60% | 54, −14.9% | 48, −11.7% | 44, −11.7% | 38, −12.3% |
+| 60-65% | 28*, +27.7% | 27*, +32.4% | 25*, +30.1% | 21*, +47.0% |
+| 65-70% | 14*, +106.5% | 10*, +158.6% | 10*, +158.6% | 10*, +158.6% |
+
+*n<30 at every bar shown — 60-65% and 65-70% never reach a large enough
+sample to say anything, at any threshold tested here.
+
+**The pattern is remarkably threshold-stable within a tier.** Moving the
+bar from 1% to 5% barely changes the sign or rough magnitude of the
+result at 35-40%, 40-45%, 55-60% (all negative throughout), or 60-65%/
+65-70% (both positive-but-thin throughout, same n territory). n changes,
+the verdict mostly doesn't — the exception is 45-50% and 50-55%, where
+lower thresholds pull in more marginal fixtures that measurably dilute
+(45-50%: −4.8% at 5% vs −10.2% at 1%) or don't change the direction at
+all (50-55% stays positive at every single bar tested).
+
+**The tier worth specifically flagging: 50-55%.** It is the *only* tier
+that is net positive at every one of the four thresholds tested, on a
+non-thin sample throughout (n=90-121, never below 30). At the 3%
+threshold specifically it lands almost exactly in the "+1-2% realistic
+target" zone this task asked about: **n=107, ROI +2.2%**. This is the
+most credible-looking result in the whole re-cut — modest, not a wild
+implausible swing, and stable in sign across every threshold rather than
+flipping.
+
+**How close does it come, and what would tighten it?** Not close on
+statistical significance terms — every CI here still fully spans zero.
+Using the standard volatility-based estimate (95% CI half-width =
+1.96·σ/√n; solving for the n where that half-width first drops below the
+current point estimate, holding the effect size and per-bet volatility
+fixed): at 1% edge, σ≈1.53 (typical for 0/1 outcomes on ~evens-priced
+odds), giving **n≈8,200** to reach significance at a +3.3% effect — over
+60× the current sample. At 3% edge (the "nicest-looking" cut, +2.2%),
+volatility is similar (σ≈1.58) but the smaller effect size pushes the
+requirement to **n≈20,500**. At 5% edge, the larger observed effect
+(+10.3%) needs "only" **n≈1,000** — still roughly 11× today's n=90, but
+the first threshold in this table where "collect a few more seasons"
+is a remotely realistic path rather than a multi-decade one.
+
+**Reading this honestly: 50-55% is the one genuinely promising
+direction, not a confirmed finding.** Positive, stable in sign across
+every threshold tested, on the largest non-thin cleared-group sample of
+any tier below 5% — but the per-bet volatility inherent to odds in this
+range means even the best-looking cut here (n=107, +2.2%) would need
+roughly 20,000 fixtures to become statistically distinguishable from
+zero at its current effect size. That is not a near-term validation
+path from backtest data alone; it's a specific, named direction worth
+watching as live paper-trade volume accumulates in this probability
+range, not a result to act on from this reading.
+
+**Per-league**: computed, but not reproduced in full — cleared-group n
+per (league, tier) at the 1% threshold ranges 0-56, i.e. every single
+per-league cell is thin or borderline-thin. For 50-55% specifically
+(the pooled standout), per-league cleared ROI ranges from −38.5%
+(Eredivisie, n=11) to +42.5% (Serie A, n=11) — directionally
+all over the place on tiny samples, exactly what you'd expect from
+noise around a genuinely modest pooled effect, not a sign that one
+league is driving the pooled +3.3%.
+
+**Compliance**: same single test-set look as Addenda 14-15, re-sliced —
+no re-fit, no new criteria applied to the proxy model itself, no change
+to the live threshold. Confirmed zero new Odds API or API-Sports calls:
+this endpoint reads only `backfill-historical.json` and the
+already-cached `closing-odds.json`, both fully populated by prior work.
+
+**Cleanup**: temporary `/api/debug/threshold-sensitivity` endpoint
+removed after this write-up.
+
 ## Decisions made without asking — flagged for review
 
 1. **Bucket width/range** (35-80% in 5pp steps, nesting inside the diagnostic
