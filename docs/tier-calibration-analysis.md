@@ -2435,6 +2435,134 @@ already-cached `closing-odds.json`, both fully populated by prior work.
 **Cleanup**: temporary `/api/debug/threshold-sensitivity` endpoint
 removed after this write-up.
 
+### Extension 3 — deep dive on the 50-55% tier before real money starts there
+
+Prompted directly by Extension 2: 50-55% was the only tier net positive
+at every threshold tested. Before treating that as a green light, this
+looks at what's actually inside the number — per league, per pick type,
+across time, and against the calibration reading for the same tier.
+Uses the edge≥1% cleared population (n=121, the same one flagged as
+"closest to the target zone") for the ROI breakdowns, and the full
+holdout-window tier population (n=450, matches Addendum 14's Part B
+figure exactly) for calibration. **Zero new API calls** — same
+population, same proxy model, re-sliced again.
+
+**Per-league, real numbers (cleared, edge≥1%):**
+
+| League | n | ROI | 95% CI |
+|---|---|---|---|
+| Champions League | 12 | −23.1% | [−87.6, +41.5] |
+| Premier League | 10 | −12.8% | [−83.6, +58.0] |
+| Ligue 1 | 7 | −1.4% | [−92.9, +90.0] |
+| Bundesliga | 19 | −10.2% | [−59.6, +39.3] |
+| Eredivisie | 11 | −38.5% | [−102.3, +25.4] |
+| Primeira Liga | 13 | +21.2% | [−43.0, +85.3] |
+| Serie A | 11 | +42.5% | [−25.4, +110.3] |
+| La Liga | 23 | +17.0% | [−88.5, +122.6] |
+| Scottish Premiership | 15 | +19.7% | [−50.9, +90.4] |
+
+**Every single league is below n=30 — none of these individually say
+anything.** Five leagues negative, four positive, split roughly down the
+middle — exactly the pattern you'd expect from noise scattered around a
+modest positive pooled mean, not one bad or one good league quietly
+driving the +3.3% headline. No league can be ruled in or out here.
+
+**Pick-type breakdown — this is the real finding.** Draws are never the
+tier's top pick (draw probability essentially never reaches 50-55% as
+the single highest of the three outcomes in this population, n=0
+throughout). Home vs. away splits as follows:
+
+| Pick type | n | ROI | 95% CI |
+|---|---|---|---|
+| Home | 107 | **−0.8%** | [−30.6, +29.1] — n≥30, not thin |
+| Away | 14 | +34.4% | [−20.5, +89.2] — thin |
+
+**The pooled +3.3% is not a broad home-and-away effect — it's a flat,
+well-powered home-pick population (88% of the cleared bets) plus a
+thin, wide-CI away subset pulling the average up.** Weighted check:
+(107×−0.8 + 14×34.4)/121 = +3.3%, exactly reproducing Extension 2's
+headline figure. If real-money betting started on this tier
+indiscriminately, the large majority of actual bets (home picks) would
+be going in on a population that, on the best-powered read available,
+looks like a coin flip on returns — not the positive signal the pooled
+number implies.
+
+**Calibration cross-check, by pick type — genuinely coherent.** The
+55-70pp home/away n's here are large enough to trust directionally:
+
+| Pick type | n | Mean pred | Hit rate | Calibration error |
+|---|---|---|---|---|
+| Home | 338 | 52.4% | 55.9% | −3.6pp |
+| Away | 112 | 52.2% | 63.4% | **−11.2pp** |
+
+Away picks are almost three times more underconfident than home picks
+in this tier, on a genuinely well-powered calibration sample (n=112,
+not thin) — and away is also the pick type showing the better (if
+thin) ROI. **This is one real, consistent story, not two coincidentally
+aligned numbers**: the tier's underconfidence is itself concentrated in
+away picks, and that's exactly where the (thin) positive ROI shows up
+too. It just doesn't rescue the headline number, because away picks are
+a small fraction (12%) of the cleared population.
+
+**Calibration cross-check, by league — mixed, inconclusive.** Serie A
+shows the tier's largest calibration gap (−18.0pp, n=47, not thin) and
+also its best ROI point estimate (+42.5%, n=11) — consistent. But
+Eredivisie shows a real calibration gap too (−7.2pp, n=52) alongside
+*negative* ROI (−38.5%, n=11) — inconsistent. La Liga is the tier's one
+league that isn't underconfident at all (+3.1pp, essentially flat or
+mildly overconfident) yet shows positive ROI (+17.0%, n=23) — also
+inconsistent. With every league's ROI cell thin, this cross-check can't
+be resolved either way at the league level — only the pick-type split
+had enough calibration-side power to draw a real conclusion.
+
+**Time distribution — not clustered, this part checks out clean.** Full
+tier population (n=450) spreads 35-57 fixtures per month across all ten
+months of the holdout window with no gap or spike. The cleared subset
+(n=121) is thinner per month (8-18) but shows the same pattern — no
+single month or short window is quietly generating the pooled result.
+
+| Month | Full tier n | Cleared n |
+|---|---|---|
+| 2024-08 | 35 | 8 |
+| 2024-09 | 41 | 18 |
+| 2024-10 | 41 | 9 |
+| 2024-11 | 38 | 8 |
+| 2024-12 | 57 | 14 |
+| 2025-01 | 43 | 10 |
+| 2025-02 | 46 | 9 |
+| 2025-03 | 50 | 16 |
+| 2025-04 | 50 | 12 |
+| 2025-05 | 49 | 17 |
+
+**Plain verdict: the signal is narrower and more fragile than the
+pooled headline suggested — this closer look changes the confidence
+level, not just adds detail.** Two of the four checks come back clean
+(no single league, no single time window is secretly driving the
+result). But the pick-type breakdown — the one check with enough power
+on both sides (calibration and, partially, ROI) to actually resolve
+something — shows the positive pooled number is concentrated in a small,
+thin away-pick minority while the dominant home-pick majority reads as
+flat. The calibration story for that split is genuinely coherent (away
+picks are both more mispriced and better-performing), which is worth
+carrying forward as a specific, narrower hypothesis — but it is not the
+same claim as "the 50-55% tier is a broad, ready-to-go positive edge."
+**Recommendation for how this should change near-term confidence:** if
+real money starts here at all, this data argues against treating the
+whole tier uniformly — the home-pick majority has no demonstrated edge
+in this reading, and the away-pick minority that does is far too thin
+(n=14) to size a real bet around with any confidence. The honest
+position is closer to "one specific, narrower thread worth continued
+paper-trade tracking" than "this tier is validated."
+
+**Compliance**: same single test-set look, re-sliced by league/pick-type/
+date — no re-fit, no new criteria applied to the proxy model, no change
+to live scoring or the live threshold. Confirmed zero new Odds API or
+API-Sports calls: this endpoint reads only `backfill-historical.json`
+and the already-cached `closing-odds.json`.
+
+**Cleanup**: temporary `/api/debug/tier-5055-deep-dive` endpoint removed
+after this write-up.
+
 ## Decisions made without asking — flagged for review
 
 1. **Bucket width/range** (35-80% in 5pp steps, nesting inside the diagnostic
