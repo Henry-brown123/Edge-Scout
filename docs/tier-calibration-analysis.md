@@ -1766,6 +1766,16 @@ read. It exists so that the model produced in Phase 3 has something
 concrete and fully-documented to be judged against, later, once it has
 accumulated enough live decisions of its own.
 
+**Closing update:** the retrain this baseline was captured ahead of has
+since happened. The live model is now `trainedAt=2026-08-08T20:56:33.315Z`,
+`trainN=40,202` — trained on the full population this baseline describes,
+confirmed live two independent ways after a genuine process restart (not
+just a file read). Full account of the bug fixes, the infrastructure built
+first to make this safe, and the final confirmation is in
+[model-versioning.md](model-versioning.md) — not duplicated here to keep
+this document's job strictly to the pre-retrain read. This table is now
+permanently what any future model version gets compared against.
+
 ## Decisions made without asking — flagged for review
 
 1. **Bucket width/range** (35-80% in 5pp steps, nesting inside the diagnostic
