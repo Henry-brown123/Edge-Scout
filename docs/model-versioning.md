@@ -87,8 +87,14 @@ than running anything.
 
 **`POST /api/admin/trigger-retrain`** is the manual path — it runs the exact
 same retrain code (`runGbdtRetrain()`, shared with the gated auto-trigger) on
-demand and returns the new model's `trainedAt`/`trainN`/`testN`/`metrics` on
-success. This is the only way a retrain runs today.
+demand. This is the only way a retrain runs today. It's **asynchronous**:
+the endpoint returns immediately once the training process has started
+(`{ success: true, started: true }`); poll **`GET /api/admin/retrain-status`**
+for `running` / `success` / `failed` plus the trained model's
+`trainedAt`/`trainN`/`testN`/`metrics` and a tail of the training script's
+output. It was originally synchronous (`execSync`), which turned out to be a
+real problem at this population's size — see "What actually happened running
+this for the first time" below.
 
 `/api/server-status`'s `model` block now surfaces `autoRetrainEnabled`,
 `retrainPending`, and `retrainPendingSince` so this state is visible without
@@ -97,6 +103,93 @@ reading raw files.
 **Automating this safely (e.g. auto-retrain with its own quality gates and
 rollback) is explicitly future work** — manual control was the priority for
 this task, per its own instructions.
+
+## What actually happened running this for the first time
+
+The DATA_DIR fix (`models/gbdt-train.js` reading production data instead of a
+stale local snapshot) was necessary but turned out not to be sufficient on
+its own — getting a real retrain genuinely live surfaced three more bugs,
+each only visible once actual production-scale data and a real deploy cycle
+were involved. Recorded in full because each is the kind of thing that looks
+fine in isolation and only breaks under real conditions:
+
+1. **`execSync` couldn't handle real data volume.** The first trigger used
+   `execSync` with a 5-minute timeout sized for the old 8,316-record file.
+   Training on the real ~50,000-record population takes over 20 minutes, and
+   `execSync` blocks Node's entire event loop for its whole duration —
+   meaning every other live request (scoring, bet placement, dashboard
+   reads) would have frozen for that window too, on every future retrain,
+   auto-triggered or not. Fixed by switching to `spawn()`
+   (non-blocking, `retrain-status.json` for progress/result, polled via
+   `GET /api/admin/retrain-status`) with a 40-minute external safety kill.
+
+2. **Require-cache clearing never actually hot-reloaded anything.**
+   `checkAndRetrain()`'s original `delete require.cache[...]` after a
+   successful retrain did nothing useful: `server.js` holds a permanent
+   `const model = require('./models/interface')` reference bound once at
+   process startup, and clearing the cache only affects *future* `require()`
+   calls, not that existing binding. Every prior retrain could have written
+   good weights to disk while the live process kept serving predictions from
+   whatever was cached in `models/gbdt.js`'s `_model` variable, until the
+   process happened to restart for an unrelated reason. Fixed by having
+   `loadModel()` stat the weights file's mtime on every call and reload when
+   it changes — no restart dependency.
+
+3. **`gbdt-weights.json` was git-tracked — the critical one.** The first
+   successful retrain (confirmed live and correct at the time) was silently
+   erased by the very next deploy. Root cause: the weights file lived in
+   `models/` — part of the git-tracked code checkout, not `DATA_DIR` (the
+   persistent disk) — so every Render deploy re-checked-out the repo and
+   overwrote the freshly-trained file with whatever stale version was last
+   committed to git. Fixed by moving the file to `DATA_DIR` in all three
+   places that touch it (`gbdt-train.js`'s output path, `gbdt.js` and
+   `interface.js`'s read paths) and removing it from git entirely (`.gitignore`
+   + `git rm --cached`). Bug #2's mtime fix was necessary but not sufficient
+   here either — it correctly reloads whenever the file changes, but the
+   file itself was getting stomped back to a stale committed version
+   independent of that.
+
+4. **`interface.js` routed gbdt-vs-linear only once, at require time —
+   found while re-verifying bug #3's fix.** Even after moving the weights
+   file to `DATA_DIR`, a process that happened to start before any weights
+   file existed there (e.g. the process that started right after bug #3's
+   deploy, before a retrain had run again) stayed on the linear fallback
+   **forever**, because `interface.js`'s `if (fs.existsSync(weightsPath))`
+   check ran exactly once at module load and its result was baked into
+   `module.exports`. A retrain finishing later and writing a perfectly good
+   file changed nothing for that already-running process. Same class of bug
+   as #2, one layer up — fixing #2 alone wasn't enough because the routing
+   decision above it was still cached. Fixed the same way: `interface.js`
+   now checks file existence fresh on every `predict()`/`getVersion()` call
+   instead of caching the routing decision. Also fixed two remaining stale
+   `__dirname`-based weights paths (`/api/model-info`, `/api/server-status`)
+   that would have kept silently under-reporting the active model even after
+   the routing itself was correct.
+
+**Net effect of all four fixes together: the model-loading path is now fully
+self-healing on every single call**, with no dependency on restart timing,
+require-cache tricks, or remembering to redeploy after a retrain. A retrain
+finishing at any point is picked up by the very next prediction anywhere in
+the process, and survives deploys because the file lives on the persistent
+disk.
+
+**Confirmed final state**, verified two independent ways after all four
+fixes were deployed and the process had genuinely restarted (not just a file
+read — the actual `model.getVersion()` call from the live prediction path):
+
+```
+GET /api/server-status  → model.trainedAt = 2026-08-08T20:56:33.315Z, trainN = 40202
+GET /api/debug/model-version-check → liveModelVersion = 2026-08-08T20:56:33.315Z
+GET /api/model-info → active: "gbdt", trainN: 40202, testPredict sums to ~1.0
+```
+
+All three agree. `trainN=40202` (vs the frozen model's `trainN=6,652`) is the
+real, durable result of the first controlled retrain on production data. A
+later retrain attempt (log-loss 0.9857) correctly declined to overwrite this
+one (log-loss 0.9861) — the improvement-gate in `gbdt-train.js` working
+exactly as designed, not a bug: a 0.0004 difference is below its 0.001
+meaningful-improvement threshold, so it kept the existing weights rather than
+churning for a statistically insignificant change.
 
 ## The train/test "merge" decision
 
