@@ -2801,7 +2801,7 @@ app.get('/api/scan-meta',   (_req, res) => res.json(readJSON('scan-meta.json') |
 // Model info — forces GBDT weights to load so startup log lines appear in Render logs.
 app.get('/api/model-info', (_req, res) => {
   const fs = require('fs'), path = require('path');
-  const weightsPath = path.join(__dirname, 'models/gbdt-weights.json');
+  const weightsPath = path.join(DATA_DIR, 'gbdt-weights.json'); // DATA_DIR, not models/ — see docs/model-versioning.md
   const hasWeights  = fs.existsSync(weightsPath);
   let meta = null;
   if (hasWeights) {
@@ -5869,7 +5869,7 @@ app.get('/api/server-status', async (_req, res) => {
   const nextRetrainAt = Math.ceil((scoredCount + 1) / RETRAIN_THRESHOLD) * RETRAIN_THRESHOLD;
   let gbdtMeta = null;
   try {
-    const wp = path.join(__dirname, 'models/gbdt-weights.json');
+    const wp = path.join(DATA_DIR, 'gbdt-weights.json'); // DATA_DIR, not models/ — see docs/model-versioning.md
     if (fs.existsSync(wp)) gbdtMeta = JSON.parse(fs.readFileSync(wp, 'utf8'));
   } catch {}
   const retrainPending    = readJSON('retrain-pending.json') || { pending: false };
