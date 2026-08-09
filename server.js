@@ -4277,7 +4277,22 @@ app.get('/api/debug/date-distribution', (_req, res) => {
       result[lid] = { name: LEAGUE_CONFIG[lid]?.name, total: dates.length, minDate, maxDate, windowCounts };
     }
 
-    res.json({ maxDateOverall, byLeague: result });
+    // Reproduce gbdt-train.js's exact filter + sort to find the live model's own
+    // train/test date boundary from its most recent retrain (all leagues, matching
+    // its loadData()/splitData() exactly) — so we can confirm/deny overlap with
+    // whatever holdout window gets chosen for the diagnostic proxy model.
+    const allQualifying = scoredRecords.filter(r => r.homeFactors && r.awayFactors && r.actualOutcome && r.context);
+    const sortedDates = allQualifying.map(r => r.date).sort();
+    const liveTrainCutoffIdx = Math.floor(sortedDates.length * 0.8);
+    const liveModelTrainTestBoundary = sortedDates[liveTrainCutoffIdx];
+
+    res.json({
+      maxDateOverall,
+      liveModelTrainTestBoundary,
+      liveModelTotalQualifying: sortedDates.length,
+      note: 'liveModelTrainTestBoundary = the date boundary the live GBDT model (trainedAt 2026-08-08) used for its own internal 80/20 chronological split, across ALL leagues (not just the 9 validated). Fixtures on/after this date were in the live model\'s own held-out 20% (used for Platt-fit + quality gates, not tree-building) — fixtures before it were used to build the live model\'s trees.',
+      byLeague: result,
+    });
   } catch (e) {
     res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0, 8) });
   }
