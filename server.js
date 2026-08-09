@@ -4389,6 +4389,80 @@ app.get('/api/debug/holdout-odds-coverage', (_req, res) => {
   }
 });
 
+// TEMP diagnostic — precisely targeted closing-odds fetch for ONLY the holdout
+// window's missing fixtures (9 validated leagues), grouped by (sport, kickoff
+// minute) same as runClosingOddsBackfill(), same storage format/fallback policy
+// (Pinnacle preferred, first available bookmaker otherwise) so new entries are
+// homogeneous with the rest of closing-odds.json. The general-purpose
+// /api/backfill/closing-odds endpoint was tried first but processes fixtures in
+// array order (not date-prioritised) and spent its whole budget on older,
+// unrelated gaps without touching this window at all — this is deliberately
+// scoped tighter. POST to run, tracks real credit usage.
+app.post('/api/debug/backfill-holdout-odds-targeted', async (req, res) => {
+  try {
+    const HOLDOUT_START = '2024-08-07T00:00:00.000Z';
+    const historical = readJSON('backfill-historical.json') || {};
+    const scoredRecords = historical.scoredRecords || [];
+    const closing = getClosingOdds();
+    const VALIDATED_IDS = Object.keys(VALIDATED_SPLITS).map(Number);
+
+    const missing = [];
+    for (const rec of scoredRecords) {
+      const lid = parseInt(rec.leagueId, 10);
+      if (!VALIDATED_IDS.includes(lid)) continue;
+      if (!rec.homeFactors || !rec.awayFactors || !rec.actualOutcome || !rec.date) continue;
+      if (rec.date < HOLDOUT_START) continue;
+      if (closing[rec.fixtureId] || closing[String(rec.fixtureId)]) continue;
+      const sport = CLOSING_ODDS_SPORT_MAP[String(lid)];
+      if (!sport) continue;
+      missing.push({ fixtureId: rec.fixtureId, leagueId: lid, sport, date: rec.date, home: rec.homeTeamName, away: rec.awayTeamName });
+    }
+
+    const groups = new Map();
+    for (const m of missing) {
+      const minuteKey = m.date.slice(0, 16);
+      const key = `${m.sport}|${minuteKey}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(m);
+    }
+
+    let creditsUsed = 0, apiCalls = 0, matched = 0, missed = 0;
+    for (const [groupKey, fixtures] of groups) {
+      const [sport, minuteKey] = groupKey.split('|');
+      const kickoffIso = minuteKey + ':00Z';
+      try {
+        const resp = await oddsApi.get(`/historical/sports/${sport}/odds`, {
+          params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal', date: kickoffIso },
+        });
+        creditsUsed += parseInt(resp.headers['x-requests-last'] || '0', 10);
+        apiCalls++;
+        const events = resp.data?.data || resp.data || [];
+        for (const fx of fixtures) {
+          const ev = events.find(e => teamsMatch(e.home_team, fx.home) && teamsMatch(e.away_team, fx.away));
+          if (!ev) { missed++; continue; }
+          const bm = ev.bookmakers?.find(b => b.key === 'pinnacle') || ev.bookmakers?.[0];
+          const mkt = bm?.markets?.find(m => m.key === 'h2h');
+          if (!mkt) { missed++; continue; }
+          const get = name => mkt.outcomes?.find(o => teamsMatch(o.name, name))?.price ?? null;
+          closing[fx.fixtureId] = {
+            fixtureId: fx.fixtureId, homeOdds: get(fx.home), drawOdds: get('Draw'), awayOdds: get(fx.away),
+            bookmaker: bm.key, collectedAt: bm.last_update || kickoffIso, snapshotTs: kickoffIso,
+          };
+          matched++;
+        }
+        await new Promise(r => setTimeout(r, 250));
+      } catch (e) {
+        console.error(`[TargetedOddsBackfill] ${groupKey}: ${e.message}`);
+      }
+    }
+    saveClosingOdds(closing);
+
+    res.json({ missingBefore: missing.length, groups: groups.size, apiCalls, creditsUsed, matched, missed });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0, 8) });
+  }
+});
+
 app.get('/api/league-tier-matrix', (_req, res) => {
   const leagueIds = Object.keys(LEAGUE_TIER_MATRIX).map(Number);
 
