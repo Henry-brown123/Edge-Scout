@@ -1776,6 +1776,146 @@ first to make this safe, and the final confirmation is in
 this document's job strictly to the pre-retrain read. This table is now
 permanently what any future model version gets compared against.
 
+## Addendum 13 — Calibration Matrix: a proxy strength indicator, pre-retrain model only
+
+Addendum 6's ROI matrix is structurally frozen: Odds API's 2020-06-06 floor
+plus each of the 9 leagues' fixed `testFrom` boundary means no fixture can
+ever land in that matrix's test population again, retrain or not — it will
+never move. Calibration is different: Addendum 12 got a real update on
+genuinely unseen data (n=4,054), and the underconfidence pattern held across
+all 9 leagues. Since a well-calibrated league/tier should, in principle,
+produce real edge before enough matched-odds volume exists to prove it via
+ROI, this is a league × tier breakdown of Addendum 12's calibration read —
+a leading proxy for "where the model was strong," not a replacement for
+either the ROI matrix or live results.
+
+**⚠️ Critical labeling point, stated here as plainly as in the UI and the
+code comment above `PRE_RETRAIN_CALIBRATION_MATRIX`:** every number below
+describes the **old GBDT model** — `trainedAt: 2026-07-25`, `trainN: 6,652`
+— tested against Addendum 12's held-out population. The **current live
+model** (`trainedAt: 2026-08-08T20:56:33Z`, `trainN: 40,202`, see
+[model-versioning.md](model-versioning.md)) has not been calibration-tested
+against any genuinely unseen data yet, and this table **can never be
+refreshed to reflect it** — the old model's weights no longer exist to
+re-evaluate. Treat this as a historical artifact of a model that is no
+longer live, not a current read.
+
+### Methodology
+
+Same population and pipeline as Addendum 12 (held-out test-only, 9
+validated leagues, `model.predict()` + `applyLeagueBiasCorrection()`), sliced
+by (league, tier) instead of pooled by tier alone. Cell value is calibration
+error (`meanPredicted − actualHitRate`; positive = overconfident, negative =
+underconfident) rather than ROI. Shrinkage applied exactly as Addendum 6 —
+`empiricalBayesShrink()` per tier, pooling each league's cell toward that
+tier's own n-weighted mean across all 9 leagues — using the hit rate's own
+binomial variance (`p(1−p)`) as the per-observation variance input, since
+the mean-predicted side of the error is a near-fixed quantity within a bin
+and essentially all the noise comes from the empirical hit rate. Thin-cell
+threshold: `n<30`, same as Addendum 6.
+
+Computed from the exact raw output already captured for Addendum 12 (no
+fresh scoring, no new API calls) — the old model's weights are gone, so this
+could not be recomputed live even if wanted; this is why the matrix is
+hardcoded as a permanent constant (`PRE_RETRAIN_CALIBRATION_MATRIX`,
+`server.js`), same pattern as `LEAGUE_TIER_MATRIX` and
+`HISTORICAL_TIER_BASELINE`.
+
+### The grid (raw errorPp (n), shrunk in brackets — thin cells marked *)
+
+| League | 35-40% | 40-45% | 45-50% | 50-55% | 55-60% | 60-65% | 65-70% |
+|---|---|---|---|---|---|---|---|
+| Champions League | −6.9(24)*[+5.4] | −3.5(76)[+1.4] | −3.7(70)[−6.4] | −14.0(48)[−7.2] | −11.1(38)[−7.1] | −12.5(24)*[−12.6] | −33.6(3)*[−23.4] |
+| Premier League | +3.3(59)[+5.4] | −0.2(156)[+1.4] | −16.1(146)[−8.5] | −2.2(96)[−7.2] | −2.7(58)[−7.1] | −5.8(47)[−12.6] | −33.8(9)*[−26.4] |
+| Ligue 1 | +4.7(80)[+5.4] | −0.5(163)[+1.4] | −6.6(135)[−6.7] | −4.9(79)[−7.2] | −15.1(43)[−7.1] | −12.2(23)*[−12.6] | +15.7(2)*[−15.7] |
+| Bundesliga | +8.5(73)[+5.4] | +5.2(121)[+1.4] | +1.0(117)[−5.5] | −6.6(66)[−7.2] | −5.9(41)[−7.1] | −10.3(40)[−12.6] | +5.9(5)*[−13.0] |
+| Eredivisie | +0.5(55)[+5.4] | −1.7(138)[+1.4] | −10.1(121)[−7.3] | −1.9(78)[−7.2] | −2.9(43)[−7.1] | −20.6(35)[−12.6] | −24.2(10)*[−22.4] |
+| Primeira Liga | +8.2(83)[+5.4] | +2.3(132)[+1.4] | −1.4(98)[−6.0] | −14.0(62)[−7.2] | −6.9(42)[−7.1] | −17.6(35)[−12.6] | −33.9(11)*[−27.1] |
+| Serie A | +0.1(69)[+5.4] | +4.7(106)[+1.4] | −13.4(66)[−7.4] | −2.5(49)[−7.2] | −12.2(33)[−7.1] | −22.6(19)*[−12.6] | — |
+| La Liga | +8.8(101)[+5.4] | +5.2(156)[+1.4] | −4.6(115)[−6.4] | −9.6(84)[−7.2] | −8.4(55)[−7.1] | −8.2(31)[−12.6] | −15.1(27)*[−16.9] |
+| Scottish Premiership | +12.1(45)[+5.4] | −0.2(94)[+1.4] | −3.1(89)[−6.3] | −15.1(49)[−7.2] | +1.8(27)*[−7.1] | −9.6(25)*[−12.6] | −21.9(27)*[−21.6] |
+
+### A genuinely different result than Addendum 6's ROI grid: near-total shrinkage in most tiers
+
+Unlike the ROI matrix — where individual leagues frequently retained real
+signal after shrinkage — most tiers here collapse almost completely to the
+tier's pooled mean. Every league's 35-40% cell shrinks to the same +5.4pp,
+every 40-45% cell to +1.4pp, every 50-55% cell to −7.2pp, every 60-65% cell
+to −12.6pp. This is not a computation error: a 0/1 hit-rate's per-observation
+variance (`p(1−p)`, up to 0.25) is large relative to the actual spread
+observed across only 9 leagues at these sample sizes, so
+`empiricalBayesShrink()` correctly concludes the apparent cross-league
+differences are statistically indistinguishable from sampling noise. Only
+the 65-70% tier (much smaller n, and in a few cases a genuinely large raw
+spread) and 45-50%/55-60% (partial differentiation) retain meaningfully
+different shrunk values per league.
+
+**Reading this as a finding rather than a null result: the model's
+over/underconfidence behavior at a given tier looks like a property of the
+tier itself, not of any individual league.** That's a cleaner, more useful
+conclusion for a "proxy strength indicator" than a noisy per-league table
+would have been — it says Addendum 12's pooled tier read is the number to
+trust, and no single validated league should be read as more or less
+calibration-trustworthy than another at the same tier.
+
+### Row and column summaries (shrunk, n-weighted)
+
+| League | Avg shrunk error (n) |
+|---|---|
+| Serie A | −2.3pp (342) |
+| Ligue 1 | −2.7pp (525) |
+| Bundesliga | −3.1pp (463) |
+| Primeira Liga | −3.1pp (463) |
+| La Liga | −3.2pp (569) |
+| Eredivisie | −4.0pp (480) |
+| Champions League | −4.2pp (283) |
+| Premier League | −4.6pp (571) |
+| Scottish Premiership | −4.6pp (356) |
+
+All nine leagues cluster within a 2.3pp band (−2.3 to −4.6) — confirming the
+same conclusion as above from the other direction: no league stands out as a
+calibration outlier once shrunk. The underconfidence pattern is broad **and**
+uniform across the model's whole footprint, not concentrated anywhere.
+
+| Tier | Avg shrunk error (n) |
+|---|---|
+| 35-40% | +5.4pp (589) |
+| 40-45% | +1.4pp (1,142) |
+| 45-50% | −6.8pp (957) |
+| 50-55% | −7.2pp (611) |
+| 55-60% | −7.1pp (380) |
+| 60-65% | −12.6pp (279) |
+| 65-70% | −20.9pp (94) |
+
+Reproduces Addendum 12's pooled tier table exactly (as expected, given how
+little shrinkage moved any individual cell) — included here for a complete
+row/column pair matching the ROI matrix's presentation, not as new
+information.
+
+### Placement
+
+New card on the Performance tab (`public/index.html`), positioned
+immediately after the existing Historical Performance Matrix card and
+sharing its general layout (table + two-column row/tier summary), but with
+an amber accent border and an explicit warning banner instead of the ROI
+matrix's pink — deliberately distinct so the three Performance-tab
+reference surfaces are never confused with each other:
+
+1. **Historical Performance Matrix** (pink) — old model's ROI ceiling,
+   frozen forever by the 2020 floor + fixed test boundaries.
+2. **Calibration Matrix — Pre-Retrain Model** (amber, this addendum) — old
+   model's proven calibration, also frozen (weights no longer exist).
+3. **Calibration Tier Performance tracker** (below both) — the *new* model's
+   live results, the only one of the three that will ever move again.
+
+### Cleanup
+
+No temporary endpoints were created for this task — the matrix was computed
+entirely from Addendum 12's already-captured raw output (saved locally, not
+re-fetched), then hardcoded as a permanent constant
+(`PRE_RETRAIN_CALIBRATION_MATRIX`) exactly like `LEAGUE_TIER_MATRIX`. Zero
+Odds API or API-Sports calls. No scoring, EV, or live-model code touched.
+
 ## Decisions made without asking — flagged for review
 
 1. **Bucket width/range** (35-80% in 5pp steps, nesting inside the diagnostic

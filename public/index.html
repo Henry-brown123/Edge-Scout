@@ -579,6 +579,50 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     </div>
   </div>
 
+  <!-- Pre-Retrain Calibration Matrix — a DIFFERENT model snapshot than the ROI matrix
+       above (calibration error, not ROI) and a DIFFERENT population (Addendum 12's
+       held-out test-only read, not Addendum 6's). Amber accent + explicit warning
+       banner deliberately distinct from the pink ROI matrix card and from the live
+       tracker below — this describes the OLD model only and can never be refreshed. -->
+  <div class="card" style="margin-bottom:16px;border-left:3px solid var(--amber)">
+    <div class="card-header">
+      <span class="card-title">Calibration Matrix — Pre-Retrain Model</span>
+      <span class="badge badge-amber" style="letter-spacing:.04em">LAST KNOWN BASELINE — MAY NOT REFLECT CURRENT LIVE MODEL</span>
+    </div>
+    <div style="background:rgba(255,209,102,.08);border:1px solid rgba(255,209,102,.25);border-radius:8px;padding:10px 12px;margin-bottom:10px;font-family:'DM Mono',monospace;font-size:.72rem;color:var(--amber)">
+      ⚠ Describes the <strong>old GBDT model</strong> (trained on 6,652 fixtures, frozen
+      2026-07-25) tested against Addendum 12's held-out 4,054-fixture population. The
+      <strong>current live model was retrained 2026-08-08 on 40,202 fixtures</strong> and
+      has not yet been calibration-tested against any genuinely unseen data — this table
+      cannot be refreshed to reflect it, because the old model's weights no longer exist.
+      Use as a leading proxy for "where the old model was strong," not a live read.
+    </div>
+    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 6px">
+      Calibration error (predicted probability − actual hit rate) per league × tier, raw +
+      shrinkage-corrected — same methodology and population as the Historical Performance
+      Matrix above, but calibration instead of ROI. A well-calibrated cell should, in
+      principle, produce real edge over time even before enough matched-odds volume exists
+      to prove it via ROI. See <span class="mono">docs/tier-calibration-analysis.md</span>,
+      Addendum 13. Reference/diagnostic only — no gating.
+    </p>
+    <div class="table-wrap" style="overflow-x:auto">
+      <table id="prcm-table" style="font-size:11px">
+        <thead><tr id="prcm-header-row"></tr></thead>
+        <tbody id="prcm-body"></tbody>
+      </table>
+    </div>
+    <div style="margin-top:14px;display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Row summary — shrunk avg calibration error per league (n-weighted, secondary read only):</div>
+        <div id="prcm-league-avg" style="display:flex;flex-direction:column;gap:4px"></div>
+      </div>
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Column summary — shrunk avg calibration error per tier (n-weighted, secondary read only):</div>
+        <div id="prcm-tier-avg" style="display:flex;flex-direction:column;gap:4px"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Paper Trading view (default) -->
   <div id="perf-paper-view">
 
@@ -1978,7 +2022,7 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.classList.add('active');
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
     if (btn.dataset.tab === 'model')       renderModel();
-    if (btn.dataset.tab === 'performance') { switchPerfView('paper'); renderPerformance(); renderLeagueTierMatrix(); }
+    if (btn.dataset.tab === 'performance') { switchPerfView('paper'); renderPerformance(); renderLeagueTierMatrix(); renderPreRetrainCalibrationMatrix(); }
     if (btn.dataset.tab === 'settings')  { renderSettings(); loadBackfillStatus(); loadOddsHistoryStats(); loadStartupStatus(); loadAccounts(); loadLeagueWeights(); }
   });
 });
@@ -2695,6 +2739,66 @@ async function renderLeagueTierMatrix() {
     tierAvgEl.innerHTML = data.tierAverages.map(t =>
       `<div style="display:flex;justify-content:flex-end;gap:8px;font-size:11px;font-family:'DM Mono',monospace">
         <span class="${(t.avgShrunkRoi??0) >= 0 ? 'c-green' : 'c-red'}">${t.avgShrunkRoi!=null?fmtPct(t.avgShrunkRoi):'—'} <span style="color:var(--muted)">(n=${t.n})</span></span><span>${t.tier}</span>
+      </div>`
+    ).join('');
+  }
+}
+
+// Pre-Retrain Calibration Matrix — same loading pattern as renderLeagueTierMatrix()
+// (static snapshot, loaded once when the Performance tab opens). See docs/
+// tier-calibration-analysis.md Addendum 13. Error sign convention: positive =
+// model overconfident (predicted > actual), negative = underconfident.
+async function renderPreRetrainCalibrationMatrix() {
+  let data;
+  try { data = await apiFetch('/api/pre-retrain-calibration-matrix'); } catch (e) { return; }
+
+  const headerRow = document.getElementById('prcm-header-row');
+  const body      = document.getElementById('prcm-body');
+  if (!headerRow || !body) return;
+
+  const populatedTiers = data.scope.tierLabels.filter(t =>
+    data.matrix && Object.values(data.matrix).some(l => l.cells[t]));
+
+  headerRow.innerHTML = '<th style="text-align:left">League</th>' +
+    populatedTiers.map(t => `<th style="text-align:center">${t}</th>`).join('');
+
+  const fmtPp = v => `${v >= 0 ? '+' : ''}${v.toFixed(1)}pp`;
+
+  body.innerHTML = '';
+  for (const [leagueId, league] of Object.entries(data.matrix)) {
+    const tr = document.createElement('tr');
+    const cellsHtml = populatedTiers.map(tier => {
+      const c = league.cells[tier];
+      if (!c) return '<td style="text-align:center;color:var(--muted)">—</td>';
+      // Underconfident (negative error) reads as the "good" direction here — this
+      // whole document's headline finding is that the model is underconfident, not
+      // overconfident, so red/green are flipped relative to the ROI matrix's
+      // positive-is-green convention: negative error = green, positive = red.
+      const rawCls = c.errorPp <= 0 ? 'c-green' : 'c-red';
+      const shrunkCls = c.shrunkPp <= 0 ? 'c-green' : 'c-red';
+      return `<td style="text-align:center" title="${c.thin ? 'Below decision-grade floor (n<30)' : ''}">
+        <div class="mono ${rawCls}" style="font-weight:600">${fmtPp(c.errorPp)}${c.thin ? '<span style="color:var(--muted)">*</span>' : ''}</div>
+        <div class="mono" style="font-size:9.5px;color:var(--muted)">n=${c.n}</div>
+        <div class="mono ${shrunkCls}" style="font-size:9.5px;opacity:.75">shrunk ${fmtPp(c.shrunkPp)}</div>
+      </td>`;
+    }).join('');
+    tr.innerHTML = `<td style="font-weight:600;white-space:nowrap">${league.name}</td>${cellsHtml}`;
+    body.appendChild(tr);
+  }
+
+  const leagueAvgEl = document.getElementById('prcm-league-avg');
+  const tierAvgEl   = document.getElementById('prcm-tier-avg');
+  if (leagueAvgEl) {
+    leagueAvgEl.innerHTML = [...data.leagueAverages].sort((a,b) => (a.avgShrunkErrorPp??99) - (b.avgShrunkErrorPp??99)).map(l =>
+      `<div style="display:flex;gap:8px;font-size:11px;font-family:'DM Mono',monospace">
+        <span>${l.name}</span><span class="${(l.avgShrunkErrorPp??0) <= 0 ? 'c-green' : 'c-red'}">${l.avgShrunkErrorPp!=null?fmtPp(l.avgShrunkErrorPp):'—'} <span style="color:var(--muted)">(n=${l.n})</span></span>
+      </div>`
+    ).join('');
+  }
+  if (tierAvgEl) {
+    tierAvgEl.innerHTML = data.tierAverages.map(t =>
+      `<div style="display:flex;justify-content:flex-end;gap:8px;font-size:11px;font-family:'DM Mono',monospace">
+        <span class="${(t.avgShrunkErrorPp??0) <= 0 ? 'c-green' : 'c-red'}">${t.avgShrunkErrorPp!=null?fmtPp(t.avgShrunkErrorPp):'—'} <span style="color:var(--muted)">(n=${t.n})</span></span><span>${t.tier}</span>
       </div>`
     ).join('');
   }

@@ -4186,6 +4186,61 @@ const LEAGUE_TIER_MATRIX = {
 };
 const LEAGUE_TIER_MATRIX_TIER_ORDER = ['<35%','35-40%','40-45%','45-50%','50-55%','55-60%','60-65%','65-70%','70-75%','75-80%','80%+'];
 
+// ⚠️ PRE-RETRAIN MODEL ONLY — see docs/tier-calibration-analysis.md Addendum 13.
+// This is a frozen, one-time snapshot of the OLD GBDT model's calibration
+// (trainedAt 2026-07-25, trainN=6,652), computed against Addendum 12's held-out
+// 4,054-fixture test population. It does NOT describe the current live model
+// (retrained 2026-08-08, trainN=40,202) — that model has not yet been calibration-
+// tested against any genuinely unseen data, and this table can never be refreshed
+// to reflect it, because the old model's weights no longer exist to re-evaluate.
+// errorPp = meanPredicted - actualHitRate (positive = overconfident, negative =
+// underconfident). shrunkPp pools each tier's 9 leagues toward that tier's own
+// n-weighted mean via empiricalBayesShrink (shrinkage.js), same method as
+// LEAGUE_TIER_MATRIX above. thin = n<30, same threshold as that matrix.
+const PRE_RETRAIN_CALIBRATION_MATRIX = {
+  2: { name: "Champions League", cells: { "35-40%": { n: 24, errorPp: -6.9, thin: true, shrunkPp: 5.4 }, "40-45%": { n: 76, errorPp: -3.5, thin: false, shrunkPp: 1.4 }, "45-50%": { n: 70, errorPp: -3.7, thin: false, shrunkPp: -6.4 }, "50-55%": { n: 48, errorPp: -14, thin: false, shrunkPp: -7.2 }, "55-60%": { n: 38, errorPp: -11.1, thin: false, shrunkPp: -7.1 }, "60-65%": { n: 24, errorPp: -12.5, thin: true, shrunkPp: -12.6 }, "65-70%": { n: 3, errorPp: -33.6, thin: true, shrunkPp: -23.4 } } },
+  39: { name: "Premier League", cells: { "35-40%": { n: 59, errorPp: 3.3, thin: false, shrunkPp: 5.4 }, "40-45%": { n: 156, errorPp: -0.2, thin: false, shrunkPp: 1.4 }, "45-50%": { n: 146, errorPp: -16.1, thin: false, shrunkPp: -8.5 }, "50-55%": { n: 96, errorPp: -2.2, thin: false, shrunkPp: -7.2 }, "55-60%": { n: 58, errorPp: -2.7, thin: false, shrunkPp: -7.1 }, "60-65%": { n: 47, errorPp: -5.8, thin: false, shrunkPp: -12.6 }, "65-70%": { n: 9, errorPp: -33.8, thin: true, shrunkPp: -26.4 } } },
+  61: { name: "Ligue 1", cells: { "35-40%": { n: 80, errorPp: 4.7, thin: false, shrunkPp: 5.4 }, "40-45%": { n: 163, errorPp: -0.5, thin: false, shrunkPp: 1.4 }, "45-50%": { n: 135, errorPp: -6.6, thin: false, shrunkPp: -6.7 }, "50-55%": { n: 79, errorPp: -4.9, thin: false, shrunkPp: -7.2 }, "55-60%": { n: 43, errorPp: -15.1, thin: false, shrunkPp: -7.1 }, "60-65%": { n: 23, errorPp: -12.2, thin: true, shrunkPp: -12.6 }, "65-70%": { n: 2, errorPp: 15.7, thin: true, shrunkPp: -15.7 } } },
+  78: { name: "Bundesliga", cells: { "35-40%": { n: 73, errorPp: 8.5, thin: false, shrunkPp: 5.4 }, "40-45%": { n: 121, errorPp: 5.2, thin: false, shrunkPp: 1.4 }, "45-50%": { n: 117, errorPp: 1, thin: false, shrunkPp: -5.5 }, "50-55%": { n: 66, errorPp: -6.6, thin: false, shrunkPp: -7.2 }, "55-60%": { n: 41, errorPp: -5.9, thin: false, shrunkPp: -7.1 }, "60-65%": { n: 40, errorPp: -10.3, thin: false, shrunkPp: -12.6 }, "65-70%": { n: 5, errorPp: 5.9, thin: true, shrunkPp: -13 } } },
+  88: { name: "Eredivisie", cells: { "35-40%": { n: 55, errorPp: 0.5, thin: false, shrunkPp: 5.4 }, "40-45%": { n: 138, errorPp: -1.7, thin: false, shrunkPp: 1.4 }, "45-50%": { n: 121, errorPp: -10.1, thin: false, shrunkPp: -7.3 }, "50-55%": { n: 78, errorPp: -1.9, thin: false, shrunkPp: -7.2 }, "55-60%": { n: 43, errorPp: -2.9, thin: false, shrunkPp: -7.1 }, "60-65%": { n: 35, errorPp: -20.6, thin: false, shrunkPp: -12.6 }, "65-70%": { n: 10, errorPp: -24.2, thin: true, shrunkPp: -22.4 } } },
+  94: { name: "Primeira Liga", cells: { "35-40%": { n: 83, errorPp: 8.2, thin: false, shrunkPp: 5.4 }, "40-45%": { n: 132, errorPp: 2.3, thin: false, shrunkPp: 1.4 }, "45-50%": { n: 98, errorPp: -1.4, thin: false, shrunkPp: -6 }, "50-55%": { n: 62, errorPp: -14, thin: false, shrunkPp: -7.2 }, "55-60%": { n: 42, errorPp: -6.9, thin: false, shrunkPp: -7.1 }, "60-65%": { n: 35, errorPp: -17.6, thin: false, shrunkPp: -12.6 }, "65-70%": { n: 11, errorPp: -33.9, thin: true, shrunkPp: -27.1 } } },
+  135: { name: "Serie A", cells: { "35-40%": { n: 69, errorPp: 0.1, thin: false, shrunkPp: 5.4 }, "40-45%": { n: 106, errorPp: 4.7, thin: false, shrunkPp: 1.4 }, "45-50%": { n: 66, errorPp: -13.4, thin: false, shrunkPp: -7.4 }, "50-55%": { n: 49, errorPp: -2.5, thin: false, shrunkPp: -7.2 }, "55-60%": { n: 33, errorPp: -12.2, thin: false, shrunkPp: -7.1 }, "60-65%": { n: 19, errorPp: -22.6, thin: true, shrunkPp: -12.6 } } },
+  140: { name: "La Liga", cells: { "35-40%": { n: 101, errorPp: 8.8, thin: false, shrunkPp: 5.4 }, "40-45%": { n: 156, errorPp: 5.2, thin: false, shrunkPp: 1.4 }, "45-50%": { n: 115, errorPp: -4.6, thin: false, shrunkPp: -6.4 }, "50-55%": { n: 84, errorPp: -9.6, thin: false, shrunkPp: -7.2 }, "55-60%": { n: 55, errorPp: -8.4, thin: false, shrunkPp: -7.1 }, "60-65%": { n: 31, errorPp: -8.2, thin: false, shrunkPp: -12.6 }, "65-70%": { n: 27, errorPp: -15.1, thin: true, shrunkPp: -16.9 } } },
+  179: { name: "Scottish Premiership", cells: { "35-40%": { n: 45, errorPp: 12.1, thin: false, shrunkPp: 5.4 }, "40-45%": { n: 94, errorPp: -0.2, thin: false, shrunkPp: 1.4 }, "45-50%": { n: 89, errorPp: -3.1, thin: false, shrunkPp: -6.3 }, "50-55%": { n: 49, errorPp: -15.1, thin: false, shrunkPp: -7.2 }, "55-60%": { n: 27, errorPp: 1.8, thin: true, shrunkPp: -7.1 }, "60-65%": { n: 25, errorPp: -9.6, thin: true, shrunkPp: -12.6 }, "65-70%": { n: 27, errorPp: -21.9, thin: true, shrunkPp: -21.6 } } },
+};
+const PRE_RETRAIN_CALIBRATION_TIER_ORDER = ['35-40%','40-45%','45-50%','50-55%','55-60%','60-65%','65-70%'];
+
+app.get('/api/pre-retrain-calibration-matrix', (_req, res) => {
+  const leagueIds = Object.keys(PRE_RETRAIN_CALIBRATION_MATRIX).map(Number);
+
+  const leagueAverages = leagueIds.map(id => {
+    let wSum = 0, nSum = 0;
+    for (const cell of Object.values(PRE_RETRAIN_CALIBRATION_MATRIX[id].cells)) { wSum += cell.shrunkPp * cell.n; nSum += cell.n; }
+    return { leagueId: id, name: PRE_RETRAIN_CALIBRATION_MATRIX[id].name, n: nSum, avgShrunkErrorPp: nSum > 0 ? +(wSum / nSum).toFixed(1) : null };
+  });
+  const tierAverages = PRE_RETRAIN_CALIBRATION_TIER_ORDER.map(tier => {
+    let wSum = 0, nSum = 0;
+    for (const id of leagueIds) {
+      const cell = PRE_RETRAIN_CALIBRATION_MATRIX[id].cells[tier];
+      if (cell) { wSum += cell.shrunkPp * cell.n; nSum += cell.n; }
+    }
+    return { tier, n: nSum, avgShrunkErrorPp: nSum > 0 ? +(wSum / nSum).toFixed(1) : null };
+  }).filter(t => t.n > 0);
+
+  res.json({
+    warning: 'PRE-RETRAIN MODEL ONLY. Describes the old GBDT model (trainedAt 2026-07-25, trainN=6,652), not the current live model (retrained 2026-08-08, trainN=40,202). The live model has not been calibration-tested against unseen data yet. This snapshot cannot be refreshed — the old model no longer exists.',
+    scope: {
+      validatedLeagues: leagueIds.map(id => ({ id, name: PRE_RETRAIN_CALIBRATION_MATRIX[id].name })),
+      tierLabels: PRE_RETRAIN_CALIBRATION_TIER_ORDER,
+      populationSource: 'docs/tier-calibration-analysis.md Addendum 12 — held-out test-only population, n=4,054, 9 validated leagues.',
+      note: 'errorPp = meanPredicted - actualHitRate (positive = model overconfident, negative = underconfident). Shrunk pools each tier toward its own n-weighted mean across leagues (empirical-Bayes, shrinkage.js). Reference/diagnostic only, not a gate.',
+    },
+    matrix: PRE_RETRAIN_CALIBRATION_MATRIX,
+    leagueAverages,
+    tierAverages,
+  });
+});
+
 app.get('/api/league-tier-matrix', (_req, res) => {
   const leagueIds = Object.keys(LEAGUE_TIER_MATRIX).map(Number);
 
