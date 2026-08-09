@@ -4354,6 +4354,41 @@ app.get('/api/debug/date-distribution', (_req, res) => {
   }
 });
 
+// TEMP diagnostic — check existing Pinnacle closing-odds coverage for the holdout
+// window before deciding whether Part C needs fresh Odds API calls. Read-only,
+// zero API calls itself. Temporary, removed after Part C's population is settled.
+app.get('/api/debug/holdout-odds-coverage', (_req, res) => {
+  try {
+    const HOLDOUT_START = '2024-08-07T00:00:00.000Z';
+    const historical = readJSON('backfill-historical.json') || {};
+    const scoredRecords = historical.scoredRecords || [];
+    const closingOdds = readJSON('closing-odds.json') || {};
+    const VALIDATED_IDS = Object.keys(VALIDATED_SPLITS).map(Number);
+
+    const byLeague = {};
+    for (const lid of [...VALIDATED_IDS, 3, 848]) byLeague[lid] = { total: 0, matched: 0 };
+
+    for (const rec of scoredRecords) {
+      const lid = parseInt(rec.leagueId, 10);
+      if (!byLeague[lid]) continue;
+      if (!rec.homeFactors || !rec.awayFactors || !rec.actualOutcome || !rec.date) continue;
+      if (rec.date < HOLDOUT_START) continue;
+      byLeague[lid].total++;
+      const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
+      if (co) byLeague[lid].matched++;
+    }
+
+    const summary = Object.entries(byLeague).map(([lid, v]) => ({
+      leagueId: lid, name: LEAGUE_CONFIG[lid]?.name, total: v.total, matched: v.matched,
+      matchedPct: v.total ? +((v.matched / v.total) * 100).toFixed(1) : null,
+    }));
+
+    res.json({ holdoutStart: HOLDOUT_START, closingOddsTotalKeys: Object.keys(closingOdds).length, byLeague: summary });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0, 8) });
+  }
+});
+
 app.get('/api/league-tier-matrix', (_req, res) => {
   const leagueIds = Object.keys(LEAGUE_TIER_MATRIX).map(Number);
 
