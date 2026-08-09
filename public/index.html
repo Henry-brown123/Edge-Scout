@@ -1786,6 +1786,16 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
             <input type="number" id="threshold-settings" value="40" min="20" max="90" style="width:70px">
           </div>
           <div class="field">
+            <label>Manual Kelly fraction <span style="color:var(--muted);font-weight:400">(Scout tab lock preview)</span></label>
+            <input type="number" id="manual-kelly-frac-input" value="0.25" step="0.05" min="0.05" max="1" style="width:80px">
+            <div style="font-size:10px;color:var(--muted);margin-top:3px">Used for the pre-lock Kelly preview when manually locking a bet, and as the real-bet Kelly fraction whenever the calibration-driven fraction isn't available. Doesn't change scoring, EV, or automated Kelly logic.</div>
+          </div>
+          <div class="field">
+            <label>Real bankroll default <span style="color:var(--muted);font-weight:400">(£, fallback)</span></label>
+            <input type="number" id="real-bankroll-default-input" value="1000" min="100" step="50" style="width:90px">
+            <div style="font-size:10px;color:var(--muted);margin-top:3px">Used for real-money Kelly sizing only when no active bookmaker has a balance set — otherwise the sum of active bookmaker balances is used.</div>
+          </div>
+          <div class="field">
             <label>Calibration factor <span style="color:var(--muted);font-weight:400">(edge &amp; score only)</span></label>
             <input type="number" id="cal-factor-input" value="1.08" step="0.01" min="1.00" max="1.30" style="width:80px">
             <div style="font-size:10px;color:var(--muted);margin-top:3px">Scales model probs before edge calc. 1.00 = off. Adjust as calibration data accumulates.</div>
@@ -1944,6 +1954,9 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
         </div>
         <button onclick="closeBmPanel()" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;padding:0;line-height:1;flex-shrink:0">✕</button>
       </div>
+      <!-- Pinnacle reference price — the actual benchmark for "only real money if it
+           beats Pinnacle's price", front and center regardless of pick type. -->
+      <div id="bmp-pinnacle-ref" style="margin-top:8px;font-size:12px;font-family:'DM Mono',monospace"></div>
       <!-- Quick-select best exchange -->
       <div style="margin-top:12px;padding:10px 12px;background:rgba(0,255,135,.06);border:1px solid rgba(0,255,135,.2);border-radius:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
         <div style="font-size:12px;color:var(--text2)" id="bmp-exchange-summary">Calculating best exchange…</div>
@@ -1959,6 +1972,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
             <th style="padding:8px 12px;text-align:left">Bookmaker</th>
             <th style="padding:8px 8px;text-align:center">Tier</th>
             <th style="padding:8px 8px;text-align:right">Odds</th>
+            <th style="padding:8px 8px;text-align:right" title="vs Pinnacle's price at lock time">vs Pinn.</th>
             <th style="padding:8px 8px;text-align:right">Edge</th>
             <th style="padding:8px 8px;text-align:right">Kelly Stake</th>
             <th style="padding:8px 8px;text-align:right">Rounded</th>
@@ -1993,6 +2007,34 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
 </div>
 
 <!-- Skip reason panel (shown inside bm-panel flow) -->
+<!-- Manual lock: explicit Paper/Real choice, default Paper. Enforced (not just a
+     label) — forcePreMatch() below only ever fires with the mode this panel sends;
+     there is no code path that locks a bet without an explicit mode when using this
+     button. Real bets flow straight into the bookmaker panel (Pinnacle price +
+     Kelly, task 89) once the fresh scan returns. -->
+<div id="lock-mode-panel" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:1001;align-items:center;justify-content:center">
+  <div style="background:var(--surface1);border:1px solid var(--border);border-radius:12px;padding:24px;width:min(380px,90vw)">
+    <div style="font-size:14px;font-weight:700;margin-bottom:4px">Lock this bet</div>
+    <div id="lmp-fixture" style="font-size:12px;color:var(--muted);margin-bottom:16px"></div>
+    <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:8px;letter-spacing:.06em;text-transform:uppercase">Mode</label>
+    <div style="display:flex;gap:10px;margin-bottom:18px">
+      <label style="flex:1;display:flex;align-items:center;gap:8px;padding:12px;border:2px solid var(--cyan);border-radius:8px;cursor:pointer;background:rgba(0,229,255,.06)" id="lmp-paper-label">
+        <input type="radio" name="lmp-mode" value="paper" checked onchange="lmpModeChanged()"> Paper
+      </label>
+      <label style="flex:1;display:flex;align-items:center;gap:8px;padding:12px;border:2px solid var(--border);border-radius:8px;cursor:pointer" id="lmp-real-label">
+        <input type="radio" name="lmp-mode" value="real" onchange="lmpModeChanged()"> Real Money
+      </label>
+    </div>
+    <div id="lmp-real-warning" style="display:none;font-size:11px;color:var(--amber);margin-bottom:14px;padding:8px 10px;background:rgba(255,209,102,.08);border-radius:6px">
+      ⚠ Real money selected. After locking, you'll be asked to pick a bookmaker and enter the actual odds you can get — only place it if that beats Pinnacle's price.
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn btn-ghost btn-sm" onclick="closeLockModal()">Cancel</button>
+      <button class="btn btn-primary btn-sm" onclick="confirmLock()">Lock Bet</button>
+    </div>
+  </div>
+</div>
+
 <div id="skip-panel" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:1001;align-items:center;justify-content:center">
   <div style="background:var(--surface1);border:1px solid var(--border);border-radius:12px;padding:24px;width:min(360px,90vw)">
     <div style="font-size:14px;font-weight:700;margin-bottom:16px">Skip this bet</div>
@@ -2142,11 +2184,25 @@ function tierBadge(modelProb) {
   return `<span class="tier-badge" title="Raw model probability: ${pct}">${tier}</span>`;
 }
 
+function pickTypeOfBetKey(betKey) {
+  if (betKey === 'Home Win') return 'home';
+  if (betKey === 'Away Win') return 'away';
+  if (betKey === 'Draw')     return 'draw';
+  return null;
+}
+function pickTypeBadge(pickType) {
+  if (!pickType) return '';
+  const label = { home: 'HOME', away: 'AWAY', draw: 'DRAW' }[pickType] || pickType.toUpperCase();
+  return `<span class="badge badge-muted" style="letter-spacing:.03em">${label}</span>`;
+}
+
 // Compact historical-vs-live reference for the Scout page, shown at the moment a bet
 // is presented — informational only, does not filter or block anything. Reads the
 // cached /api/tier-performance response (STATE.tierPerf, mode=all, refreshed each
-// loadState() poll) rather than fetching per-card.
-function scoutTierBlock(modelProb, leagueId) {
+// loadState() poll) rather than fetching per-card. pickType ('home'/'away'/'draw',
+// derived from the projected/locked bet key) adds a pick-type-specific historical
+// line and, for 50-55%, the frozen backtest note from the deep-dive addendum.
+function scoutTierBlock(modelProb, leagueId, pickType) {
   const tier = tierOfProb(modelProb);
   if (!tier) return '';
   const perf = STATE.tierPerf;
@@ -2154,6 +2210,7 @@ function scoutTierBlock(modelProb, leagueId) {
   const fmtPct = v => `${v >= 0 ? '+' : ''}${(v*100).toFixed(1)}%`;
 
   let contextHtml;
+  let pickTypeHtml = '';
   if (!perf) {
     contextHtml = `<span style="color:var(--muted)">tier reference unavailable</span>`;
   } else if (!isValidated) {
@@ -2168,11 +2225,26 @@ function scoutTierBlock(modelProb, leagueId) {
         ? `Live: <span class="${l.roi >= 0 ? 'c-green' : 'c-red'}">${fmtPct(l.roi)}</span> (n=${l.n}${l.thin ? ', thin' : ''})`
         : `Live: <span style="color:var(--muted)">no resolved bets yet</span>`;
       contextHtml = `Historical: <span class="${h.roi >= 0 ? 'c-green' : 'c-red'}">${fmtPct(h.roi)}</span> (n=${h.n}${h.thin ? ', thin' : ''}) · ${liveStr}`;
+
+      // Pick-type-specific live line, same row's byPickType (already mode=all pooled)
+      if (pickType && row.byPickType) {
+        const pt = row.byPickType.find(p => p.pickType === pickType);
+        if (pt && pt.n > 0) {
+          contextHtml += ` · Live (${pickType}): <span class="${pt.roi >= 0 ? 'c-green' : 'c-red'}">${fmtPct(pt.roi)}</span> (n=${pt.n}${pt.thin ? ', thin' : ''})`;
+        }
+      }
+    }
+    // Purely informational — never a recommendation or restriction, see
+    // docs/tier-calibration-analysis.md Addendum 14/15 extension 3.
+    const notes = perf.pickTypeBacktestNotes?.[tier];
+    if (notes) {
+      const lines = Object.entries(notes).map(([pt, text]) => `<div>${pt === pickType ? '<strong>→</strong> ' : ''}${text}</div>`);
+      pickTypeHtml = `<div style="margin-top:3px;padding:6px 8px;background:rgba(255,209,102,.06);border:1px solid rgba(255,209,102,.2);border-radius:6px;font-size:9.5px;color:var(--text2);line-height:1.5">${lines.join('')}</div>`;
     }
   }
   return `<div style="margin-top:4px;font-size:10.5px;font-family:'DM Mono',monospace;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-    ${tierBadge(modelProb)}<span>${contextHtml}</span>
-  </div>`;
+    ${tierBadge(modelProb)}${pickTypeBadge(pickType)}<span>${contextHtml}</span>
+  </div>${pickTypeHtml}`;
 }
 
 function weatherBadge(condition) {
@@ -2346,7 +2418,7 @@ function recommendedCard(b) {
             <span>@${b.bookOdds.toFixed(2)}</span>
             ${b.weather ? `<span title="Weather">🌧 ${b.weather.precipProb}% rain, ${b.weather.windSpeed?.toFixed(0)}km/h</span>` : ''}
           </div>
-          ${scoutTierBlock(b.modelProb, b.leagueId)}
+          ${scoutTierBlock(b.modelProb, b.leagueId, b.pickType || pickTypeOfBetKey(b.bet))}
         </div>
         <div class="fixture-right" style="flex-shrink:0">
           <div class="stake-box">
@@ -2388,7 +2460,7 @@ function watchingCard(w) {
           ${minsOut != null ? `<span style="color:var(--amber)">T-${minsOut}m</span>` : ''}
           <span class="badge badge-amber">Projected: ${projLabel}</span>
         </div>
-        ${scoutTierBlock(w.modelProb, w.leagueId)}
+        ${scoutTierBlock(w.modelProb, w.leagueId, pickTypeOfBetKey(w.projectedBet))}
       </div>
       <div class="fixture-right">
         <span class="stage-tag tag-watching">WATCHING</span>
@@ -2396,7 +2468,7 @@ function watchingCard(w) {
         ${contextBadge(w.context)}
         ${weatherBadge(w.weatherCondition)}
         ${w.lowConfidence ? '<span class="badge badge-red" title="Model diverges from bookmaker beyond data-confidence threshold — will not auto-lock">LOW CONF</span>' : ''}
-        <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();forcePreMatch('${w.id}')">Lock now</button>
+        <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openLockModal('${w.id}')">Lock now</button>
       </div>
     </div>`;
 }
@@ -2442,14 +2514,64 @@ async function triggerMorningScan() {
   }
 }
 
-async function forcePreMatch(watchId) {
+// mode: 'paper' | 'real' | undefined. Undefined preserves the old behaviour (league-
+// mode default) for any caller that isn't the explicit lock-mode-panel flow below.
+async function forcePreMatch(watchId, mode) {
   toast('Running pre-match scan…', 'info');
   try {
-    const result = await apiFetch(`/api/scan/prematch/${watchId}`, { method: 'POST' });
-    if (result.dropped) toast('Score below threshold — dropped', 'info');
-    else toast(`Locked: ${result.fixture} — £${result.suggestedStake?.toFixed(2)}`, 'success');
+    const body = mode ? { mode } : {};
+    const result = await apiFetch(`/api/scan/prematch/${watchId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (result.dropped) {
+      toast('Score below threshold — dropped', 'info');
+    } else {
+      toast(`Locked: ${result.fixture} — £${result.suggestedStake?.toFixed(2)}`, 'success');
+      // Real bets flow straight into the bookmaker panel — bookmaker + actual odds
+      // are required before the bet counts as placed (task: "require... which
+      // bookmaker was actually used, and the actual odds obtained there").
+      if (result.mode === 'real') {
+        await loadState();
+        openBmPanel(result.id);
+        return;
+      }
+    }
     await loadState();
   } catch(e) { toast(e.message, 'error'); }
+}
+
+// ─── LOCK MODE PANEL (explicit Paper/Real choice, enforced at manual lock time) ──
+let _lmpWatchId = null;
+function openLockModal(watchId) {
+  _lmpWatchId = watchId;
+  const w = STATE.watching.find(x => x.id === watchId);
+  document.getElementById('lmp-fixture').textContent = w ? `${w.fixture} · ${w.leagueName}` : '';
+  // Always reset to Paper (the safer default) each time the panel opens — a
+  // previous session's choice must never silently carry over to a new fixture.
+  document.querySelector('input[name="lmp-mode"][value="paper"]').checked = true;
+  lmpModeChanged();
+  document.getElementById('lock-mode-panel').style.display = 'flex';
+}
+function closeLockModal() {
+  document.getElementById('lock-mode-panel').style.display = 'none';
+  _lmpWatchId = null;
+}
+function lmpModeChanged() {
+  const mode = document.querySelector('input[name="lmp-mode"]:checked').value;
+  document.getElementById('lmp-paper-label').style.borderColor = mode === 'paper' ? 'var(--cyan)' : 'var(--border)';
+  document.getElementById('lmp-paper-label').style.background  = mode === 'paper' ? 'rgba(0,229,255,.06)' : 'transparent';
+  document.getElementById('lmp-real-label').style.borderColor  = mode === 'real' ? 'var(--amber)' : 'var(--border)';
+  document.getElementById('lmp-real-label').style.background   = mode === 'real' ? 'rgba(255,209,102,.08)' : 'transparent';
+  document.getElementById('lmp-real-warning').style.display    = mode === 'real' ? 'block' : 'none';
+}
+async function confirmLock() {
+  if (!_lmpWatchId) return;
+  const mode = document.querySelector('input[name="lmp-mode"]:checked').value;
+  const watchId = _lmpWatchId;
+  closeLockModal();
+  await forcePreMatch(watchId, mode);
 }
 
 async function manualResolve(id, result) {
@@ -2843,6 +2965,11 @@ async function renderTierPerf(mode = 'paper', prefix = '') {
 
   // Only show rows that have either a historical baseline or some live activity —
   // no point listing every empty tier in the far ends of the probability range.
+  const fmtRoiPlain = (roi, thin) => {
+    if (roi == null) return '<span style="color:var(--muted)">—</span>';
+    const cls = roi >= 0 ? 'c-green' : 'c-red';
+    return `<span class="${cls}">${roi >= 0 ? '+' : ''}${(roi*100).toFixed(1)}%</span>${thin ? '<span style="color:var(--muted);font-size:9px">*thin</span>' : ''}`;
+  };
   data.rows.filter(r => r.historical || r.live.n > 0).forEach(r => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
@@ -2852,6 +2979,23 @@ async function renderTierPerf(mode = 'paper', prefix = '') {
       <td style="text-align:center">${statusBadge(r.status)}</td>
     `;
     tbody.appendChild(tr);
+
+    // Pick-type sub-row — live bets only, same n<10 thin flag as the tier row above.
+    // Structured generically (any tier can carry this), not hardcoded to 50-55%.
+    if (r.byPickType?.length) {
+      const sub = document.createElement('tr');
+      sub.style.fontSize = '10px';
+      const cells = r.byPickType.map(p =>
+        `<span style="margin-right:14px"><span style="color:var(--muted);text-transform:uppercase;letter-spacing:.03em">${p.pickType}</span> ${fmtRoiPlain(p.roi, p.thin)} <span style="color:var(--muted)">(n=${p.n})</span></span>`
+      ).join('');
+      let noteHtml = '';
+      const notes = data.pickTypeBacktestNotes?.[r.tier];
+      if (notes) {
+        noteHtml = `<div style="margin-top:2px;color:var(--muted);font-style:italic">${Object.values(notes).join(' · ')}</div>`;
+      }
+      sub.innerHTML = `<td colspan="4" style="padding:2px 8px 8px 24px;font-family:'DM Mono',monospace">By pick type: ${cells}${noteHtml}</td>`;
+      tbody.appendChild(sub);
+    }
   });
 
   if (otherEl) {
@@ -3709,12 +3853,15 @@ async function deleteBet(id) {
 
 function exportCSV(mode = 'paper') {
   const bets = STATE.bets.filter(b => mode === 'paper' ? (!b.mode || b.mode === 'paper') : mode === 'real' ? b.mode === 'real' : true);
-  const rows = [['Fixture','League','Bet','Score','ModelProb%','Tier','Odds','Edge%','Stake','P&L','Result','ModelVersion']];
+  // KellySuggestedStake and ActualStake logged separately (not just one "Stake"
+  // column) so past sizing decisions are reviewable — actual may differ from
+  // suggested if manually adjusted at placement time.
+  const rows = [['Fixture','League','Bet','PickType','Score','ModelProb%','Tier','Odds','PinnacleOddsAtLock','Edge%','KellySuggestedStake','ActualStake','P&L','Result','ModelVersion']];
   bets.forEach(b => rows.push([
-    b.fixture, b.leagueName, b.bet, b.successScore,
+    b.fixture, b.leagueName, b.bet, b.pickType || (pickTypeOfBetKey(b.bet) || ''), b.successScore,
     b.modelProb != null ? (b.modelProb*100).toFixed(1) : '', tierOfProb(b.modelProb) || '',
-    b.bookOdds?.toFixed(2), ((b.edge||0)*100).toFixed(2),
-    b.suggestedStake?.toFixed(2), b.pnl?.toFixed(2) || '', b.result || 'pending',
+    b.bookOdds?.toFixed(2), b.pinnacleOddsAtLock?.toFixed(2) || '', ((b.edge||0)*100).toFixed(2),
+    b.suggestedStake?.toFixed(2), b.actualStake?.toFixed(2) || '', b.pnl?.toFixed(2) || '', b.result || 'pending',
     b.modelVersion || '',
   ]));
   const csv = rows.map(r => r.join(',')).join('\n');
@@ -3983,6 +4130,8 @@ function renderSettings() {
   if (s.h2hWindow   != null) document.getElementById('h2h-window-input').value      = s.h2hWindow;
   if (s.kellyFraction!=null) document.getElementById('kelly-frac-input').value      = s.kellyFraction;
   if (s.successThreshold!=null) document.getElementById('threshold-settings').value = s.successThreshold;
+  if (s.manualKellyFraction!=null) document.getElementById('manual-kelly-frac-input').value = s.manualKellyFraction;
+  if (s.realBankrollDefault!=null) document.getElementById('real-bankroll-default-input').value = s.realBankrollDefault;
   if (s.calibrationFactor!=null) document.getElementById('cal-factor-input').value  = s.calibrationFactor;
   const wowyChk = document.getElementById('wowy-active-input');
   const wowyWarn = document.getElementById('wowy-warning');
@@ -4044,6 +4193,8 @@ async function saveSettings() {
     h2hWindow:        parseInt(document.getElementById('h2h-window-input').value),
     kellyFraction:    parseFloat(document.getElementById('kelly-frac-input').value),
     successThreshold:  parseInt(document.getElementById('threshold-settings').value),
+    manualKellyFraction: parseFloat(document.getElementById('manual-kelly-frac-input').value),
+    realBankrollDefault: parseFloat(document.getElementById('real-bankroll-default-input').value),
     calibrationFactor: parseFloat(document.getElementById('cal-factor-input').value),
     wowyActive:           document.getElementById('wowy-active-input')?.checked ?? false,
     preferExchange:       document.getElementById('prefer-exchange-input')?.checked ?? true,
@@ -4604,7 +4755,7 @@ function openDrawer(w) {
     ${teamIntelSection(w)}
 
     <div class="drawer-actions">
-      <button class="btn btn-primary btn-sm" onclick="closeDrawer();forcePreMatch('${w.id}')">Lock Bet Now</button>
+      <button class="btn btn-primary btn-sm" onclick="closeDrawer();openLockModal('${w.id}')">Lock Bet Now</button>
       <button class="btn btn-ghost btn-sm" onclick="closeDrawer()">Close</button>
     </div>`;
 
@@ -4949,9 +5100,15 @@ async function openBmPanel(betId) {
 
   document.getElementById('bmp-title').textContent    = bet.fixture;
   document.getElementById('bmp-subtitle').textContent = `${bet.bet} · score ${bet.successScore} · book odds ${bet.bookOdds?.toFixed(2)} · Kelly £${(bet.displayStake ?? bet.suggestedStake)?.toFixed(2)}`;
+  const pinnRef = document.getElementById('bmp-pinnacle-ref');
+  if (bet.pinnacleOddsAtLock) {
+    pinnRef.innerHTML = `<span style="color:var(--muted)">Pinnacle:</span> <strong style="color:var(--text1)">${bet.pinnacleOddsAtLock.toFixed(2)}</strong> <span style="color:var(--muted)">— any price below this doesn't clear the "beat Pinnacle" bar</span>`;
+  } else {
+    pinnRef.innerHTML = `<span style="color:var(--muted)">Pinnacle price not available at lock time — compare manually before placing.</span>`;
+  }
   document.getElementById('bmp-confirm-section').style.display = 'none';
   document.getElementById('bmp-group-warning').style.display   = 'none';
-  document.getElementById('bmp-table-body').innerHTML = '<tr><td colspan="8" style="padding:20px;color:var(--muted);text-align:center">Loading bookmakers…</td></tr>';
+  document.getElementById('bmp-table-body').innerHTML = '<tr><td colspan="9" style="padding:20px;color:var(--muted);text-align:center">Loading bookmakers…</td></tr>';
   document.getElementById('bmp-exchange-summary').textContent = 'Calculating best exchange…';
   document.getElementById('bm-panel').style.display = 'flex';
 
@@ -4988,7 +5145,11 @@ function _calcKelly(modelProb, odds, bankroll, fraction) {
 }
 
 function _renderBmTable(bet, books) {
-  const bankroll  = STATE.bankroll?.current || 1000;
+  // Bug fixed: this always used the PAPER bankroll (STATE.bankroll) for Kelly sizing
+  // regardless of bet.mode, so every real-money Kelly stake was priced off the wrong
+  // pot. Real bets now use STATE.realBankroll (bookmaker balances, or the
+  // configurable settings.realBankrollDefault fallback if none are set yet).
+  const bankroll  = bet.mode === 'real' ? (STATE.realBankroll || 1000) : (STATE.bankroll?.current || 1000);
   const modelProb = bet.modelProb || 0;
   const fraction  = bet.kellyFraction || 0.5;
   const recId     = bet.routingRecommendation?.recommended?.id;
@@ -5041,6 +5202,9 @@ function _renderBmTable(bet, books) {
       ? (bm.tier === 1 ? 1 + (rawOdds - 1) * (1 - comm) : rawOdds)
       : null;
     const edge     = rawOdds ? (modelProb * rawOdds - 1) : null;
+    // vs Pinnacle's price at lock time — the actual decision-rule comparison, shown
+    // per bookmaker regardless of pick type (home/away/draw all compare the same way).
+    const vsPinnPct = (dispOdds && bet.pinnacleOddsAtLock) ? (dispOdds / bet.pinnacleOddsAtLock - 1) * 100 : null;
     const kellRaw  = rawOdds ? _calcKelly(modelProb, rawOdds, bankroll, fraction) : null;
     const kellRnd  = kellRaw != null ? Math.max(0.5, Math.round(kellRaw * 2) / 2) : null;
 
@@ -5075,6 +5239,9 @@ function _renderBmTable(bet, books) {
         ${dispOdds ? `<span style="color:var(--text1)">${dispOdds.toFixed(2)}</span>${bm.tier === 1 && comm ? `<div style="font-size:9px;color:var(--muted)">net after ${Math.round(comm*100)}%</div>` : ''}` : '<span style="color:var(--muted)">—</span>'}
       </td>
       <td style="padding:10px 8px;text-align:right;font-family:'DM Mono',monospace">
+        ${vsPinnPct != null ? `<span style="color:${vsPinnPct > 0 ? 'var(--green)' : 'var(--red)'};font-weight:${vsPinnPct > 0 ? '700' : '400'}">${vsPinnPct > 0 ? '+' : ''}${vsPinnPct.toFixed(1)}%</span>` : '<span style="color:var(--muted)">—</span>'}
+      </td>
+      <td style="padding:10px 8px;text-align:right;font-family:'DM Mono',monospace">
         ${edge != null ? `<span style="color:${edge > 0 ? 'var(--green)' : 'var(--red)'}">${edge > 0 ? '+' : ''}${(edge * 100).toFixed(1)}%</span>` : '<span style="color:var(--muted)">—</span>'}
       </td>
       <td style="padding:10px 8px;text-align:right;font-family:'DM Mono',monospace">
@@ -5097,7 +5264,7 @@ function _renderBmTable(bet, books) {
 
   document.getElementById('bmp-table-body').innerHTML = rows.length
     ? rows.join('')
-    : '<tr><td colspan="8" style="padding:20px;color:var(--muted);text-align:center">No active bookmakers configured</td></tr>';
+    : '<tr><td colspan="9" style="padding:20px;color:var(--muted);text-align:center">No active bookmakers configured</td></tr>';
 }
 
 function selectBmRow(bmId, bmName, odds, stake) {
@@ -5151,7 +5318,7 @@ function selectBestExchange() {
   const rawOdds = bet ? _bmOddsForOutcome(bm, bet) : null;
   const comm    = bm.commission || 0.02;
   const netOdds = rawOdds ? 1 + (rawOdds - 1) * (1 - comm) : null;
-  const bankroll = STATE.bankroll?.current || 1000;
+  const bankroll = bet?.mode === 'real' ? (STATE.realBankroll || 1000) : (STATE.bankroll?.current || 1000);
   const kellRaw  = bet ? _calcKelly(bet.modelProb, rawOdds, bankroll, bet.kellyFraction || 0.5) : null;
   const kellRnd  = kellRaw != null ? Math.max(0.5, Math.round(kellRaw * 2) / 2) : (bet?.displayStake ?? bet?.suggestedStake);
   selectBmRow(bm.id, bm.name, netOdds || rawOdds || bet?.bookOdds, kellRnd);
