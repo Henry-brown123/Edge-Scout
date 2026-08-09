@@ -170,6 +170,14 @@ const SETTINGS_DEFAULTS = {
   transferModifierActive: true,
   preferExchange: true,
   preferExchangeBuffer: 5,
+  // Real-money Kelly preview at manual lock time (Scout tab) — separate from
+  // getEvKellyFraction()'s per-league, calibration-driven fraction (which still
+  // governs what actually gets stored as a bet's own kellyFraction/suggestedStake).
+  // This is a simple, user-adjustable default for the pre-lock "what would Kelly
+  // suggest" preview, and for real-bankroll fallback when no bookmaker balance is
+  // set yet. Does not change any scoring/EV logic.
+  realBankrollDefault: 1000,
+  manualKellyFraction: 0.25,
   leagueModes: {
     '39': 'paper', '140': 'paper_only', '135': 'paper', '78': 'paper',
     '61': 'paper', '2': 'paper', '1': 'paper', '179': 'paper',
@@ -1098,6 +1106,9 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
       edge, successScore: finalScore, kelly: k,
       ev: calProb * (displayOdds - 1) - (1 - calProb),
       pinnacleAvailable: !!pinnStripped,
+      // Raw Pinnacle price (with margin), not the stripped true-probability used for
+      // edge calc — this is what a human actually compares a soft-book price against.
+      pinnacleOddsRaw: bookOdds._pinnacleRaw?.[teamKey] ?? null,
     };
     if (c.displayLabel) entry.displayLabel = c.displayLabel;
     results.push(entry);
@@ -1355,7 +1366,11 @@ async function runMorningScan(leagueIds) {
 
 // ─── PRE-MATCH SCAN (T-60) ───────────────────────────────────────────────────
 
-async function runPreMatchScan(watchingEntry) {
+// overrides.mode ('paper' | 'real'), when explicitly provided by a human at manual
+// lock time (Scout tab), takes priority over the league-mode-derived default — an
+// explicit, per-fixture choice should never be silently overridden by the blanket
+// per-league setting.
+async function runPreMatchScan(watchingEntry, overrides = {}) {
   const settings  = getSettings();
   const leagueId  = watchingEntry.leagueId;
   const meta      = LEAGUES[leagueId] || { season: 2024 };
@@ -1499,12 +1514,17 @@ async function runPreMatchScan(watchingEntry) {
       }
     } catch {}
 
-    // Lock the bet — mode-aware Kelly and bankroll
-    const betMode   = scored.betMode || 'paper';
+    // Lock the bet — mode-aware Kelly and bankroll. An explicit mode override from a
+    // human at manual lock time (Scout tab "Lock Bet Now" flow) always wins over the
+    // league-mode-derived default; the automated cron path never sets one.
+    const betMode   = overrides.mode || scored.betMode || 'paper';
     const isReal    = betMode === 'real';
-    const realBr    = isReal ? getRealBankroll() : null;
+    // Real bankroll = sum of active bookmaker balances if any are set, else the
+    // configurable settings default — previously fell back to a hard 0 (no balances
+    // set yet = every real Kelly stake silently computed as £0).
+    const realBr    = isReal ? (getRealBankroll() || settings.realBankrollDefault || 1000) : null;
     const evKelly   = isReal ? getEvKellyFraction(leagueId) : settings.kellyFraction;
-    const bankrollForKelly = isReal ? (realBr || 0) : getBankroll().current;
+    const bankrollForKelly = isReal ? realBr : getBankroll().current;
     const realKelly = kelly(best.modelProb * (settings.calibrationFactor ?? 1.08),
                             best.bookOdds, evKelly, bankrollForKelly);
     const br    = getBankroll();
@@ -1521,10 +1541,19 @@ async function runPreMatchScan(watchingEntry) {
       kickoff:      fix.fixture?.date,
       expectedFinish: new Date(new Date(fix.fixture.date).getTime() + 110 * 60000).toISOString(),
       bet:          best.bet,
+      // Derived, not a new independent field — 'Home Win'/'Away Win'/'Draw' already
+      // fully determines this. Kept as its own field so pick-type breakdowns
+      // (Scout cards, Performance tab) don't each need to re-derive it from `bet`.
+      pickType:     best.bet === 'Home Win' ? 'home' : best.bet === 'Away Win' ? 'away' : 'draw',
       successScore: best.successScore,
       modelProb:    best.modelProb,
       modelVersion: scored.modelVersion,
       bookOdds:     best.bookOdds,
+      // Raw Pinnacle price at lock time, separate from bookOdds (which is a generic
+      // "UK book odds" figure used for display/Kelly, not necessarily Pinnacle's own
+      // price) — this is the actual reference price a human compares a soft-book
+      // quote against under the "only real-money if it beats Pinnacle" rule.
+      pinnacleOddsAtLock: best.pinnacleOddsRaw ?? null,
       impliedProb:  best.impliedProb,
       edge:         best.edge,
       ev:           best.ev,
@@ -2751,11 +2780,17 @@ app.get('/api/state', (_req, res) => {
     }
     return w;
   });
+  const settings = getSettings();
   res.json({
     bankroll:    getBankroll(),
+    // Real-money-aware bankroll for Scout-tab Kelly previews/panels — sum of active
+    // bookmaker balances if any are set, else the configurable settings default.
+    // getBankroll() above is paper-only; using it for real-bet Kelly sizing was a
+    // pre-existing gap (client always priced real Kelly off the paper bankroll).
+    realBankroll: getRealBankroll() || settings.realBankrollDefault || 1000,
     bets:        getBets(),
     watching,
-    settings:    getSettings(),
+    settings,
     leagues:     LEAGUES,
     phase2Ready: !!scanMeta.phase2Ready,
   });
@@ -3132,6 +3167,17 @@ const TIER_PERF_VALIDATED_LEAGUES = new Set([39, 61, 2, 135, 179, 78, 140, 88, 9
 // here so "enough live data to say something" means the same thing everywhere.
 const TIER_PERF_MIN_LIVE_N = 10;
 const TIER_EDGES_SHARED = [0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80];
+
+// Frozen backtest finding from docs/tier-calibration-analysis.md Addendum 14/15
+// extension 3 — purely informational context shown alongside the live pick-type
+// breakdown, never a recommendation or restriction. Structured per-tier so it
+// extends cleanly if a similar deep dive is ever done on another tier.
+const TIER_PICKTYPE_BACKTEST_NOTES = {
+  '50-55%': {
+    home: 'Home picks: ~breakeven vs Pinnacle historically (n=107, -0.8% ROI, CI spans zero)',
+    away: 'Away picks: promising but thin sample (n=14, +34.4% ROI) — also the more underconfident pick type by calibration (-11.2pp vs -3.6pp for home)',
+  },
+};
 const TIER_LABELS_SHARED = ['<35%', ...TIER_EDGES_SHARED.slice(0, -1).map((e, i) => `${Math.round(e*100)}-${Math.round(TIER_EDGES_SHARED[i+1]*100)}%`), '80%+'];
 function tierOfProbShared(p) {
   if (p == null || isNaN(p)) return null;
@@ -3162,6 +3208,25 @@ app.get('/api/tier-performance', (req, res) => {
       map[tier].pnl    += (b.pnl || 0);
     }
     return map;
+  }
+
+  // Pick-type breakdown within a tier (task: "Scout tab real-money logging with
+  // pick-type context"). Derives from bet.pickType where present, falling back to
+  // bet.bet for bets locked before that field existed — same n<TIER_PERF_MIN_LIVE_N
+  // thin-sample flag used everywhere else on this endpoint, applied per pick-type
+  // cell rather than the whole tier, since these are necessarily smaller slices.
+  function pickTypeOf(b) {
+    return b.pickType || (b.bet === 'Home Win' ? 'home' : b.bet === 'Away Win' ? 'away' : b.bet === 'Draw' ? 'draw' : null);
+  }
+  function byPickTypeForTier(bets, tier) {
+    const inTier = bets.filter(b => tierOfProbShared(b.modelProb) === tier);
+    return ['home', 'draw', 'away'].map(pt => {
+      const g = inTier.filter(b => pickTypeOf(b) === pt);
+      const n = g.length;
+      const staked = g.reduce((s, b) => s + (b.actualStake ?? b.suggestedStake ?? 0), 0);
+      const pnl    = g.reduce((s, b) => s + (b.pnl || 0), 0);
+      return { pickType: pt, n, roi: n && staked ? +(pnl / staked).toFixed(4) : null, thin: n < TIER_PERF_MIN_LIVE_N };
+    }).filter(r => r.n > 0);
   }
 
   // Per-model-version sample floor tracking (docs/model-versioning.md). A brand-new
@@ -3214,6 +3279,7 @@ app.get('/api/tier-performance', (req, res) => {
       historical: hist ? { n: hist.n, roi: hist.roi, ciExcludesZero: !!hist.ciExcludesZero, thin: !hist.decisionGrade } : null,
       live: { n: liveN, roi: liveRoi, thin: liveThin },
       status,
+      byPickType: byPickTypeForTier(validatedBets, tier),
     };
   });
 
@@ -3236,6 +3302,7 @@ app.get('/api/tier-performance', (req, res) => {
     otherLeagueActivity,
     byModelVersion,
     modelVersionDecisionFloor: MODEL_VERSION_DECISION_FLOOR,
+    pickTypeBacktestNotes: TIER_PICKTYPE_BACKTEST_NOTES,
   });
 });
 
@@ -4438,7 +4505,12 @@ app.post('/api/scan/prematch/:watchId', async (req, res) => {
   const watching = getWatching();
   const entry    = watching.find(w => w.id === req.params.watchId);
   if (!entry) return res.status(404).json({ error: 'Not found in watching list' });
-  const bet = await runPreMatchScan(entry);
+  // Explicit mode from the Scout tab's manual lock flow — 'paper' or 'real'. Absent
+  // (e.g. the automated cron path never sends a body) falls back to league-mode
+  // default inside runPreMatchScan, unchanged from before this existed.
+  const mode = req.body?.mode;
+  if (mode && !['paper', 'real'].includes(mode)) return res.status(400).json({ error: "mode must be 'paper' or 'real'" });
+  const bet = await runPreMatchScan(entry, mode ? { mode } : {});
   if (bet) {
     saveWatching(watching.filter(w => w.id !== entry.id), { allowEmpty: true });
     res.json(bet);
