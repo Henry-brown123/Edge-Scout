@@ -4463,6 +4463,194 @@ app.post('/api/debug/backfill-holdout-odds-targeted', async (req, res) => {
   }
 });
 
+// TEMP diagnostic — the full "Comprehensive league x tier evidence table" computation
+// (Parts B, C, D) in a single pass, using the DIAGNOSTIC PROXY model only (never the
+// live model). Single test-set look per docs/calibration-rules.md — this endpoint is
+// read once to write the report, not iterated against.
+app.get('/api/debug/evidence-table', (_req, res) => {
+  try {
+    const HOLDOUT_START = '2024-08-07T00:00:00.000Z';
+    const historical = readJSON('backfill-historical.json') || {};
+    const scoredRecords = historical.scoredRecords || [];
+    const optWeights = historical.optimisedWeights || {};
+    const closingOdds = readJSON('closing-odds.json') || {};
+    const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG } = require('./scoring');
+    const { empiricalBayesShrink, varianceForRoi } = require('./shrinkage');
+    const proxyModel = require('./models/gbdt-proxy');
+
+    const WORLD_CUP_ID = 1;
+    const TIERS = [
+      { label: '<35%',   lo: -Infinity, hi: 0.35 },
+      { label: '35-40%', lo: 0.35, hi: 0.40 },
+      { label: '40-45%', lo: 0.40, hi: 0.45 },
+      { label: '45-50%', lo: 0.45, hi: 0.50 },
+      { label: '50-55%', lo: 0.50, hi: 0.55 },
+      { label: '55-60%', lo: 0.55, hi: 0.60 },
+      { label: '60-65%', lo: 0.60, hi: 0.65 },
+      { label: '65-70%', lo: 0.65, hi: 0.70 },
+      { label: '70-75%', lo: 0.70, hi: 0.75 },
+      { label: '75-80%', lo: 0.75, hi: 0.80 },
+      { label: '80%+',   lo: 0.80, hi: Infinity },
+    ];
+    const EDGE_BANDS = [
+      { label: '<0%',    lo: -Infinity, hi: 0 },
+      { label: '0-2%',   lo: 0,    hi: 0.02 },
+      { label: '2-4%',   lo: 0.02, hi: 0.04 },
+      { label: '4-6%',   lo: 0.04, hi: 0.06 },
+      { label: '6-8%',   lo: 0.06, hi: 0.08 },
+      { label: '8-10%',  lo: 0.08, hi: 0.10 },
+      { label: '10-15%', lo: 0.10, hi: 0.15 },
+      { label: '15-20%', lo: 0.15, hi: 0.20 },
+      { label: '20%+',   lo: 0.20, hi: Infinity },
+    ];
+    const CALIB_TIER_LABELS = ['35-40%','40-45%','45-50%','50-55%','55-60%','60-65%','65-70%'];
+
+    // ── Score every in-scope fixture through the PROXY model (never live model.predict) ──
+    const scored = [];
+    for (const rec of scoredRecords) {
+      const lid = parseInt(rec.leagueId, 10);
+      if (!LEAGUE_CONFIG[lid] || lid === WORLD_CUP_ID) continue;
+      if (!rec.homeFactors || !rec.awayFactors || !rec.actualOutcome || !rec.date) continue;
+
+      const context = rec.context || classifyFixture(lid);
+      const weights = optWeights[context] || optWeights.club_domestic;
+      if (!weights) continue;
+
+      let probs;
+      try {
+        const rawProbs = proxyModel.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[lid]);
+        probs = applyLeagueBiasCorrection(rawProbs, lid, LEAGUE_CONFIG);
+      } catch { continue; }
+
+      let topOutcome, modelProb;
+      if (probs.home >= probs.draw && probs.home >= probs.away) { topOutcome = 'home'; modelProb = probs.home; }
+      else if (probs.away >= probs.draw)                        { topOutcome = 'away'; modelProb = probs.away; }
+      else                                                       { topOutcome = 'draw'; modelProb = probs.draw; }
+      const won = rec.actualOutcome === topOutcome;
+
+      let pinnacleOdds = null, edge = null;
+      const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
+      if (co) {
+        pinnacleOdds = topOutcome === 'home' ? co.homeOdds : topOutcome === 'away' ? co.awayOdds : co.drawOdds;
+        if (pinnacleOdds && pinnacleOdds > 1) edge = (modelProb - (1 / pinnacleOdds)) / (1 / pinnacleOdds);
+        else pinnacleOdds = null;
+      }
+
+      scored.push({ fixtureId: rec.fixtureId, leagueId: lid, date: rec.date, topOutcome, modelProb, won, pinnacleOdds, edge });
+    }
+
+    const validatedIds = Object.keys(VALIDATED_SPLITS).map(Number);
+
+    // ── Two populations for Part B's dual-window comparison ──
+    const holdoutPop = scored.filter(r => r.date >= HOLDOUT_START && validatedIds.includes(r.leagueId));
+    const addendum12Pop = scored.filter(r => {
+      const s = VALIDATED_SPLITS[r.leagueId];
+      return s && new Date(r.date) >= new Date(s.testFrom);
+    });
+
+    // ── Calibration tables (raw pooled + shrunk grid), per league x tier ──
+    function calibTable(pop) {
+      return TIERS.map(t => {
+        const inTier = pop.filter(r => r.modelProb >= t.lo && r.modelProb < t.hi);
+        const n = inTier.length;
+        if (!n) return { tier: t.label, n: 0 };
+        const meanPred = inTier.reduce((s, r) => s + r.modelProb, 0) / n;
+        const hitRate  = inTier.filter(r => r.won).length / n;
+        return { tier: t.label, n, meanPred: +(meanPred * 100).toFixed(1), hitRate: +(hitRate * 100).toFixed(1), errorPp: +((meanPred - hitRate) * 100).toFixed(1) };
+      });
+    }
+    function calibGridShrunk(pop) {
+      const grid = {};
+      for (const label of CALIB_TIER_LABELS) {
+        const t = TIERS.find(x => x.label === label);
+        const cells = validatedIds.map(lid => {
+          const inTier = pop.filter(r => r.leagueId === lid && r.modelProb >= t.lo && r.modelProb < t.hi);
+          const n = inTier.length;
+          if (!n) return { id: lid, n: 0, value: 0, hitRate: 0 };
+          const meanPred = inTier.reduce((s, r) => s + r.modelProb, 0) / n;
+          const hitRate  = inTier.filter(r => r.won).length / n;
+          return { id: lid, n, value: (meanPred - hitRate), hitRate, errorPp: +((meanPred - hitRate) * 100).toFixed(1) };
+        });
+        grid[label] = empiricalBayesShrink(cells.filter(c => c.n > 0), c => Math.max(c.hitRate * (1 - c.hitRate), 1e-6));
+      }
+      return grid;
+    }
+
+    const holdoutCalibPooled    = calibTable(holdoutPop);
+    const holdoutCalibGrid      = calibGridShrunk(holdoutPop);
+    const addendum12CalibPooled = calibTable(addendum12Pop);
+    const addendum12CalibGrid   = calibGridShrunk(addendum12Pop);
+
+    // ── Part C: continuous edge-vs-ROI, full matched population (holdout window), no threshold ──
+    const holdoutMatched = holdoutPop.filter(r => r.edge != null);
+
+    function roiFor(pop) {
+      const n = pop.length;
+      if (!n) return { n: 0, roi: null };
+      const returns = pop.map(r => r.won ? (r.pinnacleOdds - 1) : -1);
+      const roi = returns.reduce((s, x) => s + x, 0) / n;
+      return { n, roi: +(roi * 100).toFixed(1) };
+    }
+
+    const edgeBandPooled = EDGE_BANDS.map(b => ({ band: b.label, ...roiFor(holdoutMatched.filter(r => r.edge >= b.lo && r.edge < b.hi)) }));
+    const edgeBandByLeague = {};
+    for (const lid of validatedIds) {
+      edgeBandByLeague[lid] = EDGE_BANDS.map(b => ({ band: b.label, ...roiFor(holdoutMatched.filter(r => r.leagueId === lid && r.edge >= b.lo && r.edge < b.hi)) }));
+    }
+    const tierROIFullPooled = CALIB_TIER_LABELS.map(label => {
+      const t = TIERS.find(x => x.label === label);
+      return { tier: label, ...roiFor(holdoutMatched.filter(r => r.modelProb >= t.lo && r.modelProb < t.hi)) };
+    });
+    const tierROIFullByLeague = {};
+    for (const lid of validatedIds) {
+      tierROIFullByLeague[lid] = CALIB_TIER_LABELS.map(label => {
+        const t = TIERS.find(x => x.label === label);
+        return { tier: label, ...roiFor(holdoutMatched.filter(r => r.leagueId === lid && r.modelProb >= t.lo && r.modelProb < t.hi)) };
+      });
+    }
+
+    // ── Part D: traditional threshold ROI (posEdge >= 5%), same convention as Addendum 6 ──
+    const posEdge = holdoutMatched.filter(r => r.edge >= 0.05);
+    const thresholdROIPooled = CALIB_TIER_LABELS.map(label => {
+      const t = TIERS.find(x => x.label === label);
+      return { tier: label, ...roiFor(posEdge.filter(r => r.modelProb >= t.lo && r.modelProb < t.hi)) };
+    });
+    const thresholdGrid = {};
+    for (const label of CALIB_TIER_LABELS) {
+      const t = TIERS.find(x => x.label === label);
+      const cells = validatedIds.map(lid => {
+        const pop = posEdge.filter(r => r.leagueId === lid && r.modelProb >= t.lo && r.modelProb < t.hi);
+        const rf = roiFor(pop);
+        const meanFrac = rf.roi != null ? rf.roi / 100 : 0;
+        const returns = pop.map(r => r.won ? (r.pinnacleOdds - 1) : -1);
+        const sampleVariance = pop.length ? returns.reduce((s, x) => s + (x - meanFrac) ** 2, 0) / pop.length : 0;
+        return { id: lid, n: rf.n, value: meanFrac, sampleVariance };
+      });
+      thresholdGrid[label] = empiricalBayesShrink(cells.filter(c => c.n > 0), varianceForRoi);
+    }
+
+    res.json({
+      holdoutStart: HOLDOUT_START,
+      proxyModelVersion: proxyModel.getVersion(),
+      scope: {
+        validatedLeagueIds: validatedIds,
+        holdoutPopN: holdoutPop.length,
+        addendum12PopN: addendum12Pop.length,
+        holdoutMatchedOddsN: holdoutMatched.length,
+        posEdgeN: posEdge.length,
+      },
+      partB: {
+        holdout:           { pooled: holdoutCalibPooled,    grid: holdoutCalibGrid },
+        addendum12Control: { pooled: addendum12CalibPooled, grid: addendum12CalibGrid },
+      },
+      partC: { edgeBandPooled, edgeBandByLeague, tierROIFullPooled, tierROIFullByLeague },
+      partD: { thresholdROIPooled, thresholdGrid },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0, 10) });
+  }
+});
+
 app.get('/api/league-tier-matrix', (_req, res) => {
   const leagueIds = Object.keys(LEAGUE_TIER_MATRIX).map(Number);
 
