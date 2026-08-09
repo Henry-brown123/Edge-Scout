@@ -2360,6 +2360,62 @@ function runGbdtRetrain(reason) {
   return { success: true, started: true };
 }
 
+// Diagnostic PROXY training — entirely separate process/status-file/output-file from
+// the real retrain above. Writes gbdt-proxy-diagnostic.json (models/gbdt-proxy.js),
+// never gbdt-weights.json — cannot affect the live model. Same spawn/timeout pattern
+// as runGbdtRetrain(). See models/gbdt-train-proxy.js for what this actually trains.
+let _proxyTrainProcess = null;
+function runGbdtProxyTrain(reason) {
+  if (_proxyTrainProcess) {
+    return { success: false, error: 'A proxy training run is already in progress.' };
+  }
+  console.log(`[GBDT-proxy] Starting diagnostic proxy training — ${reason}`);
+  const startedAt = new Date().toISOString();
+  writeJSON('proxy-train-status.json', { status: 'running', reason, startedAt, finishedAt: null, error: null });
+
+  const { spawn } = require('child_process');
+  const child = spawn('node', ['scripts/gbdt-train-proxy.js'], {
+    cwd: __dirname,
+    env: { ...process.env, DATA_DIR: process.env.DATA_DIR },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  _proxyTrainProcess = child;
+
+  let output = '';
+  child.stdout.on('data', d => { output += d; process.stdout.write(d); });
+  child.stderr.on('data', d => { output += d; process.stderr.write(d); });
+
+  const SAFETY_TIMEOUT_MS = 40 * 60 * 1000; // same headroom as the real retrain
+  const killTimer = setTimeout(() => {
+    if (_proxyTrainProcess === child) {
+      console.error('[GBDT-proxy] Proxy training exceeded 40-minute safety timeout — killing');
+      child.kill('SIGKILL');
+    }
+  }, SAFETY_TIMEOUT_MS);
+
+  child.on('close', (code) => {
+    clearTimeout(killTimer);
+    _proxyTrainProcess = null;
+    const finishedAt = new Date().toISOString();
+    if (code === 0) {
+      console.log('[GBDT-proxy] Proxy training complete — gbdt-proxy-diagnostic.json written');
+      writeJSON('proxy-train-status.json', { status: 'success', reason, startedAt, finishedAt, error: null, exitCode: code, tail: output.slice(-4000) });
+    } else {
+      console.error(`[GBDT-proxy] Proxy training failed — exit code ${code}`);
+      writeJSON('proxy-train-status.json', { status: 'failed', reason, startedAt, finishedAt, error: `exit code ${code}`, exitCode: code, tail: output.slice(-4000) });
+    }
+  });
+
+  child.on('error', (e) => {
+    clearTimeout(killTimer);
+    _proxyTrainProcess = null;
+    console.error('[GBDT-proxy] Proxy training failed to start:', e.message);
+    writeJSON('proxy-train-status.json', { status: 'failed', reason, startedAt, finishedAt: new Date().toISOString(), error: e.message });
+  });
+
+  return { success: true, started: true };
+}
+
 // Run weight optimisation for all three contexts and mutate `existing` in place.
 function _runOptimisation(records, existing, onProgress) {
   const optimisedWeights = existing.optimisedWeights || {};
@@ -6034,6 +6090,18 @@ app.post('/api/admin/trigger-retrain', (_req, res) => {
 
 app.get('/api/admin/retrain-status', (_req, res) => {
   res.json(readJSON('retrain-status.json') || { status: 'never_run' });
+});
+
+// Diagnostic proxy model — never live, see models/gbdt-train-proxy.js and
+// docs/tier-calibration-analysis.md's evidence-table addendum.
+app.post('/api/admin/trigger-proxy-train', (_req, res) => {
+  const result = runGbdtProxyTrain('manual trigger via POST /api/admin/trigger-proxy-train');
+  if (!result.success) return res.status(409).json({ success: false, error: result.error });
+  res.json({ success: true, started: true, message: 'Proxy training started — poll GET /api/admin/proxy-train-status for completion.' });
+});
+
+app.get('/api/admin/proxy-train-status', (_req, res) => {
+  res.json(readJSON('proxy-train-status.json') || { status: 'never_run' });
 });
 
 // Cache expensive WOWY count — recompute only when profiles change (startup/backfill)
