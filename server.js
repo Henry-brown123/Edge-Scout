@@ -4241,6 +4241,48 @@ app.get('/api/pre-retrain-calibration-matrix', (_req, res) => {
   });
 });
 
+// TEMP diagnostic — inspect per-league date distribution to choose a holdout window
+// for the diagnostic proxy model (task: "Comprehensive league x tier evidence table").
+// Read-only, zero API calls. Temporary, removed after the holdout window is chosen.
+app.get('/api/debug/date-distribution', (_req, res) => {
+  try {
+    const historical = readJSON('backfill-historical.json') || {};
+    const scoredRecords = historical.scoredRecords || [];
+    const VALIDATED_IDS = Object.keys(VALIDATED_SPLITS).map(Number);
+
+    const byLeague = {};
+    for (const lid of VALIDATED_IDS) byLeague[lid] = [];
+    for (const rec of scoredRecords) {
+      const lid = parseInt(rec.leagueId, 10);
+      if (!VALIDATED_IDS.includes(lid)) continue;
+      if (!rec.homeFactors || !rec.awayFactors || !rec.actualOutcome || !rec.date) continue;
+      byLeague[lid].push(rec.date);
+    }
+
+    const maxDateOverall = scoredRecords.reduce((m, r) => r.date && r.date > m ? r.date : m, '');
+    const windows = [6, 9, 12, 15, 18, 24];
+
+    const result = {};
+    for (const lid of VALIDATED_IDS) {
+      const dates = byLeague[lid].sort();
+      const maxDate = dates[dates.length - 1] || null;
+      const minDate = dates[0] || null;
+      const windowCounts = {};
+      for (const months of windows) {
+        const cutoff = new Date(maxDateOverall);
+        cutoff.setMonth(cutoff.getMonth() - months);
+        const cutoffStr = cutoff.toISOString();
+        windowCounts[`${months}mo`] = dates.filter(d => d >= cutoffStr).length;
+      }
+      result[lid] = { name: LEAGUE_CONFIG[lid]?.name, total: dates.length, minDate, maxDate, windowCounts };
+    }
+
+    res.json({ maxDateOverall, byLeague: result });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0, 8) });
+  }
+});
+
 app.get('/api/league-tier-matrix', (_req, res) => {
   const leagueIds = Object.keys(LEAGUE_TIER_MATRIX).map(Number);
 
