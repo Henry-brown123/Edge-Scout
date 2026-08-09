@@ -1916,6 +1916,305 @@ re-fetched), then hardcoded as a permanent constant
 (`PRE_RETRAIN_CALIBRATION_MATRIX`) exactly like `LEAGUE_TIER_MATRIX`. Zero
 Odds API or API-Sports calls. No scoring, EV, or live-model code touched.
 
+## Addendum 14 — Comprehensive league × tier evidence table (calibration, continuous edge-vs-ROI, threshold ROI)
+
+Replaces the earlier composite-score approach — no go/no-go scoring, no
+automated ranking. Three separate readings on the largest available sample
+per reading, using a **diagnostic proxy model**, never the live model.
+
+### Part A — the diagnostic proxy model
+
+**Why a proxy model at all.** The live GBDT model was retrained 2026-08-08
+on essentially the entire population (`trainN=40,202` of 50,253 qualifying
+fixtures — see [model-versioning.md](model-versioning.md)). It has no
+remaining genuinely-unseen recent data to test against. A separate model,
+deliberately blind to a recent slice, is the only way to get an honest
+out-of-sample read using *current* data patterns rather than Addendum 12's
+now-months-old snapshot.
+
+**Holdout window: fixtures dated ≥ 2024-08-07.** A literal last-12-months
+window was checked first and rejected — it returned ~0 fixtures for 6 of
+the 9 validated leagues, because their 2025-26 seasons haven't started yet
+(today is 2026-08-09; European domestic seasons resume mid-August). A
+~24-month window gives 206-380 fixtures per league, the same order of
+magnitude as Addendum 12's per-league test counts. In football terms this
+window is close to "the completed 2024-25 season," plus early 2026-27
+fixtures for the three leagues whose seasons start earlier (Eredivisie,
+Primeira Liga, Scottish Premiership).
+
+**Confirmed not in the live model's most recent retrain.** Reproduced
+`gbdt-train.js`'s exact filter+sort to find the live model's own train/test
+boundary: **2022-11-13**. Every fixture in the chosen holdout window
+(≥2024-08-07) falls after this — none of it was used to build the live
+model's decision trees. (It's possible a portion contributed to the live
+model's own Platt-scaling fit, which uses its whole reserved 20%, not a
+further-reserved slice — a narrower, secondary form of "seen" than tree
+training, worth naming rather than glossing over.)
+
+**The proxy model itself** (`models/gbdt-train-proxy.js` → `DATA_DIR/gbdt-proxy-diagnostic.json`,
+loaded via `models/gbdt-proxy.js`): identical architecture and
+hyperparameters to the live model, trained only on the 46,394 qualifying
+fixtures dated before 2024-08-07 (37,115 train / 9,279 inner-test, the
+inner split used only for its own Platt-scaling fit and diagnostic
+metrics — the holdout itself is never touched during training in any
+capacity). Inner-test log-loss 0.9891 vs linear baseline 1.0316 —
+comparable to every other GBDT fit this project has produced.
+
+**Confirmed never wired into anything live**: `models/interface.js` only
+ever looks for `gbdt-weights.json` — a different, unrelated file.
+`models/gbdt-proxy.js` is a separate module with its own file path, never
+required by `interface.js`, `scoreOneFixture()`, or any live route. No
+scoring, EV, or live-model code was touched by this task.
+
+### Part B — calibration grid: does the underconfidence pattern hold on current data?
+
+Same proxy model, scored on the held-out window (n=2,825), **and** as a
+control, re-scored against Addendum 12's original test-only population
+(n=4,054, same 9 leagues, different — earlier and partially overlapping —
+date range). This is a **pattern comparison, not a magnitude comparison**:
+different model, different window; agreement in direction and shape is the
+signal to look for, not identical numbers.
+
+**Pooled calibration — holdout window (n=2,825) vs Addendum 12 window (n=4,054), same proxy model:**
+
+| Tier | Holdout: n, error | Addendum 12 window: n, error |
+|---|---|---|
+| 35-40% | 423, +0.9pp | 630, +2.7pp |
+| 40-45% | 754, +2.0pp | 1,050, +1.3pp |
+| 45-50% | 601, −1.7pp | 844, −0.2pp |
+| 50-55% | 450, −5.5pp | 653, −6.7pp |
+| 55-60% | 253, −6.8pp | 370, −7.9pp |
+| 60-65% | 168, −7.4pp | 237, −11.2pp |
+| 65-70% | 123, −8.2pp | 183, −9.6pp |
+| 70-75% | 51, −16.4pp | 84, −16.2pp |
+
+**Verdict: the pattern holds, clearly.** Both windows show the same shape —
+near-perfect calibration through 45%, then a widening underconfidence gap
+from 50% onward, reaching double digits by 60-65% and −16pp by 70-75%.
+The two windows land within 1-4pp of each other at every tier except
+60-65% (holdout −7.4pp vs control −11.2pp, still the same direction and
+same order of magnitude). Given this uses a different model trained on a
+different population than either of the model versions behind Addendum 12
+or the live retrain, this is about as strong a confirmation as this
+project can produce that the underconfidence behavior is a structural
+property of the modeling approach itself, not an artifact of one
+particular training run or window.
+
+**Per-league shrunk grid, holdout window** (raw errorPp(n) → shrunk):
+
+| League | 35-40% | 40-45% | 45-50% | 50-55% | 55-60% | 60-65% | 65-70% |
+|---|---|---|---|---|---|---|---|
+| Champions League | −10.9(12)→0.9 | −3.7(67)→2.0 | −10.9(53)→−1.7 | −4.9(42)→−5.5 | −11.8(26)→−6.8 | −21.7(6)→−7.4 | −34.0(3)→−13.8 |
+| Premier League | −11.4(46)→0.9 | −0.6(109)→2.0 | −3.9(74)→−1.7 | −2.3(62)→−5.5 | +0.8(39)→−6.8 | −5.8(28)→−7.4 | +8.8(17)→+2.2 |
+| Ligue 1 | −4.7(65)→0.9 | +8.6(68)→2.0 | −6.9(63)→−1.7 | −9.8(58)→−5.5 | −23.3(26)→−6.8 | −16.2(14)→−7.4 | +22.2(9)→+5.6 |
+| Bundesliga | +11.9(56)→0.9 | +7.1(90)→2.0 | +8.8(52)→−1.7 | −0.4(53)→−5.5 | −9.2(21)→−6.8 | −1.6(22)→−7.4 | −12.1(10)→−10.1 |
+| Eredivisie | +1.9(49)→0.9 | −0.8(76)→2.0 | −0.5(67)→−1.7 | −7.2(52)→−5.5 | −8.1(29)→−6.8 | −1.2(22)→−7.4 | −20.9(17)→−16.0 |
+| Primeira Liga | +2.5(50)→0.9 | +5.4(84)→2.0 | −9.3(62)→−1.7 | −5.6(40)→−5.5 | +2.9(33)→−6.8 | −14.2(17)→−7.4 | −22.0(19)→−17.0 |
+| Serie A | +2.8(79)→0.9 | −1.0(106)→2.0 | +4.9(82)→−1.7 | −18.0(47)→−5.5 | −6.1(30)→−6.8 | −5.9(25)→−7.4 | −15.1(11)→−11.7 |
+| La Liga | +1.7(46)→0.9 | +4.1(99)→2.0 | +1.7(85)→−1.7 | +3.1(57)→−5.5 | −11.8(35)→−6.8 | −6.2(19)→−7.4 | −8.1(25)→−8.2 |
+| Scottish Premiership | +8.9(20)→0.9 | −1.1(55)→2.0 | −2.0(63)→−1.7 | −6.5(39)→−5.5 | +7.1(14)→−6.8 | −10.6(15)→−7.4 | +0.6(12)→−3.6 |
+
+Same near-total shrinkage collapse at most tiers seen in Addendum 13, same
+explanation: a 0/1 hit-rate's binomial variance dominates the actual
+spread across 9 leagues at these sample sizes. 65-70% retains more
+per-league differentiation here (larger raw spread relative to n).
+
+### Part C — continuous edge-vs-ROI curve (full matched-odds population, no threshold)
+
+Every holdout-window fixture with matched Pinnacle odds (n=2,777 — 98.3% of
+the holdout population, after a targeted closing-odds backfill, see
+"Odds API usage" below) — not just the subset clearing the live 5% edge
+threshold. This is explicitly **analysis only** — it does not change the
+live EV threshold, and no conclusion here is applied to that threshold.
+
+**Pooled ROI by edge-size band:**
+
+| Edge band | n | ROI |
+|---|---|---|
+| <0% | 1,735 | −2.9% |
+| 0-2% | 78 | −21.9% |
+| 2-4% | 84 | −25.8% |
+| 4-6% | 62 | −25.7% |
+| 6-8% | 77 | −4.3% |
+| 8-10% | 45 | +1.1% |
+| 10-15% | 128 | −5.1% |
+| 15-20% | 90 | +8.8% |
+| 20%+ | 478 | −2.5% |
+
+**Pooled ROI by tier (same full matched population, no edge threshold):**
+
+| Tier | n | ROI |
+|---|---|---|
+| 35-40% | 422 | −5.3% |
+| 40-45% | 737 | −8.4% |
+| 45-50% | 588 | −6.1% |
+| 50-55% | 440 | −1.0% |
+| 55-60% | 249 | −3.9% |
+| 60-65% | 167 | +1.4% |
+| 65-70% | 122 | +9.5% |
+
+**Shape of the relationship: noisy, not monotonic, at current sample
+sizes.** The naive expectation — ROI rising smoothly with edge size — does
+not hold. The 0-2%, 2-4%, and 4-6% edge bands show the *worst* returns in
+the whole table (−21.9% to −25.8%), worse than fixtures with *negative*
+model-vs-market disagreement (<0%: −2.9%). Returns partially recover
+through 6-10%, dip again at 10-15%, spike at 15-20% (+8.8%, n=90), then
+fall back at 20%+ (−2.5%, n=478 — the largest single band, so this number
+carries more weight than the others despite still being noisy). The tier
+view is comparatively better-behaved — a rough upward drift from 40-45%
+through 65-70% — but still not clean, and every band/tier here is well
+under rule 6's ~300-400 decision-grade floor individually.
+
+**Per-league detail** (full matched population, no threshold, ROI% by tier):
+
+| League | 35-40% | 40-45% | 45-50% | 50-55% | 55-60% | 60-65% | 65-70% |
+|---|---|---|---|---|---|---|---|
+| Champions League | +72.5(11) | +14.3(55) | +1.9(46) | +2.1(34) | −15.7(24) | +3.2(5) | +34.5(2) |
+| Premier League | +22.0(46) | +1.4(109) | −0.6(74) | −13.6(62) | −13.7(39) | +29.9(28) | −24.8(17) |
+| Ligue 1 | +0.6(65) | −29.1(68) | +0.9(63) | +0.7(58) | +22.6(26) | +5.9(14) | −42.0(9) |
+| Bundesliga | −24.0(56) | −24.2(90) | −33.8(52) | −7.9(53) | +1.6(21) | −13.4(22) | −5.3(10) |
+| Eredivisie | −3.0(49) | −6.6(72) | −13.5(62) | −10.5(51) | 0.0(29) | −16.1(22) | +8.6(17) |
+| Primeira Liga | −18.7(50) | −17.7(84) | +18.3(62) | −3.6(39) | −21.8(32) | −0.5(17) | +90.5(19) |
+| Serie A | −8.6(79) | −3.2(106) | −19.5(82) | +19.3(47) | −1.6(30) | −7.5(25) | +11.7(11) |
+| La Liga | −9.0(46) | −4.7(99) | −5.6(85) | +3.6(57) | +8.7(35) | −0.3(19) | +0.9(25) |
+| Scottish Premiership | −27.5(20) | −3.5(54) | −2.1(62) | +7.5(39) | −18.2(13) | +9.5(15) | −6.8(12) |
+
+**This is analysis only.** Whether or where the live EV threshold should
+sit is explicitly not decided here — that's a separate future discussion,
+flagged, not answered, per this task's own instruction.
+
+### Part D — traditional threshold ROI (posEdge ≥ 5%), for continuity with Addendum 6
+
+Same population as Part C, restricted to the live threshold (posEdgeN=847
+of 2,777 matched, 30.5%) — the familiar comparison point.
+
+**Pooled:**
+
+| Tier | n | ROI |
+|---|---|---|
+| 35-40% | 197 | −7.0% |
+| 40-45% | 312 | −6.5% |
+| 45-50% | 178 | −4.8% |
+| 50-55% | 90 | +10.3% |
+| 55-60% | 38 | −12.3% |
+| 60-65% | 21 | +47.0% |
+| 65-70% | 10 | +158.6% |
+
+**Shrunk per-league grid** (40-45% and 45-50% shown; full 7-tier grid
+behind the endpoint output this addendum was generated from):
+
+| League | 40-45% raw (n) → shrunk | 45-50% raw (n) → shrunk |
+|---|---|---|
+| Champions League | +45.2%(29) → +6.6% | −4.9%(14)* |
+| Premier League | −0.2%(44) → −4.3% | −4.9%(22)* |
+| Ligue 1 | −50.6%(22) → −15.5% | −4.9%(12)* |
+| Bundesliga | −55.5%(34) → −20.4% | −4.9%(9)* |
+| Eredivisie | +13.7%(23) → −2.2% | −4.9%(21)* |
+| Primeira Liga | −13.6%(36) → −8.6% | −4.9%(20)* |
+| Serie A | −10.8%(47) → −8.0% | −4.9%(21)* |
+| La Liga | +10.4%(49) → −0.3% | −4.9%(35)* |
+| Scottish Premiership | −5.3%(28) → −6.2% | −4.9%(24)* |
+
+*45-50% shrinks to a single pooled value for every league — same
+complete-collapse pattern as Addendum 13, expected given ROI's
+per-observation variance relative to n here.
+
+The apparent +47%/+158.6% pooled figures at 60-65%/65-70% are n=21/n=10 —
+nowhere near decision-grade; not a finding, a warning sign about reading
+small cells at face value (same caution as every prior addendum this
+project has produced).
+
+### Part E — the three readings side by side
+
+The primary, pooled view — the one table meant to be read directly, no
+composite, no ranking:
+
+| Tier | Calibration error (shrunk, n) | Continuous ROI (full matched, n) | Threshold ROI (posEdge≥5%, n) |
+|---|---|---|---|
+| 35-40% | +0.9pp (423) | −5.3% (422) | −7.0% (197) |
+| 40-45% | +2.0pp (754) | −8.4% (737) | −6.5% (312) |
+| 45-50% | −1.7pp (601) | −6.1% (588) | −4.8% (178) |
+| 50-55% | −5.5pp (450) | −1.0% (440) | +10.3% (90) |
+| 55-60% | −6.8pp (253) | −3.9% (249) | −12.3% (38) |
+| 60-65% | −7.4pp (168) | +1.4% (167) | +47.0% (21)* |
+| 65-70% | −8.2pp (123) | +9.5% (122) | +158.6% (10)* |
+
+*Starred cells are far below rule 6's ~300-400 decision-grade floor —
+read as noise, not signal. n differs meaningfully across the three
+columns by construction: calibration uses every scored fixture in the
+window regardless of odds availability (n=2,825 total), continuous-ROI
+uses every fixture with matched Pinnacle odds regardless of edge size
+(n=2,777), threshold-ROI uses only posEdge≥5% fixtures (n=847) — each
+column is deliberately the largest sample that specific reading supports,
+not a common subset.
+
+Full per-league grids for all three readings are in Parts B/C/D above —
+this pooled table is the headline read; the per-league grids are there for
+anyone who wants to check whether a specific league diverges from the
+pooled pattern (per Part B's finding, mostly none do, once shrunk).
+
+### Scope limits (restated explicitly, not just implied)
+
+- **Goals markets remain unvalidated** — every reading in this addendum,
+  like every tier-calibration addendum before it, is 1X2 only (confirmed
+  no goals-market mixing in Addendum 7). No claim here extends to
+  over/under or BTTS markets.
+- **Conference League's 2021-2022 gap is a permanent, accepted
+  limitation** (Addendum 10-11) — not evaluated in this addendum at all;
+  the 9-league scope throughout excludes both Conference League and
+  Europa League (neither has a `VALIDATED_SPLITS` boundary to define a
+  clean holdout/control comparison against).
+- **World Cup is excluded** — zero pure-calibration population exists for
+  it (Scope section, page 1 of this document); unaffected by anything in
+  this addendum.
+
+### Odds API usage (Part C's only real API-call requirement)
+
+Two attempts, reported in full including the unproductive one:
+
+1. **General-purpose `/api/backfill/closing-odds`** (budget 3,000, scoped
+   to the 9 validated leagues): processes fixtures in array order, not
+   date-prioritised — spent its entire budget (3,000 credits, 150 calls)
+   on older, unrelated gaps elsewhere in these leagues' 2020+ history and
+   matched **zero** fixtures in the holdout window specifically.
+2. **Targeted backfill** (temp endpoint, scoped to exactly the 51 fixtures
+   still missing in the holdout window after (1)): 39 API calls, 780
+   credits, matched 3 of 51. The remaining 48 genuinely have no bookmaker
+   data available at their exact kickoff minute — consistent with this
+   project's established finding (Addendum 10) that most small residual
+   gaps are provider-level, not a fetch-methodology problem.
+
+**Total: 3,780 credits, 189 API calls.** Final holdout-window coverage for
+the 9 validated leagues: 96.9%-100% for 7 of 9, 98.3% (Scottish
+Premiership), 84.7% (Champions League — the lowest, plausibly due to more
+varied European-night kickoff times complicating minute-level matching).
+Odds API balance confirmed via `/api/odds-credits-status` before and after:
+4,936,060 → 4,932,280.
+
+### Calibration-rules.md compliance
+
+Single test-set look: the entire Part B/C/D computation (one comprehensive
+temp endpoint, one call) was read exactly once to write this addendum, not
+iterated against. The proxy model itself was trained once, before any of
+Part C or D's results existed — no tuning, weight change, or retraining
+decision was made in response to what those parts showed, satisfying the
+"no iterating on the proxy model based on what Part C/D show" constraint
+explicitly.
+
+### Cleanup
+
+Temporary endpoints removed after this addendum was written:
+`/api/debug/date-distribution`, `/api/debug/holdout-odds-coverage`,
+`/api/debug/backfill-holdout-odds-targeted`, `/api/debug/evidence-table`.
+**Permanent additions, kept**: `models/gbdt-proxy.js`,
+`models/gbdt-train-proxy.js`, `scripts/gbdt-train-proxy.js`,
+`DATA_DIR/gbdt-proxy-diagnostic.json` (the trained proxy weights),
+`runGbdtProxyTrain()` + `POST /api/admin/trigger-proxy-train` +
+`GET /api/admin/proxy-train-status` (so this proxy can be retrained again
+in the future without rebuilding the mechanism from scratch). No changes
+to `models/interface.js`, live scoring, the live EV threshold, or
+`LEAGUE_CONFIG`.
+
 ## Decisions made without asking — flagged for review
 
 1. **Bucket width/range** (35-80% in 5pp steps, nesting inside the diagnostic
