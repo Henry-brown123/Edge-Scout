@@ -2796,3 +2796,86 @@ below. The backfill (Part C/D) proceeds using the pipeline exactly as it
 already exists — the finding here is that no analogous "domestic blend"
 code needed to be written, because the historical pipeline was never
 siloed the way the live pipeline was before its own fix.
+
+## Addendum 17 — Carabao Cup, League One, League Two: full historical ingestion and scoring complete
+
+Following Addendum 16's finding (no pool-filtering fix needed) and a
+confirmed-correct promotion/relegation read (both `buildStandingsIndex`
+and `classifyFixture` derive division context from each fixture's own
+recorded `league.id`/`season`, never from an external "current team
+division" lookup — there is no such lookup anywhere in the codebase), the
+three competitions were added to `HISTORICAL_BACKFILL_CONFIG` (2011-2026,
+16 seasons each) and fully ingested and scored.
+
+### Final population
+
+| Competition | Fixtures | Scored | Seasons |
+|---|---|---|---|
+| Carabao Cup (48) | 1,101 | 1,101 (100%) | 2011-2026 |
+| League One (41) | 8,195 | 8,195 (100%) | 2011-2025 |
+| League Two (42) | 8,220 | 8,220 (100%) | 2011-2025 |
+| **New total** | **17,516** | **17,516 (100%)** | |
+
+Overall historical population grew from 50,253 to 67,791 fixtures
+(+17,538 — the extra 22 beyond the three new leagues' 17,516 is routine
+active-season refresh on already-tracked leagues, not a discrepancy).
+Regression check on an established league (Premier League, 39): 5,700
+fixtures, 100% scored, consistent with expected volume — untouched by
+this ingestion, confirmed empirically not just by construction (Phase
+2's `if (scoredMap.has(fixtureId)) continue` guard makes already-scored
+records structurally immutable regardless).
+
+Pool-richness proof (mirrors the live-fix task's Plymouth-vs-Exeter
+proof): Charlton Athletic (League One, team id 1335) now shows 444
+fixtures in its historical pool — 421 League One (2011-2025) plus 23
+Carabao Cup (2011-2026) — the exact "near-empty pool" problem the live
+fix solved for the live path, now also resolved on the historical side,
+with zero new pool-filtering code (Addendum 16).
+
+### Operational note: three rounds of crashes, root-caused and fixed
+
+The scoring run itself repeatedly crashed the Render process mid-run
+(confirmed via Render's own error page appearing mid-poll, then a clean
+auto-restart with in-memory run state lost but on-disk data intact,
+since Phase 1's per-league writes and Phase 2's per-checkpoint writes are
+both already atomic). Root cause, found by reading rather than guessing:
+`runHistoricalBackfill`'s Phase 2 scoring loop, its periodic
+`optimiseWeights` re-optimisation, and `updateTeamProfiles`'s per-team
+rebuild loop all had zero `await` anywhere in their bodies — at this
+population size (~68k records, thousands of distinct teams once Carabao
+Cup pulls in every English professional club), each was a multi-minute
+uninterrupted synchronous block, during which Node's single event loop
+couldn't answer Render's health check at all.
+
+Three fixes applied, in order, each verified against the actual next
+failure point rather than assumed sufficient: a periodic `setImmediate`
+yield in Phase 2's per-fixture loop (commit `b19151e`); yields inside
+`optimiseWeights` itself, not just around it, since a single call was
+itself a multi-minute unbroken block (`889f5b1`); and yields inside
+`updateTeamProfiles`'s per-team loop (`a120b2b`). Each fix was confirmed
+correct — scoring reliably reached 100% completion after the first two —
+but crashes continued at other points afterward regardless of yielding,
+which is the specific signature of a memory ceiling rather than a
+responsiveness problem (yields fix scheduling, not memory footprint).
+
+Given that signature, and given the actual task deliverable (the scored
+population) was already complete and durable, further fixing was
+deliberately **not** pursued overnight: no partial/scoped profile
+rebuild was attempted, because scoping the input fixture set to only the
+new leagues would silently overwrite an already-tracked team's rich
+multi-league profile with just its handful of Carabao Cup fixtures for
+any team that plays in both — worse than leaving it alone. Team profile
+rebuild for the new leagues' teams (`updateTeamProfiles` over the full
+67,791-fixture pool) is deferred as a genuine, explicitly-flagged
+follow-up — needs either a smaller-batch/streaming approach or a larger
+memory allocation on the hosting instance, not more yielding.
+
+`checkAndRetrain`'s gate (`settings.autoRetrainEnabled`) was re-checked
+before and after every single deploy and trigger across this entire
+process — confirmed `false` throughout, `retrainPending` never flipped
+(the 68,000-record threshold wasn't reached; would have stayed a no-op
+pending flag either way per the gate added in the model-versioning work).
+No calibration, ROI read, or weight re-optimisation was run against this
+population — it remains the same held-aside, untouched status as
+Carabao Cup/League One/League Two's original addition (Addendum 15) and
+the standing rule in `docs/calibration-rules.md`.
