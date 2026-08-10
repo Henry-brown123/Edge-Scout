@@ -161,7 +161,13 @@ function writeJSON(file, data, options = {}) {
 
 const SETTINGS_DEFAULTS = {
   weights: { form:18, homeAdv:12, xg:16, h2h:10, defense:14, momentum:10, injuries:8, standings:12 },
-  decay: 0.05, formWindow: 6, h2hWindow: 5, kellyFraction: 0.5,
+  decay: 0.05, formWindow: 6, h2hWindow: 5,
+  // Kelly fraction is a property of each bankroll's own risk posture, not the model —
+  // paper and real are set independently (Scout-tab bankroll panel), each occasionally
+  // adjusted by the user rather than tuned per bet. paperKellyFraction also still drives
+  // the pre-lock scoring-stage Kelly preview shown before a mode is chosen.
+  paperKellyFraction: 0.5,
+  realKellyFraction: 0.25,
   activeLeagues: ['1','39','140','78','135','61','2','179','88','94','3','848'], successThreshold: 40,
   calibrationFactor: 1.08,
   wowyActive: true,
@@ -170,14 +176,6 @@ const SETTINGS_DEFAULTS = {
   transferModifierActive: true,
   preferExchange: true,
   preferExchangeBuffer: 5,
-  // Real-money Kelly preview at manual lock time (Scout tab) — separate from
-  // getEvKellyFraction()'s per-league, calibration-driven fraction (which still
-  // governs what actually gets stored as a bet's own kellyFraction/suggestedStake).
-  // This is a simple, user-adjustable default for the pre-lock "what would Kelly
-  // suggest" preview, and for real-bankroll fallback when no bookmaker balance is
-  // set yet. Does not change any scoring/EV logic.
-  realBankrollDefault: 1000,
-  manualKellyFraction: 0.25,
   leagueModes: {
     '39': 'paper', '140': 'paper_only', '135': 'paper', '78': 'paper',
     '61': 'paper', '2': 'paper', '1': 'paper', '179': 'paper',
@@ -194,13 +192,20 @@ function saveSettings(s) { writeJSON('settings.json', s); }
 // ── Rate limit — single source of truth ──────────────────────────────────────
 const { setRateLimited, isRateLimited, getRateLimitState, backfillCutoffReached } = require('./rateLimit');
 
-function getBankroll() {
-  const stored  = readJSON('bankroll.json') || { initial: 1000, lastUpdated: null };
+// Shared engine behind both bankrolls — paper and real are two independent instances
+// of the same {initial + transactions + dedup'd bet P&L} model, distinguished only by
+// which JSON file holds the ledger anchor and which bets.json rows count toward P&L.
+// Transactions carry an `account` tag ('paper'|'real'); untagged rows predate the real
+// bankroll's existence and are implicitly paper.
+function computeBankrollAccount(file, account, betFilter) {
+  const stored  = readJSON(file) || { initial: 1000, lastUpdated: null };
   const initial = stored.initial || 1000;
 
   // Transactions shift the base: deposits add, withdrawals subtract, resets set a new anchor.
   // We replay transactions to find the current non-bet base, starting from initial.
-  const txns = (readJSON('transactions.json') || []).slice().reverse(); // oldest first
+  const txns = (readJSON('transactions.json') || [])
+    .filter(t => account === 'paper' ? (!t.account || t.account === 'paper') : t.account === account)
+    .slice().reverse(); // oldest first
   let base = initial;
   for (const t of txns) {
     if (t.type === 'reset')      { base = t.bankrollAfter; }
@@ -212,7 +217,7 @@ function getBankroll() {
   // Only count bets resolved AFTER the last reset transaction, to avoid double-counting cleared bets.
   const lastReset = txns.filter(t => t.type === 'reset').pop();
   const resetCutoff = lastReset ? new Date(lastReset.date).getTime() : 0;
-  const bets = (readJSON('bets.json') || []).filter(b => !b.mode || b.mode === 'paper');
+  const bets = (readJSON('bets.json') || []).filter(betFilter);
   const seen = new Set();
   let betPnl = 0;
   for (const b of bets) {
@@ -227,6 +232,14 @@ function getBankroll() {
 
   const current = parseFloat((base + betPnl).toFixed(2));
   return { ...stored, initial, current };
+}
+
+function getBankroll() {
+  return computeBankrollAccount('bankroll.json', 'paper', b => !b.mode || b.mode === 'paper');
+}
+
+function getRealBankrollAccount() {
+  return computeBankrollAccount('real-bankroll.json', 'real', b => b.mode === 'real');
 }
 
 function roundStake(amount) {
@@ -294,6 +307,7 @@ const WC_2026_SEEDS = {
 function saveBets(bets)         { writeJSON('bets.json', bets); }
 function saveWatching(list, options) { writeJSON('watching.json', list, options); }
 function saveBankroll(br)       { writeJSON('bankroll.json', { ...br, lastUpdated: new Date().toISOString() }); }
+function saveRealBankrollAcct(br) { writeJSON('real-bankroll.json', { ...br, lastUpdated: new Date().toISOString() }); }
 function saveCalibration(list)  { writeJSON('calibration.json', list); }
 function saveOddsHistory(list)  { writeJSON('odds-history.json', list); }
 function getRealBets()          { return readJSON('real-bets.json') || []; }
@@ -312,20 +326,15 @@ function getLeagueMode(leagueId) {
   return getLeagueModes()[String(leagueId)] || 'paper';
 }
 
+// Sum of funded bookmaker accounts — used only for the canGoLive() "3+ funded accounts"
+// gate and the admin bookmaker-breakdown view. NOT the real-money bankroll used for Kelly
+// sizing or displayed to the user as "real bankroll" — that's getRealBankrollAccount(),
+// a clean transactional ledger independent of which specific books hold the money.
 function getRealBankroll() {
   const bookmakers = getBookmakers();
   return bookmakers
     .filter(b => b.status === 'active' && b.balance != null && b.balance > 0)
     .reduce((sum, b) => sum + b.balance, 0);
-}
-
-function getEvKellyFraction(leagueId) {
-  const KELLY_MAP = { half_kelly: 0.5, third_kelly: 0.33, quarter_kelly: 0.25 };
-  const evCal = readJSON('ev-calibration.json');
-  if (!evCal?.byLeague) return 0.33; // default third-kelly until calibrated
-  const leagueName = (LEAGUES[String(leagueId)] || {}).name;
-  const entry = evCal.byLeague.find(l => l.league === leagueName);
-  return KELLY_MAP[entry?.kelly] ?? 0.33;
 }
 
 // On startup: tag all existing bets without a mode field as 'paper'
@@ -1098,7 +1107,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     // 10-15% band is profitable — drop only the high-edge picks below the 40-point
     // lock threshold so they never lock as bets, leaving the rest of the league untouched.
     if (parseInt(leagueId, 10) === 135 && edge > 0.20) finalScore = Math.min(finalScore, 39);
-    const k         = kelly(calProb, displayOdds, settings.kellyFraction, getBankroll().current);
+    const k         = kelly(calProb, displayOdds, settings.paperKellyFraction, getBankroll().current);
 
     const entry = {
       market: 'match_outcome',
@@ -1180,7 +1189,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
 
   const goalsCandidates = scoreGoalsMarkets(
     homeName, awayName, fix.fixture?.date,
-    totalsMap, getBankroll().current, settings.kellyFraction,
+    totalsMap, getBankroll().current, settings.paperKellyFraction,
     homeF, awayF, leagueConfig
   );
 
@@ -1519,14 +1528,14 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
     // league-mode-derived default; the automated cron path never sets one.
     const betMode   = overrides.mode || scored.betMode || 'paper';
     const isReal    = betMode === 'real';
-    // Real bankroll = sum of active bookmaker balances if any are set, else the
-    // configurable settings default — previously fell back to a hard 0 (no balances
-    // set yet = every real Kelly stake silently computed as £0).
-    const realBr    = isReal ? (getRealBankroll() || settings.realBankrollDefault || 1000) : null;
-    const evKelly   = isReal ? getEvKellyFraction(leagueId) : settings.kellyFraction;
+    // Real bankroll is the clean transactional ledger (Scout-tab bankroll panel), not
+    // the sum of per-bookmaker balances — those still exist for the canGoLive() funded-
+    // accounts gate, but Kelly sizing needs one clean pot, same as paper.
+    const realBr    = isReal ? getRealBankrollAccount().current : null;
+    const kellyFrac = isReal ? (settings.realKellyFraction ?? 0.25) : (settings.paperKellyFraction ?? 0.5);
     const bankrollForKelly = isReal ? realBr : getBankroll().current;
     const realKelly = kelly(best.modelProb * (settings.calibrationFactor ?? 1.08),
-                            best.bookOdds, evKelly, bankrollForKelly);
+                            best.bookOdds, kellyFrac, bankrollForKelly);
     const br    = getBankroll();
     const betId = uuidv4();
     const routingOddsEntry = _lookupOddsEntry(oddsMap, scored.homeName, scored.awayName);
@@ -1559,7 +1568,7 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
       ev:           best.ev,
       mode:          betMode,
       paperTradeOnly: scored.paperTradeOnly,
-      kellyFraction: evKelly,
+      kellyFraction: kellyFrac,
       kellStake:     computedStake,
       suggestedStake: computedStake,
       displayStake:  computedStake,
@@ -1681,9 +1690,15 @@ async function checkAndResolve() {
       if (matchingBets.length) {
         const canonical = matchingBets[0];
         const won = actualOutcome === canonical.bet;
+        // Settle off the actually-placed odds/stake, not the lock-time suggestion — for
+        // real bets these can differ once a bookmaker/price was confirmed. Paper bets
+        // have actualOdds/actualStake auto-filled equal to bookOdds/suggestedStake at
+        // lock time, so this is a no-op for them.
+        const settleOdds  = canonical.actualOdds  ?? canonical.bookOdds;
+        const settleStake = canonical.actualStake ?? canonical.suggestedStake;
         const pnl = won
-          ? parseFloat(((canonical.bookOdds - 1) * canonical.suggestedStake).toFixed(2))
-          : -canonical.suggestedStake;
+          ? parseFloat(((settleOdds - 1) * settleStake).toFixed(2))
+          : -settleStake;
         matchingBets.forEach(b => {
           b.result     = won ? 'win' : 'loss';
           b.pnl        = b === canonical ? pnl : 0; // duplicates get 0 pnl, canonical gets real pnl
@@ -1691,12 +1706,10 @@ async function checkAndResolve() {
           b.resolvedAt = resolvedAt;
           b.finalScore = finalScore;
         });
-        const br = getBankroll();
-        br.current = parseFloat((br.current + pnl).toFixed(2));
-        saveBankroll(br);
         betsChanged = true;
         const dupNote = matchingBets.length > 1 ? ` (${matchingBets.length - 1} duplicates voided)` : '';
-        console.log(`[Resolve] ${canonical.fixture} — ${canonical.bet} → ${canonical.result} (${finalScore}), P&L: £${pnl}, Bankroll: £${br.current}${dupNote}`);
+        const newBankroll = (canonical.mode === 'real' ? getRealBankrollAccount() : getBankroll()).current;
+        console.log(`[Resolve] ${canonical.fixture} — ${canonical.bet} → ${canonical.result} (${finalScore}), P&L: £${pnl}, Bankroll: £${newBankroll}${dupNote}`);
       }
 
       // Resolve calibration entry
@@ -1867,8 +1880,9 @@ function setupScheduler() {
   }, { timezone: 'UTC' });
 
   // 2b. Monday 06:00 UTC (before the morning scan) — weekly EV calibration refresh.
-  // Keeps ev-calibration.json fresh for canGoLive() and getEvKellyFraction() (real-money
-  // Kelly sizing), which otherwise only refresh when someone manually hits /api/ev-calibration.
+  // Keeps ev-calibration.json fresh for canGoLive() and the paperKellyFraction auto-
+  // recommendation below, which otherwise only refresh when someone manually hits
+  // /api/ev-calibration.
   cron.schedule('0 6 * * 1', () => {
     try {
       runEvCalibration();
@@ -2783,11 +2797,9 @@ app.get('/api/state', (_req, res) => {
   const settings = getSettings();
   res.json({
     bankroll:    getBankroll(),
-    // Real-money-aware bankroll for Scout-tab Kelly previews/panels — sum of active
-    // bookmaker balances if any are set, else the configurable settings default.
-    // getBankroll() above is paper-only; using it for real-bet Kelly sizing was a
-    // pre-existing gap (client always priced real Kelly off the paper bankroll).
-    realBankroll: getRealBankroll() || settings.realBankrollDefault || 1000,
+    // Real bankroll — same {initial, current, lastUpdated} shape as `bankroll`, its own
+    // transactional ledger (Scout-tab bankroll panel), independent of bookmaker balances.
+    realBankroll: getRealBankrollAccount(),
     bets:        getBets(),
     watching,
     settings,
@@ -2797,28 +2809,31 @@ app.get('/api/state', (_req, res) => {
 });
 
 // ── Transactions helpers ───────────────────────────────────────────────────────
+// One shared ledger file, rows tagged by `account` ('paper'|'real') — untagged rows
+// predate the real bankroll's existence and are implicitly paper (see
+// computeBankrollAccount's filter).
 function getTransactions() { return readJSON('transactions.json') || []; }
 function saveTransactions(txns) { writeJSON('transactions.json', txns); }
-function addTransaction(type, amount, bankrollBefore, bankrollAfter, notes = '') {
+function addTransaction(type, amount, bankrollBefore, bankrollAfter, notes = '', account = 'paper') {
   const txns = getTransactions();
   const id   = `txn_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
-  txns.unshift({ id, type, amount, bankrollBefore, bankrollAfter, date: new Date().toISOString(), notes });
+  txns.unshift({ id, type, amount, bankrollBefore, bankrollAfter, date: new Date().toISOString(), notes, account });
   saveTransactions(txns);
   return txns[0];
 }
 
-// GET / PUT bankroll
+// GET / PUT bankroll (paper)
 app.get('/api/bankroll', (_req, res) => res.json(getBankroll()));
 
-// Full reset: wipes bets + bankroll + watching, logs as 'reset' transaction
+// Full reset: wipes paper bets + paper bankroll + watching, logs as 'reset' transaction
 app.post('/api/bankroll/reset', (req, res) => {
   const amount = parseFloat(req.body?.amount) || 1000;
   const notes  = req.body?.notes  || '';
   const before = getBankroll().current;
   saveBankroll({ initial: amount });
-  saveBets([]);
+  saveBets(getBets().filter(b => b.mode === 'real'));
   saveWatching([]);
-  addTransaction('reset', amount, before, amount, notes);
+  addTransaction('reset', amount, before, amount, notes, 'paper');
   res.json(getBankroll());
 });
 
@@ -2828,7 +2843,7 @@ app.post('/api/bankroll/reset-only', (req, res) => {
   const notes  = req.body?.notes  || '';
   const before = getBankroll().current;
   saveBankroll({ initial: amount });
-  addTransaction('reset', amount, before, amount, notes || 'Bankroll reset (bets kept)');
+  addTransaction('reset', amount, before, amount, notes || 'Bankroll reset (bets kept)', 'paper');
   res.json(getBankroll());
 });
 
@@ -2839,7 +2854,7 @@ app.post('/api/bankroll/deposit', (req, res) => {
   const notes  = req.body?.notes || '';
   const before = getBankroll().current;
   const after  = parseFloat((before + amount).toFixed(2));
-  const txn    = addTransaction('deposit', amount, before, after, notes);
+  const txn    = addTransaction('deposit', amount, before, after, notes, 'paper');
   res.json({ bankroll: getBankroll(), transaction: txn });
 });
 
@@ -2851,13 +2866,62 @@ app.post('/api/bankroll/withdraw', (req, res) => {
   if (amount > before) return res.status(400).json({ error: 'Cannot withdraw more than current bankroll' });
   const notes  = req.body?.notes || '';
   const after  = parseFloat((before - amount).toFixed(2));
-  const txn = addTransaction('withdrawal', amount, before, after, notes);
+  const txn = addTransaction('withdrawal', amount, before, after, notes, 'paper');
   res.json({ bankroll: getBankroll(), transaction: txn });
 });
 
-// GET transactions
-app.get('/api/transactions', (_req, res) => {
-  const txns = getTransactions();
+// ── Real-money bankroll — same shape/semantics as paper above, fully independent ──
+app.get('/api/real-bankroll', (_req, res) => res.json(getRealBankrollAccount()));
+
+// Full reset: wipes REAL bets only (paper bets + watching untouched) + real bankroll
+app.post('/api/real-bankroll/reset', (req, res) => {
+  const amount = parseFloat(req.body?.amount) || 1000;
+  const notes  = req.body?.notes  || '';
+  const before = getRealBankrollAccount().current;
+  saveRealBankrollAcct({ initial: amount });
+  saveBets(getBets().filter(b => b.mode !== 'real'));
+  addTransaction('reset', amount, before, amount, notes, 'real');
+  res.json(getRealBankrollAccount());
+});
+
+// Bankroll-only reset: does NOT touch bets
+app.post('/api/real-bankroll/reset-only', (req, res) => {
+  const amount = parseFloat(req.body?.amount) || 1000;
+  const notes  = req.body?.notes  || '';
+  const before = getRealBankrollAccount().current;
+  saveRealBankrollAcct({ initial: amount });
+  addTransaction('reset', amount, before, amount, notes || 'Bankroll reset (bets kept)', 'real');
+  res.json(getRealBankrollAccount());
+});
+
+app.post('/api/real-bankroll/deposit', (req, res) => {
+  const amount = parseFloat(req.body?.amount);
+  if (!amount || amount <= 0) return res.status(400).json({ error: 'amount must be positive' });
+  const notes  = req.body?.notes || '';
+  const before = getRealBankrollAccount().current;
+  const after  = parseFloat((before + amount).toFixed(2));
+  const txn    = addTransaction('deposit', amount, before, after, notes, 'real');
+  res.json({ bankroll: getRealBankrollAccount(), transaction: txn });
+});
+
+app.post('/api/real-bankroll/withdraw', (req, res) => {
+  const amount = parseFloat(req.body?.amount);
+  if (!amount || amount <= 0) return res.status(400).json({ error: 'amount must be positive' });
+  const before = getRealBankrollAccount().current;
+  if (amount > before) return res.status(400).json({ error: 'Cannot withdraw more than current bankroll' });
+  const notes  = req.body?.notes || '';
+  const after  = parseFloat((before - amount).toFixed(2));
+  const txn = addTransaction('withdrawal', amount, before, after, notes, 'real');
+  res.json({ bankroll: getRealBankrollAccount(), transaction: txn });
+});
+
+// GET transactions — ?account=paper (default, backward-compatible) | real | all
+app.get('/api/transactions', (req, res) => {
+  const account = req.query.account || 'paper';
+  const all = getTransactions();
+  const txns = account === 'all' ? all
+    : account === 'real' ? all.filter(t => t.account === 'real')
+    : all.filter(t => !t.account || t.account === 'paper');
   // A reset that lowers the bankroll banks the difference as realized profit (counts as
   // withdrawn); a reset that raises it is a top-up (counts as deposited).
   let totalWithdrawn = txns.filter(t => t.type === 'withdrawal').reduce((s, t) => s + t.amount, 0);
@@ -3324,19 +3388,21 @@ app.patch('/api/bets/:id', (req, res) => {
 
   if (bet.result) return res.status(400).json({ error: 'Already resolved' });
 
-  const pnl = result === 'win'  ? parseFloat(((bet.bookOdds - 1) * bet.suggestedStake).toFixed(2))
-            : result === 'loss' ? -bet.suggestedStake : 0;
+  // Settle off the actually-placed odds/stake, not the lock-time suggestion — see the
+  // matching comment in the automated resolve loop above.
+  const settleOdds  = bet.actualOdds  ?? bet.bookOdds;
+  const settleStake = bet.actualStake ?? bet.suggestedStake;
+  const pnl = result === 'win'  ? parseFloat(((settleOdds - 1) * settleStake).toFixed(2))
+            : result === 'loss' ? -settleStake : 0;
 
   bet.result     = result;
   bet.pnl        = pnl;
   bet.stage      = 'RESOLVED';
   bet.resolvedAt = new Date().toISOString();
 
-  const br   = getBankroll();
-  br.current = parseFloat((br.current + pnl).toFixed(2));
-  saveBankroll(br);
   saveBets(bets);
-  res.json({ bet, bankroll: br });
+  const bankroll = bet.mode === 'real' ? getRealBankrollAccount() : getBankroll();
+  res.json({ bet, bankroll });
 });
 
 // DELETE bet
@@ -5627,12 +5693,14 @@ function runEvCalibration() {
     };
     writeJSON('ev-calibration.json', result);
 
-    // Auto-update Kelly fraction and paperTradeOnly leagues based on calibration findings
+    // Auto-update paper Kelly fraction and paperTradeOnly leagues based on calibration
+    // findings. Real Kelly fraction is deliberately not auto-tuned here — it's a manual,
+    // occasionally-adjusted setting on the real bankroll (Scout tab panel).
     const settings = readJSON('settings.json') || {};
-    const currentFraction = settings.kellyFraction ?? 0.5;
+    const currentFraction = settings.paperKellyFraction ?? 0.5;
     const recommendedFraction = KELLY_FRACTION_MAP[overallKelly] ?? currentFraction;
     const kellyChanged = recommendedFraction !== currentFraction && overallKelly !== 'flag_for_review';
-    if (kellyChanged) settings.kellyFraction = recommendedFraction;
+    if (kellyChanged) settings.paperKellyFraction = recommendedFraction;
 
     // Bidirectional paperTradeOnly management:
     // Add when ROI < 0 AND posEdgeN >= 30 (sufficient evidence of negative edge)
@@ -5964,16 +6032,16 @@ app.get('/api/performance/real', (_req, res) => {
     const staked   = resolved.reduce((s, b) => s + (b.suggestedStake || 0), 0);
     const pnl      = resolved.reduce((s, b) => s + (b.pnl || 0), 0);
     const roi      = staked > 0 ? pnl / staked : null;
+    // Bookmaker breakdown stays informational (which accounts are funded, for the
+    // Go-Live gate) — realBankroll itself is the transactional ledger, not a balance sum.
     const bookmakers = getBookmakers().filter(b => b.status === 'active');
-    const realBankroll = bookmakers.filter(b => b.balance != null && b.balance > 0)
-      .reduce((s, b) => s + b.balance, 0);
     const bookmakerBreakdown = bookmakers
       .filter(b => b.balance != null)
       .map(b => ({ name: b.name, balance: b.balance, status: b.status }))
       .sort((a, b) => (b.balance ?? 0) - (a.balance ?? 0));
     res.json({
       mode:     'real',
-      realBankroll, bookmakerBreakdown,
+      realBankroll: getRealBankrollAccount().current, bookmakerBreakdown,
       total:    bets.length,
       resolved: resolved.length,
       wins:     wins.length,
