@@ -2333,6 +2333,23 @@ async function runHistoricalBackfill({ rescore = false, onProgress } = {}) {
       let   nextOptimiseAt = Math.ceil(scoredMap.size / OPTIMISE_EVERY) * OPTIMISE_EVERY;
       if (nextOptimiseAt <= scoredMap.size) nextOptimiseAt += OPTIMISE_EVERY;
 
+      // This loop is entirely synchronous per-fixture (scoreFixtureFromPool does no
+      // I/O), and on a large catch-up run (tens of thousands of newly-unscored
+      // fixtures, on top of an already-large existing population) it previously ran
+      // for many consecutive minutes with zero event-loop yields — including the
+      // periodic optimisation checkpoint below, which re-runs full-population
+      // gradient descent (200 iterations x ~17 loss evaluations x 3 contexts, each
+      // evaluation scanning the entire scored-so-far population). With no `await`
+      // anywhere in this loop, Node's single event loop stayed fully blocked for the
+      // whole run, so the process couldn't answer Render's health check at all —
+      // confirmed as the cause of two mid-run crash/restarts adding Carabao Cup/
+      // League One/League Two (server went unresponsive, then came back up with a
+      // fresh boot, losing only the in-memory run state — incremental writes below
+      // meant no scored data was lost, just the run had to be re-triggered). A
+      // periodic yield fixes this without touching any scoring or optimisation
+      // logic — same math, same weights, just cooperatively scheduled instead of
+      // one uninterrupted synchronous burst.
+      let sinceYield = 0;
       for (const fix of allFixtures) {
         if (scoredMap.has(fix.fixture?.id)) continue;
         // One malformed fixture (e.g. from an older season with unexpected API shape)
@@ -2348,6 +2365,11 @@ async function runHistoricalBackfill({ rescore = false, onProgress } = {}) {
         if (record) {
           scoredMap.set(record.fixtureId, record);
           scored++;
+        }
+
+        if (++sinceYield >= 200) {
+          sinceYield = 0;
+          await new Promise(r => setImmediate(r));
         }
 
         // Incremental optimisation + persistence checkpoint. Scoring has no per-record
@@ -2368,6 +2390,10 @@ async function runHistoricalBackfill({ rescore = false, onProgress } = {}) {
           fs.writeFileSync(histTmp, JSON.stringify(existing));
           fs.renameSync(histTmp, histPath);
           nextOptimiseAt += OPTIMISE_EVERY;
+          // Yield right after the heaviest chunk of work too, not just every 200
+          // fixtures — a single checkpoint's optimisation pass can itself take longer
+          // than the gap between two yield points above.
+          await new Promise(r => setImmediate(r));
         }
       }
 
