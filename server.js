@@ -1487,20 +1487,29 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
     const best   = scored.results.reduce((a, b) => a.successScore > b.successScore ? a : b);
     persistOddsSnapshot(fix, scored, meta.sport || 'soccer_epl', 'pre_match_lock', leagueId, meta.name, settings);
 
+    // On any drop below, return structured detail (not bare null) — a manual lock-modal
+    // click needs enough to show an unmissable in-modal warning, since the fresh re-score
+    // here can legitimately differ from what the watching card showed a moment earlier
+    // (e.g. lineup just confirmed, odds moved) and a missed toast could otherwise leave
+    // someone thinking a real-money bet was logged when nothing was.
+    const fixtureLabel = `${scored.homeName} vs ${scored.awayName}`;
     if (best.successScore < threshold) {
-      console.log(`[PreMatch] ${scored.homeName} vs ${scored.awayName} DROPPED (score ${best.successScore} < ${threshold})`);
-      return null;
+      console.log(`[PreMatch] ${fixtureLabel} DROPPED (score ${best.successScore} < ${threshold})`);
+      return { dropped: true, reason: 'score_below_threshold', fixture: fixtureLabel,
+        successScore: best.successScore, threshold };
     }
     if (scored.lowConfidence) {
-      console.log(`[PreMatch] ${scored.homeName} vs ${scored.awayName} DROPPED — low confidence: ${scored.lowConfidenceReason} (max gap ${Math.round(scored.maxModelBookGap * 100)}pp)`);
-      return null;
+      console.log(`[PreMatch] ${fixtureLabel} DROPPED — low confidence: ${scored.lowConfidenceReason} (max gap ${Math.round(scored.maxModelBookGap * 100)}pp)`);
+      return { dropped: true, reason: 'low_confidence', fixture: fixtureLabel,
+        detail: scored.lowConfidenceReason, maxGapPct: Math.round(scored.maxModelBookGap * 100) };
     }
 
     // Fix 5: hard minimum data requirement per context
     const dataMin = CONTEXT_CONFIG[scored.context]?.dataConfMin ?? 0.3;
     if (scored.homeDataConf < dataMin && scored.awayDataConf < dataMin) {
-      console.log(`[PreMatch] ${scored.homeName} vs ${scored.awayName} DROPPED — insufficient data (home ${scored.homeDataConf.toFixed(2)}, away ${scored.awayDataConf.toFixed(2)}, min ${dataMin} for ${scored.context})`);
-      return null;
+      console.log(`[PreMatch] ${fixtureLabel} DROPPED — insufficient data (home ${scored.homeDataConf.toFixed(2)}, away ${scored.awayDataConf.toFixed(2)}, min ${dataMin} for ${scored.context})`);
+      return { dropped: true, reason: 'insufficient_data', fixture: fixtureLabel,
+        homeDataConf: scored.homeDataConf, awayDataConf: scored.awayDataConf, dataMin };
     }
 
     // Fix 2: value consistency check — only acts when 10+ comparable resolved entries exist
@@ -4578,12 +4587,12 @@ app.post('/api/scan/prematch/:watchId', async (req, res) => {
   // default inside runPreMatchScan, unchanged from before this existed.
   const mode = req.body?.mode;
   if (mode && !['paper', 'real'].includes(mode)) return res.status(400).json({ error: "mode must be 'paper' or 'real'" });
-  const bet = await runPreMatchScan(entry, mode ? { mode } : {});
-  if (bet) {
+  const result = await runPreMatchScan(entry, mode ? { mode } : {});
+  if (result && !result.dropped) {
     saveWatching(watching.filter(w => w.id !== entry.id), { allowEmpty: true });
-    res.json(bet);
+    res.json(result);
   } else {
-    res.json({ dropped: true });
+    res.json(result || { dropped: true });
   }
 });
 

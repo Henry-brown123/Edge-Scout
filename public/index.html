@@ -2042,23 +2042,40 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
      Kelly, task 89) once the fresh scan returns. -->
 <div id="lock-mode-panel" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:1001;align-items:center;justify-content:center">
   <div style="background:var(--surface1);border:1px solid var(--border);border-radius:12px;padding:24px;width:min(380px,90vw)">
-    <div style="font-size:14px;font-weight:700;margin-bottom:4px">Lock this bet</div>
-    <div id="lmp-fixture" style="font-size:12px;color:var(--muted);margin-bottom:16px"></div>
-    <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:8px;letter-spacing:.06em;text-transform:uppercase">Mode</label>
-    <div style="display:flex;gap:10px;margin-bottom:18px">
-      <label style="flex:1;display:flex;align-items:center;gap:8px;padding:12px;border:2px solid var(--cyan);border-radius:8px;cursor:pointer;background:rgba(0,229,255,.06)" id="lmp-paper-label">
-        <input type="radio" name="lmp-mode" value="paper" checked onchange="lmpModeChanged()"> Paper
-      </label>
-      <label style="flex:1;display:flex;align-items:center;gap:8px;padding:12px;border:2px solid var(--border);border-radius:8px;cursor:pointer" id="lmp-real-label">
-        <input type="radio" name="lmp-mode" value="real" onchange="lmpModeChanged()"> Real Money
-      </label>
+    <div id="lmp-choice">
+      <div style="font-size:14px;font-weight:700;margin-bottom:4px">Lock this bet</div>
+      <div id="lmp-fixture" style="font-size:12px;color:var(--muted);margin-bottom:16px"></div>
+      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:8px;letter-spacing:.06em;text-transform:uppercase">Mode</label>
+      <div style="display:flex;gap:10px;margin-bottom:18px">
+        <label style="flex:1;display:flex;align-items:center;gap:8px;padding:12px;border:2px solid var(--cyan);border-radius:8px;cursor:pointer;background:rgba(0,229,255,.06)" id="lmp-paper-label">
+          <input type="radio" name="lmp-mode" value="paper" checked onchange="lmpModeChanged()"> Paper
+        </label>
+        <label style="flex:1;display:flex;align-items:center;gap:8px;padding:12px;border:2px solid var(--border);border-radius:8px;cursor:pointer" id="lmp-real-label">
+          <input type="radio" name="lmp-mode" value="real" onchange="lmpModeChanged()"> Real Money
+        </label>
+      </div>
+      <div id="lmp-real-warning" style="display:none;font-size:11px;color:var(--amber);margin-bottom:14px;padding:8px 10px;background:rgba(255,209,102,.08);border-radius:6px">
+        ⚠ Real money selected. After locking, you'll be asked to pick a bookmaker and enter the actual odds you can get — only place it if that beats Pinnacle's price.
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button class="btn btn-ghost btn-sm" onclick="closeLockModal()">Cancel</button>
+        <button class="btn btn-primary btn-sm" id="lmp-lock-btn" onclick="confirmLock()">Lock Bet</button>
+      </div>
     </div>
-    <div id="lmp-real-warning" style="display:none;font-size:11px;color:var(--amber);margin-bottom:14px;padding:8px 10px;background:rgba(255,209,102,.08);border-radius:6px">
-      ⚠ Real money selected. After locking, you'll be asked to pick a bookmaker and enter the actual odds you can get — only place it if that beats Pinnacle's price.
-    </div>
-    <div style="display:flex;gap:10px;justify-content:flex-end">
-      <button class="btn btn-ghost btn-sm" onclick="closeLockModal()">Cancel</button>
-      <button class="btn btn-primary btn-sm" onclick="confirmLock()">Lock Bet</button>
+    <!-- Shown in place of the choice above when the fixture is re-scored at lock time
+         and no longer qualifies — deliberately loud and blocking (not just a toast) so
+         nobody walks away thinking a bet was logged, then goes and places it for real
+         with a bookmaker on the strength of the earlier watching-card reading. -->
+    <div id="lmp-dropped" style="display:none">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+        <span style="font-size:28px;line-height:1">⚠️</span>
+        <div style="font-size:15px;font-weight:800;color:var(--red)">NOT LOCKED</div>
+      </div>
+      <div id="lmp-dropped-text" style="font-size:13px;color:var(--text1);margin-bottom:10px;line-height:1.5"></div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:18px">Nothing was placed or logged. Do not place this bet with a bookmaker based on the earlier reading — re-check the fixture if you still want to act on it.</div>
+      <div style="display:flex;justify-content:flex-end">
+        <button class="btn btn-sm" style="background:var(--red);color:#fff;border:none;min-height:44px;padding:0 22px;font-weight:700" onclick="closeLockModal()">OK, understood</button>
+      </div>
     </div>
   </div>
 </div>
@@ -2554,32 +2571,49 @@ async function triggerMorningScan() {
   }
 }
 
-// mode: 'paper' | 'real' | undefined. Undefined preserves the old behaviour (league-
-// mode default) for any caller that isn't the explicit lock-mode-panel flow below.
+// mode: 'paper' | 'real'. Called only from the lock-mode-panel flow below — the modal
+// stays open until the outcome is known, and a drop shows a blocking in-modal warning
+// (see #lmp-dropped) rather than just a toast. A missed toast here previously left
+// someone able to think a bet was logged, close the panel, and go place it for real
+// with a bookmaker when nothing was ever locked — this fixes that.
 async function forcePreMatch(watchId, mode) {
-  toast('Running pre-match scan…', 'info');
+  const btn = document.getElementById('lmp-lock-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Locking…'; }
   try {
-    const body = mode ? { mode } : {};
     const result = await apiFetch(`/api/scan/prematch/${watchId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ mode }),
     });
     if (result.dropped) {
-      toast('Score below threshold — dropped', 'info');
-    } else {
-      toast(`Locked: ${result.fixture} — £${result.suggestedStake?.toFixed(2)}`, 'success');
-      // Real bets flow straight into the bookmaker panel — bookmaker + actual odds
-      // are required before the bet counts as placed (task: "require... which
-      // bookmaker was actually used, and the actual odds obtained there").
-      if (result.mode === 'real') {
-        await loadState();
-        openBmPanel(result.id);
-        return;
-      }
+      showLockDropped(result);
+      return;
     }
+    closeLockModal();
+    toast(`Locked: ${result.fixture} — £${result.suggestedStake?.toFixed(2)}`, 'success');
     await loadState();
-  } catch(e) { toast(e.message, 'error'); }
+    // Real bets flow straight into the bookmaker panel — bookmaker + actual odds
+    // are required before the bet counts as placed (task: "require... which
+    // bookmaker was actually used, and the actual odds obtained there").
+    if (result.mode === 'real') openBmPanel(result.id);
+  } catch(e) {
+    showLockDropped({ dropped: true, reason: 'error', detail: e.message });
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Lock Bet'; }
+  }
+}
+
+function showLockDropped(result) {
+  const REASON_TEXT = {
+    score_below_threshold: `Re-scored just now at lock time: the score came back ${result.successScore} (below the ${result.threshold} lock threshold). It read higher a moment ago on the watching card, but that reading is now stale.`,
+    low_confidence: `Re-scored just now at lock time: the model diverges too far from the market to trust${result.detail ? ` — ${result.detail}` : ''}${result.maxGapPct != null ? ` (${result.maxGapPct}pp gap)` : ''}.`,
+    insufficient_data: `Re-scored just now at lock time: not enough data for either team (confidence home ${result.homeDataConf?.toFixed(2) ?? '?'}, away ${result.awayDataConf?.toFixed(2) ?? '?'}).`,
+    error: result.detail || 'The lock request failed.',
+  };
+  document.getElementById('lmp-dropped-text').textContent =
+    REASON_TEXT[result.reason] || 'This fixture no longer qualifies to lock.';
+  document.getElementById('lmp-choice').style.display = 'none';
+  document.getElementById('lmp-dropped').style.display = 'block';
 }
 
 // ─── LOCK MODE PANEL (explicit Paper/Real choice, enforced at manual lock time) ──
@@ -2592,6 +2626,8 @@ function openLockModal(watchId) {
   // previous session's choice must never silently carry over to a new fixture.
   document.querySelector('input[name="lmp-mode"][value="paper"]').checked = true;
   lmpModeChanged();
+  document.getElementById('lmp-choice').style.display = 'block';
+  document.getElementById('lmp-dropped').style.display = 'none';
   document.getElementById('lock-mode-panel').style.display = 'flex';
 }
 function closeLockModal() {
@@ -2609,9 +2645,7 @@ function lmpModeChanged() {
 async function confirmLock() {
   if (!_lmpWatchId) return;
   const mode = document.querySelector('input[name="lmp-mode"]:checked').value;
-  const watchId = _lmpWatchId;
-  closeLockModal();
-  await forcePreMatch(watchId, mode);
+  await forcePreMatch(_lmpWatchId, mode);
 }
 
 async function manualResolve(id, result) {
