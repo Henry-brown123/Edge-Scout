@@ -6345,7 +6345,15 @@ app.post('/api/debug/finish-profiles-and-meta', async (req, res) => {
     if (scoredCount !== totalFixtures) {
       return res.status(409).json({ error: 'scoring not yet complete', totalFixtures, scoredCount });
     }
-    const profileCount = await updateTeamProfiles(existing.fixtures);
+    // skipProfiles=true: even the yield-protected rebuild kept crashing the process
+    // (confirmed a memory ceiling, not a responsiveness issue — yields fixed Phase
+    // 2/3, this repeatedly didn't). Rather than risk another crash cycle, or a
+    // partially-scoped rebuild that could overwrite an already-tracked team's rich
+    // profile with just its Carabao Cup fixtures, this just records accurate scoring
+    // state and leaves team-profiles.json exactly as-is — profile rebuild deferred
+    // to a follow-up session with either a smaller-batch approach or more memory.
+    const skipProfiles = req.query.skipProfiles === 'true';
+    const profileCount = skipProfiles ? null : await updateTeamProfiles(existing.fixtures);
     const summary = {
       totalFixtures,
       scoredCount,
@@ -6354,7 +6362,9 @@ app.post('/api/debug/finish-profiles-and-meta', async (req, res) => {
       optimisedWeights: existing.optimisedWeights,
       accuracy:         existing.accuracy,
       completedAt:      new Date().toISOString(),
-      note:             'meta refreshed directly, skipping Phase 1 refetch — scoring was already complete',
+      note: skipProfiles
+        ? 'meta refreshed directly — scoring confirmed complete; profile rebuild deferred (see report), team-profiles.json untouched'
+        : 'meta refreshed directly, skipping Phase 1 refetch — scoring was already complete',
     };
     writeJSON('backfill-historical-meta.json', summary);
     res.json(summary);
