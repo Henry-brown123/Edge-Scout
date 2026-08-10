@@ -196,10 +196,12 @@ const { setRateLimited, isRateLimited, getRateLimitState, backfillCutoffReached 
 // of the same {initial + transactions + dedup'd bet P&L} model, distinguished only by
 // which JSON file holds the ledger anchor and which bets.json rows count toward P&L.
 // Transactions carry an `account` tag ('paper'|'real'); untagged rows predate the real
-// bankroll's existence and are implicitly paper.
-function computeBankrollAccount(file, account, betFilter) {
-  const stored  = readJSON(file) || { initial: 1000, lastUpdated: null };
-  const initial = stored.initial || 1000;
+// bankroll's existence and are implicitly paper. defaultInitial is 1000 for paper (the
+// long-standing nominal validation bankroll) but 0 for real — a fresh real account has
+// no money in it until the user actually deposits some via the bankroll panel.
+function computeBankrollAccount(file, account, betFilter, defaultInitial) {
+  const stored  = readJSON(file) || { initial: defaultInitial, lastUpdated: null };
+  const initial = stored.initial ?? defaultInitial;
 
   // Transactions shift the base: deposits add, withdrawals subtract, resets set a new anchor.
   // We replay transactions to find the current non-bet base, starting from initial.
@@ -235,11 +237,11 @@ function computeBankrollAccount(file, account, betFilter) {
 }
 
 function getBankroll() {
-  return computeBankrollAccount('bankroll.json', 'paper', b => !b.mode || b.mode === 'paper');
+  return computeBankrollAccount('bankroll.json', 'paper', b => !b.mode || b.mode === 'paper', 1000);
 }
 
 function getRealBankrollAccount() {
-  return computeBankrollAccount('real-bankroll.json', 'real', b => b.mode === 'real');
+  return computeBankrollAccount('real-bankroll.json', 'real', b => b.mode === 'real', 0);
 }
 
 function roundStake(amount) {
