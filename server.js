@@ -78,7 +78,7 @@ console.log(`[Data] process.env.DATA_DIR=${process.env.DATA_DIR ?? '(unset)'} �
   const settingsDest = path.join(DATA_DIR, 'settings.json');
   if (!fs.existsSync(settingsDest)) {
     const defaults = { calibrationFactor: 1.11, wowyActive: true,
-      activeLeagues: ['1','39','140','78','135','61','2','179','88','94','3','848','48'], successThreshold: 40,
+      activeLeagues: ['1','39','140','78','135','61','2','179','88','94','3','848','48','41','42'], successThreshold: 40,
       decay: 0.05, formWindow: 6, h2hWindow: 5, kellyFraction: 0.5,
       weights: { form:18, homeAdv:12, xg:16, h2h:10, defense:14, momentum:10, injuries:8, standings:12 } };
     const settingsTmp = settingsDest + '.tmp';
@@ -168,7 +168,7 @@ const SETTINGS_DEFAULTS = {
   // the pre-lock scoring-stage Kelly preview shown before a mode is chosen.
   paperKellyFraction: 0.5,
   realKellyFraction: 0.25,
-  activeLeagues: ['1','39','140','78','135','61','2','179','88','94','3','848','48'], successThreshold: 40,
+  activeLeagues: ['1','39','140','78','135','61','2','179','88','94','3','848','48','41','42'], successThreshold: 40,
   calibrationFactor: 1.08,
   wowyActive: true,
   // Enabled 2026-07-31 after reviewing netQualityDelta across 436 teams and fixing a
@@ -185,6 +185,8 @@ const SETTINGS_DEFAULTS = {
     // shown; POST /api/league-modes/48 already 403s on a real-mode request
     // while a league sits at 'paper_only', same guarantee La Liga's default had.
     '48': 'paper_only',
+    '41': 'paper_only',
+    '42': 'paper_only',
   },
 };
 
@@ -475,6 +477,12 @@ const LEAGUES = {
   // Carabao Cup's official league name in that API; confirmed via /leagues?search=
   // "League Cup" and cross-checked against live Round of 128 fixtures.
   '48':  { name: 'Carabao Cup',           season: 2026, sport: 'soccer_england_efl_cup' },
+  // Added 2026-08-10, paper-only — see LEAGUE_CONFIG[41]/[42] in scoring.js. IDs and
+  // sport keys confirmed via /leagues?search=League+One / League+Two and
+  // /api/odds/sports, cross-checked against real current-season and mid-season-2025
+  // fixtures for both API-Sports and the Odds API before adding.
+  '41':  { name: 'League One',            season: 2026, sport: 'soccer_england_league1' },
+  '42':  { name: 'League Two',            season: 2026, sport: 'soccer_england_league2' },
 };
 
 // ─── BACKFILL CONFIG ──────────────────────────────────────────────────────────
@@ -6006,7 +6014,7 @@ const LEAGUE_NAMES_MAP = {
   '39': 'Premier League', '140': 'La Liga', '135': 'Serie A', '78': 'Bundesliga',
   '61': 'Ligue 1', '2': 'Champions League', '1': 'World Cup', '179': 'Scottish Premiership',
   '88': 'Eredivisie', '94': 'Primeira Liga', '3': 'Europa League', '848': 'Conference League',
-  '48': 'Carabao Cup',
+  '48': 'Carabao Cup', '41': 'League One', '42': 'League Two',
 };
 
 function getLivePaperRecord(leagueId) {
@@ -6135,29 +6143,6 @@ app.get('/api/performance/real', (_req, res) => {
       bets,
     });
   } catch(e) { res.status(500).json({ error: e.message }); }
-});
-
-// TEMPORARY diagnostic endpoint — remove after League One/Two odds-coverage check
-// (task: "Cross-competition calibration architecture + League One/Two coverage
-// check"). Read-only historical odds snapshot, same pattern used for the Carabao
-// Cup check and runClosingOddsBackfill's production usage.
-app.get('/api/debug/odds-history-check', async (req, res) => {
-  try {
-    const sport = req.query.sport;
-    const date  = req.query.date;
-    const { data, headers } = await oddsApi.get(`/sports/${sport}/odds-history`, {
-      params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal', date },
-    });
-    const events = data?.data || data || [];
-    const summary = events.map(ev => ({
-      commence_time: ev.commence_time,
-      home: ev.home_team, away: ev.away_team,
-      n_books: (ev.bookmakers || []).length,
-      books: (ev.bookmakers || []).map(b => b.title),
-    }));
-    res.set('X-Requests-Remaining', headers['x-requests-remaining'] || '');
-    res.json({ count: summary.length, summary });
-  } catch (e) { res.status(e.response?.status || 500).json({ error: e.message, detail: e.response?.data }); }
 });
 
 const _serverStartedAt = new Date().toISOString();

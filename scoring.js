@@ -283,6 +283,11 @@ const LEAGUE_CONFIG = {
   // when avgHomeWinRate is absent (see scoring.js) — this entry exists for name
   // lookups and as a ready slot for real calibration once enough live data exists.
   48:  { name: 'Carabao Cup', marketEfficiency: 1.0, drawBaseWeight: 1.0, homeAdvBaseWeight: 1.0 },
+  // Added 2026-08-10, paper-only, zero calibration history — same guard as league 48
+  // above (no avgHomeWinRate/avgDrawRate/avgAwayWinRate/avgGoalsPerGame; neutral
+  // marketEfficiency/drawBaseWeight/homeAdvBaseWeight only).
+  41:  { name: 'League One', marketEfficiency: 1.0, drawBaseWeight: 1.0, homeAdvBaseWeight: 1.0 },
+  42:  { name: 'League Two', marketEfficiency: 1.0, drawBaseWeight: 1.0, homeAdvBaseWeight: 1.0 },
 };
 
 // ─── XG PROXY ─────────────────────────────────────────────────────────────────
