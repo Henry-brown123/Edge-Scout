@@ -2695,3 +2695,104 @@ Two different layers, two different answers:
 Net: real input-level siloing exists, it's not uniform across the
 pipeline, and the international context already shows the shape of a fix.
 Scoped as a proposal (not implemented) in this task's report.
+
+## Addendum 16 — Historical scoring pool is globally unscoped by league (not siloed like the pre-fix live path) — decision on how the Carabao Cup/League One/League Two backfill uses it
+
+Addendum 15's siloing finding was about the **live** path
+(`scoreOneFixture`'s `scoringPool`). A follow-up task generalized the
+live path's `international`-context blend to club cup competitions
+(Carabao Cup/CL/EL/Conference League): a gated, live per-team domestic-form
+fetch (`fetchTeamDomesticForm`), deliberately one-directional — domestic
+leagues' own fixtures never enter the blend branch, by construction. That
+fix is done and deployed (commit `4d2ce32`).
+
+Before running a large historical backfill for the same three competitions,
+this addendum checks whether the **historical** scoring path
+(`scoreFixtureFromPool` in `weightOptimiser.js`, used by
+`runHistoricalBackfill`) has the same siloing problem and needs an
+analogous fix.
+
+### Finding: it does not silo by league at all — it never has
+
+`scoreFixtureFromPool` takes a `teamIndex` built once per backfill run by
+`buildTeamIndex(allFixtures)`, where `allFixtures` is *every* fixture
+across *every* league currently in `HISTORICAL_BACKFILL_CONFIG`, merged
+into one global `Map` keyed by fixture ID. `buildTeamIndex` groups this
+global list by team ID with **no league filter at all** — a team's pool is
+every fixture it has ever played in any tracked competition, date-filtered
+to before the fixture being scored (no lookahead), full stop.
+
+Confirmed empirically, not just by reading the code — a temp diagnostic
+endpoint (`/api/debug/historical-pool-check`, removed after use) rebuilt
+the real `teamIndex` from the already-cached `backfill-historical.json`
+and reported what a real team's pool actually contains. Manchester City
+(team id 50):
+
+| League | Fixtures in pool | Seasons | Date range |
+|---|---|---|---|
+| Premier League (39) | 570 | 2010–2024 | 2010-08-14 to 2025-05-25 |
+| UEFA Champions League (2) | 135 | 2011–2024 | 2011-09-14 to 2025-02-19 |
+
+Man City's Premier League fixtures have been scored, this whole time,
+against a pool that already includes their Champions League matches,
+completely undifferentiated. This is not a bug introduced by this task —
+it's how `scoreFixtureFromPool` has always worked, for every team that
+appears in more than one `HISTORICAL_BACKFILL_CONFIG` league. It also
+means the thing the live-path fix had to build (a deliberate blend of a
+team's domestic history into its cup-fixture pool) is, for the historical
+path, **already happening automatically** — a cup fixture's pool already
+draws on whatever else that team has played in any tracked league, no new
+code required, *provided the relevant domestic league is itself in
+`HISTORICAL_BACKFILL_CONFIG`*.
+
+### The decision this forces
+
+The task's brief asked for the historical fix to be "one-directional"
+the same way the live fix is — domestic leagues' own historical scoring
+staying completely untouched, verified empirically. The finding above
+means that property **does not hold today** (PL is already blended with
+CL for co-occurring teams) and **cannot be made to hold going forward**
+without a materially different, riskier change: adding a context-gate to
+`scoreFixtureFromPool` so only cup fixtures draw cross-competition data,
+and domestic-only fixtures are newly restricted to their own league.
+
+That gate was considered and explicitly not built. Two reasons:
+
+1. **Already-scored records are frozen.** `runHistoricalBackfill` skips
+   any fixture already in `scoredRecords` (`if (scoredMap.has(...))
+   continue`) unless `rescore: true` is passed, which this task does not
+   do. So nothing about the *existing* PL/La Liga/Serie A/Bundesliga/
+   Ligue 1/Scottish Prem/Eredivisie/Primeira Liga/CL/EL scored population
+   changes as a result of this backfill, regardless of which option was
+   chosen here.
+2. **A gate would only change behavior for *newly scored* domestic-league
+   fixtures from now on** — meaning PL fixtures scored before the gate
+   include CL blend, and PL fixtures scored after it would not. That's a
+   regime change partway through an already-relied-upon, already-trained-
+   on population (the live GBDT model was trained on this exact
+   `scoredRecords` set — see Addendum 12). Introducing that split was
+   judged higher-risk than the alternative: extending the existing,
+   already-live-for-years global-pool behavior to three more leagues,
+   which changes nothing about *how* scoring works, only *what's in the
+   pool* going forward.
+
+**Decision (confirmed with the user before implementation): rely on the
+existing global pool.** No new gating code was added to
+`scoreFixtureFromPool`. Carabao Cup/League One/League Two fixtures enter
+the same global `fixtureMap` as every other tracked league. Concretely,
+this means: going forward, Premier League, League One, and League Two
+fixtures scored *for the first time* from this point on will have Carabao
+Cup matches mixed into their pool too — the same category of effect CL/EL
+have already had on PL/La Liga/Serie A/Bundesliga/Ligue 1/Scottish Prem/
+Eredivisie/Primeira Liga for years, just extended to a few more
+competitions. It is not a new kind of risk, and it does not touch any
+fixture already scored.
+
+### What this means for the backfill
+
+No implementation changed for Part A/B of the accompanying task beyond
+this decision itself. Promotion/relegation handling is covered separately
+below. The backfill (Part C/D) proceeds using the pipeline exactly as it
+already exists — the finding here is that no analogous "domestic blend"
+code needed to be written, because the historical pipeline was never
+siloed the way the live pipeline was before its own fix.
