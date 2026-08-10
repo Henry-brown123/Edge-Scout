@@ -2382,7 +2382,7 @@ async function runHistoricalBackfill({ rescore = false, onProgress } = {}) {
         if (scoredMap.size >= nextOptimiseAt && scoredMap.size >= OPTIMISE_EVERY) {
           const msg = `[Optimise] Checkpoint at ${scoredMap.size} records — running optimisation…`;
           console.log(msg); onProgress?.(msg);
-          _runOptimisation([...scoredMap.values()], existing, onProgress);
+          await _runOptimisation([...scoredMap.values()], existing, onProgress);
           existing.scoredRecords = [...scoredMap.values()];
           existing.scoredCount   = scoredMap.size;
           const histPath = path.join(DATA_DIR, 'backfill-historical.json');
@@ -2408,7 +2408,7 @@ async function runHistoricalBackfill({ rescore = false, onProgress } = {}) {
       _historicalBackfillStatus.phase = 'optimising';
       const msg = `[Optimise] Final pass on ${allRecords.length} records…`;
       console.log(msg); onProgress?.(msg);
-      _runOptimisation(allRecords, existing, onProgress);
+      await _runOptimisation(allRecords, existing, onProgress);
     }
 
     // ── Phase 4: Persist ───────────────────────────────────────────────────
@@ -2605,14 +2605,16 @@ function runGbdtProxyTrain(reason) {
 }
 
 // Run weight optimisation for all three contexts and mutate `existing` in place.
-function _runOptimisation(records, existing, onProgress) {
+// Async because optimiseModelWeights (weightOptimiser.js) now yields internally on
+// large record sets — see the comment there for why.
+async function _runOptimisation(records, existing, onProgress) {
   const optimisedWeights = existing.optimisedWeights || {};
   const accuracy         = existing.accuracy         || {};
 
   for (const ctx of ['club_domestic', 'club_european', 'international']) {
     const ctxRecords = records.filter(r => r.context === ctx);
     if (ctxRecords.length < 50) continue;
-    const result = optimiseModelWeights(records, ctx);
+    const result = await optimiseModelWeights(records, ctx);
     optimisedWeights[ctx] = result.weights;
     accuracy[ctx] = {
       accuracy:         result.accuracy,

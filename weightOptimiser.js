@@ -220,7 +220,16 @@ function computeAccuracy(records, weights, context) {
 // Numerical gradient descent minimising recency-weighted cross-entropy loss.
 // Weights are constrained to ≥1 and renormalised to sum to 100 after each step.
 
-function optimiseWeights(records, context, iterations = 200) {
+// Async, not for the math (still plain synchronous gradient descent) but so a large
+// record population doesn't block Node's event loop for the whole 200-iteration run —
+// each iteration scans the full `records` array ~17 times (2 evals/weight-key x 8 keys,
+// plus one for the step itself), which at tens of thousands of records is real,
+// multi-second-per-iteration work. Yielding every 20 iterations keeps every single
+// blocking span short enough that the server can still answer requests (including
+// Render's health check) while a large historical backfill is scoring/optimising in
+// the background — this was the root cause of repeated crash/restarts when the
+// Carabao Cup/League One/League Two ingestion pushed the population past ~65k records.
+async function optimiseWeights(records, context, iterations = 200) {
   const defaultW = { ...(WEIGHTS_BY_CONTEXT[context] || WEIGHTS_BY_CONTEXT.club_domestic) };
   const keys     = Object.keys(defaultW);
 
@@ -254,6 +263,8 @@ function optimiseWeights(records, context, iterations = 200) {
     const newLoss = computeLogLoss(records, nw, context);
     if (newLoss < bestLoss) { bestLoss = newLoss; bestW = { ...nw }; }
     w = nw;
+
+    if ((iter + 1) % 20 === 0) await new Promise(r => setImmediate(r));
   }
 
   // Round to integers for output, fix rounding drift
