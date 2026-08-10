@@ -3304,6 +3304,22 @@ app.get('/api/tier-performance', (req, res) => {
     }).filter(r => r.n > 0);
   }
 
+  // Live ROI crossed with league — needed for the tier x league grid's Live sub-cell
+  // (Historical/Continuous below are already league-crossed via LEAGUE_TIER_MATRIX /
+  // CONTINUOUS_LEAGUE_TIER_MATRIX; Live wasn't until now). All 9 validated leagues are
+  // always returned, n=0 included, so the frontend has a stable column set to render
+  // dashes into rather than reshaping the grid around whichever cells have data.
+  function byLeagueForTier(bets, tier) {
+    const inTier = bets.filter(b => tierOfProbShared(b.modelProb) === tier);
+    return Object.keys(LEAGUE_TIER_MATRIX).map(Number).map(leagueId => {
+      const g = inTier.filter(b => parseInt(b.leagueId, 10) === leagueId);
+      const n = g.length;
+      const staked = g.reduce((s, b) => s + (b.actualStake ?? b.suggestedStake ?? 0), 0);
+      const pnl    = g.reduce((s, b) => s + (b.pnl || 0), 0);
+      return { leagueId, leagueName: LEAGUE_TIER_MATRIX[leagueId].name, n, roi: n && staked ? +(pnl / staked).toFixed(4) : null, thin: n < TIER_PERF_MIN_LIVE_N };
+    });
+  }
+
   // Per-model-version sample floor tracking (docs/model-versioning.md). A brand-new
   // model version's early live results must be visibly flagged as below decision-grade
   // rather than read with the same confidence as an established version — same rule-6
@@ -3355,6 +3371,7 @@ app.get('/api/tier-performance', (req, res) => {
       live: { n: liveN, roi: liveRoi, thin: liveThin },
       status,
       byPickType: byPickTypeForTier(validatedBets, tier),
+      byLeague: byLeagueForTier(validatedBets, tier),
     };
   });
 
@@ -4386,6 +4403,27 @@ const LEAGUE_TIER_MATRIX = {
 };
 const LEAGUE_TIER_MATRIX_TIER_ORDER = ['<35%','35-40%','40-45%','45-50%','50-55%','55-60%','60-65%','65-70%','70-75%','75-80%','80%+'];
 
+// Addendum 14 Part C — continuous edge-vs-ROI, full matched-odds population (no 5%
+// edge threshold applied, unlike LEAGUE_TIER_MATRIX above which is posEdge>=5% only).
+// Same static-backtest-snapshot treatment: hard-coded from the doc's already-published
+// table, not live-computed. Only covers 35-40% through 65-70% — the underlying analysis
+// simply didn't have matched-odds volume outside that range (see Addendum 14 Part C).
+const CONTINUOUS_LEAGUE_TIER_MATRIX = {
+  2:   { name: 'Champions League',     cells: { '35-40%': { n: 11,  roi: 0.725  }, '40-45%': { n: 55,  roi: 0.143  }, '45-50%': { n: 46,  roi: 0.019  }, '50-55%': { n: 34, roi: 0.021  }, '55-60%': { n: 24, roi: -0.157 }, '60-65%': { n: 5,  roi: 0.032  }, '65-70%': { n: 2,  roi: 0.345  } } },
+  39:  { name: 'Premier League',       cells: { '35-40%': { n: 46,  roi: 0.220  }, '40-45%': { n: 109, roi: 0.014  }, '45-50%': { n: 74,  roi: -0.006 }, '50-55%': { n: 62, roi: -0.136 }, '55-60%': { n: 39, roi: -0.137 }, '60-65%': { n: 28, roi: 0.299  }, '65-70%': { n: 17, roi: -0.248 } } },
+  61:  { name: 'Ligue 1',              cells: { '35-40%': { n: 65,  roi: 0.006  }, '40-45%': { n: 68,  roi: -0.291 }, '45-50%': { n: 63,  roi: 0.009  }, '50-55%': { n: 58, roi: 0.007  }, '55-60%': { n: 26, roi: 0.226  }, '60-65%': { n: 14, roi: 0.059  }, '65-70%': { n: 9,  roi: -0.420 } } },
+  78:  { name: 'Bundesliga',           cells: { '35-40%': { n: 56,  roi: -0.240 }, '40-45%': { n: 90,  roi: -0.242 }, '45-50%': { n: 52,  roi: -0.338 }, '50-55%': { n: 53, roi: -0.079 }, '55-60%': { n: 21, roi: 0.016  }, '60-65%': { n: 22, roi: -0.134 }, '65-70%': { n: 10, roi: -0.053 } } },
+  88:  { name: 'Eredivisie',           cells: { '35-40%': { n: 49,  roi: -0.030 }, '40-45%': { n: 72,  roi: -0.066 }, '45-50%': { n: 62,  roi: -0.135 }, '50-55%': { n: 51, roi: -0.105 }, '55-60%': { n: 29, roi: 0.000  }, '60-65%': { n: 22, roi: -0.161 }, '65-70%': { n: 17, roi: 0.086  } } },
+  94:  { name: 'Primeira Liga',        cells: { '35-40%': { n: 50,  roi: -0.187 }, '40-45%': { n: 84,  roi: -0.177 }, '45-50%': { n: 62,  roi: 0.183  }, '50-55%': { n: 39, roi: -0.036 }, '55-60%': { n: 32, roi: -0.218 }, '60-65%': { n: 17, roi: -0.005 }, '65-70%': { n: 19, roi: 0.905  } } },
+  135: { name: 'Serie A',              cells: { '35-40%': { n: 79,  roi: -0.086 }, '40-45%': { n: 106, roi: -0.032 }, '45-50%': { n: 82,  roi: -0.195 }, '50-55%': { n: 47, roi: 0.193  }, '55-60%': { n: 30, roi: -0.016 }, '60-65%': { n: 25, roi: -0.075 }, '65-70%': { n: 11, roi: 0.117  } } },
+  140: { name: 'La Liga',              cells: { '35-40%': { n: 46,  roi: -0.090 }, '40-45%': { n: 99,  roi: -0.047 }, '45-50%': { n: 85,  roi: -0.056 }, '50-55%': { n: 57, roi: 0.036  }, '55-60%': { n: 35, roi: 0.087  }, '60-65%': { n: 19, roi: -0.003 }, '65-70%': { n: 25, roi: 0.009  } } },
+  179: { name: 'Scottish Premiership', cells: { '35-40%': { n: 20,  roi: -0.275 }, '40-45%': { n: 54,  roi: -0.035 }, '45-50%': { n: 62,  roi: -0.021 }, '50-55%': { n: 39, roi: 0.075  }, '55-60%': { n: 13, roi: -0.182 }, '60-65%': { n: 15, roi: 0.095  }, '65-70%': { n: 12, roi: -0.068 } } },
+};
+// Add the same n<30 thin-sample flag LEAGUE_TIER_MATRIX cells carry, mechanically.
+for (const league of Object.values(CONTINUOUS_LEAGUE_TIER_MATRIX)) {
+  for (const cell of Object.values(league.cells)) cell.thin = cell.n < 30;
+}
+
 // ⚠️ PRE-RETRAIN MODEL ONLY — see docs/tier-calibration-analysis.md Addendum 13.
 // This is a frozen, one-time snapshot of the OLD GBDT model's calibration
 // (trainedAt 2026-07-25, trainN=6,652), computed against Addendum 12's held-out
@@ -4465,8 +4503,10 @@ app.get('/api/league-tier-matrix', (_req, res) => {
       validatedLeagues: leagueIds.map(id => ({ id, name: LEAGUE_TIER_MATRIX[id].name })),
       tierLabels: LEAGUE_TIER_MATRIX_TIER_ORDER,
       note: 'Reference/diagnostic snapshot, not live-computed and not a gate. Raw = uncorrected posEdge ROI, test-only. Shrunk = empirical-Bayes estimate pooling toward the tier average across all 9 leagues. See docs/tier-calibration-analysis.md Addendum 6.',
+      continuousNote: 'continuousMatrix (Addendum 14 Part C) is the same population with no 5% edge threshold applied — only covers 35-40% through 65-70%, the range that analysis actually had matched-odds volume for.',
     },
     matrix: LEAGUE_TIER_MATRIX,
+    continuousMatrix: CONTINUOUS_LEAGUE_TIER_MATRIX,
     leagueAverages,
     tierAverages,
   });
