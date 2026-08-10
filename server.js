@@ -6221,6 +6221,47 @@ app.get('/api/performance/real', (_req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// TEMPORARY diagnostic endpoint — remove after historical-scoring-pipeline
+// investigation (task: "Confirm/fix historical scoring pipeline, then ingest and
+// score full historical population for Carabao Cup, League One, and League Two").
+// Reads already-cached backfill-historical.json (no API calls), rebuilds teamIndex
+// exactly as runHistoricalBackfill does, and reports which league IDs actually show
+// up in a given team's pool — used to empirically confirm/refute whether
+// scoreFixtureFromPool's teamIndex is already global/unscoped by league.
+app.get('/api/debug/historical-pool-check', async (req, res) => {
+  try {
+    const teamId = parseInt(req.query.teamId, 10);
+    if (!teamId) return res.status(400).json({ error: 'teamId required' });
+    const { buildTeamIndex } = require('./weightOptimiser');
+    const existing = readJSON('backfill-historical.json') || { fixtures: [] };
+    const allFixtures = existing.fixtures || [];
+    const teamIndex = buildTeamIndex(allFixtures);
+    const teamFixtures = teamIndex[teamId] || [];
+
+    const byLeague = {};
+    for (const f of teamFixtures) {
+      const key = `${f.league?.id}_${f.league?.name}`;
+      if (!byLeague[key]) byLeague[key] = { count: 0, seasons: new Set(), earliest: null, latest: null };
+      byLeague[key].count++;
+      byLeague[key].seasons.add(f.league?.season);
+      const d = f.fixture?.date;
+      if (!byLeague[key].earliest || d < byLeague[key].earliest) byLeague[key].earliest = d;
+      if (!byLeague[key].latest || d > byLeague[key].latest) byLeague[key].latest = d;
+    }
+    const summary = Object.entries(byLeague).map(([key, v]) => ({
+      league: key, count: v.count, seasons: [...v.seasons].sort(),
+      earliest: v.earliest, latest: v.latest,
+    }));
+
+    res.json({
+      teamId,
+      totalFixturesInPool: teamFixtures.length,
+      distinctLeaguesInPool: summary.length,
+      byLeague: summary,
+    });
+  } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
+});
+
 const _serverStartedAt = new Date().toISOString();
 
 app.get('/api/server-status', async (_req, res) => {
