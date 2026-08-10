@@ -4424,6 +4424,21 @@ for (const league of Object.values(CONTINUOUS_LEAGUE_TIER_MATRIX)) {
   for (const cell of Object.values(league.cells)) cell.thin = cell.n < 30;
 }
 
+// Addendum 14 Part C's own pooled-by-tier reading (same population, no per-league
+// split) — the grid's Total column uses this directly rather than re-deriving it from
+// CONTINUOUS_LEAGUE_TIER_MATRIX's per-league cells, so it matches the number the doc
+// itself reports instead of a client-side recomputation that could drift from it.
+const CONTINUOUS_TIER_POOLED = {
+  '35-40%': { n: 422, roi: -0.053 },
+  '40-45%': { n: 737, roi: -0.084 },
+  '45-50%': { n: 588, roi: -0.061 },
+  '50-55%': { n: 440, roi: -0.010 },
+  '55-60%': { n: 249, roi: -0.039 },
+  '60-65%': { n: 167, roi: 0.014  },
+  '65-70%': { n: 122, roi: 0.095  },
+};
+for (const cell of Object.values(CONTINUOUS_TIER_POOLED)) cell.thin = cell.n < 30;
+
 // ⚠️ PRE-RETRAIN MODEL ONLY — see docs/tier-calibration-analysis.md Addendum 13.
 // This is a frozen, one-time snapshot of the OLD GBDT model's calibration
 // (trainedAt 2026-07-25, trainN=6,652), computed against Addendum 12's held-out
@@ -4507,6 +4522,7 @@ app.get('/api/league-tier-matrix', (_req, res) => {
     },
     matrix: LEAGUE_TIER_MATRIX,
     continuousMatrix: CONTINUOUS_LEAGUE_TIER_MATRIX,
+    continuousTierTotals: CONTINUOUS_TIER_POOLED,
     leagueAverages,
     tierAverages,
   });

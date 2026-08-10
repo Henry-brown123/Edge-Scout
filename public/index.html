@@ -291,6 +291,7 @@ td.mono { font-family: var(--font-data); }
 .tpg-table th { padding: 6px 8px; background: var(--surface2); font-size: 9px; text-transform: none; }
 .tpg-tier-cell { padding: 8px 10px !important; background: var(--surface2); font-weight: 600; white-space: nowrap; vertical-align: middle !important; }
 .tpg-cell { min-width: 96px; }
+.tpg-total-cell, .tpg-total-header { background: var(--surface2); border-left: 2px solid var(--border) !important; font-weight: 600; }
 .tpg-sub { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; padding: 3px 7px; border-bottom: 1px solid rgba(255,255,255,.05); font-family: var(--font-data); }
 .tpg-sub:last-child { border-bottom: none; }
 .tpg-sub-label { font-size: 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; flex-shrink: 0; }
@@ -3170,7 +3171,8 @@ async function renderTierPerf(mode = 'paper', prefix = '') {
 
   if (headerRow) {
     headerRow.innerHTML = `<th class="tpg-tier-cell">Tier</th>` +
-      leagues.map(l => `<th class="tpg-cell">${l.name}</th>`).join('');
+      leagues.map(l => `<th class="tpg-cell">${l.name}</th>`).join('') +
+      `<th class="tpg-total-header">Total<br><span style="font-weight:400;color:var(--muted)">(all leagues)</span></th>`;
   }
 
   rows.forEach(r => {
@@ -3185,7 +3187,16 @@ async function renderTierPerf(mode = 'paper', prefix = '') {
         ${_tpgFmtSub('L', liveCell?.n, liveCell?.roi, liveCell?.thin)}
       </td>`;
     }).join('');
-    tr.innerHTML = `<td class="tpg-tier-cell">${r.tier}</td>${cells}`;
+    // Total column — pooled across all 9 leagues, sourced directly rather than summed
+    // client-side from the per-league cells (Historical/Live are already pooled reads
+    // elsewhere on this row; Continuous uses Addendum 14 Part C's own pooled figure).
+    const contTotal = ltm?.continuousTierTotals?.[r.tier];
+    const totalCell = `<td class="tpg-cell tpg-total-cell">
+      ${_tpgFmtSub('H', r.historical?.n, r.historical?.roi, r.historical?.thin)}
+      ${_tpgFmtSub('C', contTotal?.n, contTotal?.roi, contTotal?.thin)}
+      ${_tpgFmtSub('L', r.live?.n, r.live?.roi, r.live?.thin)}
+    </td>`;
+    tr.innerHTML = `<td class="tpg-tier-cell">${r.tier}</td>${cells}${totalCell}`;
     tbody.appendChild(tr);
   });
 
