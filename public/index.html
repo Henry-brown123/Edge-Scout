@@ -432,10 +432,10 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
             <input type="number" id="bp-paper-kelly" value="0.5" step="0.05" min="0.05" max="1" style="width:70px" onchange="updateKellyFraction('paper', this.value)">
           </div>
           <div style="display:flex;flex-wrap:wrap;gap:6px">
-            <button class="btn btn-cyan btn-sm" onclick="confirmDeposit('paper')">Deposit</button>
-            <button class="btn btn-ghost btn-sm" onclick="confirmWithdraw('paper')" style="border-color:var(--green);color:var(--green)">Withdraw</button>
-            <button class="btn btn-ghost btn-sm" onclick="confirmBankrollReset('paper')" style="border-color:var(--cyan);color:var(--cyan)">Reset Bankroll</button>
-            <button class="btn btn-ghost btn-sm" onclick="confirmFullReset('paper')" style="border-color:var(--red);color:var(--red)">Reset + Bets</button>
+            <button class="btn btn-cyan btn-sm" onclick="openBankrollAction('paper','deposit')">Deposit</button>
+            <button class="btn btn-ghost btn-sm" onclick="openBankrollAction('paper','withdraw')" style="border-color:var(--green);color:var(--green)">Withdraw</button>
+            <button class="btn btn-ghost btn-sm" onclick="openBankrollAction('paper','reset-only')" style="border-color:var(--cyan);color:var(--cyan)">Reset Bankroll</button>
+            <button class="btn btn-ghost btn-sm" onclick="openBankrollAction('paper','reset-full')" style="border-color:var(--red);color:var(--red)">Reset + Bets</button>
           </div>
         </div>
         <!-- Real column -->
@@ -451,14 +451,37 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
             <input type="number" id="bp-real-kelly" value="0.25" step="0.05" min="0.05" max="1" style="width:70px" onchange="updateKellyFraction('real', this.value)">
           </div>
           <div style="display:flex;flex-wrap:wrap;gap:6px">
-            <button class="btn btn-cyan btn-sm" onclick="confirmDeposit('real')">Deposit</button>
-            <button class="btn btn-ghost btn-sm" onclick="confirmWithdraw('real')" style="border-color:var(--green);color:var(--green)">Withdraw</button>
-            <button class="btn btn-ghost btn-sm" onclick="confirmBankrollReset('real')" style="border-color:var(--cyan);color:var(--cyan)">Reset Bankroll</button>
-            <button class="btn btn-ghost btn-sm" onclick="confirmFullReset('real')" style="border-color:var(--red);color:var(--red)">Reset + Bets</button>
+            <button class="btn btn-cyan btn-sm" onclick="openBankrollAction('real','deposit')">Deposit</button>
+            <button class="btn btn-ghost btn-sm" onclick="openBankrollAction('real','withdraw')" style="border-color:var(--green);color:var(--green)">Withdraw</button>
+            <button class="btn btn-ghost btn-sm" onclick="openBankrollAction('real','reset-only')" style="border-color:var(--cyan);color:var(--cyan)">Reset Bankroll</button>
+            <button class="btn btn-ghost btn-sm" onclick="openBankrollAction('real','reset-full')" style="border-color:var(--red);color:var(--red)">Reset + Bets</button>
           </div>
         </div>
       </div>
       <div style="font-size:10px;color:var(--muted);margin-top:10px">Each account is fully independent — balances, resets, and Kelly fractions never cross between paper and real. "Reset + Bets" only clears that account's own bets, never the other's.</div>
+    </div>
+  </div>
+
+  <!-- Bankroll action panel (Deposit/Withdraw/Reset) — replaces native prompt()/confirm()
+       popups, which are unreliable across browser contexts and give no way to show an
+       error if the request fails. Handles both accounts and all four actions generically. -->
+  <div id="ba-panel" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:1001;align-items:center;justify-content:center">
+    <div style="background:var(--surface1);border:1px solid var(--border);border-radius:12px;padding:24px;width:min(380px,90vw)">
+      <div id="ba-title" style="font-size:14px;font-weight:700;margin-bottom:12px"></div>
+      <div id="ba-warning" style="display:none;font-size:12px;color:var(--red);margin-bottom:14px;padding:8px 10px;background:rgba(255,82,82,.08);border-radius:6px;line-height:1.4"></div>
+      <div style="margin-bottom:12px">
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Amount (£)</label>
+        <input type="number" id="ba-amount" min="0" step="1" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:#fff;padding:9px 10px;font-size:13px;box-sizing:border-box">
+      </div>
+      <div style="margin-bottom:14px">
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Notes (optional)</label>
+        <input type="text" id="ba-notes" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:#fff;padding:9px 10px;font-size:13px;box-sizing:border-box">
+      </div>
+      <div id="ba-error" style="display:none;font-size:12px;color:var(--red);margin-bottom:14px"></div>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button class="btn btn-ghost btn-sm" onclick="closeBankrollAction()">Cancel</button>
+        <button class="btn btn-primary btn-sm" id="ba-confirm-btn" onclick="confirmBankrollAction()">Confirm</button>
+      </div>
     </div>
   </div>
 
@@ -4386,54 +4409,69 @@ async function updateKellyFraction(account, value) {
   toast(`${account === 'real' ? 'Real' : 'Paper'} Kelly fraction set to ${frac}`, 'success');
 }
 
-async function confirmFullReset(account = 'paper') {
+// action: 'deposit' | 'withdraw' | 'reset-only' | 'reset-full'
+let _baState = null;
+const BA_ENDPOINT = { deposit: 'deposit', withdraw: 'withdraw', 'reset-only': 'reset-only', 'reset-full': 'reset' };
+
+function openBankrollAction(account, action) {
+  _baState = { account, action };
   const label = _brLabel(account);
-  if (!confirm(`This will wipe ${label.toUpperCase()} bets and reset the ${label} bankroll. The other account is untouched. Continue?`)) return;
-  const amountStr = prompt(`Starting ${label} bankroll amount (£):`, '1000');
-  if (amountStr === null) return;
-  const amount = parseFloat(amountStr) || 1000;
-  const notes  = prompt('Notes (optional):', 'New validation phase') || '';
-  await apiFetch(`${_brBase(account)}/reset`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ amount, notes }) });
-  await loadState();
-  toast(`${label} bankroll & bets reset to £${amount.toFixed(2)}`, 'success');
+  const TITLES = {
+    deposit:      `Deposit into ${label} bankroll`,
+    withdraw:     `Withdraw from ${label} bankroll`,
+    'reset-only': `Reset ${label} bankroll (bets kept)`,
+    'reset-full': `Reset ${label} bankroll & bets`,
+  };
+  const WARNINGS = {
+    'reset-only': `This resets the ${label} bankroll balance only. ${label} bets are kept.`,
+    'reset-full': `⚠ This wipes ALL ${label} bets and resets the ${label} bankroll. This cannot be undone. The ${account === 'real' ? 'paper' : 'real'} account is not touched.`,
+  };
+  document.getElementById('ba-title').textContent = TITLES[action];
+  const warnEl = document.getElementById('ba-warning');
+  if (WARNINGS[action]) { warnEl.textContent = WARNINGS[action]; warnEl.style.display = 'block'; }
+  else warnEl.style.display = 'none';
+  document.getElementById('ba-amount').value = (action === 'reset-only' || action === 'reset-full') ? 1000 : '';
+  document.getElementById('ba-notes').value  = '';
+  document.getElementById('ba-error').style.display = 'none';
+  document.getElementById('ba-panel').style.display = 'flex';
 }
 
-async function confirmBankrollReset(account = 'paper') {
-  const label = _brLabel(account);
-  if (!confirm(`This resets the ${label} bankroll only — ${label} bets are kept. Continue?`)) return;
-  const amountStr = prompt(`New starting ${label} bankroll amount (£):`, '1000');
-  if (amountStr === null) return;
-  const amount = parseFloat(amountStr) || 1000;
-  const notes  = prompt('Notes (optional):', 'Bankroll reset') || '';
-  await apiFetch(`${_brBase(account)}/reset-only`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ amount, notes }) });
-  await loadState();
-  toast(`${label} bankroll reset to £${amount.toFixed(2)} (bets kept)`, 'success');
+function closeBankrollAction() {
+  document.getElementById('ba-panel').style.display = 'none';
+  _baState = null;
 }
 
-async function confirmDeposit(account = 'paper') {
+async function confirmBankrollAction() {
+  if (!_baState) return;
+  const { account, action } = _baState;
+  const errEl = document.getElementById('ba-error');
+  errEl.style.display = 'none';
+  const amount = parseFloat(document.getElementById('ba-amount').value);
+  if (!amount || amount <= 0) { errEl.textContent = 'Enter a valid amount greater than 0.'; errEl.style.display = 'block'; return; }
+  const notes = document.getElementById('ba-notes').value || '';
   const label = _brLabel(account);
-  const amountStr = prompt(`Deposit amount into ${label} bankroll (£):`);
-  if (!amountStr) return;
-  const amount = parseFloat(amountStr);
-  if (!amount || amount <= 0) { toast('Invalid amount', 'error'); return; }
-  const notes = prompt('Notes (optional):', '') || '';
-  await apiFetch(`${_brBase(account)}/deposit`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ amount, notes }) });
-  await loadState();
-  toast(`Deposited £${amount.toFixed(2)} into ${label} bankroll`, 'success');
-}
-
-async function confirmWithdraw(account = 'paper') {
-  const label = _brLabel(account);
-  const amountStr = prompt(`Withdrawal amount from ${label} bankroll (£):`);
-  if (!amountStr) return;
-  const amount = parseFloat(amountStr);
-  if (!amount || amount <= 0) { toast('Invalid amount', 'error'); return; }
-  const notes = prompt('Notes (optional):', '') || '';
+  const btn = document.getElementById('ba-confirm-btn');
+  btn.disabled = true; btn.textContent = 'Working…';
   try {
-    await apiFetch(`${_brBase(account)}/withdraw`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ amount, notes }) });
+    await apiFetch(`${_brBase(account)}/${BA_ENDPOINT[action]}`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ amount, notes }),
+    });
+    closeBankrollAction();
     await loadState();
-    toast(`Withdrew £${amount.toFixed(2)} from ${label} bankroll`, 'success');
-  } catch(e) { toast(e.message, 'error'); }
+    const MSGS = {
+      deposit:      `Deposited £${amount.toFixed(2)} into ${label} bankroll`,
+      withdraw:     `Withdrew £${amount.toFixed(2)} from ${label} bankroll`,
+      'reset-only': `${label} bankroll reset to £${amount.toFixed(2)} (bets kept)`,
+      'reset-full': `${label} bankroll & bets reset to £${amount.toFixed(2)}`,
+    };
+    toast(MSGS[action], 'success');
+  } catch(e) {
+    errEl.textContent = e.message || 'Something went wrong — the request failed.';
+    errEl.style.display = 'block';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Confirm';
+  }
 }
 
 function renderTransactions() { return renderTransactionsInto(''); }
