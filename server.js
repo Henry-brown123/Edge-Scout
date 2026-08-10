@@ -2216,7 +2216,7 @@ function stripFixture(f) {
 let _historicalBackfillRunning = false;
 let _historicalBackfillStatus  = null; // in-progress status for polling
 
-async function runHistoricalBackfill({ rescore = false, onProgress } = {}) {
+async function runHistoricalBackfill({ rescore = false, skipOptimise = false, onProgress } = {}) {
   if (_historicalBackfillRunning) return { error: 'already_running' };
   _historicalBackfillRunning = true;
   _historicalBackfillStatus  = { phase: 'fetching', leaguesDone: 0, totalLeagues: 0, fixturesFetched: 0, scored: 0, startedAt: new Date().toISOString() };
@@ -2380,9 +2380,11 @@ async function runHistoricalBackfill({ rescore = false, onProgress } = {}) {
         // restart loses at most one checkpoint's worth of scoring, matching Phase 1's
         // resilience.
         if (scoredMap.size >= nextOptimiseAt && scoredMap.size >= OPTIMISE_EVERY) {
-          const msg = `[Optimise] Checkpoint at ${scoredMap.size} records — running optimisation…`;
-          console.log(msg); onProgress?.(msg);
-          await _runOptimisation([...scoredMap.values()], existing, onProgress);
+          if (!skipOptimise) {
+            const msg = `[Optimise] Checkpoint at ${scoredMap.size} records — running optimisation…`;
+            console.log(msg); onProgress?.(msg);
+            await _runOptimisation([...scoredMap.values()], existing, onProgress);
+          }
           existing.scoredRecords = [...scoredMap.values()];
           existing.scoredCount   = scoredMap.size;
           const histPath = path.join(DATA_DIR, 'backfill-historical.json');
@@ -2403,12 +2405,27 @@ async function runHistoricalBackfill({ rescore = false, onProgress } = {}) {
     }
 
     // ── Phase 3: Final weight optimisation ─────────────────────────────────
+    // skipOptimise exists for large one-off catch-up runs (e.g. ingesting several
+    // new leagues' full history at once) where optimiseWeights' full-population
+    // gradient descent — even yielding internally — was still crashing the process
+    // (see commit 889f5b1's comment; yielding fixed unresponsiveness but not
+    // whatever repeatedly killed the process afterward, most likely a memory
+    // ceiling on the hosting instance rather than a CPU/responsiveness issue).
+    // Scoring (this function's actual deliverable — the scoredRecords population)
+    // is entirely unaffected by skipping this: optimisedWeights/accuracy are
+    // reporting-only figures that are never auto-applied to live settings (only a
+    // separate, manual POST /api/backfill/historical/apply-weights call does that),
+    // so deferring them to a later, smaller, deliberate run costs nothing but a
+    // stale accuracy readout in the meantime.
     const allRecords = [...scoredMap.values()];
-    if (allRecords.length >= OPTIMISE_EVERY) {
+    if (!skipOptimise && allRecords.length >= OPTIMISE_EVERY) {
       _historicalBackfillStatus.phase = 'optimising';
       const msg = `[Optimise] Final pass on ${allRecords.length} records…`;
       console.log(msg); onProgress?.(msg);
       await _runOptimisation(allRecords, existing, onProgress);
+    } else if (skipOptimise) {
+      const msg = `[Optimise] Skipped for this run (skipOptimise=true) — existing optimisedWeights/accuracy left as-is.`;
+      console.log(msg); onProgress?.(msg);
     }
 
     // ── Phase 4: Persist ───────────────────────────────────────────────────
@@ -3606,13 +3623,17 @@ app.get('/api/backfill/status', (_req, res) => {
 
 // Historical backfill — full 3-season fetch, factor scoring, weight optimisation
 // ?rescore=true clears all scored records and re-scores from the fixture pool (needed after factor function changes)
+// ?skipOptimise=true skips weight re-optimisation for this run (scoring/persistence
+// still happen as normal) — see runHistoricalBackfill's Phase 3 comment for why this
+// exists: large one-off catch-up runs, not routine use.
 app.post('/api/backfill/historical', async (req, res) => {
   if (_historicalBackfillRunning) {
     return res.json({ started: false, message: 'Already running', status: _historicalBackfillStatus });
   }
-  const rescore = req.query.rescore === 'true';
-  res.json({ started: true, rescore, message: `Historical backfill running (rescore=${rescore}) — poll /api/backfill/historical/status` });
-  runHistoricalBackfill({ rescore }).catch(e => console.error('[HistoricalBackfill]', e.message));
+  const rescore      = req.query.rescore === 'true';
+  const skipOptimise = req.query.skipOptimise === 'true';
+  res.json({ started: true, rescore, skipOptimise, message: `Historical backfill running (rescore=${rescore}, skipOptimise=${skipOptimise}) — poll /api/backfill/historical/status` });
+  runHistoricalBackfill({ rescore, skipOptimise }).catch(e => console.error('[HistoricalBackfill]', e.message));
 });
 
 app.get('/api/backfill/historical/status', (_req, res) => {
