@@ -78,7 +78,7 @@ console.log(`[Data] process.env.DATA_DIR=${process.env.DATA_DIR ?? '(unset)'} �
   const settingsDest = path.join(DATA_DIR, 'settings.json');
   if (!fs.existsSync(settingsDest)) {
     const defaults = { calibrationFactor: 1.11, wowyActive: true,
-      activeLeagues: ['1','39','140','78','135','61','2','179','88','94','3','848'], successThreshold: 40,
+      activeLeagues: ['1','39','140','78','135','61','2','179','88','94','3','848','48'], successThreshold: 40,
       decay: 0.05, formWindow: 6, h2hWindow: 5, kellyFraction: 0.5,
       weights: { form:18, homeAdv:12, xg:16, h2h:10, defense:14, momentum:10, injuries:8, standings:12 } };
     const settingsTmp = settingsDest + '.tmp';
@@ -168,7 +168,7 @@ const SETTINGS_DEFAULTS = {
   // the pre-lock scoring-stage Kelly preview shown before a mode is chosen.
   paperKellyFraction: 0.5,
   realKellyFraction: 0.25,
-  activeLeagues: ['1','39','140','78','135','61','2','179','88','94','3','848'], successThreshold: 40,
+  activeLeagues: ['1','39','140','78','135','61','2','179','88','94','3','848','48'], successThreshold: 40,
   calibrationFactor: 1.08,
   wowyActive: true,
   // Enabled 2026-07-31 after reviewing netQualityDelta across 436 teams and fixing a
@@ -180,6 +180,11 @@ const SETTINGS_DEFAULTS = {
     '39': 'paper', '140': 'paper_only', '135': 'paper', '78': 'paper',
     '61': 'paper', '2': 'paper', '1': 'paper', '179': 'paper',
     '88': 'paper', '94': 'paper', '3': 'paper', '848': 'paper',
+    // Hard block, not the auto-managed paperTradeOnly array — zero calibration
+    // history means this must never flip to real regardless of any live edge
+    // shown; POST /api/league-modes/48 already 403s on a real-mode request
+    // while a league sits at 'paper_only', same guarantee La Liga's default had.
+    '48': 'paper_only',
   },
 };
 
@@ -465,6 +470,11 @@ const LEAGUES = {
   '94':  { name: 'Primeira Liga',         season: 2026, sport: 'soccer_portugal_primeira_liga' },
   '3':   { name: 'Europa League',         season: 2024, sport: 'soccer_uefa_europa_league' },
   '848': { name: 'Conference League',     season: 2024, sport: 'soccer_uefa_europa_conference_league' },
+  // Added 2026-08-10, paper-only — see LEAGUE_CONFIG[48] in scoring.js for why no
+  // base-rate calibration is set. API-Sports id 48 ("League Cup", England) is the
+  // Carabao Cup's official league name in that API; confirmed via /leagues?search=
+  // "League Cup" and cross-checked against live Round of 128 fixtures.
+  '48':  { name: 'Carabao Cup',           season: 2026, sport: 'soccer_england_efl_cup' },
 };
 
 // ─── BACKFILL CONFIG ──────────────────────────────────────────────────────────
@@ -3778,6 +3788,12 @@ const TEAM_NICKNAME_ALIASES = {
   // former but not an exact match of "hearts" (plural), so the token-overlap
   // check couldn't catch it either.
   'heart of midlothian': 'hearts',
+  // Confirmed 2026-08-10 — Carabao Cup (League Cup, league 48): api-football's
+  // short code "QPR" vs the Odds API's "Queens Park Rangers". Neither a
+  // substring nor a shared 4+ char token of the other, so both fallback checks
+  // miss it too. Found proactively by cross-checking every Round of 128 +
+  // Preliminary Round fixture before go-live, not by tripping over it live.
+  'qpr': 'queens park rangers',
 };
 function resolveTeamAlias(normalised) {
   return TEAM_NICKNAME_ALIASES[normalised] || normalised;
@@ -5990,6 +6006,7 @@ const LEAGUE_NAMES_MAP = {
   '39': 'Premier League', '140': 'La Liga', '135': 'Serie A', '78': 'Bundesliga',
   '61': 'Ligue 1', '2': 'Champions League', '1': 'World Cup', '179': 'Scottish Premiership',
   '88': 'Eredivisie', '94': 'Primeira Liga', '3': 'Europa League', '848': 'Conference League',
+  '48': 'Carabao Cup',
 };
 
 function getLivePaperRecord(leagueId) {
@@ -6118,38 +6135,6 @@ app.get('/api/performance/real', (_req, res) => {
       bets,
     });
   } catch(e) { res.status(500).json({ error: e.message }); }
-});
-
-// TEMPORARY diagnostic endpoint — remove after enriched form pool verification.
-app.get('/api/debug/league-backfill', (req, res) => {
-  const leagueId = req.query.league;
-  const data = readJSON('backfill-historical.json') || { fixtures: [] };
-  const fixtures = (data.fixtures || [])
-    .filter(f => f.fixture?.status?.short === 'FT')
-    .filter(f => String(f.league?.id) === String(leagueId));
-  res.json(fixtures);
-});
-
-// TEMPORARY diagnostic endpoint — remove after Carabao Cup odds-coverage check
-// (task: "Add Carabao Cup to LEAGUE_CONFIG"). Read-only historical odds snapshot,
-// same /odds-history pattern runClosingOddsBackfill already uses in production.
-app.get('/api/debug/odds-history-check', async (req, res) => {
-  try {
-    const sport = req.query.sport;
-    const date  = req.query.date;
-    const { data, headers } = await oddsApi.get(`/sports/${sport}/odds-history`, {
-      params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal', date },
-    });
-    const events = data?.data || data || [];
-    const summary = events.map(ev => ({
-      commence_time: ev.commence_time,
-      home: ev.home_team, away: ev.away_team,
-      n_books: (ev.bookmakers || []).length,
-      books: (ev.bookmakers || []).map(b => b.title),
-    }));
-    res.set('X-Requests-Remaining', headers['x-requests-remaining'] || '');
-    res.json({ count: summary.length, summary });
-  } catch (e) { res.status(e.response?.status || 500).json({ error: e.message, detail: e.response?.data }); }
 });
 
 const _serverStartedAt = new Date().toISOString();

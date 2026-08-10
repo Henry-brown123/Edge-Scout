@@ -272,6 +272,17 @@ const LEAGUE_CONFIG = {
   94:  { name: 'Primeira Liga',         avgHomeWinRate: 0.4486, avgDrawRate: 0.2258, avgAwayWinRate: 0.3255, avgGoalsPerGame: 2.68, marketEfficiency: 0.79, drawBaseWeight: 0.93, homeAdvBaseWeight: 0.97 },
   3:   { name: 'Europa League',         avgHomeWinRate: 0.431, avgDrawRate: 0.248, avgAwayWinRate: 0.321, avgGoalsPerGame: 2.78, marketEfficiency: 0.88, drawBaseWeight: 1.02, homeAdvBaseWeight: 0.96 },
   848: { name: 'Conference League',     avgHomeWinRate: 0.441, avgDrawRate: 0.251, avgAwayWinRate: 0.308, avgGoalsPerGame: 2.65, marketEfficiency: 0.82, drawBaseWeight: 1.03, homeAdvBaseWeight: 0.98 },
+  // Added 2026-08-10, paper-only, zero calibration history — deliberately no
+  // avgHomeWinRate/avgDrawRate/avgAwayWinRate/avgGoalsPerGame. Those four feed a
+  // real 30%-live-blend in applyLeagueBiasCorrection() and a goals-market baseline
+  // in scoreGoalsMarkets() — inventing plausible-looking cup numbers for either
+  // would silently bias live predictions toward an unverified guess, exactly what
+  // "no tuned base rates" rules out. marketEfficiency/drawBaseWeight/homeAdvBaseWeight
+  // are pure multipliers where 1.0 is a genuine no-op, not a guess, so those are
+  // safe to set neutral. applyLeagueBiasCorrection() now skips the blend entirely
+  // when avgHomeWinRate is absent (see scoring.js) — this entry exists for name
+  // lookups and as a ready slot for real calibration once enough live data exists.
+  48:  { name: 'Carabao Cup', marketEfficiency: 1.0, drawBaseWeight: 1.0, homeAdvBaseWeight: 1.0 },
 };
 
 // ─── XG PROXY ─────────────────────────────────────────────────────────────────
@@ -351,7 +362,12 @@ function computeModelProb(homeFactors, awayFactors, weights, context = 'club_dom
 // separately feeds computeModelProb, the diagnostic/backtest-only linear model).
 function applyLeagueBiasCorrection(probs, leagueId, leagueConfig) {
   const config = leagueConfig[leagueId];
-  if (!config) return probs; // no correction available
+  // A LEAGUE_CONFIG entry can exist (for name lookups, market efficiency, etc.)
+  // without carrying real base-rate calibration yet — e.g. a brand-new paper-only
+  // league with no live/backtest history. Skip the blend rather than pull toward
+  // an absent/undefined target (avgDrawRate/avgAwayWinRate would be equally
+  // missing whenever avgHomeWinRate is, since they're always added together).
+  if (!config || config.avgHomeWinRate == null) return probs; // no correction available
 
   // Target rates from LEAGUE_CONFIG (observed actual rates), with homeAdvBaseWeight
   // scaling the home target before the three are renormalised to sum to 1.
