@@ -6325,6 +6325,32 @@ app.get('/api/debug/historical-pool-check', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
 });
 
+// TEMPORARY diagnostic endpoint — per-league/season fixture+scored counts from the
+// already-cached backfill-historical.json (no API calls). Used to report exact
+// per-competition, per-season population sizes for the Carabao Cup/League One/
+// League Two ingestion.
+app.get('/api/debug/league-population-check', async (req, res) => {
+  try {
+    const leagueId = req.query.leagueId;
+    const existing = readJSON('backfill-historical.json') || { fixtures: [], scoredRecords: [] };
+    const scoredIds = new Set(existing.scoredRecords.map(r => r.fixtureId));
+    const bySeasson = {};
+    for (const f of existing.fixtures) {
+      if (String(f.league?.id) !== String(leagueId)) continue;
+      const s = f.league?.season;
+      if (!bySeasson[s]) bySeasson[s] = { fixtures: 0, scored: 0 };
+      bySeasson[s].fixtures++;
+      if (scoredIds.has(f.fixture?.id)) bySeasson[s].scored++;
+    }
+    const seasons = Object.entries(bySeasson).sort((a, b) => a[0] - b[0])
+      .map(([season, v]) => ({ season: Number(season), ...v }));
+    const totals = seasons.reduce((acc, s) => ({
+      fixtures: acc.fixtures + s.fixtures, scored: acc.scored + s.scored,
+    }), { fixtures: 0, scored: 0 });
+    res.json({ leagueId, totals, seasons });
+  } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
+});
+
 // TEMPORARY admin endpoint — direct Phase 5 (team-profile rebuild) + meta refresh,
 // bypassing runHistoricalBackfill's Phase 1 fetch loop entirely. Scoring is already
 // confirmed complete (scoredCount === totalFixtures in backfill-historical.json) —
