@@ -1460,7 +1460,7 @@ async function runMorningScan(leagueIds) {
 
   // Rebuild all team profiles from accumulated form fixtures
   if (allFormFixtures.size > 0) {
-    updateTeamProfiles([...allFormFixtures.values()]);
+    await updateTeamProfiles([...allFormFixtures.values()]);
   }
 
   saveWatching(watching);
@@ -2134,7 +2134,7 @@ async function runProfileBackfill(onProgress) {
   }
 
   const allArr    = [...allFixtures.values()];
-  const built     = updateTeamProfiles(allArr);
+  const built     = await updateTeamProfiles(allArr);
   const summary   = { apiCalls, totalFixtures: allFixtures.size, profilesBuilt: built, breakdown: results };
   console.log(`[Backfill] Done — ${allFixtures.size} fixtures → ${built} profiles`);
   return summary;
@@ -2441,7 +2441,7 @@ async function runHistoricalBackfill({ rescore = false, skipOptimise = false, on
     fs.renameSync(histTmp, histPath);
 
     // ── Phase 5: Rebuild team profiles ─────────────────────────────────────
-    const profileCount = updateTeamProfiles(existing.fixtures);
+    const profileCount = await updateTeamProfiles(existing.fixtures);
     const msg2 = `[Profiles] Rebuilt ${profileCount} profiles from ${existing.totalFixtures} fixtures`;
     console.log(msg2); onProgress?.(msg2);
 

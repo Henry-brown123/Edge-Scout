@@ -347,7 +347,13 @@ function getIntlHistoricalPool() {
   return _intlPoolCache;
 }
 
-function updateTeamProfiles(fixtures) {
+// Async, not for the per-team work itself (buildProfileFromFixtures stays a plain
+// sync function) but so a large fixture population — e.g. a full historical
+// backfill spanning many leagues/seasons, which can mean thousands of distinct
+// teams — doesn't block Node's event loop for the whole rebuild. Same reasoning
+// and pattern as the yields added to the historical scoring pipeline
+// (server.js/weightOptimiser.js) for the same underlying crash.
+async function updateTeamProfiles(fixtures) {
   if (!fixtures || !fixtures.length) return 0;
 
   const completed = fixtures.filter(f =>
@@ -372,6 +378,7 @@ function updateTeamProfiles(fixtures) {
   const profiles = readProfiles();
   let updated = 0;
   let intlPool = null; // loaded lazily only if international teams are found
+  let sinceYield = 0;
 
   for (const [teamId, { name, fixes }] of Object.entries(teamData)) {
     // Fix 1: for international context teams, build the profile from the full
@@ -402,6 +409,11 @@ function updateTeamProfiles(fixtures) {
       }
       profiles[teamId] = profile;
       updated++;
+    }
+
+    if (++sinceYield >= 100) {
+      sinceYield = 0;
+      await new Promise(r => setImmediate(r));
     }
   }
 
