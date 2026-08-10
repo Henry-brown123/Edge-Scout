@@ -2183,6 +2183,20 @@ const HISTORICAL_BACKFILL_CONFIG = [
   // API-Sports' own /leagues data confirms 2021 is the earliest season it has, so
   // there is no deeper archive to extend into here (checked, not assumed).
   { leagueId: '848', name: 'Conference League',     seasons: [2024, 2023, 2022, 2021] },
+  // Carabao Cup / League One / League Two — added Aug 2026 (paper-only, see
+  // Addendum 15 in docs/tier-calibration-analysis.md). API-Sports confirms
+  // 2011-2026 depth (16 seasons) for all three — matches HIST_SEASONS_2010's
+  // 2011 floor for the top-flight leagues, one season shallower than those
+  // (which reach 2010) since 2011 is where API-Sports' own archive starts for
+  // these three. 2026 included as the active season, same reasoning as the
+  // 179/88/94 entries above (avoid the "config says fetched, active season
+  // silently never added" gap). This ingestion is scored (Part D of the task
+  // it accompanies) but stays a held-aside, uncalibrated population per the
+  // standing rule (docs/calibration-rules.md rule 10) — no ROI/calibration
+  // read against it is part of this ingestion.
+  { leagueId: '48', name: 'Carabao Cup', seasons: [2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013, 2012, 2011] },
+  { leagueId: '41', name: 'League One',  seasons: [2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013, 2012, 2011] },
+  { leagueId: '42', name: 'League Two',  seasons: [2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013, 2012, 2011] },
 ];
 
 const OPTIMISE_EVERY = 500; // run weight optimisation after every N scored records
