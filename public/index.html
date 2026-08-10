@@ -625,85 +625,6 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     </div>
   </div>
 
-  <!-- Historical Performance Matrix — static reference/diagnostic, independent of the
-       Paper/Real/Combined toggle above (it's backtest data, not live). Deliberately
-       styled and worded differently from the Calibration Tier Performance tracker
-       below so the two are never confused. -->
-  <div class="card" style="margin-bottom:16px;border-left:3px solid var(--pink)">
-    <div class="card-header">
-      <span class="card-title">Historical Performance Matrix — League × Tier</span>
-      <span class="badge badge-muted" style="letter-spacing:.04em">REFERENCE — NOT A RECOMMENDATION</span>
-    </div>
-    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 6px">
-      Backtest snapshot (raw + shrinkage-corrected), test-only, every validated league
-      crossed with every calibration tier — see <span class="mono">docs/tier-calibration-analysis.md</span>,
-      Addendum 6. This is a diagnostic view for spotting broad patterns across leagues or
-      tiers; it is separate from the "Calibration Tier Performance" tracker below (which
-      compares live bets against history at the point of locking) and does not update with
-      live bets or drive any gating.
-    </p>
-    <div class="table-wrap" style="overflow-x:auto">
-      <table id="ltm-table" style="font-size:11px">
-        <thead><tr id="ltm-header-row"></tr></thead>
-        <tbody id="ltm-body"></tbody>
-      </table>
-    </div>
-    <div style="margin-top:14px;display:grid;grid-template-columns:1fr 1fr;gap:16px">
-      <div>
-        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Row summary — shrunk avg ROI per league (n-weighted, secondary read only):</div>
-        <div id="ltm-league-avg" style="display:flex;flex-direction:column;gap:4px"></div>
-      </div>
-      <div>
-        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Column summary — shrunk avg ROI per tier (n-weighted, secondary read only):</div>
-        <div id="ltm-tier-avg" style="display:flex;flex-direction:column;gap:4px"></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Pre-Retrain Calibration Matrix — a DIFFERENT model snapshot than the ROI matrix
-       above (calibration error, not ROI) and a DIFFERENT population (Addendum 12's
-       held-out test-only read, not Addendum 6's). Amber accent + explicit warning
-       banner deliberately distinct from the pink ROI matrix card and from the live
-       tracker below — this describes the OLD model only and can never be refreshed. -->
-  <div class="card" style="margin-bottom:16px;border-left:3px solid var(--amber)">
-    <div class="card-header">
-      <span class="card-title">Calibration Matrix — Pre-Retrain Model</span>
-      <span class="badge badge-amber" style="letter-spacing:.04em">LAST KNOWN BASELINE — MAY NOT REFLECT CURRENT LIVE MODEL</span>
-    </div>
-    <div style="background:rgba(255,209,102,.08);border:1px solid rgba(255,209,102,.25);border-radius:8px;padding:10px 12px;margin-bottom:10px;font-family:'DM Mono',monospace;font-size:.72rem;color:var(--amber)">
-      ⚠ Describes the <strong>old GBDT model</strong> (trained on 6,652 fixtures, frozen
-      2026-07-25) tested against Addendum 12's held-out 4,054-fixture population. The
-      <strong>current live model was retrained 2026-08-08 on 40,202 fixtures</strong> and
-      has not yet been calibration-tested against any genuinely unseen data — this table
-      cannot be refreshed to reflect it, because the old model's weights no longer exist.
-      Use as a leading proxy for "where the old model was strong," not a live read.
-    </div>
-    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 6px">
-      Calibration error (predicted probability − actual hit rate) per league × tier, raw +
-      shrinkage-corrected — same methodology and population as the Historical Performance
-      Matrix above, but calibration instead of ROI. A well-calibrated cell should, in
-      principle, produce real edge over time even before enough matched-odds volume exists
-      to prove it via ROI. See <span class="mono">docs/tier-calibration-analysis.md</span>,
-      Addendum 13. Reference/diagnostic only — no gating.
-    </p>
-    <div class="table-wrap" style="overflow-x:auto">
-      <table id="prcm-table" style="font-size:11px">
-        <thead><tr id="prcm-header-row"></tr></thead>
-        <tbody id="prcm-body"></tbody>
-      </table>
-    </div>
-    <div style="margin-top:14px;display:grid;grid-template-columns:1fr 1fr;gap:16px">
-      <div>
-        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Row summary — shrunk avg calibration error per league (n-weighted, secondary read only):</div>
-        <div id="prcm-league-avg" style="display:flex;flex-direction:column;gap:4px"></div>
-      </div>
-      <div>
-        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Column summary — shrunk avg calibration error per tier (n-weighted, secondary read only):</div>
-        <div id="prcm-tier-avg" style="display:flex;flex-direction:column;gap:4px"></div>
-      </div>
-    </div>
-  </div>
-
   <!-- Paper Trading view (default) -->
   <div id="perf-paper-view">
 
@@ -1372,6 +1293,86 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
   </div>
 
   </div><!-- /perf-combined-view -->
+
+  <!-- Historical Performance Matrix — static reference/diagnostic, independent of the
+       Paper/Real/Combined toggle above (it's backtest data, not live). Deliberately
+       styled and worded differently from the Calibration Tier Performance tracker
+       above so the two are never confused. Placed at the bottom of the tab — reference
+       material, not the primary live-tracking content someone opens this tab to see. -->
+  <div class="card" style="margin-bottom:16px;border-left:3px solid var(--pink)">
+    <div class="card-header">
+      <span class="card-title">Historical Performance Matrix — League × Tier</span>
+      <span class="badge badge-muted" style="letter-spacing:.04em">REFERENCE — NOT A RECOMMENDATION</span>
+    </div>
+    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 6px">
+      Backtest snapshot (raw + shrinkage-corrected), test-only, every validated league
+      crossed with every calibration tier — see <span class="mono">docs/tier-calibration-analysis.md</span>,
+      Addendum 6. This is a diagnostic view for spotting broad patterns across leagues or
+      tiers; it is separate from the "Calibration Tier Performance" tracker above (which
+      compares live bets against history at the point of locking) and does not update with
+      live bets or drive any gating.
+    </p>
+    <div class="table-wrap" style="overflow-x:auto">
+      <table id="ltm-table" style="font-size:11px">
+        <thead><tr id="ltm-header-row"></tr></thead>
+        <tbody id="ltm-body"></tbody>
+      </table>
+    </div>
+    <div style="margin-top:14px;display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Row summary — shrunk avg ROI per league (n-weighted, secondary read only):</div>
+        <div id="ltm-league-avg" style="display:flex;flex-direction:column;gap:4px"></div>
+      </div>
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Column summary — shrunk avg ROI per tier (n-weighted, secondary read only):</div>
+        <div id="ltm-tier-avg" style="display:flex;flex-direction:column;gap:4px"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pre-Retrain Calibration Matrix — a DIFFERENT model snapshot than the ROI matrix
+       above (calibration error, not ROI) and a DIFFERENT population (Addendum 12's
+       held-out test-only read, not Addendum 6's). Amber accent + explicit warning
+       banner deliberately distinct from the pink ROI matrix card and from the live
+       tracker above — this describes the OLD model only and can never be refreshed. -->
+  <div class="card" style="margin-bottom:16px;border-left:3px solid var(--amber)">
+    <div class="card-header">
+      <span class="card-title">Calibration Matrix — Pre-Retrain Model</span>
+      <span class="badge badge-amber" style="letter-spacing:.04em">LAST KNOWN BASELINE — MAY NOT REFLECT CURRENT LIVE MODEL</span>
+    </div>
+    <div style="background:rgba(255,209,102,.08);border:1px solid rgba(255,209,102,.25);border-radius:8px;padding:10px 12px;margin-bottom:10px;font-family:'DM Mono',monospace;font-size:.72rem;color:var(--amber)">
+      ⚠ Describes the <strong>old GBDT model</strong> (trained on 6,652 fixtures, frozen
+      2026-07-25) tested against Addendum 12's held-out 4,054-fixture population. The
+      <strong>current live model was retrained 2026-08-08 on 40,202 fixtures</strong> and
+      has not yet been calibration-tested against any genuinely unseen data — this table
+      cannot be refreshed to reflect it, because the old model's weights no longer exist.
+      Use as a leading proxy for "where the old model was strong," not a live read.
+    </div>
+    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 6px">
+      Calibration error (predicted probability − actual hit rate) per league × tier, raw +
+      shrinkage-corrected — same methodology and population as the Historical Performance
+      Matrix above, but calibration instead of ROI. A well-calibrated cell should, in
+      principle, produce real edge over time even before enough matched-odds volume exists
+      to prove it via ROI. See <span class="mono">docs/tier-calibration-analysis.md</span>,
+      Addendum 13. Reference/diagnostic only — no gating.
+    </p>
+    <div class="table-wrap" style="overflow-x:auto">
+      <table id="prcm-table" style="font-size:11px">
+        <thead><tr id="prcm-header-row"></tr></thead>
+        <tbody id="prcm-body"></tbody>
+      </table>
+    </div>
+    <div style="margin-top:14px;display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Row summary — shrunk avg calibration error per league (n-weighted, secondary read only):</div>
+        <div id="prcm-league-avg" style="display:flex;flex-direction:column;gap:4px"></div>
+      </div>
+      <div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Column summary — shrunk avg calibration error per tier (n-weighted, secondary read only):</div>
+        <div id="prcm-tier-avg" style="display:flex;flex-direction:column;gap:4px"></div>
+      </div>
+    </div>
+  </div>
 
 </div>
 
