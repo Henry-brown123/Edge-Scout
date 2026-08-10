@@ -842,6 +842,46 @@ function _getWeightsForFixture(leagueId, context, settings) {
   return settings.optimisedWeights?.[context] || WEIGHTS_BY_CONTEXT[context];
 }
 
+// Cup/continental competitions whose entrants typically have little-to-no
+// same-competition history (knockout format — a handful of matches per season at
+// most — or, for the Carabao Cup, brand new to this system with zero backfill).
+// These draw on each team's actual domestic-league form instead (see
+// fetchTeamDomesticForm below). Domestic leagues themselves are NOT in this set,
+// so a domestic fixture's own scoring is completely untouched by this mechanism —
+// docs/tier-calibration-analysis.md Addendum 15's "no unintended effect on
+// already-tracked leagues" requirement is satisfied by construction, not by a
+// runtime check.
+const CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND = new Set([48, 2, 3, 848]); // Carabao Cup, Champions League, Europa League, Conference League
+// Domestic leagues eligible as a source of "real current form" for the blend above —
+// every currently-tracked top-flight-or-below domestic league. Deliberately excludes
+// other cup competitions (keeps the blend one-directional: cup fixtures pull in
+// domestic form, not the reverse) and anything outside LEAGUES (an untracked
+// league simply contributes nothing, same limitation the international blend
+// already has for non-backfilled competitions).
+const DOMESTIC_LEAGUE_IDS_FOR_BLEND = new Set([39, 140, 135, 78, 61, 179, 88, 94, 41, 42]);
+
+// Live per-team fetch of a club's actual recent domestic-league matches, used to
+// fill a cup fixture's scoring pool. Deliberately live rather than backfill-sourced
+// (unlike the international blend just below) — a club's current domestic form
+// changes weekly, so a static snapshot would go stale within a month; the
+// international blend's national-team qualifying/Nations League history is
+// comparatively fixed over a season, which is what makes a static file the right
+// tool there. Filtered to DOMESTIC_LEAGUE_IDS_FOR_BLEND so pre-season friendlies
+// and other untracked competitions (weakened lineups, no real stakes, confirmed by
+// spot-checking a real team's fixture list — 6 of the last 10 fixtures returned for
+// a League One club in pre-season were "Friendlies Clubs") don't pollute the signal.
+async function fetchTeamDomesticForm(teamId) {
+  try {
+    const { data } = await apiSports.get('/fixtures', { params: { team: teamId, last: 30 } });
+    return (data?.response || []).filter(f =>
+      DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(f.league?.id) && f.fixture?.status?.short === 'FT'
+    );
+  } catch (e) {
+    console.error(`[DomesticBlend] fetch failed for team ${teamId}: ${e.message}`);
+    return [];
+  }
+}
+
 async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap, settings, totalsMap = {}) {
   const homeId   = fix.teams?.home?.id;
   const awayId   = fix.teams?.away?.id;
@@ -856,12 +896,17 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   // Use optimised weights if available in settings, otherwise fall back to hand-tuned defaults
   const weights  = _getWeightsForFixture(leagueId, context, settings);
   const competitionPhase = classifyCompetitionPhase(fix, leagueId);
+  const needsDomesticBlend = CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND.has(parseInt(leagueId, 10));
 
-  // H2H + injuries in parallel (injuries skipped if pre-fetched at T-60)
-  const [h2hRes, injRes] = await Promise.allSettled([
+  // H2H + injuries + (cup fixtures only) each team's live domestic-form fetch, all
+  // in parallel — same Promise.allSettled batch, no added latency over the
+  // pre-existing two calls when this fixture doesn't need the domestic blend.
+  const [h2hRes, injRes, homeDomesticRes, awayDomesticRes] = await Promise.allSettled([
     apiSports.get('/fixtures/headtohead', { params: { h2h: `${homeId}-${awayId}`, last: 5 } }),
     fix._injuries ? Promise.resolve({ data: { response: fix._injuries } })
       : apiSports.get('/injuries', { params: { fixture: fix.fixture.id } }),
+    needsDomesticBlend ? fetchTeamDomesticForm(homeId) : Promise.resolve([]),
+    needsDomesticBlend ? fetchTeamDomesticForm(awayId) : Promise.resolve([]),
   ]);
   const h2hFixtures = h2hRes.status === 'fulfilled' ? h2hRes.value.data?.response || [] : [];
   const injuries    = injRes.status  === 'fulfilled' ? injRes.value.data?.response  || [] : [];
@@ -876,6 +921,13 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   // continental tournament data that should feed form, xG, defense, and momentum scores.
   const INTERNATIONAL_LEAGUE_IDS = new Set([1, 4, 5, 6, 7, 8, 9, 10, 32, 33, 34, 31, 960]);
   let scoringPool = formFixtures;
+  // Exposed on the return value (domesticBlendFixtures) so runMorningScan can fold
+  // these into its cross-league profile-building pool too — see Part B of the
+  // cross-competition blend task: updateTeamProfiles() previously only got
+  // cross-competition richness as an accidental side effect of which leagues
+  // happened to be batched into the same scan. Reusing this same live fetch (no
+  // extra API calls) makes that deliberate and correct on every run instead.
+  let domesticBlendFixtures = [];
   if (context === 'international') {
     const hist = readJSON('backfill-historical.json');
     if (hist?.fixtures?.length) {
@@ -889,6 +941,21 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
       scoringPool = [...poolMap.values()]
         .sort((a, b) => new Date(b.fixture?.date) - new Date(a.fixture?.date));
     }
+  } else if (needsDomesticBlend) {
+    // Same merge/sort shape as the international blend above, generalized: add
+    // each team's real domestic-league matches to the pool. formScore/xgScore/
+    // defenseScore/momentumScore all self-filter by team id internally (confirmed
+    // by reading scoring.js before writing this), so one shared pool containing
+    // both a Premier League side's and a League Two side's domestic fixtures is
+    // safe — each side's score computation only ever pulls its own matches back
+    // out, never the opponent's tier.
+    const homeDomestic = homeDomesticRes.status === 'fulfilled' ? homeDomesticRes.value : [];
+    const awayDomestic = awayDomesticRes.status === 'fulfilled' ? awayDomesticRes.value : [];
+    domesticBlendFixtures = [...homeDomestic, ...awayDomestic];
+    const poolMap = new Map(domesticBlendFixtures.map(f => [f.fixture.id, f]));
+    for (const f of formFixtures) poolMap.set(f.fixture.id, f);
+    scoringPool = [...poolMap.values()]
+      .sort((a, b) => new Date(b.fixture?.date) - new Date(a.fixture?.date));
   }
 
   // Neutral venue: WC group stage and knockout are played at neutral sites — no home advantage.
@@ -1220,7 +1287,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     homeDataConf, awayDataConf, dataConf,
     homeFormCount, awayFormCount, minFormCount, tierThreshold,
     teamIntel, paperTradeOnly, betMode,
-    goalsCandidates, modelVersion,
+    goalsCandidates, modelVersion, domesticBlendFixtures,
   };
 }
 
@@ -1310,6 +1377,15 @@ async function runMorningScan(leagueIds) {
         try {
           const scored = await scoreOneFixture(fix, enrichedFormFixtures, standings, statsCache, oddsMap, settings, totalsMap);
           const best   = scored.results.reduce((a, b) => a.successScore > b.successScore ? a : b);
+          // Fold cup fixtures' live domestic-form fetch (already made inside
+          // scoreOneFixture, no extra API calls here) into the same pool
+          // updateTeamProfiles() uses below — makes the profile-layer blend
+          // deterministic on every scan instead of an accidental side effect of
+          // which leagues happened to be batched together (see Part B, cross-
+          // competition blend task).
+          if (scored.domesticBlendFixtures?.length) {
+            scored.domesticBlendFixtures.forEach(f => allFormFixtures.set(f.fixture?.id, f));
+          }
           persistOddsSnapshot(fix, scored, meta.sport || 'soccer_epl', 'morning', leagueId, meta.name, settings);
           const calEntry = {
             id:           uuidv4(),
@@ -6143,6 +6219,59 @@ app.get('/api/performance/real', (_req, res) => {
       bets,
     });
   } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// TEMPORARY diagnostic endpoint — remove after cross-competition domestic-blend
+// testing (task: "Extend cross-competition form/input blending... fixing the root
+// cause behind Plymouth vs Exeter's minFormCount: 0"). Calls the real
+// scoreOneFixture() directly against a real fixture (or a real fixture with team
+// ids swapped for a synthetic cross-division pairing) — side-effect-free, writes
+// nothing to bets/watching/calibration, safe to call repeatedly.
+app.get('/api/debug/domestic-blend-test', async (req, res) => {
+  try {
+    const fixtureId = req.query.fixtureId;
+    if (!fixtureId) return res.status(400).json({ error: 'fixtureId required' });
+    const { data: fd } = await apiSports.get('/fixtures', { params: { id: fixtureId } });
+    const fix = fd?.response?.[0];
+    if (!fix) return res.status(404).json({ error: 'fixture not found' });
+
+    // Optional overrides for a synthetic cross-division test — reuses a real
+    // fixture's shape/league/date/venue but swaps in different real team ids, so
+    // no fabricated "official" fixture is ever created, just a different pair of
+    // real teams run through the real scoring function.
+    if (req.query.homeTeamId) fix.teams.home.id = parseInt(req.query.homeTeamId, 10);
+    if (req.query.homeTeamName) fix.teams.home.name = req.query.homeTeamName;
+    if (req.query.awayTeamId) fix.teams.away.id = parseInt(req.query.awayTeamId, 10);
+    if (req.query.awayTeamName) fix.teams.away.name = req.query.awayTeamName;
+    if (req.query.leagueId) fix.league.id = parseInt(req.query.leagueId, 10);
+
+    const settings = getSettings();
+    const leagueId  = fix.league.id;
+    const meta      = LEAGUES[String(leagueId)] || { season: 2024 };
+
+    const { data: formData } = await apiSports.get('/fixtures', { params: { league: leagueId, season: meta.season, last: 60 } });
+    const formFixtures = (formData?.response || []).filter(f => f.fixture?.status?.short === 'FT');
+    const { data: sd } = await apiSports.get('/standings', { params: { league: leagueId, season: meta.season } });
+    const standings = sd?.response?.[0]?.league?.standings || [];
+    const { oddsMap, totalsMap } = await fetchOddsForLeague(meta.sport || 'soccer_epl');
+
+    const scored = await scoreOneFixture(fix, formFixtures, standings, {}, oddsMap, settings, totalsMap);
+    const best   = scored.results.reduce((a, b) => a.successScore > b.successScore ? a : b);
+
+    res.json({
+      fixture: `${scored.homeName} vs ${scored.awayName}`,
+      leagueId, context: scored.context,
+      successScore: best.successScore,
+      minFormCount: scored.minFormCount,
+      homeFormCount: scored.homeFormCount,
+      awayFormCount: scored.awayFormCount,
+      homeDataConf: scored.homeDataConf,
+      awayDataConf: scored.awayDataConf,
+      domesticBlendFixturesCount: scored.domesticBlendFixtures?.length ?? 0,
+      homeF: scored.homeF,
+      awayF: scored.awayF,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 const _serverStartedAt = new Date().toISOString();
