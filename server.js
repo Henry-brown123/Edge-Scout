@@ -6130,6 +6130,28 @@ app.get('/api/debug/league-backfill', (req, res) => {
   res.json(fixtures);
 });
 
+// TEMPORARY diagnostic endpoint — remove after Carabao Cup odds-coverage check
+// (task: "Add Carabao Cup to LEAGUE_CONFIG"). Read-only historical odds snapshot,
+// same /odds-history pattern runClosingOddsBackfill already uses in production.
+app.get('/api/debug/odds-history-check', async (req, res) => {
+  try {
+    const sport = req.query.sport;
+    const date  = req.query.date;
+    const { data, headers } = await oddsApi.get(`/sports/${sport}/odds-history`, {
+      params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal', date },
+    });
+    const events = data?.data || data || [];
+    const summary = events.map(ev => ({
+      commence_time: ev.commence_time,
+      home: ev.home_team, away: ev.away_team,
+      n_books: (ev.bookmakers || []).length,
+      books: (ev.bookmakers || []).map(b => b.title),
+    }));
+    res.set('X-Requests-Remaining', headers['x-requests-remaining'] || '');
+    res.json({ count: summary.length, summary });
+  } catch (e) { res.status(e.response?.status || 500).json({ error: e.message, detail: e.response?.data }); }
+});
+
 const _serverStartedAt = new Date().toISOString();
 
 app.get('/api/server-status', async (_req, res) => {
