@@ -49,3 +49,22 @@ MIN_LIVE_PAPER_TRADES before real money. A good backtest earns the right to
 
 ## 9. Every tuning commit documents its train/test boundary.
 Commit message states the split date/method used, so it's auditable later.
+
+## 10. A newly added league or competition's historical backfill is a future clean-test opportunity — don't spend it early.
+The moment a new league's fixture history gets ingested, it's still unseen
+by the live model (same status the 2010-2019 expansion fixtures had before
+the big retrain). Preserve that: no calibration fit, base-rate tuning, or
+ROI read against it until a deliberate, documented baseline pass is run —
+the same shape as the retrain brief's Phase 1 (a genuine held-out read
+before anything touches training). Folding it into calibration piecemeal,
+or reading ROI off it "just to see," burns the one chance to test the
+current model against real unseen data for that competition. Concretely,
+for any newly added `LEAGUE_CONFIG` entry: leave `avgHomeWinRate`/
+`avgDrawRate`/`avgAwayWinRate`/`avgGoalsPerGame` out entirely rather than
+filling them with a plausible-sounding guess — those four feed a real
+30%-live-blend in `applyLeagueBiasCorrection()` and a goals-market
+baseline, not inert metadata, so an invented number is fabricated
+calibration exactly as much as fitting one on contaminated data would be.
+`marketEfficiency`/`drawBaseWeight`/`homeAdvBaseWeight` default to `1.0`
+(a genuine no-op) until real evidence exists. First applied 2026-08-10 for
+the Carabao Cup, League One, and League Two additions.

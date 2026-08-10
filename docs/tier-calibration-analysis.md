@@ -2617,3 +2617,81 @@ future shrinkage need (e.g. a later per-tier ROI cycle, or shrinking home/away
 base-rate estimates directly). The Platt-scaling fit from Addendum 2 was
 **not** productionised anywhere — it exists only as the parameters quoted in
 that section, not as code in any live path.
+
+## Addendum 15 — Carabao Cup, League One, League Two: added paper-only, held aside as an untouched future test population
+
+Three new competitions were added to `LEAGUE_CONFIG`/`LEAGUES` this cycle —
+Carabao Cup (2026-08-10), League One and League Two (2026-08-10, same day).
+This addendum records the coverage findings and, more importantly, the
+status of the data now flowing in: **none of it has been calibrated,
+tuned, or read for ROI. It is deliberately being left alone.**
+
+### Coverage findings (real calls, not assumptions — same method as every prior check)
+
+| Competition | API-Sports ID | Historical depth | Odds API sport key | Pinnacle coverage | Matchbook | Marathon Bet |
+|---|---|---|---|---|---|---|
+| Carabao Cup (League Cup) | 48 | 2011-2026 (16 seasons), stats from 2015, ~93 fixtures/season | `soccer_england_efl_cup` | ~100% (66 fixtures sampled across Preliminary Round + Round of 128) | ~100% | 97% (30/31) |
+| League One | 41 | 2011-2026 (16 seasons), stats from 2024, ~557 fixtures/season | `soccer_england_league1` | 100% (opening day + mid-season-2025 samples) | high | high |
+| League Two | 42 | 2011-2026 (16 seasons), stats from 2024, ~557 fixtures/season | `soccer_england_league2` | 100% (opening day + mid-season-2025 samples) | high | high |
+
+No early-round/lower-tier sparsity found for any of the three, unlike the
+Conference League qualifying-round pattern documented earlier in this doc —
+English domestic football markets are consistently deep even at the
+smallest-club end.
+
+### Why nothing here has been calibrated
+
+`LEAGUE_CONFIG[48]`, `[41]`, `[42]` deliberately carry no
+`avgHomeWinRate`/`avgDrawRate`/`avgAwayWinRate`/`avgGoalsPerGame` —
+`applyLeagueBiasCorrection()` was given a guard so it skips its 30%
+live-blend entirely when those are absent, rather than blending toward an
+invented number. `marketEfficiency`/`drawBaseWeight`/`homeAdvBaseWeight`
+are set to `1.0` — a genuine no-op, not a guess. All three leagues are
+`paper_only` in `leagueModes` (hard block, confirmed via a live 403 on
+`POST /api/league-modes/{id}` with `mode: 'real'`), and are absent from
+`TIER_PERF_VALIDATED_LEAGUES` — no train/test split exists, so none of the
+tracker/grid work elsewhere in this doc treats them as validated.
+
+### What this means going forward
+
+As fixtures accumulate for these three competitions, that data is sitting
+untouched — the same status the pre-2010 backfill population had before
+the 2010-2019 expansion, and the same status the full population had before
+the Final Pre-Retrain Baseline (Addendum 12). Per house rule 10
+(`docs/calibration-rules.md`), it should stay untouched until a deliberate,
+documented baseline read is run against it — the same shape as Addendum
+12's Phase 1 — not folded into calibration piecemeal or peeked at for ROI
+"just to see." That read is future work, not part of this addendum.
+
+### Cross-competition input siloing (Part C of the task this addendum accompanies)
+
+Two different layers, two different answers:
+
+- **Primary scoring factors** — `formScore`/`xgScore`/`defenseScore`/
+  `momentumScore` inside `scoreOneFixture()` are computed against
+  `scoringPool` (= `formFixtures`, the specific fixture's own
+  `league=leagueId&season=...` fetch plus that same league's slice of the
+  historical backfill). **Genuinely siloed per competition** — a club
+  playing across two tracked competitions (e.g. a League One side now also
+  in the Carabao Cup) gets its League One score computed from League One
+  matches only, and vice versa. Notably, `context === 'international'`
+  already has a bespoke fix for exactly this problem (blends in the full
+  international historical pool — qualifying, Nations League, etc. —
+  because World Cup fixtures have no pool of their own), but that blend
+  is `international`-only; it was never extended to `club_domestic`/
+  `club_european`.
+- **Team profile modifiers** (WOWY/PIR/momentum/transfer adjustments via
+  `applyTeamProfileModifiers`, built by `updateTeamProfiles()`) get
+  **partial, accidental** cross-competition blending: `runMorningScan`
+  accumulates fixtures from every league in that scan's batch into one
+  `allFormFixtures` pool before rebuilding profiles once at the end, so a
+  team appearing in two of *that day's scanned leagues* has both folded
+  into its profile. This isn't a deliberate design — it's a side effect of
+  batching, it's all-or-nothing per scan (a league scanned alone rebuilds
+  profiles from only that league, potentially discarding cross-competition
+  richness a fuller batch previously gave them), and it doesn't
+  incrementally merge — each call overwrites.
+
+Net: real input-level siloing exists, it's not uniform across the
+pipeline, and the international context already shows the shape of a fix.
+Scoped as a proposal (not implemented) in this task's report.
