@@ -404,6 +404,64 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     <div class="wc-badge" id="wc-bankroll-badge">£1,000.00</div>
   </div>
 
+  <!-- Bankroll & Kelly panel — paper and real, side by side, each independently controlled -->
+  <div class="card" id="bankroll-panel" style="margin-bottom:16px">
+    <div class="card-header" style="cursor:pointer" onclick="toggleBankrollPanel()">
+      <span class="card-title">Bankroll &amp; Kelly Sizing</span>
+      <div style="display:flex;align-items:center;gap:14px">
+        <span style="font-size:12px;color:var(--muted)">
+          <span class="badge badge-paper" style="margin-right:4px">PAPER</span><strong id="bp-paper-summary" style="color:var(--cyan)">£0.00</strong>
+          <span style="margin:0 6px;color:var(--border)">·</span>
+          <span class="badge badge-real" style="margin-right:4px">REAL</span><strong id="bp-real-summary" style="color:var(--amber)">£0.00</strong>
+        </span>
+        <span id="bp-toggle-icon" style="font-size:11px;color:var(--muted)">▸ Expand</span>
+      </div>
+    </div>
+    <div id="bp-body" style="display:none;padding-top:6px">
+      <div class="grid-2" style="gap:16px">
+        <!-- Paper column -->
+        <div style="border:1px solid var(--border);border-radius:10px;padding:14px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+            <span class="badge badge-paper">PAPER</span>
+            <span style="font-size:11px;color:var(--muted)">started at £<span id="bp-paper-initial">1,000.00</span></span>
+          </div>
+          <div style="font-size:24px;font-weight:700;color:var(--cyan)" id="bp-paper-balance">£0.00</div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:12px" id="bp-paper-pnl">+£0.00</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+            <label style="font-size:11px;color:var(--muted)">Kelly fraction</label>
+            <input type="number" id="bp-paper-kelly" value="0.5" step="0.05" min="0.05" max="1" style="width:70px" onchange="updateKellyFraction('paper', this.value)">
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            <button class="btn btn-cyan btn-sm" onclick="confirmDeposit('paper')">Deposit</button>
+            <button class="btn btn-ghost btn-sm" onclick="confirmWithdraw('paper')" style="border-color:var(--green);color:var(--green)">Withdraw</button>
+            <button class="btn btn-ghost btn-sm" onclick="confirmBankrollReset('paper')" style="border-color:var(--cyan);color:var(--cyan)">Reset Bankroll</button>
+            <button class="btn btn-ghost btn-sm" onclick="confirmFullReset('paper')" style="border-color:var(--red);color:var(--red)">Reset + Bets</button>
+          </div>
+        </div>
+        <!-- Real column -->
+        <div style="border:1px solid var(--border);border-radius:10px;padding:14px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+            <span class="badge badge-real">REAL</span>
+            <span style="font-size:11px;color:var(--muted)">started at £<span id="bp-real-initial">1,000.00</span></span>
+          </div>
+          <div style="font-size:24px;font-weight:700;color:var(--amber)" id="bp-real-balance">£0.00</div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:12px" id="bp-real-pnl">+£0.00</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+            <label style="font-size:11px;color:var(--muted)">Kelly fraction</label>
+            <input type="number" id="bp-real-kelly" value="0.25" step="0.05" min="0.05" max="1" style="width:70px" onchange="updateKellyFraction('real', this.value)">
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            <button class="btn btn-cyan btn-sm" onclick="confirmDeposit('real')">Deposit</button>
+            <button class="btn btn-ghost btn-sm" onclick="confirmWithdraw('real')" style="border-color:var(--green);color:var(--green)">Withdraw</button>
+            <button class="btn btn-ghost btn-sm" onclick="confirmBankrollReset('real')" style="border-color:var(--cyan);color:var(--cyan)">Reset Bankroll</button>
+            <button class="btn btn-ghost btn-sm" onclick="confirmFullReset('real')" style="border-color:var(--red);color:var(--red)">Reset + Bets</button>
+          </div>
+        </div>
+      </div>
+      <div style="font-size:10px;color:var(--muted);margin-top:10px">Each account is fully independent — balances, resets, and Kelly fractions never cross between paper and real. "Reset + Bets" only clears that account's own bets, never the other's.</div>
+    </div>
+  </div>
+
   <!-- Phase 2 readiness banner (hidden until 50+ resolved calibration entries) -->
   <div id="phase2-banner" style="display:none;align-items:center;gap:12px;background:rgba(76,201,240,.1);border:1px solid rgba(76,201,240,.3);border-radius:8px;padding:12px 16px;margin-bottom:16px">
     <span style="font-size:1.4rem">🚀</span>
@@ -1773,28 +1831,10 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
             <input type="number" id="h2h-window-input" value="5" min="1" max="10" style="width:70px">
           </div>
           <div class="field">
-            <label>Kelly Fraction</label>
-            <select id="kelly-frac-input">
-              <option value="0.25">Quarter Kelly</option>
-              <option value="0.33">Third Kelly</option>
-              <option value="0.5" selected>Half Kelly</option>
-              <option value="1">Full Kelly</option>
-            </select>
-          </div>
-          <div class="field">
             <label>Success Score threshold</label>
             <input type="number" id="threshold-settings" value="40" min="20" max="90" style="width:70px">
           </div>
-          <div class="field">
-            <label>Manual Kelly fraction <span style="color:var(--muted);font-weight:400">(Scout tab lock preview)</span></label>
-            <input type="number" id="manual-kelly-frac-input" value="0.25" step="0.05" min="0.05" max="1" style="width:80px">
-            <div style="font-size:10px;color:var(--muted);margin-top:3px">Used for the pre-lock Kelly preview when manually locking a bet, and as the real-bet Kelly fraction whenever the calibration-driven fraction isn't available. Doesn't change scoring, EV, or automated Kelly logic.</div>
-          </div>
-          <div class="field">
-            <label>Real bankroll default <span style="color:var(--muted);font-weight:400">(£, fallback)</span></label>
-            <input type="number" id="real-bankroll-default-input" value="1000" min="100" step="50" style="width:90px">
-            <div style="font-size:10px;color:var(--muted);margin-top:3px">Used for real-money Kelly sizing only when no active bookmaker has a balance set — otherwise the sum of active bookmaker balances is used.</div>
-          </div>
+          <div style="font-size:11px;color:var(--muted);padding:4px 0">Kelly fractions and bankroll controls (paper &amp; real) have moved to the bankroll panel at the top of the Scout tab.</div>
           <div class="field">
             <label>Calibration factor <span style="color:var(--muted);font-weight:400">(edge &amp; score only)</span></label>
             <input type="number" id="cal-factor-input" value="1.08" step="0.01" min="1.00" max="1.30" style="width:80px">
@@ -1867,18 +1907,6 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
         </div>
       </div>
 
-      <div class="card">
-        <div class="card-header"><span class="card-title">Bankroll Management</span></div>
-        <div style="font-size:12px;color:var(--muted);margin-bottom:14px">
-          Withdraw profits, deposit funds, or reset for a new validation phase. Withdrawals and deposits are logged separately from betting P&L so ROI stays clean.
-        </div>
-        <div style="display:flex;flex-wrap:wrap;gap:8px">
-          <button class="btn btn-cyan btn-sm" onclick="confirmDeposit()">Deposit Funds</button>
-          <button class="btn btn-ghost btn-sm" onclick="confirmWithdraw()" style="border-color:var(--green);color:var(--green)">Withdraw Profits</button>
-          <button class="btn btn-ghost btn-sm" onclick="confirmBankrollReset()" style="border-color:var(--cyan);color:var(--cyan)">Reset Bankroll</button>
-          <button class="btn btn-ghost btn-sm" onclick="confirmReset()" style="border-color:var(--red);color:var(--red)">Reset Bankroll &amp; Bets</button>
-        </div>
-      </div>
       <div class="card">
         <div class="card-header"><span class="card-title">API Status</span></div>
         <div class="grid-2">
@@ -2107,6 +2135,7 @@ async function loadState() {
     STATE.tierPerf = tierPerf; // used by Scout-page tier context lines — see tierContextLine()
     renderScout();
     updateBankrollBadge();
+    renderBankrollPanel();
     syncRerouteInterval();
     // Keep bankroll input in Morning Scan in sync with actual bankroll
     const brInput = document.getElementById('bankroll-input');
@@ -2194,6 +2223,17 @@ function pickTypeBadge(pickType) {
   if (!pickType) return '';
   const label = { home: 'HOME', away: 'AWAY', draw: 'DRAW' }[pickType] || pickType.toUpperCase();
   return `<span class="badge badge-muted" style="letter-spacing:.03em">${label}</span>`;
+}
+
+// bet.kellyFraction is now a freely user-adjustable per-bankroll setting (Scout tab
+// panel), not just one of half/third/quarter — label the common cases, fall back to
+// the raw fraction for anything else.
+function kellyFractionLabel(f) {
+  if (f === 0.5)  return 'Half';
+  if (f === 0.33) return 'Third';
+  if (f === 0.25) return 'Quarter';
+  if (f === 1)    return 'Full';
+  return f != null ? `${f}×` : 'Quarter';
 }
 
 // Compact historical-vs-live reference for the Scout page, shown at the moment a bet
@@ -2399,7 +2439,7 @@ function recommendedCard(b) {
       : `<span class="badge badge-paper">PAPER</span>`;
   const stakeColor  = isReal ? 'var(--amber)' : 'var(--cyan)';
   const kellyLabel  = isReal
-    ? `${b.kellyFraction === 0.5 ? 'Half' : b.kellyFraction === 0.33 ? 'Third' : 'Quarter'}-Kelly · real`
+    ? `${kellyFractionLabel(b.kellyFraction)}-Kelly · real`
     : 'Kelly · paper';
   return `
     <div class="fixture-card recommended ${modeClass}" style="flex-direction:column;align-items:stretch;padding-bottom:12px">
@@ -2665,11 +2705,9 @@ async function renderPerfMode(mode) {
   const apiMode = mode === 'combined' ? 'all' : mode;
   const { bankroll, bets } = STATE;
 
-  // Real bankroll (sum of funded bookmaker accounts) — only needed outside paper mode.
-  let realBankroll = 0;
-  if (mode !== 'paper') {
-    try { realBankroll = (await apiFetch('/api/performance/real')).realBankroll || 0; } catch (e) {}
-  }
+  // Real bankroll — its own transactional ledger (Scout-tab panel), already loaded via
+  // /api/state, so no extra fetch needed here.
+  const realBankroll = STATE.realBankroll?.current || 0;
   const bankrollCurrent  = mode === 'paper' ? bankroll.current : mode === 'real' ? realBankroll : bankroll.current + realBankroll;
   const bankrollBaseline = mode === 'paper' ? (bankroll.initial || 0) : bankrollCurrent;
 
@@ -3406,7 +3444,7 @@ async function renderEvCal() {
 
   // ── Settings notification ──────────────────────────────────────────────────
   if (!_evCalDismissed && d.summary?.kellyRecommendation && d.summary.kellyRecommendation !== 'flag_for_review') {
-    const currentEl = document.getElementById('kelly-frac-input');
+    const currentEl = document.getElementById('bp-paper-kelly');
     const currentVal = currentEl?.value;
     const recommended = KELLY_FRACTION_VALUES[d.summary.kellyRecommendation];
     if (recommended && currentVal && recommended !== currentVal) {
@@ -3435,9 +3473,9 @@ function applyEvKellyRecommendation() {
   const KELLY_FRACTION_VALUES = { half_kelly: '0.5', third_kelly: '0.33', quarter_kelly: '0.25' };
   const val = KELLY_FRACTION_VALUES[_evCalData.summary.kellyRecommendation];
   if (!val) return;
-  const el = document.getElementById('kelly-frac-input');
+  updateKellyFraction('paper', val);
+  const el = document.getElementById('bp-paper-kelly');
   if (el) el.value = val;
-  saveSettings();
   dismissEvKellyNotify();
 }
 
@@ -4128,10 +4166,7 @@ function renderSettings() {
   if (s.decay       != null) document.getElementById('decay-input').value           = s.decay;
   if (s.formWindow  != null) document.getElementById('form-window-input').value     = s.formWindow;
   if (s.h2hWindow   != null) document.getElementById('h2h-window-input').value      = s.h2hWindow;
-  if (s.kellyFraction!=null) document.getElementById('kelly-frac-input').value      = s.kellyFraction;
   if (s.successThreshold!=null) document.getElementById('threshold-settings').value = s.successThreshold;
-  if (s.manualKellyFraction!=null) document.getElementById('manual-kelly-frac-input').value = s.manualKellyFraction;
-  if (s.realBankrollDefault!=null) document.getElementById('real-bankroll-default-input').value = s.realBankrollDefault;
   if (s.calibrationFactor!=null) document.getElementById('cal-factor-input').value  = s.calibrationFactor;
   const wowyChk = document.getElementById('wowy-active-input');
   const wowyWarn = document.getElementById('wowy-warning');
@@ -4191,10 +4226,7 @@ async function saveSettings() {
     decay:            parseFloat(document.getElementById('decay-input').value),
     formWindow:       parseInt(document.getElementById('form-window-input').value),
     h2hWindow:        parseInt(document.getElementById('h2h-window-input').value),
-    kellyFraction:    parseFloat(document.getElementById('kelly-frac-input').value),
     successThreshold:  parseInt(document.getElementById('threshold-settings').value),
-    manualKellyFraction: parseFloat(document.getElementById('manual-kelly-frac-input').value),
-    realBankrollDefault: parseFloat(document.getElementById('real-bankroll-default-input').value),
     calibrationFactor: parseFloat(document.getElementById('cal-factor-input').value),
     wowyActive:           document.getElementById('wowy-active-input')?.checked ?? false,
     preferExchange:       document.getElementById('prefer-exchange-input')?.checked ?? true,
@@ -4277,60 +4309,107 @@ async function loadDataCoverage() {
   }
 }
 
-async function confirmReset() {
-  if (!confirm('This will wipe ALL bets and reset the bankroll. Use at end of a validation phase. Continue?')) return;
-  const amountStr = prompt('Starting bankroll amount (£):', '1000');
+// ─── BANKROLL PANEL (Scout tab — paper & real, fully independent) ───────────────
+// account: 'paper' | 'real' — picks the API base and the account label shown in prompts.
+function _brBase(account)  { return account === 'real' ? '/api/real-bankroll' : '/api/bankroll'; }
+function _brLabel(account) { return account === 'real' ? 'REAL MONEY' : 'paper'; }
+
+function toggleBankrollPanel() {
+  const body = document.getElementById('bp-body');
+  const icon = document.getElementById('bp-toggle-icon');
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : 'block';
+  icon.textContent   = open ? '▸ Expand' : '▾ Collapse';
+}
+
+function renderBankrollPanel() {
+  const s = STATE.settings || {};
+  const renderSide = (account, br) => {
+    br = br || { initial: 1000, current: 1000 };
+    const pnl = br.current - br.initial;
+    const prefix = account === 'paper' ? 'bp-paper' : 'bp-real';
+    document.getElementById(`${prefix}-summary`).textContent = `£${br.current.toFixed(2)}`;
+    document.getElementById(`${prefix}-balance`).textContent = `£${br.current.toFixed(2)}`;
+    document.getElementById(`${prefix}-initial`).textContent = br.initial.toFixed(2);
+    const pnlEl = document.getElementById(`${prefix}-pnl`);
+    pnlEl.textContent  = `${pnl >= 0 ? '+' : ''}£${pnl.toFixed(2)}`;
+    pnlEl.style.color  = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+    const kellyEl = document.getElementById(`${prefix}-kelly`);
+    if (kellyEl && document.activeElement !== kellyEl) {
+      kellyEl.value = account === 'paper' ? (s.paperKellyFraction ?? 0.5) : (s.realKellyFraction ?? 0.25);
+    }
+  };
+  renderSide('paper', STATE.bankroll);
+  renderSide('real',  STATE.realBankroll);
+}
+
+async function updateKellyFraction(account, value) {
+  const frac = parseFloat(value);
+  if (!frac || frac <= 0 || frac > 1) { toast('Kelly fraction must be between 0 and 1', 'error'); return; }
+  const field = account === 'real' ? 'realKellyFraction' : 'paperKellyFraction';
+  await apiFetch('/api/settings', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ [field]: frac }) });
+  STATE.settings[field] = frac;
+  toast(`${account === 'real' ? 'Real' : 'Paper'} Kelly fraction set to ${frac}`, 'success');
+}
+
+async function confirmFullReset(account = 'paper') {
+  const label = _brLabel(account);
+  if (!confirm(`This will wipe ${label.toUpperCase()} bets and reset the ${label} bankroll. The other account is untouched. Continue?`)) return;
+  const amountStr = prompt(`Starting ${label} bankroll amount (£):`, '1000');
   if (amountStr === null) return;
   const amount = parseFloat(amountStr) || 1000;
   const notes  = prompt('Notes (optional):', 'New validation phase') || '';
-  await apiFetch('/api/bankroll/reset', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ amount, notes }) });
+  await apiFetch(`${_brBase(account)}/reset`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ amount, notes }) });
   await loadState();
-  toast(`Bankroll & bets reset to £${amount.toFixed(2)}`, 'success');
+  toast(`${label} bankroll & bets reset to £${amount.toFixed(2)}`, 'success');
 }
 
-async function confirmBankrollReset() {
-  if (!confirm('This resets the bankroll only — bets are kept. Continue?')) return;
-  const amountStr = prompt('New starting bankroll amount (£):', '1000');
+async function confirmBankrollReset(account = 'paper') {
+  const label = _brLabel(account);
+  if (!confirm(`This resets the ${label} bankroll only — ${label} bets are kept. Continue?`)) return;
+  const amountStr = prompt(`New starting ${label} bankroll amount (£):`, '1000');
   if (amountStr === null) return;
   const amount = parseFloat(amountStr) || 1000;
   const notes  = prompt('Notes (optional):', 'Bankroll reset') || '';
-  await apiFetch('/api/bankroll/reset-only', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ amount, notes }) });
+  await apiFetch(`${_brBase(account)}/reset-only`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ amount, notes }) });
   await loadState();
-  toast(`Bankroll reset to £${amount.toFixed(2)} (bets kept)`, 'success');
+  toast(`${label} bankroll reset to £${amount.toFixed(2)} (bets kept)`, 'success');
 }
 
-async function confirmDeposit() {
-  const amountStr = prompt('Deposit amount (£):');
+async function confirmDeposit(account = 'paper') {
+  const label = _brLabel(account);
+  const amountStr = prompt(`Deposit amount into ${label} bankroll (£):`);
   if (!amountStr) return;
   const amount = parseFloat(amountStr);
   if (!amount || amount <= 0) { toast('Invalid amount', 'error'); return; }
   const notes = prompt('Notes (optional):', '') || '';
-  await apiFetch('/api/bankroll/deposit', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ amount, notes }) });
+  await apiFetch(`${_brBase(account)}/deposit`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ amount, notes }) });
   await loadState();
-  toast(`Deposited £${amount.toFixed(2)}`, 'success');
+  toast(`Deposited £${amount.toFixed(2)} into ${label} bankroll`, 'success');
 }
 
-async function confirmWithdraw() {
-  const amountStr = prompt('Withdrawal amount (£):');
+async function confirmWithdraw(account = 'paper') {
+  const label = _brLabel(account);
+  const amountStr = prompt(`Withdrawal amount from ${label} bankroll (£):`);
   if (!amountStr) return;
   const amount = parseFloat(amountStr);
   if (!amount || amount <= 0) { toast('Invalid amount', 'error'); return; }
   const notes = prompt('Notes (optional):', '') || '';
   try {
-    await apiFetch('/api/bankroll/withdraw', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ amount, notes }) });
+    await apiFetch(`${_brBase(account)}/withdraw`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ amount, notes }) });
     await loadState();
-    toast(`Withdrew £${amount.toFixed(2)}`, 'success');
+    toast(`Withdrew £${amount.toFixed(2)} from ${label} bankroll`, 'success');
   } catch(e) { toast(e.message, 'error'); }
 }
 
 function renderTransactions() { return renderTransactionsInto(''); }
 
-// Bankroll Transactions reflects the one paper-bankroll ledger there is — Real and
-// Combined show the exact same figures as Paper, per design (no separate real-money
-// transaction log exists; any bankroll readjustment is treated as withdrawn/deposited).
+// Paper/Real/Combined each show their own ledger now — real-money deposits, withdrawals
+// and resets are logged separately from paper's (see /api/transactions?account=).
 async function renderTransactionsInto(prefix) {
+  const account = prefix === 'real-' ? 'real' : prefix === 'combined-' ? 'all' : 'paper';
   let data;
-  try { data = await apiFetch('/api/transactions'); } catch(e) { return; }
+  try { data = await apiFetch(`/api/transactions?account=${account}`); } catch(e) { return; }
 
   const tbody  = document.getElementById(`${prefix}txn-body`);
   const emptyEl = document.getElementById(`${prefix}txn-empty`);
@@ -4373,10 +4452,15 @@ async function renderTransactionsInto(prefix) {
     const d = new Date(txn.date);
     const dateStr = `${d.toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'numeric'})} ${d.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'})}`;
     const amtColor = txn.type === 'withdrawal' ? 'c-green' : txn.type === 'deposit' ? 'c-cyan' : 'c-muted';
+    // Combined view interleaves two independent ledgers — tag each row so a paper
+    // reset next to a real deposit doesn't read as one continuous account.
+    const acctTag = account === 'all'
+      ? `<span class="badge ${txn.account === 'real' ? 'badge-real' : 'badge-paper'}" style="margin-left:4px;font-size:9px">${txn.account === 'real' ? 'REAL' : 'PAPER'}</span>`
+      : '';
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td class="mono" style="white-space:nowrap">${dateStr}</td>
-      <td style="text-align:center">${typeBadge(txn.type)}</td>
+      <td style="text-align:center">${typeBadge(txn.type)}${acctTag}</td>
       <td style="text-align:right" class="mono ${amtColor}">£${txn.amount.toFixed(2)}</td>
       <td style="text-align:right" class="mono">£${(txn.bankrollBefore||0).toFixed(2)}</td>
       <td style="text-align:right" class="mono">£${(txn.bankrollAfter||0).toFixed(2)}</td>
@@ -5145,11 +5229,9 @@ function _calcKelly(modelProb, odds, bankroll, fraction) {
 }
 
 function _renderBmTable(bet, books) {
-  // Bug fixed: this always used the PAPER bankroll (STATE.bankroll) for Kelly sizing
-  // regardless of bet.mode, so every real-money Kelly stake was priced off the wrong
-  // pot. Real bets now use STATE.realBankroll (bookmaker balances, or the
-  // configurable settings.realBankrollDefault fallback if none are set yet).
-  const bankroll  = bet.mode === 'real' ? (STATE.realBankroll || 1000) : (STATE.bankroll?.current || 1000);
+  // Real bets use STATE.realBankroll (the real-money bankroll's own transactional
+  // ledger — same {initial,current} shape as STATE.bankroll, fully independent of it).
+  const bankroll  = bet.mode === 'real' ? (STATE.realBankroll?.current || 1000) : (STATE.bankroll?.current || 1000);
   const modelProb = bet.modelProb || 0;
   const fraction  = bet.kellyFraction || 0.5;
   const recId     = bet.routingRecommendation?.recommended?.id;
@@ -5318,7 +5400,7 @@ function selectBestExchange() {
   const rawOdds = bet ? _bmOddsForOutcome(bm, bet) : null;
   const comm    = bm.commission || 0.02;
   const netOdds = rawOdds ? 1 + (rawOdds - 1) * (1 - comm) : null;
-  const bankroll = bet?.mode === 'real' ? (STATE.realBankroll || 1000) : (STATE.bankroll?.current || 1000);
+  const bankroll = bet?.mode === 'real' ? (STATE.realBankroll?.current || 1000) : (STATE.bankroll?.current || 1000);
   const kellRaw  = bet ? _calcKelly(bet.modelProb, rawOdds, bankroll, bet.kellyFraction || 0.5) : null;
   const kellRnd  = kellRaw != null ? Math.max(0.5, Math.round(kellRaw * 2) / 2) : (bet?.displayStake ?? bet?.suggestedStake);
   selectBmRow(bm.id, bm.name, netOdds || rawOdds || bet?.bookOdds, kellRnd);
