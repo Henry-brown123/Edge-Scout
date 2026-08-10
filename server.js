@@ -6325,6 +6325,42 @@ app.get('/api/debug/historical-pool-check', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
 });
 
+// TEMPORARY admin endpoint — direct Phase 5 (team-profile rebuild) + meta refresh,
+// bypassing runHistoricalBackfill's Phase 1 fetch loop entirely. Scoring is already
+// confirmed complete (scoredCount === totalFixtures in backfill-historical.json) —
+// repeated full-pipeline runs kept crashing at unpredictable points (Phase 1's tail,
+// Phase 2's checkpoint, Phase 4/5 boundary), which after three rounds of legitimate
+// event-loop-yield fixes to the actual expensive code paths stopped looking like a
+// single fixable blocking bottleneck and started looking like platform-level
+// instability from rapid repeated restarts. Since Phase 1 (fetch) and Phase 2/3
+// (score/optimise) are already durably persisted on disk and this run doesn't touch
+// the API at all, this is a safe, minimal way to finish the one genuinely
+// outstanding piece — profiles — without re-running the parts already done.
+app.post('/api/debug/finish-profiles-and-meta', async (req, res) => {
+  try {
+    const existing = readJSON('backfill-historical.json');
+    if (!existing) return res.status(404).json({ error: 'backfill-historical.json not found' });
+    const totalFixtures = existing.fixtures.length;
+    const scoredCount   = existing.scoredRecords.length;
+    if (scoredCount !== totalFixtures) {
+      return res.status(409).json({ error: 'scoring not yet complete', totalFixtures, scoredCount });
+    }
+    const profileCount = await updateTeamProfiles(existing.fixtures);
+    const summary = {
+      totalFixtures,
+      scoredCount,
+      newFixtures:      0,
+      profilesBuilt:    profileCount,
+      optimisedWeights: existing.optimisedWeights,
+      accuracy:         existing.accuracy,
+      completedAt:      new Date().toISOString(),
+      note:             'meta refreshed directly, skipping Phase 1 refetch — scoring was already complete',
+    };
+    writeJSON('backfill-historical-meta.json', summary);
+    res.json(summary);
+  } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
+});
+
 const _serverStartedAt = new Date().toISOString();
 
 app.get('/api/server-status', async (_req, res) => {
