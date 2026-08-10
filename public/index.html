@@ -285,6 +285,17 @@ tr:last-child td { border-bottom: none; }
 tr:hover td { background: rgba(76,201,240,.04); }
 td.mono { font-family: var(--font-data); }
 
+/* ── Tier x League performance grid (Calibration Tier Performance) ── */
+.tpg-table { border-collapse: collapse; font-size: 11px; }
+.tpg-table th, .tpg-table td { border: 1px solid var(--border); padding: 0; vertical-align: top; white-space: nowrap; }
+.tpg-table th { padding: 6px 8px; background: var(--surface2); font-size: 9px; text-transform: none; }
+.tpg-tier-cell { padding: 8px 10px !important; background: var(--surface2); font-weight: 600; white-space: nowrap; vertical-align: middle !important; }
+.tpg-cell { min-width: 96px; }
+.tpg-sub { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; padding: 3px 7px; border-bottom: 1px solid rgba(255,255,255,.05); font-family: var(--font-data); }
+.tpg-sub:last-child { border-bottom: none; }
+.tpg-sub-label { font-size: 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; flex-shrink: 0; }
+.tpg-sub-dash { color: var(--muted); }
+
 /* ── Badge ── */
 .badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-family: var(--font-head); font-weight: 700; }
 .badge-green  { background: rgba(0,255,135,.1);  color: var(--green); }
@@ -705,42 +716,65 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     </div>
   </div>
 
-  <!-- Calibration Tier Performance -->
+  <!-- Calibration Tier Performance — tier x league grid, 3 stacked ROI readings per cell -->
   <div class="card" style="margin-top:16px">
     <div class="card-header">
       <span class="card-title">Calibration Tier Performance</span>
       <button class="btn btn-ghost btn-sm" onclick="renderTierPerf('paper','')">↻ Refresh</button>
     </div>
-    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 6px">
-      Live ROI by predicted-probability tier vs. the raw (uncorrected) historical backtest baseline —
-      see <span class="mono">docs/tier-calibration-analysis.md</span>, Addendum 2. Both columns are
-      scoped to the nine leagues with a genuine train/test split (Premier League, Ligue 1,
-      Champions League, Serie A, Scottish Premiership, Bundesliga, La Liga, Eredivisie, Primeira
-      Liga) — for a fair comparison. This is a reference view, not a gate.
+    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 10px">
+      Every cell stacks three readings: <strong style="color:var(--text1)">H</strong>istorical (backtest baseline,
+      posEdge≥5%) · <strong style="color:var(--text1)">C</strong>ontinuous (same backtest, no edge threshold) ·
+      <strong style="color:var(--text1)">L</strong>ive (actual accumulating results, this model version). Scoped to
+      the nine leagues with a genuine train/test split. Reference view, not a gate.
     </p>
-    <p style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--muted);margin:0 0 14px">
-      ⓘ Live model probability includes team-profile/weather/WOWY adjustments the historical backtest
-      population didn't have — directionally comparable, not a perfect match.
-    </p>
+    <div style="margin-bottom:12px">
+      <button class="btn btn-ghost btn-sm" id="tpg-toggle-btn" onclick="toggleTpgMethodology('')">▸ Methodology notes</button>
+      <div id="tpg-methodology" style="display:none;margin-top:8px;font-family:'DM Mono',monospace;font-size:.68rem;color:var(--muted);line-height:1.5">
+        Historical/Continuous are static backtest snapshots (<span class="mono">docs/tier-calibration-analysis.md</span>,
+        Addenda 6 &amp; 14 Part C) — never live-computed, never gate anything. Continuous only covers 35-40% through
+        65-70% (the range that analysis had matched-odds volume for). Live model probability includes team-profile/
+        weather/WOWY adjustments the historical backtest population didn't have — directionally comparable, not a
+        perfect match. No individual cell in this grid reaches the ~350-bet decision-grade floor from
+        calibration-rules.md on its own (that floor is a whole-model-version/whole-tier-pooled read) — treat every
+        cell as directional, not decisive; a ✓350 marker appears only on a cell that does clear it.
+      </div>
+    </div>
     <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Tier</th>
-            <th style="text-align:right">Historical ROI (n)</th>
-            <th style="text-align:right">Live ROI (n)</th>
-            <th style="text-align:center">Status</th>
-          </tr>
-        </thead>
-        <tbody id="tier-perf-body"></tbody>
+      <table class="tpg-table">
+        <thead><tr id="tpg-header-row"></tr></thead>
+        <tbody id="tpg-body"></tbody>
       </table>
-      <div class="empty" id="tier-perf-empty" style="display:none">
+      <div class="empty" id="tpg-empty" style="display:none">
         <div class="empty-icon">🎯</div>
-        <p>No resolved bets yet in the four validated leagues.</p>
+        <p>No resolved bets yet in the nine validated leagues.</p>
       </div>
     </div>
     <div id="tier-perf-other" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
     <div id="tier-perf-model-versions" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
+  </div>
+
+  <!-- Home vs. Away — pooled across leagues, periodic-review table, not a primary read -->
+  <div class="card" style="margin-top:16px;border-left:3px solid var(--muted)">
+    <div class="card-header">
+      <span class="card-title">Home vs. Away — Tier Breakdown</span>
+      <span class="badge badge-muted" style="letter-spacing:.04em">PERIODIC REVIEW — NOT A PRIMARY TABLE</span>
+    </div>
+    <p style="font-family:'DM Mono',monospace;font-size:.72rem;color:var(--text2);margin:0 0 12px">
+      Pooled across all nine leagues — not crossed with league, it gets too thin split further. Glance at this
+      occasionally to catch something worth a deeper investigation (like the 50-55% away-pick finding from
+      Addendum 14/15 ext.3), not something to read every time.
+    </p>
+    <div class="table-wrap">
+      <table class="tpg-table">
+        <thead><tr><th class="tpg-tier-cell">Tier</th><th>Home</th><th>Away</th></tr></thead>
+        <tbody id="tpha-body"></tbody>
+      </table>
+      <div class="empty" id="tpha-empty" style="display:none">
+        <div class="empty-icon">👀</div>
+        <p>No home/away pick-type data yet.</p>
+      </div>
+    </div>
   </div>
 
   <!-- Bookmaker Performance -->
@@ -928,42 +962,65 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     </div>
   </div>
 
-  <!-- Calibration Tier Performance -->
+  <!-- Calibration Tier Performance — tier x league grid, 3 stacked ROI readings per cell -->
   <div class="card" style="margin-top:16px">
     <div class="card-header">
       <span class="card-title">Calibration Tier Performance</span>
       <button class="btn btn-ghost btn-sm" onclick="renderTierPerf('real','real-')">↻ Refresh</button>
     </div>
-    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 6px">
-      Live ROI by predicted-probability tier vs. the raw (uncorrected) historical backtest baseline —
-      see <span class="mono">docs/tier-calibration-analysis.md</span>, Addendum 2. Both columns are
-      scoped to the nine leagues with a genuine train/test split (Premier League, Ligue 1,
-      Champions League, Serie A, Scottish Premiership, Bundesliga, La Liga, Eredivisie, Primeira
-      Liga) — for a fair comparison. This is a reference view, not a gate.
+    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 10px">
+      Every cell stacks three readings: <strong style="color:var(--text1)">H</strong>istorical (backtest baseline,
+      posEdge≥5%) · <strong style="color:var(--text1)">C</strong>ontinuous (same backtest, no edge threshold) ·
+      <strong style="color:var(--text1)">L</strong>ive (actual accumulating results, this model version). Scoped to
+      the nine leagues with a genuine train/test split. Reference view, not a gate.
     </p>
-    <p style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--muted);margin:0 0 14px">
-      ⓘ Live model probability includes team-profile/weather/WOWY adjustments the historical backtest
-      population didn't have — directionally comparable, not a perfect match.
-    </p>
+    <div style="margin-bottom:12px">
+      <button class="btn btn-ghost btn-sm" id="real-tpg-toggle-btn" onclick="toggleTpgMethodology('real-')">▸ Methodology notes</button>
+      <div id="real-tpg-methodology" style="display:none;margin-top:8px;font-family:'DM Mono',monospace;font-size:.68rem;color:var(--muted);line-height:1.5">
+        Historical/Continuous are static backtest snapshots (<span class="mono">docs/tier-calibration-analysis.md</span>,
+        Addenda 6 &amp; 14 Part C) — never live-computed, never gate anything. Continuous only covers 35-40% through
+        65-70% (the range that analysis had matched-odds volume for). Live model probability includes team-profile/
+        weather/WOWY adjustments the historical backtest population didn't have — directionally comparable, not a
+        perfect match. No individual cell in this grid reaches the ~350-bet decision-grade floor from
+        calibration-rules.md on its own (that floor is a whole-model-version/whole-tier-pooled read) — treat every
+        cell as directional, not decisive; a ✓350 marker appears only on a cell that does clear it.
+      </div>
+    </div>
     <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Tier</th>
-            <th style="text-align:right">Historical ROI (n)</th>
-            <th style="text-align:right">Live ROI (n)</th>
-            <th style="text-align:center">Status</th>
-          </tr>
-        </thead>
-        <tbody id="real-tier-perf-body"></tbody>
+      <table class="tpg-table">
+        <thead><tr id="real-tpg-header-row"></tr></thead>
+        <tbody id="real-tpg-body"></tbody>
       </table>
-      <div class="empty" id="real-tier-perf-empty" style="display:none">
+      <div class="empty" id="real-tpg-empty" style="display:none">
         <div class="empty-icon">🎯</div>
-        <p>No resolved bets yet in the four validated leagues.</p>
+        <p>No resolved bets yet in the nine validated leagues.</p>
       </div>
     </div>
     <div id="real-tier-perf-other" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
     <div id="real-tier-perf-model-versions" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
+  </div>
+
+  <!-- Home vs. Away — pooled across leagues, periodic-review table, not a primary read -->
+  <div class="card" style="margin-top:16px;border-left:3px solid var(--muted)">
+    <div class="card-header">
+      <span class="card-title">Home vs. Away — Tier Breakdown</span>
+      <span class="badge badge-muted" style="letter-spacing:.04em">PERIODIC REVIEW — NOT A PRIMARY TABLE</span>
+    </div>
+    <p style="font-family:'DM Mono',monospace;font-size:.72rem;color:var(--text2);margin:0 0 12px">
+      Pooled across all nine leagues — not crossed with league, it gets too thin split further. Glance at this
+      occasionally to catch something worth a deeper investigation (like the 50-55% away-pick finding from
+      Addendum 14/15 ext.3), not something to read every time.
+    </p>
+    <div class="table-wrap">
+      <table class="tpg-table">
+        <thead><tr><th class="tpg-tier-cell">Tier</th><th>Home</th><th>Away</th></tr></thead>
+        <tbody id="real-tpha-body"></tbody>
+      </table>
+      <div class="empty" id="real-tpha-empty" style="display:none">
+        <div class="empty-icon">👀</div>
+        <p>No home/away pick-type data yet.</p>
+      </div>
+    </div>
   </div>
 
   <!-- Bookmaker Performance -->
@@ -1151,42 +1208,65 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     </div>
   </div>
 
-  <!-- Calibration Tier Performance -->
+  <!-- Calibration Tier Performance — tier x league grid, 3 stacked ROI readings per cell -->
   <div class="card" style="margin-top:16px">
     <div class="card-header">
       <span class="card-title">Calibration Tier Performance</span>
       <button class="btn btn-ghost btn-sm" onclick="renderTierPerf('combined','combined-')">↻ Refresh</button>
     </div>
-    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 6px">
-      Live ROI by predicted-probability tier vs. the raw (uncorrected) historical backtest baseline —
-      see <span class="mono">docs/tier-calibration-analysis.md</span>, Addendum 2. Both columns are
-      scoped to the nine leagues with a genuine train/test split (Premier League, Ligue 1,
-      Champions League, Serie A, Scottish Premiership, Bundesliga, La Liga, Eredivisie, Primeira
-      Liga) — for a fair comparison. This is a reference view, not a gate.
+    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 10px">
+      Every cell stacks three readings: <strong style="color:var(--text1)">H</strong>istorical (backtest baseline,
+      posEdge≥5%) · <strong style="color:var(--text1)">C</strong>ontinuous (same backtest, no edge threshold) ·
+      <strong style="color:var(--text1)">L</strong>ive (actual accumulating results, this model version). Scoped to
+      the nine leagues with a genuine train/test split. Reference view, not a gate.
     </p>
-    <p style="font-family:'DM Mono',monospace;font-size:.68rem;color:var(--muted);margin:0 0 14px">
-      ⓘ Live model probability includes team-profile/weather/WOWY adjustments the historical backtest
-      population didn't have — directionally comparable, not a perfect match.
-    </p>
+    <div style="margin-bottom:12px">
+      <button class="btn btn-ghost btn-sm" id="combined-tpg-toggle-btn" onclick="toggleTpgMethodology('combined-')">▸ Methodology notes</button>
+      <div id="combined-tpg-methodology" style="display:none;margin-top:8px;font-family:'DM Mono',monospace;font-size:.68rem;color:var(--muted);line-height:1.5">
+        Historical/Continuous are static backtest snapshots (<span class="mono">docs/tier-calibration-analysis.md</span>,
+        Addenda 6 &amp; 14 Part C) — never live-computed, never gate anything. Continuous only covers 35-40% through
+        65-70% (the range that analysis had matched-odds volume for). Live model probability includes team-profile/
+        weather/WOWY adjustments the historical backtest population didn't have — directionally comparable, not a
+        perfect match. No individual cell in this grid reaches the ~350-bet decision-grade floor from
+        calibration-rules.md on its own (that floor is a whole-model-version/whole-tier-pooled read) — treat every
+        cell as directional, not decisive; a ✓350 marker appears only on a cell that does clear it.
+      </div>
+    </div>
     <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Tier</th>
-            <th style="text-align:right">Historical ROI (n)</th>
-            <th style="text-align:right">Live ROI (n)</th>
-            <th style="text-align:center">Status</th>
-          </tr>
-        </thead>
-        <tbody id="combined-tier-perf-body"></tbody>
+      <table class="tpg-table">
+        <thead><tr id="combined-tpg-header-row"></tr></thead>
+        <tbody id="combined-tpg-body"></tbody>
       </table>
-      <div class="empty" id="combined-tier-perf-empty" style="display:none">
+      <div class="empty" id="combined-tpg-empty" style="display:none">
         <div class="empty-icon">🎯</div>
-        <p>No resolved bets yet in the four validated leagues.</p>
+        <p>No resolved bets yet in the nine validated leagues.</p>
       </div>
     </div>
     <div id="combined-tier-perf-other" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
     <div id="combined-tier-perf-model-versions" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
+  </div>
+
+  <!-- Home vs. Away — pooled across leagues, periodic-review table, not a primary read -->
+  <div class="card" style="margin-top:16px;border-left:3px solid var(--muted)">
+    <div class="card-header">
+      <span class="card-title">Home vs. Away — Tier Breakdown</span>
+      <span class="badge badge-muted" style="letter-spacing:.04em">PERIODIC REVIEW — NOT A PRIMARY TABLE</span>
+    </div>
+    <p style="font-family:'DM Mono',monospace;font-size:.72rem;color:var(--text2);margin:0 0 12px">
+      Pooled across all nine leagues — not crossed with league, it gets too thin split further. Glance at this
+      occasionally to catch something worth a deeper investigation (like the 50-55% away-pick finding from
+      Addendum 14/15 ext.3), not something to read every time.
+    </p>
+    <div class="table-wrap">
+      <table class="tpg-table">
+        <thead><tr><th class="tpg-tier-cell">Tier</th><th>Home</th><th>Away</th></tr></thead>
+        <tbody id="combined-tpha-body"></tbody>
+      </table>
+      <div class="empty" id="combined-tpha-empty" style="display:none">
+        <div class="empty-icon">👀</div>
+        <p>No home/away pick-type data yet.</p>
+      </div>
+    </div>
   </div>
 
   <!-- Bookmaker Performance -->
@@ -3022,76 +3102,91 @@ async function renderPreRetrainCalibrationMatrix() {
   }
 }
 
+// /api/league-tier-matrix is mode-independent (static backtest snapshot), so it's
+// fetched once and reused across Paper/Real/Combined instead of 3x per tab switch.
+let _ltmDataCache = null;
+async function _getLtmData() {
+  if (_ltmDataCache) return _ltmDataCache;
+  try { _ltmDataCache = await apiFetch('/api/league-tier-matrix'); } catch (e) { _ltmDataCache = null; }
+  return _ltmDataCache;
+}
+
+function toggleTpgMethodology(prefix) {
+  const el  = document.getElementById(`${prefix}tpg-methodology`);
+  const btn = document.getElementById(`${prefix}tpg-toggle-btn`);
+  const open = el.style.display !== 'none';
+  el.style.display = open ? 'none' : 'block';
+  btn.textContent  = (open ? '▸' : '▾') + ' Methodology notes';
+}
+
+// calibration-rules.md rule 6's ~300-400 posEdge decision-grade floor, same value
+// docs/model-versioning.md's per-model-version tracking already uses as a single
+// threshold — applied per sub-cell here per this task's brief. No individual tier x
+// league (or tier x pick-type) cell in this grid is expected to reach it — that's not
+// a bug, it's honest about how thin any single cell necessarily is.
+const TPG_DECISION_FLOOR = 350;
+
+// One stacked sub-row (Historical/Continuous/Live) inside a grid cell. n==null/0
+// renders a clean dash rather than an error or blank — most cells, especially Live
+// and Continuous, don't have data yet at current volume.
+function _tpgFmtSub(label, n, roi, thin) {
+  let valueHtml = '<span class="tpg-sub-dash">—</span>';
+  if (n) {
+    const cls = roi >= 0 ? 'c-green' : 'c-red';
+    const roiStr = roi != null ? `${roi >= 0 ? '+' : ''}${(roi*100).toFixed(1)}%` : '—';
+    const thinMark  = thin ? '<span style="color:var(--muted);font-size:8px">*</span>' : '';
+    const floorMark = n >= TPG_DECISION_FLOOR ? ' <span style="color:var(--green);font-size:8px" title="Meets the ~350-bet decision-grade floor">✓350</span>' : '';
+    valueHtml = `<span class="${cls}">${roiStr}</span>${thinMark}<span style="color:var(--muted);font-size:9px"> (${n})</span>${floorMark}`;
+  }
+  return `<div class="tpg-sub"><span class="tpg-sub-label">${label}</span><span>${valueHtml}</span></div>`;
+}
+
 async function renderTierPerf(mode = 'paper', prefix = '') {
   let data;
   try {
     const p = new URLSearchParams({ mode: mode === 'combined' ? 'all' : mode });
     data = await apiFetch(`/api/tier-performance?${p}`);
   } catch (e) { return; }
+  const ltm = await _getLtmData();
 
-  const tbody   = document.getElementById(`${prefix}tier-perf-body`);
-  const emptyEl = document.getElementById(`${prefix}tier-perf-empty`);
-  const otherEl = document.getElementById(`${prefix}tier-perf-other`);
+  const headerRow = document.getElementById(`${prefix}tpg-header-row`);
+  const tbody     = document.getElementById(`${prefix}tpg-body`);
+  const emptyEl   = document.getElementById(`${prefix}tpg-empty`);
+  const otherEl   = document.getElementById(`${prefix}tier-perf-other`);
   if (!tbody) return;
   tbody.innerHTML = '';
 
-  const withBaseline = data.rows.filter(r => r.historical);
-  const anyLiveData  = data.rows.some(r => r.live.n > 0);
-  if (!anyLiveData && !withBaseline.some(r => r.historical)) {
-    emptyEl.style.display = 'block';
-  } else {
-    emptyEl.style.display = 'none';
+  // Same row-inclusion rule as before the rebuild: only tiers with either a pooled
+  // historical baseline or some live activity — no point showing empty rows at the
+  // far ends of the probability range.
+  const rows = data.rows.filter(r => r.historical || r.live.n > 0);
+  emptyEl.style.display = rows.length ? 'none' : 'block';
+
+  // League columns — data-driven from the matrix endpoint so this doesn't drift out
+  // of sync with LEAGUE_TIER_MATRIX; falls back to whatever byLeague carries if that
+  // fetch failed, so the grid still renders (just without Historical/Continuous).
+  const leagues = ltm?.scope?.validatedLeagues
+    || (rows[0]?.byLeague || []).map(l => ({ id: l.leagueId, name: l.leagueName }));
+
+  if (headerRow) {
+    headerRow.innerHTML = `<th class="tpg-tier-cell">Tier</th>` +
+      leagues.map(l => `<th class="tpg-cell">${l.name}</th>`).join('');
   }
 
-  const statusBadge = status => {
-    const map = {
-      'Consistent':  ['badge-green',  'Consistent'],
-      'Diverging':   ['badge-red',    'Diverging'],
-      'Tracking':    ['badge-muted',  'Tracking'],
-      'No baseline': ['badge-muted',  'No baseline'],
-    };
-    const [cls, label] = map[status] || ['badge-muted', status];
-    return `<span class="badge ${cls}">${label}</span>`;
-  };
-  const fmtRoi = (roi, thin) => {
-    if (roi == null) return '<span style="color:var(--muted)">—</span>';
-    const cls = roi >= 0 ? 'c-green' : 'c-red';
-    return `<span class="${cls}">${roi >= 0 ? '+' : ''}${(roi*100).toFixed(1)}%</span>${thin ? ' <span style="color:var(--muted);font-size:10px">*thin</span>' : ''}`;
-  };
-
-  // Only show rows that have either a historical baseline or some live activity —
-  // no point listing every empty tier in the far ends of the probability range.
-  const fmtRoiPlain = (roi, thin) => {
-    if (roi == null) return '<span style="color:var(--muted)">—</span>';
-    const cls = roi >= 0 ? 'c-green' : 'c-red';
-    return `<span class="${cls}">${roi >= 0 ? '+' : ''}${(roi*100).toFixed(1)}%</span>${thin ? '<span style="color:var(--muted);font-size:9px">*thin</span>' : ''}`;
-  };
-  data.rows.filter(r => r.historical || r.live.n > 0).forEach(r => {
+  rows.forEach(r => {
     const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td><span class="tier-badge">${r.tier}</span></td>
-      <td style="text-align:right" class="mono">${r.historical ? `${fmtRoi(r.historical.roi, r.historical.thin)} <span style="color:var(--muted)">(n=${r.historical.n})</span>` : '<span style="color:var(--muted)">no baseline</span>'}</td>
-      <td style="text-align:right" class="mono">${fmtRoi(r.live.roi, r.live.thin)} <span style="color:var(--muted)">(n=${r.live.n})</span></td>
-      <td style="text-align:center">${statusBadge(r.status)}</td>
-    `;
+    const cells = leagues.map(l => {
+      const histCell = ltm?.matrix?.[l.id]?.cells?.[r.tier];
+      const contCell = ltm?.continuousMatrix?.[l.id]?.cells?.[r.tier];
+      const liveCell = r.byLeague?.find(x => x.leagueId === l.id);
+      return `<td class="tpg-cell">
+        ${_tpgFmtSub('H', histCell?.n, histCell?.roi, histCell?.thin)}
+        ${_tpgFmtSub('C', contCell?.n, contCell?.roi, contCell?.thin)}
+        ${_tpgFmtSub('L', liveCell?.n, liveCell?.roi, liveCell?.thin)}
+      </td>`;
+    }).join('');
+    tr.innerHTML = `<td class="tpg-tier-cell">${r.tier}</td>${cells}`;
     tbody.appendChild(tr);
-
-    // Pick-type sub-row — live bets only, same n<10 thin flag as the tier row above.
-    // Structured generically (any tier can carry this), not hardcoded to 50-55%.
-    if (r.byPickType?.length) {
-      const sub = document.createElement('tr');
-      sub.style.fontSize = '10px';
-      const cells = r.byPickType.map(p =>
-        `<span style="margin-right:14px"><span style="color:var(--muted);text-transform:uppercase;letter-spacing:.03em">${p.pickType}</span> ${fmtRoiPlain(p.roi, p.thin)} <span style="color:var(--muted)">(n=${p.n})</span></span>`
-      ).join('');
-      let noteHtml = '';
-      const notes = data.pickTypeBacktestNotes?.[r.tier];
-      if (notes) {
-        noteHtml = `<div style="margin-top:2px;color:var(--muted);font-style:italic">${Object.values(notes).join(' · ')}</div>`;
-      }
-      sub.innerHTML = `<td colspan="4" style="padding:2px 8px 8px 24px;font-family:'DM Mono',monospace">By pick type: ${cells}${noteHtml}</td>`;
-      tbody.appendChild(sub);
-    }
   });
 
   if (otherEl) {
@@ -3118,6 +3213,41 @@ async function renderTierPerf(mode = 'paper', prefix = '') {
       versionsEl.innerHTML = '';
     }
   }
+
+  renderTierPerfHomeAway(rows, data, prefix);
+}
+
+// Part B — pooled home/away, tier-only (not crossed with league). Historical/Continuous
+// sub-rows are structurally present for consistency with the main grid but will show as
+// a dash for every tier except where a one-off deep dive (like the 50-55% pick-type
+// investigation, Addendum 14/15 ext.3) has actually computed a number — that's sparse
+// by design, not a bug, and is exactly the kind of finding this table exists to surface
+// occasionally, not something meant to arrive fully populated on day one.
+function renderTierPerfHomeAway(rows, data, prefix) {
+  const tbody   = document.getElementById(`${prefix}tpha-body`);
+  const emptyEl = document.getElementById(`${prefix}tpha-empty`);
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  if (emptyEl) emptyEl.style.display = rows.length ? 'none' : 'block';
+
+  rows.forEach(r => {
+    const home = r.byPickType?.find(p => p.pickType === 'home');
+    const away = r.byPickType?.find(p => p.pickType === 'away');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="tpg-tier-cell">${r.tier}</td>
+      <td class="tpg-cell">${_tpgFmtSub('H')}${_tpgFmtSub('C')}${_tpgFmtSub('L', home?.n, home?.roi, home?.thin)}</td>
+      <td class="tpg-cell">${_tpgFmtSub('H')}${_tpgFmtSub('C')}${_tpgFmtSub('L', away?.n, away?.roi, away?.thin)}</td>
+    `;
+    tbody.appendChild(tr);
+
+    const notes = data.pickTypeBacktestNotes?.[r.tier];
+    if (notes) {
+      const noteTr = document.createElement('tr');
+      noteTr.innerHTML = `<td colspan="3" style="font-size:10px;color:var(--muted);font-style:italic;padding:4px 10px 8px">${Object.values(notes).join(' · ')}</td>`;
+      tbody.appendChild(noteTr);
+    }
+  });
 }
 
 function toggleBetLogExpanded(mode) {
