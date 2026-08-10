@@ -6221,59 +6221,6 @@ app.get('/api/performance/real', (_req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// TEMPORARY diagnostic endpoint — remove after cross-competition domestic-blend
-// testing (task: "Extend cross-competition form/input blending... fixing the root
-// cause behind Plymouth vs Exeter's minFormCount: 0"). Calls the real
-// scoreOneFixture() directly against a real fixture (or a real fixture with team
-// ids swapped for a synthetic cross-division pairing) — side-effect-free, writes
-// nothing to bets/watching/calibration, safe to call repeatedly.
-app.get('/api/debug/domestic-blend-test', async (req, res) => {
-  try {
-    const fixtureId = req.query.fixtureId;
-    if (!fixtureId) return res.status(400).json({ error: 'fixtureId required' });
-    const { data: fd } = await apiSports.get('/fixtures', { params: { id: fixtureId } });
-    const fix = fd?.response?.[0];
-    if (!fix) return res.status(404).json({ error: 'fixture not found' });
-
-    // Optional overrides for a synthetic cross-division test — reuses a real
-    // fixture's shape/league/date/venue but swaps in different real team ids, so
-    // no fabricated "official" fixture is ever created, just a different pair of
-    // real teams run through the real scoring function.
-    if (req.query.homeTeamId) fix.teams.home.id = parseInt(req.query.homeTeamId, 10);
-    if (req.query.homeTeamName) fix.teams.home.name = req.query.homeTeamName;
-    if (req.query.awayTeamId) fix.teams.away.id = parseInt(req.query.awayTeamId, 10);
-    if (req.query.awayTeamName) fix.teams.away.name = req.query.awayTeamName;
-    if (req.query.leagueId) fix.league.id = parseInt(req.query.leagueId, 10);
-
-    const settings = getSettings();
-    const leagueId  = fix.league.id;
-    const meta      = LEAGUES[String(leagueId)] || { season: 2024 };
-
-    const { data: formData } = await apiSports.get('/fixtures', { params: { league: leagueId, season: meta.season, last: 60 } });
-    const formFixtures = (formData?.response || []).filter(f => f.fixture?.status?.short === 'FT');
-    const { data: sd } = await apiSports.get('/standings', { params: { league: leagueId, season: meta.season } });
-    const standings = sd?.response?.[0]?.league?.standings || [];
-    const { oddsMap, totalsMap } = await fetchOddsForLeague(meta.sport || 'soccer_epl');
-
-    const scored = await scoreOneFixture(fix, formFixtures, standings, {}, oddsMap, settings, totalsMap);
-    const best   = scored.results.reduce((a, b) => a.successScore > b.successScore ? a : b);
-
-    res.json({
-      fixture: `${scored.homeName} vs ${scored.awayName}`,
-      leagueId, context: scored.context,
-      successScore: best.successScore,
-      minFormCount: scored.minFormCount,
-      homeFormCount: scored.homeFormCount,
-      awayFormCount: scored.awayFormCount,
-      homeDataConf: scored.homeDataConf,
-      awayDataConf: scored.awayDataConf,
-      domesticBlendFixturesCount: scored.domesticBlendFixtures?.length ?? 0,
-      homeF: scored.homeF,
-      awayF: scored.awayF,
-    });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
 const _serverStartedAt = new Date().toISOString();
 
 app.get('/api/server-status', async (_req, res) => {
