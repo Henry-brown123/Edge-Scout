@@ -191,6 +191,106 @@ exactly as designed, not a bug: a 0.0004 difference is below its 0.001
 meaningful-improvement threshold, so it kept the existing weights rather than
 churning for a statistically insignificant change.
 
+## Weekly walk-forward retrain cycle
+
+`checkAndRetrain()`'s every-500-record trigger (above) is now permanently
+superseded as the live retrain path — `settings.autoRetrainEnabled` stays
+`false` forever, and it exists today only as a dormant threshold-crossing log
+(`retrain-pending.json`). The sanctioned, ongoing path is a **fixed weekly
+cron**, not a record-count trigger: every fixture that resolves during the
+week is scored under whatever model version is live at the time (permanent,
+unaffected by the retrain that follows), then folded into the following
+week's training pool once its result is final — so every fixture is genuine
+out-of-sample evidence at the moment it resolves, and the model keeps
+improving from real results without ever being tuned against fixtures it's
+also being judged on.
+
+**Schedule**: Mondays 05:15 UTC (`server.js`'s `setupScheduler()`), sequenced
+after the nightly backfill's own 05:00 UTC cutoff — so the week's
+newly-resolved fixtures are already scored and in `backfill-historical.json`
+by the time the cycle runs — and before the 06:00 UTC EV-calibration refresh
+and 07:00 UTC morning scan, so it never competes with either for the same
+window. Chosen as a low-fixture time of day/week by design.
+
+**What it does** (`runWeeklyRetrainCycle()`):
+1. Computes an eligible-fixture snapshot from `backfill-historical.json`
+   (`getEligibleTrainingSnapshot()`) — this mirrors `gbdt-train.js`'s own
+   filtering for audit-log accuracy; the actual training-time exclusion is
+   enforced independently inside `gbdt-train.js` itself (see below).
+2. Checks `settings.weeklyRetrainPaused` — if `true`, skips the cycle
+   entirely and logs `decision: 'skipped_paused'` with the accumulating
+   eligible count carried forward for the next cycle's delta.
+3. Otherwise calls `runGbdtRetrain()` — the same underlying training code the
+   old manual `/api/admin/trigger-retrain` path uses — and appends a
+   `weekly-retrain-log.json` entry once the child process exits.
+
+**Held-aside population stays untouched.** `models/gbdt-train.js`'s
+`loadData()` filters out `EXCLUDED_LEAGUE_IDS = new Set([48, 41, 42])`
+(Carabao Cup / League One / League Two) before building the training pool.
+This population (Addenda 16-19 in
+[tier-calibration-analysis.md](tier-calibration-analysis.md),
+`calibration-rules.md` rule 10) is deliberately held aside as a future clean
+test opportunity — folding it into training must be its own explicit,
+separate decision, not something the weekly cycle absorbs automatically.
+Before this filter existed, `gbdt-train.js` had **no exclusion mechanism at
+all** (see "the train/test merge decision" below) — it always drew from the
+entirety of whatever `backfill-historical.json` it was pointed at, so without
+this filter the very first weekly cycle would have silently violated rule 10.
+Live-tested 2026-08-11: eligible population came in at exactly 50,275
+(67,791 total scored fixtures minus 17,516 excluded), confirming the filter
+works as intended.
+
+**Memory-safety.** This instance is a 512MB Render `starter` plan with a
+proven crash history under synchronous full-population passes (scoring loop,
+weight optimiser, team-profile rebuild — all fixed earlier via periodic
+`setImmediate` yields). `gbdt-train.js`'s `trainClassifier()` — 200
+sequential tree-builds per class, times three classes, entirely synchronous
+before this — got the same treatment: `await new Promise(r =>
+setImmediate(r))` every 20 trees. This matters even though training runs in
+a `spawn()`-ed child process (already isolated from the live server's event
+loop) because the child is still a single Node process sharing the same
+512MB container ceiling — an unyielding hot loop is the same risk shape, just
+relocated. The training script's `main()` also now has a top-level
+`.catch()` that logs a clear `FATAL` message and exits non-zero on any
+unhandled failure, and `runGbdtRetrain()` distinguishes in its logging
+between a clean non-zero exit, its own 40-minute safety-timeout kill, and an
+*unexpected* SIGKILL (the OOM-kill signature) — rather than a bare exit code
+that can't tell those apart.
+
+Live-tested 2026-08-11 against the real ~50k eligible population (not a
+synthetic/reduced test): completed successfully in ~30 minutes, no crash, all
+three quality gates passed. The improvement gate correctly declined to
+overwrite the deployed weights since log-loss was statistically unchanged
+from the currently-deployed version (no new fixtures had accumulated between
+the prior manual retrain and this same-day test) — expected behavior, not a
+failure.
+
+**Model versioning extends automatically.** Each weekly retrain that clears
+the improvement gate produces a new `trainedAt` and gets picked up by the
+existing self-healing model-loading path (see "what actually happened"
+above) with no code change. The per-model-version sample floor
+(`byModelVersion` in `/api/tier-performance`) groups resolved bets by
+whatever `modelVersion` string is on each bet — there's no hardcoded list of
+versions, so a new weekly version automatically gets its own row and its own
+350-bet decision-grade floor the moment bets start resolving against it.
+
+**Manual override.** `settings.weeklyRetrainPaused` (default `false`) is an
+explicit, visible control — distinct from `autoRetrainEnabled` — for
+skipping a cycle deliberately (e.g. a review in progress, or a week's data
+looking anomalous) without touching the cron schedule itself:
+- `PUT /api/admin/weekly-retrain-pause` `{ paused: true|false }` — toggle
+- `GET /api/admin/weekly-retrain-log` — full audit trail plus current paused
+  state and next scheduled run
+- `POST /api/admin/trigger-weekly-retrain` — runs the cycle immediately
+  (same code path the cron uses), for testing or forcing an off-schedule run
+
+**Audit trail.** Every cycle — whether it retrains, fails, or is skipped —
+appends one entry to `weekly-retrain-log.json`: new fixtures folded in since
+the last cycle (total and per-league), the resulting `trainN`/`testN`,
+whether the version actually changed, and a reference to the previous
+version. This is the ongoing, automatic equivalent of what Addendum 12/19's
+manual "final snapshot" reports did by hand.
+
 ## The train/test "merge" decision
 
 Once [Addendum 12](tier-calibration-analysis.md)'s final pre-retrain baseline
