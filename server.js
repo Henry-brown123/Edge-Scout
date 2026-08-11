@@ -3226,7 +3226,10 @@ app.post('/api/green-flags/toggle', (req, res) => {
   const idx = flags.findIndex(f => f.leagueId === lid && f.tier === tier);
   if (idx >= 0) flags.splice(idx, 1);
   else flags.push({ leagueId: lid, tier, flaggedAt: new Date().toISOString() });
-  writeJSON('green-flags.json', flags);
+  // allowEmpty: true — removing the last remaining flag is a legitimate,
+  // intentional empty-array write, not the accidental-wipe writeJSON's guard
+  // exists to catch. Same pattern already used by saveWatching().
+  writeJSON('green-flags.json', flags, { allowEmpty: true });
   res.json({ flags });
 });
 
