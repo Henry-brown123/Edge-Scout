@@ -6679,7 +6679,13 @@ function getWOWYHighConfCount() {
 // whether leg 1/leg 2 is distinguishable from data already on disk (no new API calls),
 // and reports actual W/D/L base rates per round-bucket so any leg-specific distortion
 // is visible directly in the real outcome distribution. Remove after this investigation.
-app.get('/api/diagnostics/two-legged-check', (_req, res) => {
+app.get('/api/diagnostics/two-legged-check', async (_req, res) => {
+  let apiQuota = null;
+  try {
+    const { data: sd } = await apiSports.get('/status');
+    apiQuota = { current: sd?.response?.requests?.current, limit_day: sd?.response?.requests?.limit_day };
+  } catch (e) { apiQuota = { error: e.message }; }
+
   const hist = readJSON('backfill-historical.json') || {};
   const EURO_LEAGUE_IDS = { 2: 'Champions League', 3: 'Europa League', 848: 'Conference League' };
   const FINAL_STATUSES = new Set(['FT', 'AET', 'PEN']);
@@ -6723,7 +6729,7 @@ app.get('/api/diagnostics/two-legged-check', (_req, res) => {
     };
   }
 
-  res.json(byLeague);
+  res.json({ apiQuota, byLeague });
 });
 
 app.get('/api/startup/status', (_req, res) => {
