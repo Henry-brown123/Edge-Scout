@@ -2649,6 +2649,81 @@ function runGbdtRetrain(reason, onComplete) {
   return { success: true, started: true };
 }
 
+// ─── WALK-FORWARD IN-SAMPLE BACKTEST (Addendum 21) ────────────────────────────
+// Runs one block of the 4-block walk-forward Historical-ROI gauge for in-sample
+// leagues (docs/tier-calibration-analysis.md Addendum 21) — spawns
+// models/gbdt-train-proxy.js in walk-forward mode (WF_TRAIN_BEFORE/WF_TEST_END/
+// WF_BLOCK_LABEL env vars), same spawn()-isolated, timeout-protected pattern as
+// runGbdtRetrain(). Each block trains once, scores itself against closing odds,
+// and appends its raw bet outcomes to DATA_DIR/walk-forward-raw-bets.json — the
+// pooling step (POST /api/admin/walkforward-pool) reads that file once all 4
+// blocks are done. Sequential only, same as runGbdtRetrain — no parallel training
+// jobs on this 512MB instance.
+let _walkForwardProcess = null;
+function runWalkForwardBlock(blockLabel, trainBefore, testEnd, onComplete) {
+  if (_walkForwardProcess) {
+    return { success: false, error: 'A walk-forward block is already in progress.' };
+  }
+  console.log(`[WalkForward] Starting block ${blockLabel} — train before ${trainBefore}, test through ${testEnd || 'end of data'}`);
+  const startedAt = new Date().toISOString();
+  writeJSON('walkforward-status.json', { status: 'running', blockLabel, trainBefore, testEnd, startedAt, finishedAt: null, error: null });
+
+  const { spawn } = require('child_process');
+  const child = spawn('node', ['models/gbdt-train-proxy.js'], {
+    cwd: __dirname,
+    env: { ...process.env, DATA_DIR: process.env.DATA_DIR, WF_TRAIN_BEFORE: trainBefore, WF_TEST_END: testEnd || '', WF_BLOCK_LABEL: blockLabel },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  _walkForwardProcess = child;
+
+  let output = '';
+  child.stdout.on('data', d => { output += d; process.stdout.write(d); });
+  child.stderr.on('data', d => { output += d; process.stderr.write(d); });
+
+  // Same 40-minute safety cap as runGbdtRetrain — each block's train population is
+  // at most the full ~46k in-sample population (the last/most recent block), same
+  // order of magnitude as the weekly retrain's proven ~30-minute runtime. Earlier
+  // blocks train on strictly less data and finish faster, not slower.
+  const SAFETY_TIMEOUT_MS = 40 * 60 * 1000;
+  let timedOut = false;
+  const killTimer = setTimeout(() => {
+    if (_walkForwardProcess === child) {
+      timedOut = true;
+      console.error(`[WalkForward] Block ${blockLabel} exceeded 40-minute safety timeout — killing`);
+      child.kill('SIGKILL');
+    }
+  }, SAFETY_TIMEOUT_MS);
+
+  child.on('close', (code, signal) => {
+    clearTimeout(killTimer);
+    _walkForwardProcess = null;
+    const finishedAt = new Date().toISOString();
+    if (code === 0) {
+      console.log(`[WalkForward] Block ${blockLabel} complete`);
+      writeJSON('walkforward-status.json', { status: 'success', blockLabel, trainBefore, testEnd, startedAt, finishedAt, error: null, exitCode: code, tail: output.slice(-4000) });
+      onComplete?.({ success: true, blockLabel });
+    } else {
+      const cause = signal
+        ? (timedOut ? `killed — exceeded ${SAFETY_TIMEOUT_MS / 60000}min safety timeout (signal ${signal})`
+                    : `killed unexpectedly (signal ${signal}) — likely OOM on this 512MB instance if this recurs`)
+        : `exit code ${code}`;
+      console.error(`[WalkForward] Block ${blockLabel} failed — ${cause}`);
+      writeJSON('walkforward-status.json', { status: 'failed', blockLabel, trainBefore, testEnd, startedAt, finishedAt, error: cause, exitCode: code, signal: signal || null, tail: output.slice(-4000) });
+      onComplete?.({ success: false, error: cause });
+    }
+  });
+
+  child.on('error', (e) => {
+    clearTimeout(killTimer);
+    _walkForwardProcess = null;
+    console.error(`[WalkForward] Block ${blockLabel} failed to start:`, e.message);
+    writeJSON('walkforward-status.json', { status: 'failed', blockLabel, trainBefore, testEnd, startedAt, finishedAt: new Date().toISOString(), error: e.message });
+    onComplete?.({ success: false, error: e.message });
+  });
+
+  return { success: true, started: true };
+}
+
 // ─── WEEKLY WALK-FORWARD RETRAIN CYCLE ────────────────────────────────────────
 // The sanctioned, ongoing path forward (docs/model-versioning.md) — supersedes
 // the old every-500-record checkAndRetrain() trigger, which stays permanently
@@ -6710,6 +6785,83 @@ app.put('/api/admin/weekly-retrain-pause', (req, res) => {
   writeJSON('settings.json', settings);
   console.log(`[WeeklyRetrain] ${paused ? 'PAUSED' : 'RESUMED'} via PUT /api/admin/weekly-retrain-pause`);
   res.json({ success: true, weeklyRetrainPaused: paused });
+});
+
+// Walk-forward in-sample backtest (Addendum 21) — see runWalkForwardBlock() above.
+// Sequential, one block at a time; the caller (an overnight orchestration script/
+// session) is responsible for waiting on GET .../walkforward-status between calls.
+app.post('/api/admin/trigger-walkforward-block', (req, res) => {
+  const { blockLabel, trainBefore, testEnd } = req.body || {};
+  if (!blockLabel || !trainBefore) {
+    return res.status(400).json({ error: 'body must include { blockLabel, trainBefore, testEnd? }' });
+  }
+  const result = runWalkForwardBlock(blockLabel, trainBefore, testEnd || null);
+  if (!result.success) return res.status(409).json({ success: false, error: result.error });
+  res.json({ success: true, started: true, message: `Block ${blockLabel} started — poll GET /api/admin/walkforward-status.` });
+});
+
+app.get('/api/admin/walkforward-status', (_req, res) => {
+  res.json(readJSON('walkforward-status.json') || { status: 'idle' });
+});
+
+app.get('/api/admin/walkforward-log', (_req, res) => {
+  res.json({ entries: readJSON('walk-forward-log.json') || [] });
+});
+
+app.get('/api/admin/walkforward-raw-bets', (_req, res) => {
+  const bets = readJSON('walk-forward-raw-bets.json') || [];
+  res.json({ totalN: bets.length, byBlock: bets.reduce((acc, b) => { acc[b.blockLabel] = (acc[b.blockLabel]||0)+1; return acc; }, {}) });
+});
+
+// Pools all 4 blocks' raw bet outcomes per (league, tier) — n, ROI, 95% CI via
+// normal approximation on per-bet returns (same method used for the Europa
+// League/Conference League splits, Addendum 20). Writes walk-forward-pooled.json,
+// which Part B's grid wiring reads as the new Historical source for in-sample
+// leagues. Idempotent/re-runnable — reads the accumulated raw-bets file fresh
+// each time, doesn't consume or mutate it.
+app.post('/api/admin/walkforward-pool', (_req, res) => {
+  const bets = readJSON('walk-forward-raw-bets.json') || [];
+  const WF_REPORTED_LEAGUE_IDS = new Set([39, 140, 135, 78, 61, 179, 88, 94, 2, 3]);
+
+  const byCell = {};
+  for (const b of bets) {
+    const key = `${b.leagueId}|${b.tier}`;
+    if (!byCell[key]) byCell[key] = [];
+    byCell[key].push(b);
+  }
+
+  const cells = Object.entries(byCell).map(([key, cellBets]) => {
+    const [leagueIdStr, tier] = key.split('|');
+    const leagueId = parseInt(leagueIdStr, 10);
+    const n = cellBets.length;
+    const returns = cellBets.map(b => b.won ? (b.pinnacleOdds - 1) : -1);
+    const mean = returns.reduce((s, v) => s + v, 0) / n;
+    let ciLow = null, ciHigh = null;
+    if (n > 1) {
+      const variance = returns.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1);
+      const se = Math.sqrt(variance / n);
+      ciLow  = +(mean - 1.96 * se).toFixed(4);
+      ciHigh = +(mean + 1.96 * se).toFixed(4);
+    }
+    return {
+      leagueId, tier, n, roi: +mean.toFixed(4), ciLow, ciHigh,
+      thin: n < 30,
+      reported: WF_REPORTED_LEAGUE_IDS.has(leagueId),
+    };
+  }).sort((a, b) => a.leagueId - b.leagueId || a.tier.localeCompare(b.tier));
+
+  const totalPooledN = bets.length;
+  const byBlockN = bets.reduce((acc, b) => { acc[b.blockLabel] = (acc[b.blockLabel]||0)+1; return acc; }, {});
+
+  const result = {
+    computedAt: new Date().toISOString(),
+    totalPooledN,
+    byBlockN,
+    cells,
+    note: 'Historical ROI gauge for in-sample leagues (Addendum 21) — pooled out-of-sample results from 4 walk-forward blocks, posEdge>=5%, applyLeagueBiasCorrection. Describes how a periodically-retrained model of this design has performed over the past 2 years, not a literal test of the exact current live model. Conference League (848) cells are present but reported:false — folded into training per block, not surfaced as its own line (validated_thin status unchanged).',
+  };
+  writeJSON('walk-forward-pooled.json', result);
+  res.json(result);
 });
 
 // Diagnostic proxy model — never live, see models/gbdt-train-proxy.js and
