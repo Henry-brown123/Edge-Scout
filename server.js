@@ -98,6 +98,12 @@ function structuralCheck(file, parsed) {
   if (file === 'bankroll.json')     return typeof parsed.initial === 'number';
   if (file === 'watching.json')     return Array.isArray(parsed);
   if (file === 'transactions.json') return Array.isArray(parsed);
+  // green-flags.json (Addendum 21 Part C) — a real bug found live-testing this
+  // task: a 1-entry flag array serialises to ~97 bytes, under MIN_VALID_BYTES,
+  // so every flag toggle was silently discarded on the very next read (treated
+  // as "possibly corrupt") until this was registered here. Same fix shape as
+  // watching.json/transactions.json above.
+  if (file === 'green-flags.json')  return Array.isArray(parsed);
   return null;
 }
 
