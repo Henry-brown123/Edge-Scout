@@ -3565,10 +3565,33 @@ const HISTORICAL_TIER_BASELINE = {
   '60-65%': { n: 26,  roi: 1.51,   decisionGrade: false }, // extreme outlier, n=26 — do not read as signal
   '65-70%': { n: 4,   roi: 0.818,  decisionGrade: false },
 };
+// Performance-tab tier×league grid grouping (League/Tournament toggle,
+// docs/tier-calibration-analysis.md Addendum 20 follow-up) — single config-level
+// source of truth for which competitions appear in the grid and which of the two
+// views they belong to. Adding a new competition later is exactly one line here:
+// tag its id with 'league' or 'tournament' and, once it's calibration-audited
+// (CALIBRATION_AUDIT reliable:true), it flows through to TIER_PERF_VALIDATED_LEAGUES
+// below and the grid's column list automatically — no UI-side list to touch.
+const COMPETITION_TYPE = {
+  39: 'league', 140: 'league', 135: 'league', 78: 'league', 61: 'league',
+  179: 'league', 88: 'league', 94: 'league', 41: 'league', 42: 'league',
+  2: 'tournament', 3: 'tournament', 848: 'tournament', 48: 'tournament',
+};
 // Every league with a genuine train/test split as of 2026-08-07 — the original
 // four (PL, Ligue 1, Champions League, Serie A) plus Scottish Premiership,
-// Bundesliga, La Liga, Eredivisie, Primeira Liga.
+// Bundesliga, La Liga, Eredivisie, Primeira Liga. Deliberately left untouched by
+// the COMPETITION_TYPE grid above (same reasoning as Addendum 19's note on this
+// same line): this set drives the pooled "Total (all leagues)" Live figure and
+// the Consistent/Diverging status logic, not just the grid's columns — widening
+// it would silently change those pooled numbers, not just add display columns.
+// TIER_PERF_GRID_LEAGUES (below) is the separate, wider set used only for the
+// grid's per-league Live breakdown.
 const TIER_PERF_VALIDATED_LEAGUES = new Set([39, 61, 2, 135, 179, 78, 140, 88, 94]);
+// All grid-eligible competitions (League/Tournament toggle) — used only to widen
+// byLeagueForTier's per-column breakdown below. Does not touch validatedBets/
+// otherBets/row.live/status/otherLeagueActivity, which stay scoped to
+// TIER_PERF_VALIDATED_LEAGUES exactly as before.
+const TIER_PERF_GRID_LEAGUES = new Set(Object.keys(COMPETITION_TYPE).map(Number));
 // Same threshold the codebase already uses to decide a league has "enough" live
 // paper-trade evidence (see runEvCalibration()'s MIN_LIVE_PAPER_TRADES) — reused
 // here so "enough live data to say something" means the same thing everywhere.
@@ -3638,17 +3661,22 @@ app.get('/api/tier-performance', (req, res) => {
 
   // Live ROI crossed with league — needed for the tier x league grid's Live sub-cell
   // (Historical/Continuous below are already league-crossed via LEAGUE_TIER_MATRIX /
-  // CONTINUOUS_LEAGUE_TIER_MATRIX; Live wasn't until now). All 9 validated leagues are
-  // always returned, n=0 included, so the frontend has a stable column set to render
-  // dashes into rather than reshaping the grid around whichever cells have data.
+  // CONTINUOUS_LEAGUE_TIER_MATRIX; Live wasn't until now). All grid-eligible leagues
+  // (TIER_PERF_GRID_LEAGUES — league + tournament competitions, Addendum 20 follow-up)
+  // are always returned, n=0 included, so the frontend has a stable column set to
+  // render dashes into rather than reshaping the grid around whichever cells have
+  // data. Takes the full resolved-bet pool (not validatedBets) since the grid now
+  // covers more competitions than TIER_PERF_VALIDATED_LEAGUES does — the pooled
+  // Total/status figures deliberately keep using validatedBets, unaffected.
   function byLeagueForTier(bets, tier) {
     const inTier = bets.filter(b => tierOfProbShared(b.modelProb) === tier);
-    return Object.keys(LEAGUE_TIER_MATRIX).map(Number).map(leagueId => {
+    return [...TIER_PERF_GRID_LEAGUES].map(leagueId => {
       const g = inTier.filter(b => parseInt(b.leagueId, 10) === leagueId);
       const n = g.length;
       const staked = g.reduce((s, b) => s + (b.actualStake ?? b.suggestedStake ?? 0), 0);
       const pnl    = g.reduce((s, b) => s + (b.pnl || 0), 0);
-      return { leagueId, leagueName: LEAGUE_TIER_MATRIX[leagueId].name, n, roi: n && staked ? +(pnl / staked).toFixed(4) : null, thin: n < TIER_PERF_MIN_LIVE_N };
+      const name   = LEAGUE_TIER_MATRIX[leagueId]?.name || LEAGUE_CONFIG[leagueId]?.name || `League ${leagueId}`;
+      return { leagueId, leagueName: name, n, roi: n && staked ? +(pnl / staked).toFixed(4) : null, thin: n < TIER_PERF_MIN_LIVE_N };
     });
   }
 
@@ -3703,7 +3731,12 @@ app.get('/api/tier-performance', (req, res) => {
       live: { n: liveN, roi: liveRoi, thin: liveThin },
       status,
       byPickType: byPickTypeForTier(validatedBets, tier),
-      byLeague: byLeagueForTier(validatedBets, tier),
+      // Wider pool than validatedBets deliberately — see TIER_PERF_GRID_LEAGUES
+      // above. byLeagueForTier still filters per-league internally, so this only
+      // adds columns for the grid's extra competitions; every other reading on
+      // this row (historical/live/status/byPickType) stays scoped to the
+      // original 9 validated leagues, unchanged.
+      byLeague: byLeagueForTier(resolved, tier),
     };
   });
 
@@ -4877,8 +4910,25 @@ app.get('/api/league-tier-matrix', (_req, res) => {
   }).filter(t => t.n > 0);
 
   const UNSEEN_POPULATION_LEAGUES = new Set([48, 41, 42]);
+
+  // Full grid-eligible competition list, League/Tournament toggle (Addendum 20
+  // follow-up) — driven entirely by COMPETITION_TYPE rather than a UI-side list,
+  // so a future addition is one config line, not a hunt through public/index.html.
+  // Includes Europa League/Conference League even though they have no
+  // LEAGUE_TIER_MATRIX entry yet (Addendum 20 deliberately didn't build one, the
+  // populations are thin) — their Historical/Continuous cells render as "no data"
+  // client-side, same as any other missing cell, while Live still works normally
+  // off /api/tier-performance.
+  const gridLeagues = Object.keys(COMPETITION_TYPE).map(Number).map(id => ({
+    id,
+    name: LEAGUE_TIER_MATRIX[id]?.name || LEAGUE_CONFIG[id]?.name || `League ${id}`,
+    competitionType: COMPETITION_TYPE[id],
+    hasHistoricalMatrix: !!LEAGUE_TIER_MATRIX[id],
+  }));
+
   res.json({
     scope: {
+      leagues: gridLeagues,
       validatedLeagues: leagueIds.filter(id => !UNSEEN_POPULATION_LEAGUES.has(id)).map(id => ({ id, name: LEAGUE_TIER_MATRIX[id].name })),
       unseenPopulationLeagues: leagueIds.filter(id => UNSEEN_POPULATION_LEAGUES.has(id)).map(id => ({ id, name: LEAGUE_TIER_MATRIX[id].name })),
       tierLabels: LEAGUE_TIER_MATRIX_TIER_ORDER,

@@ -729,6 +729,10 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       <strong style="color:var(--text1)">L</strong>ive (actual accumulating results, this model version). Scoped to
       the nine leagues with a genuine train/test split. Reference view, not a gate.
     </p>
+    <div style="display:flex;gap:4px;margin-bottom:12px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:4px;width:fit-content">
+      <button class="perf-view-btn tpg-view-btn active-combined-view" id="tpg-view-league-btn" onclick="setTpgView('league')">League</button>
+      <button class="perf-view-btn tpg-view-btn" id="tpg-view-tournament-btn" onclick="setTpgView('tournament')">Tournament</button>
+    </div>
     <div style="margin-bottom:12px">
       <button class="btn btn-ghost btn-sm" id="tpg-toggle-btn" onclick="toggleTpgMethodology('')">▸ Methodology notes</button>
       <div id="tpg-methodology" style="display:none;margin-top:8px;font-family:'DM Mono',monospace;font-size:.68rem;color:var(--muted);line-height:1.5">
@@ -975,6 +979,10 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       <strong style="color:var(--text1)">L</strong>ive (actual accumulating results, this model version). Scoped to
       the nine leagues with a genuine train/test split. Reference view, not a gate.
     </p>
+    <div style="display:flex;gap:4px;margin-bottom:12px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:4px;width:fit-content">
+      <button class="perf-view-btn tpg-view-btn active-combined-view" id="real-tpg-view-league-btn" onclick="setTpgView('league')">League</button>
+      <button class="perf-view-btn tpg-view-btn" id="real-tpg-view-tournament-btn" onclick="setTpgView('tournament')">Tournament</button>
+    </div>
     <div style="margin-bottom:12px">
       <button class="btn btn-ghost btn-sm" id="real-tpg-toggle-btn" onclick="toggleTpgMethodology('real-')">▸ Methodology notes</button>
       <div id="real-tpg-methodology" style="display:none;margin-top:8px;font-family:'DM Mono',monospace;font-size:.68rem;color:var(--muted);line-height:1.5">
@@ -1221,6 +1229,10 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       <strong style="color:var(--text1)">L</strong>ive (actual accumulating results, this model version). Scoped to
       the nine leagues with a genuine train/test split. Reference view, not a gate.
     </p>
+    <div style="display:flex;gap:4px;margin-bottom:12px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:4px;width:fit-content">
+      <button class="perf-view-btn tpg-view-btn active-combined-view" id="combined-tpg-view-league-btn" onclick="setTpgView('league')">League</button>
+      <button class="perf-view-btn tpg-view-btn" id="combined-tpg-view-tournament-btn" onclick="setTpgView('tournament')">Tournament</button>
+    </div>
     <div style="margin-bottom:12px">
       <button class="btn btn-ghost btn-sm" id="combined-tpg-toggle-btn" onclick="toggleTpgMethodology('combined-')">▸ Methodology notes</button>
       <div id="combined-tpg-methodology" style="display:none;margin-top:8px;font-family:'DM Mono',monospace;font-size:.68rem;color:var(--muted);line-height:1.5">
@@ -3112,6 +3124,28 @@ async function _getLtmData() {
   return _ltmDataCache;
 }
 
+// League/Tournament toggle for the Calibration Tier Performance grid — one
+// shared state across Paper/Real/Combined (which competitions you want to see
+// isn't a paper-vs-real question), independent of the mode toggle those tabs
+// already drive. Default 'league' per the brief — higher-volume, more
+// decision-relevant day to day; Tournament is a deliberate second click.
+let tpgViewMode = 'league';
+const TPG_PREFIXES = ['', 'real-', 'combined-'];
+function setTpgView(view) {
+  tpgViewMode = view;
+  for (const prefix of TPG_PREFIXES) {
+    const leagueBtn     = document.getElementById(`${prefix}tpg-view-league-btn`);
+    const tournamentBtn = document.getElementById(`${prefix}tpg-view-tournament-btn`);
+    if (leagueBtn)     leagueBtn.classList.toggle('active-combined-view', view === 'league');
+    if (tournamentBtn) tournamentBtn.classList.toggle('active-combined-view', view === 'tournament');
+  }
+  // Re-render all three — cheap reads, and it keeps every tab's grid consistent
+  // with the new toggle state even before the user switches to it.
+  renderTierPerf('paper', '');
+  renderTierPerf('real', 'real-');
+  renderTierPerf('combined', 'combined-');
+}
+
 function toggleTpgMethodology(prefix) {
   const el  = document.getElementById(`${prefix}tpg-methodology`);
   const btn = document.getElementById(`${prefix}tpg-toggle-btn`);
@@ -3163,11 +3197,15 @@ async function renderTierPerf(mode = 'paper', prefix = '') {
   const rows = data.rows.filter(r => r.historical || r.live.n > 0);
   emptyEl.style.display = rows.length ? 'none' : 'block';
 
-  // League columns — data-driven from the matrix endpoint so this doesn't drift out
-  // of sync with LEAGUE_TIER_MATRIX; falls back to whatever byLeague carries if that
-  // fetch failed, so the grid still renders (just without Historical/Continuous).
-  const leagues = ltm?.scope?.validatedLeagues
-    || (rows[0]?.byLeague || []).map(l => ({ id: l.leagueId, name: l.leagueName }));
+  // League columns — data-driven from the matrix endpoint's scope.leagues (config-level
+  // competitionType grouping, not a hardcoded list here) so this doesn't drift out of
+  // sync with COMPETITION_TYPE server-side; falls back to whatever byLeague carries if
+  // that fetch failed, so the grid still renders (just without Historical/Continuous or
+  // the League/Tournament split). Filtered to the active toggle state (tpgViewMode) —
+  // display-only: which columns are shown, not how any of them are calculated.
+  const allLeagues = ltm?.scope?.leagues
+    || (rows[0]?.byLeague || []).map(l => ({ id: l.leagueId, name: l.leagueName, competitionType: 'league' }));
+  const leagues = allLeagues.filter(l => (l.competitionType || 'league') === tpgViewMode);
 
   if (headerRow) {
     headerRow.innerHTML = `<th class="tpg-tier-cell">Tier</th>` +
