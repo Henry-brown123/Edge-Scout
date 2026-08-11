@@ -3163,8 +3163,16 @@ const TPG_DECISION_FLOOR = 350;
 
 // One stacked sub-row (Historical/Continuous/Live) inside a grid cell. n==null/0
 // renders a clean dash rather than an error or blank — most cells, especially Live
-// and Continuous, don't have data yet at current volume.
-function _tpgFmtSub(label, n, roi, thin) {
+// and Continuous, don't have data yet at current volume. `unavailable`, when true,
+// means this whole competition has no backtest of this type at all (Historical or
+// Continuous never computed for it — see the hasHistoricalMatrix/hasContinuousMatrix
+// comment in /api/league-tier-matrix) rather than this one tier/cell just being
+// empty within an otherwise-audited competition — those are different situations
+// and read differently: "n/a" here, a plain dash for a genuine empty cell.
+function _tpgFmtSub(label, n, roi, thin, unavailable) {
+  if (unavailable) {
+    return `<div class="tpg-sub"><span class="tpg-sub-label">${label}</span><span class="tpg-sub-dash" title="No ${label === 'H' ? 'Historical' : 'Continuous'} backtest exists for this competition yet">n/a</span></div>`;
+  }
   let valueHtml = '<span class="tpg-sub-dash">—</span>';
   if (n) {
     const cls = roi >= 0 ? 'c-green' : 'c-red';
@@ -3220,8 +3228,8 @@ async function renderTierPerf(mode = 'paper', prefix = '') {
       const contCell = ltm?.continuousMatrix?.[l.id]?.cells?.[r.tier];
       const liveCell = r.byLeague?.find(x => x.leagueId === l.id);
       return `<td class="tpg-cell">
-        ${_tpgFmtSub('H', histCell?.n, histCell?.roi, histCell?.thin)}
-        ${_tpgFmtSub('C', contCell?.n, contCell?.roi, contCell?.thin)}
+        ${_tpgFmtSub('H', histCell?.n, histCell?.roi, histCell?.thin, l.hasHistoricalMatrix === false)}
+        ${_tpgFmtSub('C', contCell?.n, contCell?.roi, contCell?.thin, l.hasContinuousMatrix === false)}
         ${_tpgFmtSub('L', liveCell?.n, liveCell?.roi, liveCell?.thin)}
       </td>`;
     }).join('');

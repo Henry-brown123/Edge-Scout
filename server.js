@@ -4919,11 +4919,28 @@ app.get('/api/league-tier-matrix', (_req, res) => {
   // populations are thin) — their Historical/Continuous cells render as "no data"
   // client-side, same as any other missing cell, while Live still works normally
   // off /api/tier-performance.
+  //
+  // hasHistoricalMatrix / hasContinuousMatrix are competition-level flags, not
+  // cell-level — added after finding LEAGUE_TIER_MATRIX (Historical) and
+  // CONTINUOUS_LEAGUE_TIER_MATRIX (Continuous) are two independently-built, static
+  // snapshots from different addenda: Historical is each league's own train/test
+  // split test-only population (Addendum 6, live model, a different date boundary
+  // per league); Continuous is Addendum 14's single shared proxy-model holdout
+  // window (≥2024-08-07, a model never used live), scoped to only the original 9
+  // leagues that existed when it was written. They are NOT the same population
+  // filtered by edge threshold, so "Continuous n ≥ Historical n" holds only
+  // empirically for those 9 (both happen to be similarly-sized snapshots), not by
+  // construction — and CONTINUOUS_LEAGUE_TIER_MATRIX has zero entries at all for
+  // Carabao Cup/League One/League Two (added in Addendum 19, after Addendum 14 was
+  // written) or Europa League/Conference League (Addendum 20). The frontend uses
+  // these two flags to render "n/a — no backtest exists for this competition" for
+  // a whole competition, distinct from an ordinary empty cell within an audited one.
   const gridLeagues = Object.keys(COMPETITION_TYPE).map(Number).map(id => ({
     id,
     name: LEAGUE_TIER_MATRIX[id]?.name || LEAGUE_CONFIG[id]?.name || `League ${id}`,
     competitionType: COMPETITION_TYPE[id],
     hasHistoricalMatrix: !!LEAGUE_TIER_MATRIX[id],
+    hasContinuousMatrix: !!CONTINUOUS_LEAGUE_TIER_MATRIX[id],
   }));
 
   res.json({
