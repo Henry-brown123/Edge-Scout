@@ -6443,7 +6443,10 @@ app.get('/api/debug/single-look-3leagues', async (req, res) => {
       const inTier = matched.filter(f => tierOf(f.modelProb) === tier);
       const posEdge = inTier.filter(f => f.edge >= 0.05);
       const stats = roiStats(posEdge);
-      return { tier, n: inTier.length, posEdgeN: posEdge.length, ...stats, thin: posEdge.length < 30 };
+      // n/posEdgeN placed AFTER the spread deliberately — roiStats() returns its
+      // own `n` (= posEdge.length, the population it was actually given), which
+      // would otherwise silently overwrite the broader per-tier `n` here.
+      return { tier, ...stats, n: inTier.length, posEdgeN: posEdge.length, thin: posEdge.length < 30 };
     }).filter(t => t.n > 0);
 
     // Shrinkage pooled among these 3 leagues' own per-league-per-tier cells only.
@@ -6484,9 +6487,10 @@ app.get('/api/debug/single-look-3leagues', async (req, res) => {
       const away = fixtures.filter(f => f.isAwayPick);
       const homePos = home.filter(f => f.edge >= 0.05);
       const awayPos = away.filter(f => f.edge >= 0.05);
+      // n/posEdgeN placed AFTER each spread — see the pooledRoi comment above for why.
       return {
-        home: { n: home.length, posEdgeN: homePos.length, ...roiStats(homePos), thin: homePos.length < 30 },
-        away: { n: away.length, posEdgeN: awayPos.length, ...roiStats(awayPos), thin: awayPos.length < 30 },
+        home: { ...roiStats(homePos), n: home.length, posEdgeN: homePos.length, thin: homePos.length < 30 },
+        away: { ...roiStats(awayPos), n: away.length, posEdgeN: awayPos.length, thin: awayPos.length < 30 },
       };
     }
     const pooledHomeAway = homeAwaySplit(matched);
@@ -6496,12 +6500,13 @@ app.get('/api/debug/single-look-3leagues', async (req, res) => {
     }));
 
     // ── Overall decision-grade summary (rule 6: ~300-400 posEdge floor) ───
+    // n/posEdgeN placed AFTER each spread — see the pooledRoi comment above for why.
     const overallPosEdge = matched.filter(f => f.edge >= 0.05);
-    const overall = { n: matched.length, posEdgeN: overallPosEdge.length, ...roiStats(overallPosEdge), decisionGrade: overallPosEdge.length >= 300 };
+    const overall = { ...roiStats(overallPosEdge), n: matched.length, posEdgeN: overallPosEdge.length, decisionGrade: overallPosEdge.length >= 300 };
     const byLeagueOverall = NEW_LEAGUE_IDS.map(lid => {
       const lfx = matched.filter(f => f.leagueId === lid);
       const lpos = lfx.filter(f => f.edge >= 0.05);
-      return { leagueId: lid, leagueName: NEW_LEAGUE_NAMES[lid], n: lfx.length, posEdgeN: lpos.length, ...roiStats(lpos), decisionGrade: lpos.length >= 300 };
+      return { leagueId: lid, leagueName: NEW_LEAGUE_NAMES[lid], ...roiStats(lpos), n: lfx.length, posEdgeN: lpos.length, decisionGrade: lpos.length >= 300 };
     });
 
     res.json({
