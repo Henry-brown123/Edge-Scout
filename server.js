@@ -3919,6 +3919,14 @@ const CLOSING_ODDS_SPORT_MAP = {
   '94':  'soccer_portugal_primeira_liga',
   '3':   'soccer_uefa_europa_league',
   '848': 'soccer_uefa_europa_conference_league',
+  // Added 2026-08-11 for the Carabao Cup/League One/League Two closing-odds
+  // backfill task. Re-verified live against /sports?all=true before use — the EFL
+  // Cup key shows active:false right now (between rounds, new season not yet
+  // underway) but that only affects the live-odds endpoint, not historical
+  // archive access, which this backfill uses exclusively.
+  '48':  'soccer_england_efl_cup',
+  '41':  'soccer_england_league1',
+  '42':  'soccer_england_league2',
 };
 
 let _closingOddsStatus = {
