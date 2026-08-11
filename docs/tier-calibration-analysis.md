@@ -2879,3 +2879,109 @@ No calibration, ROI read, or weight re-optimisation was run against this
 population — it remains the same held-aside, untouched status as
 Carabao Cup/League One/League Two's original addition (Addendum 15) and
 the standing rule in `docs/calibration-rules.md`.
+
+## Addendum 18 — Team-profile rebuild resolved: root cause was a nightly recurring crash, not a one-off
+
+Addendum 17 deferred the team-profile rebuild for Carabao Cup/League
+One/League Two after repeated crashes even with event-loop yields
+applied. This addendum confirms the actual memory constraint, assesses
+how material the gap was, fixes the real (ongoing, not one-off) root
+cause, and completes the deferred rebuild safely.
+
+### The memory constraint, confirmed not guessed
+
+`render.yaml` confirms `plan: starter` — Render's documented 512MB
+instance. A temp diagnostic (`process.memoryUsage()`, removed after use)
+showed idle RSS at ~311MB — only ~200MB of headroom before the 512MB
+ceiling, before any historical-data operation even begins. Loading and
+grouping the full ~68k-fixture pool measured as cheap (~1MB RSS growth),
+ruling out the pool-grouping step itself as the bottleneck. The actual
+crash trigger turned out to be broader than one function: not just
+`updateTeamProfiles` in isolation, but the combined effect of every
+Phase 1-5 structure (fixtureMap, scoredMap, teamIndex, standingsIndex,
+records, growing profiles object) staying resident simultaneously for an
+entire synchronous request's duration once profile rebuild ran across
+the full ~1,197-team population.
+
+### An important discovery: this wasn't a one-off, it was recurring nightly
+
+Checking cron/quota state on resuming this task revealed the 00:05 UTC
+nightly backfill cron (`runBackfillChain` → `runHistoricalBackfill`,
+unconditional every night) had been crash-looping for hours —
+`team-profiles.json`'s on-disk size hadn't moved since Addendum 17, and
+`apiQuotaUsedToday` plus a fresh boot uptime were consistent with
+repeated overnight restarts. Root cause: Phase 3 (weight optimisation)
+and Phase 5 (profile rebuild) both ran over the *entire* population on
+*every* cron firing, regardless of whether any fixture was actually new
+that day. This was the real, ongoing incident — fixing the one-off
+catch-up alone would not have stopped it recurring every night going
+forward.
+
+**Fix**: `runHistoricalBackfill` now tracks `changedTeamIds` — the teams
+with a genuinely newly-scored fixture that run. Phase 3 and Phase 5 are
+both now gated on `changedTeamIds.size > 0`; a night with zero new
+results (Phase 2 finds nothing to score) now correctly skips both
+instead of redundantly recomputing identical output. `updateTeamProfiles`
+(teamProfiles.js) gained an optional `onlyTeamIds` parameter — grouping
+still scans every passed fixture (confirmed cheap), so each affected
+team's profile is still built from its own full history; this only skips
+the per-team build+write for teams whose history didn't change. Verified
+live: a manual trigger post-fix completed cleanly in under a minute
+(`profilesBuilt: 0`, correctly skipped — the "new" fixtures were
+active-season re-fetches of already-scored data, not genuinely new).
+
+### Materiality: how much was actually at stake
+
+`applyTeamProfileModifiers` (the only place team-profile data feeds into
+live scoring) has an explicit clean no-op path — `if (!homeProfile ||
+!awayProfile) return { probs, applied: false }`. The *primary* scoring
+signal (`form`/`xg`/`defense`/`h2h`/`standings`/`momentum` —
+`WEIGHTS_BY_CONTEXT`) is 100% pool-based and has zero dependency on
+`team-profiles.json`; that layer is already fixed and rich for the new
+leagues (Addendum 16/17). The profile layer contributes only secondary,
+capped adjustments on top: home/away strength multiplier (clamped
+0.5x-2.0x, only fires above a 2pp threshold), H2H anomaly, fixture
+congestion, weather sensitivity (each gated behind minimum-sample-size
+thresholds), and WOWY absence adjustment (capped ±8pp total). A stored
+`momentumPatterns` field turned out not to be read by
+`applyTeamProfileModifiers` at all — dead data currently, for every team,
+not just the new leagues'. Conclusion: the gap was real but bounded —
+new-league fixtures were scoring purely on already-correct pool-based
+signal, missing only small secondary refinements, not corrupted or
+degraded output.
+
+### The one-off catch-up: batched, scoped, verified clean
+
+Scope: teams appearing in any Carabao Cup/League One/League Two fixture
+(108 teams total, out of ~1,197 across the whole historical population)
+— matching the task boundary that already-tracked leagues' teams should
+only be touched if they specifically played in one of the three new
+competitions. Processed in 4 batches of ≤30 via a temp endpoint using
+the new `onlyTeamIds` parameter — each batch a separate HTTP request so
+memory from one batch fully releases before the next. All 4 batches
+completed cleanly, zero crashes, server `startedAt` unchanged throughout
+the entire run.
+
+**No-corruption spot-check** (before → after):
+
+| Team | In scope? | dataPoints before | dataPoints after |
+|---|---|---|---|
+| Charlton Athletic (1335) | Yes (League One + Carabao Cup) | none (404, never built) | 444 |
+| Manchester United (33) | Yes (plays Carabao Cup) | 236 | 741 |
+| Manchester City (50) | Yes (plays Carabao Cup) | 6 (thinned by an unrelated recent morning-scan overwrite) | 756 |
+| Real Madrid (541) | No (La Liga only, never in these 3 comps) | 250 | 250 — exactly unchanged |
+
+Teams in scope got richer, accurate profiles built from their own full
+history (not corrupted, not thinned); teams out of scope were completely
+untouched, confirming the scoping worked exactly as designed. Man
+City's incidental fix (6 → 756) is a bonus — the same batched mechanism
+correctly rebuilt a profile an unrelated recent morning-scan run had
+thinned, from the full available history rather than that day's partial
+scan.
+
+### Confirmed throughout
+
+Auto-retrain gate re-checked before and after every deploy/trigger:
+`autoRetrainEnabled: false`, `retrainPending: false`, model
+`trainedAt`/`trainN` unchanged throughout. No calibration, ROI read, or
+weight re-optimisation run against this population.
