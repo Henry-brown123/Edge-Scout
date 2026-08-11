@@ -6784,29 +6784,38 @@ app.get('/api/diagnostics/two-legged-aggregate', async (_req, res) => {
     }
   }
 
-  // Round-string leg detection.
-  const legRe = /(\d)(?:st|nd|rd|th)\s*leg/i;
-  const roundFamily = (round) => round.replace(legRe, '').trim(); // strips "1st Leg"/"2nd Leg" suffix
-
-  // Group fixtures into round-families (same league+season+round-minus-leg-suffix),
-  // then within each family, pair fixtures between the same two teams (reversed
-  // home/away) as a two-legged tie.
+  // API-Sports round strings for these competitions carry no leg marker at all
+  // (confirmed empirically — "Round of 16", "Quarter-finals" etc. appear identically
+  // for both legs, no "1st Leg"/"2nd Leg" suffix like some other data sources use).
+  // So ties are identified generically: within the same league+season+round string,
+  // find fixture pairs between the same two teams with reversed home/away roles —
+  // the earlier-dated one is leg 1, the later-dated one is leg 2. Group/League-Stage
+  // rounds naturally never produce such a reversed same-round-string pair (each
+  // round number is one unique fixture per team pair), so this doesn't need an
+  // explicit knockout-only filter to avoid false positives.
   const byFamily = {};
   for (const f of allFixtures) {
-    if (!legRe.test(f.round)) continue; // only interested in explicitly leg-tagged rounds
-    const key = `${f.leagueId}_${f.season}_${roundFamily(f.round)}`;
+    const key = `${f.leagueId}_${f.season}_${f.round}`;
     if (!byFamily[key]) byFamily[key] = [];
     byFamily[key].push(f);
   }
 
   const ties = [];
+  const leg1Fixtures = []; // each matched tie's leg-1 fixture, for the "no aggregate context" baseline
   for (const fixtures of Object.values(byFamily)) {
-    const leg1s = fixtures.filter(f => /1st|first/i.test(f.round));
-    const leg2s = fixtures.filter(f => /2nd|second/i.test(f.round));
-    for (const l2 of leg2s) {
-      // leg 2's home/away should be leg 1's away/home (reversed fixture)
-      const l1 = leg1s.find(f => f.homeId === l2.awayId && f.awayId === l2.homeId);
-      if (!l1 || !Number.isFinite(l1.hg) || !Number.isFinite(l1.ag) ||
+    if (fixtures.length < 2) continue;
+    const used = new Set();
+    for (const a of fixtures) {
+      if (used.has(a.fixtureId)) continue;
+      const b = fixtures.find(f =>
+        f.fixtureId !== a.fixtureId && !used.has(f.fixtureId) &&
+        f.homeId === a.awayId && f.awayId === a.homeId
+      );
+      if (!b) continue;
+      used.add(a.fixtureId); used.add(b.fixtureId);
+      // Earlier date = leg 1, later date = leg 2 (independent of which is "a"/"b").
+      const [l1, l2] = new Date(a.date) <= new Date(b.date) ? [a, b] : [b, a];
+      if (!Number.isFinite(l1.hg) || !Number.isFinite(l1.ag) ||
           !Number.isFinite(l2.hg) || !Number.isFinite(l2.ag)) continue;
 
       // Aggregate entering leg 2, from leg-2-home-team's perspective.
@@ -6823,18 +6832,20 @@ app.get('/api/diagnostics/two-legged-aggregate', async (_req, res) => {
       else aggState = 'leg2Home_behind_2plus';
 
       ties.push({
-        leagueName: l2.leagueName, season: l2.season, round: roundFamily(l2.round),
+        leagueName: l2.leagueName, season: l2.season, round: l2.round,
         leg1Score: `${l1.hg}-${l1.ag}`, leg2Score: `${l2.hg}-${l2.ag}`,
         aggDiffEnteringLeg2, aggState,
         leg2Outcome: l2.hg > l2.ag ? 'leg2Home' : l2.hg < l2.ag ? 'leg2Away' : 'draw',
         leg2GoalDiff: Math.abs(l2.hg - l2.ag),
       });
+      leg1Fixtures.push(l1);
     }
   }
 
-  // Baseline: all leg-1 fixtures (no aggregate context yet — the "no leg-awareness" case).
-  const leg1Baseline = allFixtures.filter(f => legRe.test(f.round) && /1st|first/i.test(f.round))
-    .filter(f => Number.isFinite(f.hg) && Number.isFinite(f.ag));
+  // Baseline: the leg-1 fixture of each matched tie — a real 1X2 result with zero
+  // aggregate context yet (nothing to protect/chase), the closest available proxy
+  // for "what this model already assumes every fixture looks like."
+  const leg1Baseline = leg1Fixtures;
   const baselineStats = (arr, outcomeOf) => {
     const n = arr.length;
     let home = 0, draw = 0, away = 0, gdSum = 0;
