@@ -6732,6 +6732,152 @@ app.get('/api/diagnostics/two-legged-check', async (_req, res) => {
   res.json({ apiQuota, byLeague });
 });
 
+// TEMP DIAGNOSTIC — two-legged aggregate-state analysis. round/leg info was never
+// persisted in backfill-historical.json (stripFixture() drops league.round to save
+// memory on this 512MB instance), so this re-fetches fixture lists by league+season
+// directly from API-Sports (read-only, nothing written back to stored data) to test
+// the actual hypothesis: does a team's leg-2 result shift depending on the aggregate
+// scoreline they're carrying in from leg 1, not just whether the round is "knockout"?
+// Small, deliberate API cost — reported in the final writeup. Remove after this
+// investigation is closed out.
+app.get('/api/diagnostics/two-legged-aggregate', async (_req, res) => {
+  const LEAGUES = [
+    { id: 2,   name: 'Champions League', seasons: [2011,2012,2013,2014,2015,2016,2017,2018,2019,2020,2021,2022,2023,2024] },
+    { id: 3,   name: 'Europa League',    seasons: [2014,2015,2016,2017,2018,2019,2020,2021,2022,2023,2024] },
+    { id: 848, name: 'Conference League', seasons: [2021,2022,2023,2024] },
+  ];
+
+  let apiCallCount = 0;
+  const allFixtures = [];
+  const errors = [];
+
+  for (const lg of LEAGUES) {
+    for (const season of lg.seasons) {
+      try {
+        apiCallCount++;
+        const { data } = await apiSports.get('/fixtures', { params: { league: lg.id, season } });
+        const resp = data?.response || [];
+        for (const f of resp) {
+          const status = f.fixture?.status?.short;
+          if (!['FT', 'AET', 'PEN'].includes(status)) continue;
+          allFixtures.push({
+            leagueId: lg.id,
+            leagueName: lg.name,
+            season,
+            round: (f.league?.round || '').trim(),
+            fixtureId: f.fixture?.id,
+            date: f.fixture?.date,
+            homeId: f.teams?.home?.id,
+            awayId: f.teams?.away?.id,
+            homeName: f.teams?.home?.name,
+            awayName: f.teams?.away?.name,
+            // Use fulltime score (not AET/PEN-inflated) for the actual-1X2 result,
+            // consistent with how scoreFixtureFromPool derives actualOutcome.
+            hg: f.score?.fulltime?.home ?? f.goals?.home,
+            ag: f.score?.fulltime?.away ?? f.goals?.away,
+          });
+        }
+        await new Promise(r => setImmediate(r));
+      } catch (e) {
+        errors.push({ league: lg.name, season, error: e.message });
+      }
+    }
+  }
+
+  // Round-string leg detection.
+  const legRe = /(\d)(?:st|nd|rd|th)\s*leg/i;
+  const roundFamily = (round) => round.replace(legRe, '').trim(); // strips "1st Leg"/"2nd Leg" suffix
+
+  // Group fixtures into round-families (same league+season+round-minus-leg-suffix),
+  // then within each family, pair fixtures between the same two teams (reversed
+  // home/away) as a two-legged tie.
+  const byFamily = {};
+  for (const f of allFixtures) {
+    if (!legRe.test(f.round)) continue; // only interested in explicitly leg-tagged rounds
+    const key = `${f.leagueId}_${f.season}_${roundFamily(f.round)}`;
+    if (!byFamily[key]) byFamily[key] = [];
+    byFamily[key].push(f);
+  }
+
+  const ties = [];
+  for (const fixtures of Object.values(byFamily)) {
+    const leg1s = fixtures.filter(f => /1st|first/i.test(f.round));
+    const leg2s = fixtures.filter(f => /2nd|second/i.test(f.round));
+    for (const l2 of leg2s) {
+      // leg 2's home/away should be leg 1's away/home (reversed fixture)
+      const l1 = leg1s.find(f => f.homeId === l2.awayId && f.awayId === l2.homeId);
+      if (!l1 || !Number.isFinite(l1.hg) || !Number.isFinite(l1.ag) ||
+          !Number.isFinite(l2.hg) || !Number.isFinite(l2.ag)) continue;
+
+      // Aggregate entering leg 2, from leg-2-home-team's perspective.
+      // l1: l1.homeId (== l2.awayId) scored l1.hg; l1.awayId (== l2.homeId) scored l1.ag.
+      const leg2HomeAggBeforeLeg2 = l1.ag; // leg2's home team's goals so far
+      const leg2AwayAggBeforeLeg2 = l1.hg; // leg2's away team's goals so far
+      const aggDiffEnteringLeg2 = leg2HomeAggBeforeLeg2 - leg2AwayAggBeforeLeg2; // >0 = leg2-home team already ahead
+
+      let aggState;
+      if (aggDiffEnteringLeg2 >= 2) aggState = 'leg2Home_ahead_2plus';
+      else if (aggDiffEnteringLeg2 === 1) aggState = 'leg2Home_ahead_1';
+      else if (aggDiffEnteringLeg2 === 0) aggState = 'level';
+      else if (aggDiffEnteringLeg2 === -1) aggState = 'leg2Home_behind_1';
+      else aggState = 'leg2Home_behind_2plus';
+
+      ties.push({
+        leagueName: l2.leagueName, season: l2.season, round: roundFamily(l2.round),
+        leg1Score: `${l1.hg}-${l1.ag}`, leg2Score: `${l2.hg}-${l2.ag}`,
+        aggDiffEnteringLeg2, aggState,
+        leg2Outcome: l2.hg > l2.ag ? 'leg2Home' : l2.hg < l2.ag ? 'leg2Away' : 'draw',
+        leg2GoalDiff: Math.abs(l2.hg - l2.ag),
+      });
+    }
+  }
+
+  // Baseline: all leg-1 fixtures (no aggregate context yet — the "no leg-awareness" case).
+  const leg1Baseline = allFixtures.filter(f => legRe.test(f.round) && /1st|first/i.test(f.round))
+    .filter(f => Number.isFinite(f.hg) && Number.isFinite(f.ag));
+  const baselineStats = (arr, outcomeOf) => {
+    const n = arr.length;
+    let home = 0, draw = 0, away = 0, gdSum = 0;
+    for (const f of arr) {
+      const o = outcomeOf(f);
+      if (o === 'home' || o === 'leg2Home') home++;
+      else if (o === 'away' || o === 'leg2Away') away++;
+      else draw++;
+      gdSum += Math.abs(f.hg - f.ag);
+    }
+    return { n, homeRate: n ? +(home/n).toFixed(3) : null, drawRate: n ? +(draw/n).toFixed(3) : null, awayRate: n ? +(away/n).toFixed(3) : null, avgAbsGoalDiff: n ? +(gdSum/n).toFixed(2) : null };
+  };
+
+  const byAggState = {};
+  for (const t of ties) {
+    if (!byAggState[t.aggState]) byAggState[t.aggState] = { n: 0, leg2Home: 0, draw: 0, leg2Away: 0, gdSum: 0 };
+    const b = byAggState[t.aggState];
+    b.n++;
+    b[t.leg2Outcome]++;
+    b.gdSum += t.leg2GoalDiff;
+  }
+  const aggStateSummary = Object.entries(byAggState).map(([state, b]) => ({
+    aggState: state, n: b.n,
+    leg2HomeWinRate: +(b.leg2Home / b.n).toFixed(3),
+    drawRate:        +(b.draw / b.n).toFixed(3),
+    leg2AwayWinRate: +(b.leg2Away / b.n).toFixed(3),
+    avgLeg2GoalDiff: +(b.gdSum / b.n).toFixed(2),
+  })).sort((a, b) => {
+    const order = ['leg2Home_ahead_2plus','leg2Home_ahead_1','level','leg2Home_behind_1','leg2Home_behind_2plus'];
+    return order.indexOf(a.aggState) - order.indexOf(b.aggState);
+  });
+
+  res.json({
+    apiCallCount,
+    errors,
+    totalFixturesFetched: allFixtures.length,
+    totalTwoLeggedTiesMatched: ties.length,
+    leg1BaselineDistribution: baselineStats(leg1Baseline, f => f.hg > f.ag ? 'home' : f.hg < f.ag ? 'away' : 'draw'),
+    aggStateSummary,
+    note: 'aggStateSummary is keyed on leg-2-home-team\'s aggregate position entering leg 2. Compare drawRate/goalDiff across states against leg1BaselineDistribution (which has zero aggregate context) to see if aggregate state actually shifts leg-2 behavior.',
+  });
+});
+
 app.get('/api/startup/status', (_req, res) => {
   const hist    = readJSON('backfill-historical.json');
   const stats   = readJSON('fixture-stats.json') || {};
