@@ -6341,6 +6341,50 @@ app.get('/api/debug/memory-check', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
 });
 
+// TEMPORARY — runs the actual, full updateTeamProfiles(existing.fixtures) rebuild
+// (the real operation that crashed before) while sampling process.memoryUsage()
+// every 300ms to a file on disk, so the memory trajectory survives even if this
+// call itself crashes the process (the HTTP response would never be sent in that
+// case — the trace file is how we'd still see where it spiked). This is a real
+// rebuild, not a simulation: if it completes, team-profiles.json is genuinely
+// updated for all 1197 teams found across the full historical population.
+app.post('/api/debug/memory-traced-rebuild', async (req, res) => {
+  const tracePath = path.join(DATA_DIR, 'memory-trace.json');
+  const samples = [];
+  const sampler = setInterval(() => {
+    const m = process.memoryUsage();
+    samples.push({ t: Date.now(), rssMB: Math.round(m.rss / 1048576), heapUsedMB: Math.round(m.heapUsed / 1048576) });
+    try { fs.writeFileSync(tracePath, JSON.stringify({ running: true, samples })); } catch {}
+  }, 300);
+  try {
+    const existing = readJSON('backfill-historical.json');
+    if (!existing) return res.status(404).json({ error: 'backfill-historical.json not found' });
+    const totalFixtures = existing.fixtures.length;
+    const scoredCount   = existing.scoredRecords.length;
+    if (scoredCount !== totalFixtures) {
+      clearInterval(sampler);
+      return res.status(409).json({ error: 'scoring not complete', totalFixtures, scoredCount });
+    }
+    const profileCount = await updateTeamProfiles(existing.fixtures);
+    clearInterval(sampler);
+    fs.writeFileSync(tracePath, JSON.stringify({ running: false, completed: true, profileCount, samples }));
+    res.json({ profileCount, peakRssMB: Math.max(...samples.map(s => s.rssMB)), sampleCount: samples.length });
+  } catch (e) {
+    clearInterval(sampler);
+    try { fs.writeFileSync(tracePath, JSON.stringify({ running: false, error: e.message, samples })); } catch {}
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
+app.get('/api/debug/memory-trace', (_req, res) => {
+  const tracePath = path.join(DATA_DIR, 'memory-trace.json');
+  try {
+    const data = JSON.parse(fs.readFileSync(tracePath, 'utf8'));
+    const peakRssMB = data.samples?.length ? Math.max(...data.samples.map(s => s.rssMB)) : null;
+    res.json({ ...data, peakRssMB, sampleCount: data.samples?.length ?? 0 });
+  } catch (e) { res.status(404).json({ error: 'no trace file yet', message: e.message }); }
+});
+
 const _serverStartedAt = new Date().toISOString();
 
 app.get('/api/server-status', async (_req, res) => {
