@@ -270,8 +270,18 @@ const LEAGUE_CONFIG = {
   179: { name: 'Scottish Premiership',  avgHomeWinRate: 0.4449, avgDrawRate: 0.2396, avgAwayWinRate: 0.3154, avgGoalsPerGame: 2.71, marketEfficiency: 0.78, drawBaseWeight: 1.07, homeAdvBaseWeight: 1.35 },
   88:  { name: 'Eredivisie',            avgHomeWinRate: 0.4344, avgDrawRate: 0.2382, avgAwayWinRate: 0.3274, avgGoalsPerGame: 3.12, marketEfficiency: 0.80, drawBaseWeight: 1.00, homeAdvBaseWeight: 1.00 },
   94:  { name: 'Primeira Liga',         avgHomeWinRate: 0.4486, avgDrawRate: 0.2258, avgAwayWinRate: 0.3255, avgGoalsPerGame: 2.68, marketEfficiency: 0.79, drawBaseWeight: 0.93, homeAdvBaseWeight: 0.97 },
-  3:   { name: 'Europa League',         avgHomeWinRate: 0.431, avgDrawRate: 0.248, avgAwayWinRate: 0.321, avgGoalsPerGame: 2.78, marketEfficiency: 0.88, drawBaseWeight: 1.02, homeAdvBaseWeight: 0.96 },
-  848: { name: 'Conference League',     avgHomeWinRate: 0.441, avgDrawRate: 0.251, avgAwayWinRate: 0.308, avgGoalsPerGame: 2.65, marketEfficiency: 0.82, drawBaseWeight: 1.03, homeAdvBaseWeight: 0.98 },
+  // Base rates corrected 2026-08-11 against train-only observed frequencies
+  // (docs/calibration-rules.md train/test split; see VALIDATED_SPLITS in
+  // server.js for the exact boundary). Both are UEFA continental competitions
+  // where every match bar a neutral-venue final sends the away side across a
+  // border into an unfamiliar stadium — European away form is a well-documented
+  // step down from a club's normal domestic away form, which is a coherent
+  // football story for why the train-observed home rate runs hotter than the
+  // untuned defaults assumed. marketEfficiency/drawBaseWeight/homeAdvBaseWeight
+  // left untouched, same reasoning as every prior split this cycle: no
+  // independent train evidence to move them separately from the base-rate fix.
+  3:   { name: 'Europa League',         avgHomeWinRate: 0.500, avgDrawRate: 0.210, avgAwayWinRate: 0.290, avgGoalsPerGame: 2.78, marketEfficiency: 0.88, drawBaseWeight: 1.02, homeAdvBaseWeight: 0.96 },
+  848: { name: 'Conference League',     avgHomeWinRate: 0.466, avgDrawRate: 0.206, avgAwayWinRate: 0.328, avgGoalsPerGame: 2.65, marketEfficiency: 0.82, drawBaseWeight: 1.03, homeAdvBaseWeight: 0.98 },
   // Added 2026-08-10, paper-only, zero calibration history — deliberately no
   // avgHomeWinRate/avgDrawRate/avgAwayWinRate/avgGoalsPerGame. Those four feed a
   // real 30%-live-blend in applyLeagueBiasCorrection() and a goals-market baseline
