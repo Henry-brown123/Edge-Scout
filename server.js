@@ -6674,6 +6674,58 @@ function getWOWYHighConfCount() {
   return count;
 }
 
+// TEMP DIAGNOSTIC — two-legged knockout investigation (CL/EL/Conference League).
+// Inspects raw `round` strings already ingested in backfill-historical.json to see
+// whether leg 1/leg 2 is distinguishable from data already on disk (no new API calls),
+// and reports actual W/D/L base rates per round-bucket so any leg-specific distortion
+// is visible directly in the real outcome distribution. Remove after this investigation.
+app.get('/api/diagnostics/two-legged-check', (_req, res) => {
+  const hist = readJSON('backfill-historical.json') || {};
+  const EURO_LEAGUE_IDS = { 2: 'Champions League', 3: 'Europa League', 848: 'Conference League' };
+  const FINAL_STATUSES = new Set(['FT', 'AET', 'PEN']);
+
+  const byLeague = {};
+  for (const [lid, name] of Object.entries(EURO_LEAGUE_IDS)) {
+    const fixtures = (hist.fixtures || []).filter(f =>
+      f.league?.id === parseInt(lid, 10) && FINAL_STATUSES.has(f.fixture?.status?.short)
+    );
+
+    const byRound = {};
+    for (const f of fixtures) {
+      const round = f.league?.round || '(none)';
+      if (!byRound[round]) byRound[round] = { n: 0, home: 0, draw: 0, away: 0, goalDiffSum: 0 };
+      const hg = Number(f.goals?.home ?? f.score?.fulltime?.home);
+      const ag = Number(f.goals?.away ?? f.score?.fulltime?.away);
+      if (!Number.isFinite(hg) || !Number.isFinite(ag)) continue;
+      const b = byRound[round];
+      b.n++;
+      if (hg > ag) b.home++; else if (hg < ag) b.away++; else b.draw++;
+      b.goalDiffSum += Math.abs(hg - ag);
+    }
+
+    const roundSummary = Object.entries(byRound)
+      .map(([round, b]) => ({
+        round,
+        n: b.n,
+        homeRate: b.n ? +(b.home / b.n).toFixed(3) : null,
+        drawRate: b.n ? +(b.draw / b.n).toFixed(3) : null,
+        awayRate: b.n ? +(b.away / b.n).toFixed(3) : null,
+        avgAbsGoalDiff: b.n ? +(b.goalDiffSum / b.n).toFixed(2) : null,
+        looksLegTagged: /leg|1st|2nd|first|second/i.test(round),
+      }))
+      .sort((a, b) => b.n - a.n);
+
+    byLeague[name] = {
+      leagueId: parseInt(lid, 10),
+      totalFixtures: fixtures.length,
+      seasonsPresent: [...new Set(fixtures.map(f => f.league?.season))].sort(),
+      roundSummary,
+    };
+  }
+
+  res.json(byLeague);
+});
+
 app.get('/api/startup/status', (_req, res) => {
   const hist    = readJSON('backfill-historical.json');
   const stats   = readJSON('fixture-stats.json') || {};
