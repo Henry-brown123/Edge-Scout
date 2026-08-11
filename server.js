@@ -5999,6 +5999,8 @@ const VALIDATED_SPLITS = {
   140: { testFrom: '2024-01-12T20:00:00Z', splitCommit: 'ee97ca6' }, // La Liga, 2026-08-07
   88:  { testFrom: '2024-01-21T13:30:00Z', splitCommit: 'ee97ca6' }, // Eredivisie, 2026-08-07
   94:  { testFrom: '2024-01-18T20:45:00Z', splitCommit: 'ee97ca6' }, // Primeira Liga, 2026-08-07
+  3:   { testFrom: '2024-10-03T16:45:00Z', splitCommit: 'fbb8dbd' }, // Europa League, 2026-08-11
+  848: { testFrom: '2024-11-07T14:30:00Z', splitCommit: 'fbb8dbd' }, // Conference League, 2026-08-11
 };
 
 // Extracted so the weekly cron (setupScheduler) can refresh ev-calibration.json
