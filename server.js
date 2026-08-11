@@ -2248,6 +2248,12 @@ async function runHistoricalBackfill({ rescore = false, skipOptimise = false, on
       console.log('[HistoricalBackfill] rescore=true — cleared scored records, will re-score all fixtures');
     }
 
+    // Teams whose fixture history actually changed this run (a fixture of theirs
+    // got newly scored) — used to scope Phase 5's profile rebuild so a routine run
+    // only touches the handful of teams with genuinely new data, not the entire
+    // population every time. Declared here (not inside Phase 2's block) so it's
+    // always defined even on a run where Phase 2 finds nothing to score.
+    const changedTeamIds = new Set();
     const fixtureMap = new Map(existing.fixtures.map(f => [f.fixture?.id, f]));
     const scoredMap  = new Map(existing.scoredRecords.map(r => [r.fixtureId, r]));
     let   newCount   = 0;
@@ -2365,6 +2371,8 @@ async function runHistoricalBackfill({ rescore = false, skipOptimise = false, on
         if (record) {
           scoredMap.set(record.fixtureId, record);
           scored++;
+          if (fix.teams?.home?.id) changedTeamIds.add(fix.teams.home.id);
+          if (fix.teams?.away?.id) changedTeamIds.add(fix.teams.away.id);
         }
 
         if (++sinceYield >= 200) {
@@ -2417,14 +2425,27 @@ async function runHistoricalBackfill({ rescore = false, skipOptimise = false, on
     // separate, manual POST /api/backfill/historical/apply-weights call does that),
     // so deferring them to a later, smaller, deliberate run costs nothing but a
     // stale accuracy readout in the meantime.
+    //
+    // Also gated on changedTeamIds.size > 0 (i.e. something was actually newly
+    // scored this run) — previously this ran unconditionally on every nightly cron
+    // firing whenever the population was >= OPTIMISE_EVERY, which is every night
+    // from now on regardless of whether anything changed. Re-optimising against an
+    // unchanged population is pure waste (same input, same output) with the same
+    // crash risk as the original bug — confirmed as the actual ongoing cause of
+    // nightly crash/restart cycles via the 00:05 UTC cron (which calls this
+    // function unconditionally every night through runBackfillChain), independent
+    // of any one-off catch-up task.
     const allRecords = [...scoredMap.values()];
-    if (!skipOptimise && allRecords.length >= OPTIMISE_EVERY) {
+    if (!skipOptimise && changedTeamIds.size > 0 && allRecords.length >= OPTIMISE_EVERY) {
       _historicalBackfillStatus.phase = 'optimising';
       const msg = `[Optimise] Final pass on ${allRecords.length} records…`;
       console.log(msg); onProgress?.(msg);
       await _runOptimisation(allRecords, existing, onProgress);
     } else if (skipOptimise) {
       const msg = `[Optimise] Skipped for this run (skipOptimise=true) — existing optimisedWeights/accuracy left as-is.`;
+      console.log(msg); onProgress?.(msg);
+    } else if (changedTeamIds.size === 0) {
+      const msg = `[Optimise] Skipped — nothing newly scored this run, re-optimising against unchanged data would be a no-op.`;
       console.log(msg); onProgress?.(msg);
     }
 
@@ -2441,9 +2462,27 @@ async function runHistoricalBackfill({ rescore = false, skipOptimise = false, on
     fs.renameSync(histTmp, histPath);
 
     // ── Phase 5: Rebuild team profiles ─────────────────────────────────────
-    const profileCount = await updateTeamProfiles(existing.fixtures);
-    const msg2 = `[Profiles] Rebuilt ${profileCount} profiles from ${existing.totalFixtures} fixtures`;
-    console.log(msg2); onProgress?.(msg2);
+    // Scoped to changedTeamIds (teams with a genuinely newly-scored fixture this
+    // run) rather than every team in the full historical pool. This was previously
+    // unconditional — the actual, ongoing cause of nightly crash/restart cycles via
+    // the 00:05 UTC cron (runBackfillChain -> runHistoricalBackfill every night,
+    // rebuilding ~1200 teams' profiles regardless of whether anything changed).
+    // Each affected team's profile is still built from ITS OWN full fixture history
+    // (updateTeamProfiles groups the entire passed-in fixtures array before scoping
+    // which teams get written — see teamProfiles.js), so this doesn't produce
+    // thinner profiles, just fewer of them touched on nights nothing changed for
+    // most teams. A one-off catch-up for teams that have never had a profile built
+    // at all (e.g. after adding new leagues) is handled separately, in batches, not
+    // through this unconditional path.
+    let profileCount = 0;
+    if (changedTeamIds.size > 0) {
+      profileCount = await updateTeamProfiles(existing.fixtures, changedTeamIds);
+      const msg2 = `[Profiles] Rebuilt ${profileCount} profiles (scoped to ${changedTeamIds.size} teams with new data) from ${existing.totalFixtures} fixtures`;
+      console.log(msg2); onProgress?.(msg2);
+    } else {
+      const msg2 = `[Profiles] Skipped — no teams had newly-scored fixtures this run.`;
+      console.log(msg2); onProgress?.(msg2);
+    }
 
     const summary = {
       totalFixtures:    fixtureMap.size,

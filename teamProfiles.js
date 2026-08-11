@@ -353,8 +353,20 @@ function getIntlHistoricalPool() {
 // teams — doesn't block Node's event loop for the whole rebuild. Same reasoning
 // and pattern as the yields added to the historical scoring pipeline
 // (server.js/weightOptimiser.js) for the same underlying crash.
-async function updateTeamProfiles(fixtures) {
+// onlyTeamIds (optional Set/array of team ids, coerced to strings): scopes which
+// teams actually get buildProfileFromFixtures + written out. Grouping still scans
+// every passed fixture (cheap — confirmed empirically to add ~1MB RSS even across
+// the full ~68k-fixture historical pool), so every candidate team's FULL fixture
+// history is still available for whichever teams end up in scope; this only skips
+// the (comparatively expensive, done up to ~1200 times without it) per-team
+// profile build + write for teams whose fixture history hasn't actually changed.
+// Exists so the nightly cron (which always passes the full historical pool, not
+// just today's new results) doesn't redundantly — and, at full population size,
+// crash-risk-ily — rebuild all ~1200 teams' profiles every night regardless of
+// whether anything changed.
+async function updateTeamProfiles(fixtures, onlyTeamIds = null) {
   if (!fixtures || !fixtures.length) return 0;
+  const scopeSet = onlyTeamIds ? new Set([...onlyTeamIds].map(String)) : null;
 
   const completed = fixtures.filter(f =>
     ['FT', 'AET', 'PEN'].includes(f.fixture?.status?.short)
@@ -381,6 +393,7 @@ async function updateTeamProfiles(fixtures) {
   let sinceYield = 0;
 
   for (const [teamId, { name, fixes }] of Object.entries(teamData)) {
+    if (scopeSet && !scopeSet.has(String(teamId))) continue;
     // Fix 1: for international context teams, build the profile from the full
     // international historical pool rather than the passed-in fixtures (which
     // may be only the current season's form fetch from the morning scan).
