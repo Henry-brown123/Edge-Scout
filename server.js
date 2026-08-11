@@ -6867,11 +6867,14 @@ app.get('/api/diagnostics/two-legged-aggregate', async (_req, res) => {
     return order.indexOf(a.aggState) - order.indexOf(b.aggState);
   });
 
+  const distinctRounds = [...new Set(allFixtures.map(f => f.round))].sort();
+
   res.json({
     apiCallCount,
     errors,
     totalFixturesFetched: allFixtures.length,
     totalTwoLeggedTiesMatched: ties.length,
+    distinctRounds,
     leg1BaselineDistribution: baselineStats(leg1Baseline, f => f.hg > f.ag ? 'home' : f.hg < f.ag ? 'away' : 'draw'),
     aggStateSummary,
     note: 'aggStateSummary is keyed on leg-2-home-team\'s aggregate position entering leg 2. Compare drawRate/goalDiff across states against leg1BaselineDistribution (which has zero aggregate context) to see if aggregate state actually shifts leg-2 behavior.',
