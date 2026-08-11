@@ -6766,6 +6766,16 @@ app.get('/api/diagnostics/walkforward-planning', (_req, res) => {
   }
 
   const dates = records.map(r => r.date).sort();
+
+  // Optional: return the exact sorted date list within a window, to find real
+  // matchday-safe boundaries near a target cumulative count rather than guessing.
+  const { from, to } = _req.query;
+  const windowDates = (from || to)
+    ? dates.filter(d => (!from || d >= from) && (!to || d < to))
+    : null;
+  if (windowDates) {
+    return res.json({ totalInSample: records.length, windowN: windowDates.length, windowDates });
+  }
   res.json({
     totalInSample: records.length,
     dateRange: dates.length ? [dates[0], dates[dates.length - 1]] : null,
