@@ -2985,3 +2985,208 @@ Auto-retrain gate re-checked before and after every deploy/trigger:
 `autoRetrainEnabled: false`, `retrainPending: false`, model
 `trainedAt`/`trainN` unchanged throughout. No calibration, ROI read, or
 weight re-optimisation run against this population.
+
+## Addendum 19 — Carabao Cup, League One, League Two: closing-odds backfill and the single, deliberate calibration + ROI look
+
+This is the payoff addendum for the historical population built in
+Addenda 16-18: closing-odds matched against Pinnacle, and — per
+`docs/calibration-rules.md` rule 3 and rule 10 — the one deliberate,
+non-iterated look at calibration and ROI against a population that has
+never been touched by any tuning decision.
+
+### Part A — Closing-odds backfill
+
+Sport keys re-verified live before bulk use (`/sports?all=true`):
+`soccer_england_efl_cup` (exists, `active:false` right now — between
+rounds, doesn't affect historical archive access), `soccer_england_league1`,
+`soccer_england_league2` (both `active:true`).
+
+| Competition | Fixtures eligible (2020+) | Matched | Match rate |
+|---|---|---|---|
+| Carabao Cup | ~460 | 330 | ~72% |
+| League One | ~3,700 | 3,344 | ~90% |
+| League Two | ~3,700 | 3,338 | ~90% |
+| **Total** | **~7,900** | **7,012** | **~89%** |
+
+Credits used: ~28,900 across the whole task (smoke test + full run +
+debug-mode miss investigation), against a starting balance of
+4,922,334 remaining — negligible. Well within the API-Sports 7,500/day
+limit throughout (no fixture-side calls needed beyond confirming sport
+keys).
+
+**Team-name matching**: no alias-table fixes needed this time. A
+debug-mode run against every miss showed **100% `no_event_match` with
+`eventCount: 0`** — the Odds API returned zero events for that
+kickoff-minute query, not a failed name match (a failed match would show
+`eventCount > 0` with no matching team pair inside it). Confirmed by
+inspecting the actual miss list: Bournemouth vs Milton Keynes Dons,
+Cardiff vs Sutton Utd, Hartlepool vs Crewe, Birmingham vs Colchester,
+Ipswich vs Newport County, and more in the same pattern — bigger EFL
+clubs against smaller lower-tier opposition, the signature pairing of
+**Carabao Cup Round 1** specifically (the round below "Round of 128,"
+which is as far as the original coverage spot-check in Addendum 15 went).
+**Structural gap confirmed**: Carabao Cup's very earliest round has
+materially thinner Pinnacle market coverage historically than the
+rounds the original check sampled — a genuine data-availability limit,
+not a code defect. League One/League Two showed no comparable gap
+(~90% match rate each, no round-level pattern in the misses).
+
+### Part B — The single, deliberate look
+
+Computed once via a dedicated temp diagnostic endpoint (removed after
+use) — deliberately **not** `runEvCalibration()`, which also auto-manages
+`settings.paperTradeOnly` and the paper Kelly fraction based on ROI,
+side effects designed for the 9 validated leagues' ongoing weekly cron
+cycle. This population is categorically different (fully unseen, no
+train/test split, one-time baseline per rule 10) and any paper/real
+decision from it should stay a deliberate human call.
+
+**A bug was caught before treating the first call's numbers as final**:
+an object-spread ordering issue in the endpoint meant `n` was being
+silently overwritten by `posEdgeN` everywhere the pattern
+`{ n: X, posEdgeN: Y, ...roiStats(Y) }` appeared (`roiStats()` returns
+its own `n`, equal to the population it was actually given — i.e.
+`posEdgeN` — which clobbered the intended broader `n` after spreading).
+This didn't affect any ROI/CI figure (those were always computed
+correctly over the right subset), only the `n` label — but it meant
+rule 5's requirement (n and posEdgeN reported as genuinely distinct
+values) wasn't being met. Fixed and re-run once — a measurement-code bug
+fix in code written for this task, not a change to the population,
+model, or any calibration parameter, so this is the corrected first
+look, not a second look at the same valid numbers.
+
+**Matched population**: n=7,012, posEdgeN=3,494 (edge ≥5% vs Pinnacle).
+
+**Overall (pooled, 3 leagues combined)**: ROI +1.3%, CI (-3.3%, +5.9%) —
+spans zero. posEdgeN=3,494 clears the rule-6 decision-grade floor
+(~300-400) comfortably — a genuinely evidenced null result, not an
+under-sampled one.
+
+**Per league**:
+
+| League | n | posEdgeN | ROI | 95% CI | Decision-grade? |
+|---|---|---|---|---|---|
+| Carabao Cup | 330 | 168 | +18.5% | (-8.5%, +45.6%) | No (posEdgeN below floor) |
+| League One | 3,344 | 1,580 | -3.6% | (-9.8%, +2.5%) | Yes |
+| League Two | 3,338 | 1,746 | +4.2% | (-2.7%, +11.0%) | Yes |
+
+Carabao Cup's headline ROI looks tempting but the sample is too small
+to read as anything more than a hint — the exact caution rule 6 exists
+for. League One and League Two are both genuinely decision-grade and
+both land with CI spanning zero — no confirmed edge either way, the
+same pattern the original 9 validated leagues showed almost universally
+in their own held-out reads.
+
+**One cell excludes zero**: League One's 50-55% tier (n=230, posEdgeN
+per the tier-matrix convention) shows CI (-30.1%, -0.9%) — a genuinely
+negative reading. A single cell at this population size isn't yet a
+leaguewide finding, but it's the one place in this whole read that
+doesn't span zero, and is flagged the same way the PL 40-45% and La
+Liga 40-45% cells were in the original matrix.
+
+**Calibration grid** (5pp tiers, pooled across all 3 leagues, mean
+predicted probability vs actual hit rate):
+
+| Tier | n | Mean predicted | Actual hit rate | Error (pp) |
+|---|---|---|---|---|
+| 35-40% | 1,353 | 38.2% | 38.0% | +0.2 |
+| 40-45% | 1,703 | 42.4% | 42.6% | -0.1 |
+| 45-50% | 1,341 | 47.4% | 46.7% | +0.7 |
+| 50-55% | 1,024 | 52.3% | 46.6% | +5.7 |
+| 55-60% | 654 | 57.3% | 53.4% | +3.9 |
+| 60-65% | 452 | 62.3% | 55.3% | +7.0 |
+| 65-70% | 268 | 67.3% | 57.8% | +9.5 |
+| 70-75% | 137 | 72.5% | 61.3% | +11.1 |
+| 75-80% | 55 | 77.1% | 72.7% | +4.4 |
+| 80%+ | 23 | 81.6% | 69.6% | +12.0 |
+
+Well-calibrated through 45-50% (error under 1pp), then increasingly
+**overconfident** from 50% upward, peaking around +9 to +12pp in the
+65%+ tiers — the same directional pattern found for the original 9
+leagues throughout this project (the model trusts its own high-confidence
+picks more than the data supports). Nothing new mechanistically, just
+confirmed again on a genuinely fresh population.
+
+**Home/away split** (pooled, posEdge≥5% subset):
+
+| | n | posEdgeN | ROI | 95% CI |
+|---|---|---|---|---|
+| Home | 5,205 | 2,618 | +3.7% | (-1.7%, +9.0%) |
+| Away | 1,807 | 876 | -5.6% | (-14.6%, +3.4%) |
+
+Per league, the same home-leaning pattern holds directionally in all
+three, most notably **League Two home picks** (n=2,518, posEdgeN=1,304):
+ROI +8.0%, CI (**-0.1%**, +16.1%) — the closest any single cut of this
+entire population comes to excluding zero on the positive side. Not a
+confirmed finding on its own (still spans zero, if barely), but the
+most interesting single number in this read and worth a closer look in
+any future dedicated cycle. Carabao Cup's away split (n=75, posEdgeN=39,
+ROI +35.8%) is far too thin to read as anything.
+
+### Part C — Integration
+
+- **`LEAGUE_TIER_MATRIX`**: all three leagues added as new entries,
+  cells matching the ROI grid above exactly (posEdge-filtered `n`,
+  `roi`, `ciLow`/`ciHigh`, `thin` at n<30, `shrunk` via
+  `shrinkage.js`). Shrinkage pools **among these 3 leagues' own cells
+  only** — a deliberate choice, not merged into the original 9-league
+  pool, so every number already published in Addendum 6 stays exactly
+  as it was. `/api/league-tier-matrix` now returns two explicit scope
+  lists — `validatedLeagues` (the original 9, split-based) and
+  `unseenPopulationLeagues` (these 3) — rather than one undifferentiated
+  list, and its `note` field spells out the methodological difference.
+- **`CALIBRATION_AUDIT`**: added with `status: 'unseen_population'`,
+  deliberately not `'validated'` — that label specifically means "passed
+  a clean train/test split" (rule 7), and these three were never split
+  at all. `reliable: true` reflects genuine tuning-free cleanliness,
+  which is real but not the same claim a split makes.
+- **`TIER_PERF_VALIDATED_LEAGUES`** and **`HISTORICAL_TIER_BASELINE`**
+  deliberately left untouched — both are specifically scoped to "leagues
+  with a genuine train/test split," a different cohort by definition.
+  `byLeagueForTier` (the live tier-performance tracker's per-league
+  breakdown) already iterates `Object.keys(LEAGUE_TIER_MATRIX)`, so
+  these 3 leagues now automatically appear as tracker columns — showing
+  real historical/continuous data instead of a blank row — without
+  needing that set touched at all.
+- **Ongoing consequence worth flagging**: the Monday `runEvCalibration()`
+  cron will, from its next run onward, naturally start including these
+  three leagues in its own `byLeague` output (they now clear its n≥100
+  threshold) and in its automatic `paperTradeOnly`/Kelly-fraction
+  management — a separate, ongoing, already-existing automatic process
+  using its own edge-band methodology, not something this task
+  triggered deliberately. `LEAGUE_CONFIG`'s `leagueModes` hard block
+  (paper-only) is unaffected either way — `paperTradeOnly` is an
+  additional soft restriction layered on top, not a replacement for it.
+
+### Part D — Summary
+
+**Where (if anywhere) is there real, evidenced signal?** Nowhere
+confirmed. Every pooled and per-league ROI reading spans zero at the
+95% level, on a comfortably decision-grade sample for League One and
+League Two specifically. The two numbers worth remembering for a future
+look: League One's 50-55% tier (the one cell that excludes zero,
+negative) and League Two's home picks (closest to excluding zero,
+positive). Neither is a finding today — both are exactly the kind of
+"worth watching" flag the original 9 leagues' reads produced almost
+across the board.
+
+**This is the single look — rule 3, explicitly.** No further tuning,
+refitting, re-binning, or re-analysis of this population happens
+without a deliberate, separate, documented decision to do so in the
+future. The numbers above are final as read.
+
+**Auto-retrain gate**: re-verified before and after every deploy/trigger
+across this entire task — `autoRetrainEnabled: false`,
+`retrainPending: false` throughout, model `trainedAt`/`trainN`
+unchanged.
+
+**Constraints honoured**: no change to `LEAGUE_CONFIG` real/paper
+status — all three remain `paper_only` in `leagueModes` regardless of
+what this read showed. No change to base rates, scoring logic, or the
+live model. The real-money decision, if any, stays a separate,
+deliberate call.
+
+**Total API usage this task**: ~28,900 Odds API credits (of
+4,922,334+ remaining), well under 100 API-Sports calls (all
+confirmation/sport-key checks, no bulk fixture-side calls needed —
+Part A's fixture data was already complete from Addenda 16-18).
