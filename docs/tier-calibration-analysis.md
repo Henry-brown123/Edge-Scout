@@ -3190,3 +3190,222 @@ deliberate call.
 4,922,334+ remaining), well under 100 API-Sports calls (all
 confirmation/sport-key checks, no bulk fixture-side calls needed —
 Part A's fixture data was already complete from Addenda 16-18).
+
+## Addendum 20 — Two-legged knockout handling (CL/EL/Conference League), and train/test splits for Europa League + Conference League
+
+### Part A — Two-legged knockout structure
+
+**1. Current behaviour, confirmed by direct code reading**: neither the
+historical scorer (`scoreFixtureFromPool`, `weightOptimiser.js`) nor
+live scoring (`scoreOneFixture`, `server.js`) has any aggregate/leg
+awareness at all. Each leg of a two-legged tie is scored as a fully
+independent fixture — same factor computation (form/homeAdv/xg/h2h/
+defense/momentum/standings) as any other match, no tie-context input.
+The only competition-phase signal that exists at all is
+`classifyCompetitionPhase()` (group_stage vs knockout), and even that:
+(a) is only computed in the live path, never in historical scoring, and
+(b) for club competitions only feeds a display label
+(`neutralLabels`) — it does **not** change weights, neutral-venue
+handling, or any model input for CL/EL/Conference League (`neutralVenue`
+is gated to `context === 'international'` only, i.e. genuinely
+neutral-site tournaments like the World Cup — European club ties are
+always played at a real team's home ground, correctly).
+
+**2/3. Is this a real distortion?** Tested empirically rather than
+assumed either way. Round/leg data was never persisted in
+`backfill-historical.json` — `stripFixture()` drops `league.round`
+entirely (a genuine, previously-unknown gap, fixed below) — so this
+required re-fetching fixture lists by league+season directly from
+API-Sports (29 calls, ~8,785 fixtures, read-only, nothing written to
+stored data). Two findings from that data:
+
+- API-Sports' `round` field carries **no leg marker** for these
+  competitions (`"Round of 16"`, `"Quarter-finals"`, etc. — identical
+  string for both legs, no "1st Leg"/"2nd Leg" suffix). Ties had to be
+  identified generically: same league+season+round string, reversed
+  home/away team pair, earlier date = leg 1.
+- That matching produced **2,648 genuine two-legged ties (5,296
+  fixtures)** across CL/EL/Conference League, 2011–2024 — a real,
+  substantial population, not a handful of anecdotes. Two-legged
+  fixtures are ~63% of these three competitions' own fixture pool and
+  ~8% of the entire ~68k-fixture historical population.
+
+Leg 2's own match outcome, split by the aggregate scoreline entering
+it (from leg-2-home-team's perspective):
+
+| Aggregate state entering leg 2 | n | leg2Home win | Draw | leg2Away win | Avg goal diff |
+|---|---|---|---|---|---|
+| Ahead 2+ | 360 | 68.3% | 15.8% | 15.8% | 2.02 |
+| Ahead 1 | 403 | 59.6% | 18.1% | 22.3% | 1.61 |
+| Level | 670 | 46.9% | 22.8% | 30.3% | 1.52 |
+| Behind 1 | 589 | 50.6% | 21.4% | 28.0% | 1.45 |
+| Behind 2+ | 626 | 33.1% | 24.4% | 42.5% | 1.39 |
+| **Leg-1 baseline (no aggregate context)** | **2,648** | **45.9%** | **25.3%** | **28.8%** | **1.41** |
+
+This is real and statistically robust — the extreme buckets sit
+10–20+pp away from the leg-1 baseline on samples in the hundreds (e.g.
+"behind 2+"'s home-win gap is roughly 7 standard errors from baseline,
+nowhere near noise). It is **not fully explained by team-quality
+persistence** either: a team 2+ down after leg 1, playing leg 2 at
+home, still wins that specific match 33.1% of the time — clearly above
+what a symmetric mirror of the "ahead 2+" bucket's own 15.8%
+away/draw-combined rate would predict, consistent with a genuine
+"backs against the wall, must attack at home" second-leg dynamic on
+top of whatever team-quality gap the scoreline already reflects. The
+"ahead 2+" bucket's own extreme home-win rate (68.3%, well above the
+45.9% baseline) is plausibly mostly team-quality persistence — a team
+that's already 2+ up after leg 1 is often simply the stronger side —
+but disentangling the two cleanly wasn't attempted; see the scope
+decision below.
+
+**Practical caveat for Part B**: since two-legged fixtures are the
+majority of CL/EL/Conference League's own fixture pool, any home/away
+bias found in a competition-specific split (like the one run below)
+may partially reflect this aggregate-state dynamic rather than pure
+market inefficiency. Worth remembering when reading the Europa
+League/Conference League results below.
+
+**4. Proposal — implemented now vs. deferred**:
+
+- **Implemented**: `stripFixture()` now retains `league.round` going
+  forward (previously dropped it entirely — the exact gap that forced
+  this task to re-fetch from the API instead of reading it off disk).
+  Zero cost, purely additive, doesn't touch the existing population or
+  require any rescoring.
+- **Deferred, with a concrete recommendation**: a real "aggregate
+  context" feature or tag requires tracking each two-legged tie's leg-1
+  result *live*, at the moment leg 2 is being scored — round data now
+  available going forward (per the fix above), but the tie-pairing
+  lookup logic doesn't exist yet, and turning this into a model
+  *feature* would require a retrain plus its own quality-gate pass.
+  Recommend starting with a **metadata tag only** (`isSecondLeg`,
+  `aggDiffEnteringLeg2`) attached to the calibration log for CL/EL/
+  Conference League — near-zero model risk — and monitoring for a
+  season or two of live data whether the *live* model (with its full
+  feature set, including whatever H2H signal already leaks through
+  from leg 1 being the two teams' most recent meeting) is actually
+  measurably worse-calibrated in the extreme aggregate-state buckets,
+  before investing in an actual feature/weight change. This follows
+  calibration-rules.md rule 4 directly — a retrospective pattern that
+  might partly be a team-quality artifact isn't yet "a real
+  improvement with a football reason," it's a hypothesis worth
+  watching live before being built into the model.
+- Not implemented and not recommended soon: a full ClubElo-style
+  aggregate-points-scaled feature. The live-tag-and-monitor step above
+  is the prerequisite that would tell us whether that heavier
+  investment is actually justified.
+
+**Closed out — checked, not a lingering open flag.** The finding is
+real and documented; the response is proportionate (retain data going
+forward, tag-and-monitor before any model change) rather than either
+dismissing it or over-building on a retrospective pattern that
+hasn't been live-validated.
+
+Temp diagnostic endpoints used for this investigation
+(`/api/diagnostics/two-legged-check`, `/api/diagnostics/two-legged-aggregate`)
+have been removed; ~29 API-Sports calls were spent (~8,785 fixtures
+fetched), reported here and in the final task summary.
+
+### Part B — Europa League and Conference League train/test splits
+
+Same process as the 9 already-validated leagues, calibration-rules.md
+rule 1–9 throughout: genuine chronological split, tuning touches train
+only, single test-set look, `calibrationReliable` set from the actual
+outcome.
+
+**Europa League (league 3)**: matched-Pinnacle population starts
+2022-09-08 (no earlier Odds API coverage exists for this competition
+either, not just Conference League). Split at the natural matchday
+boundary after 2024-09-26 UTC — train n=286 (2022-09-08 to 2024-09-26,
+67.6%), test n=137 (2024-10-03 to 2025-05-21, 32.4%), zero fixture
+overlap. Train-observed outcome frequency (home 50.0% / draw 21.0% /
+away 29.0%) ran meaningfully hotter on home wins than the untuned
+default (43.1% / 24.8% / 32.1%) — corrected to match, football-
+justified by European away form running measurably below a club's
+normal domestic away form (unfamiliar stadium, cross-border travel,
+every match bar a neutral-venue final), and the shift was directionally
+coherent across all three outcomes, not an isolated noisy jump.
+`homeAdvBaseWeight`/`drawBaseWeight`/`marketEfficiency` left untouched,
+same reasoning as every other league this cycle.
+
+**Test-set result** (single look): n=137, posEdgeN=68, **ROI +2.47%**,
+95% CI (-32.4%, +37.3%) — spans zero, posEdgeN well below the rule-6
+~300-400 decision-grade floor. No confirmed edge either way. In scale
+this is comparable to Champions League's own split (the smallest of
+the original 9 at n=635 total) — Europa League's total matched
+population (423) is smaller still, but the split itself is clean and
+the result sits in the same "indicative only" bucket every other
+league has landed in.
+
+**Conference League (league 848)**: matched-Pinnacle population starts
+2022-10-27 — **empirically confirms** the 2021-22 industry-wide
+coverage blackout already documented in Addendum 11 (no vendor,
+including the current one, has ever tracked this competition's first
+UEFA season). Split at the natural matchday boundary after 2024-10-24
+UTC — train n=238 (2022-10-27 to 2024-10-24, 69.6%), test n=104
+(2024-11-07 to 2025-05-28, 30.4%), zero fixture overlap. Train-observed
+draw rate (20.6%) ran clearly below the untuned default (25.1%) — the
+clearest single gap of this cycle — corrected to match, with home/away
+renormalised accordingly (46.6% / 20.6% / 32.8%).
+
+**Test-set result** (single look): n=104, posEdgeN=39, **ROI +58.85%**,
+95% CI (-45.2%, +162.9%) — by a wide margin the noisiest reading of
+any split run to date (a 208pp-wide interval, driven by a return
+standard deviation of 3.32 on only 39 posEdge bets — a handful of
+high-odds outcomes dominating the mean). **This number should not be
+read as a finding of any kind.** The split methodology itself is
+genuinely clean — zero fixture overlap, base rates tuned on train only
+— which is what `calibrationReliable: true` certifies per rule 7's
+strict definition. But `CALIBRATION_AUDIT`'s `status` for this league
+is deliberately `validated_thin` rather than plain `validated`, to
+make clear in the data itself that this is the thinnest, least
+informative population validated so far and its ROI figure carries
+essentially no statistical weight, even though the split mechanics are
+sound. Not labelled "insufficient data for validation" outright,
+because the split genuinely completed with zero leakage — but readers
+of the dashboard should treat this exactly as they would an unvalidated
+number, not as a validated +58.85% edge.
+
+**Live wiring**: `VALIDATED_SPLITS` (server.js) gained entries for both
+leagues (`splitCommit: fbb8dbd`), so `runEvCalibration()`'s `byLeague`
+output now reports only each league's held-out test-set fixtures going
+forward, same as every other validated league. `LEAGUE_TIER_MATRIX`
+(the finer 5pp-band × league grid built in Addendum 14) was
+deliberately **not** extended to these two leagues this cycle — that's
+a separate analysis surface, and splitting an already-thin population
+(104–137 fixtures) into 8–11 finer bins would produce mostly
+single-digit-n cells with little added value. Can be done as a
+dedicated follow-up, the same way the 3 unseen-population leagues got
+their own Part C/D pass in Addendum 19, if wanted later.
+
+### Part C/D — Report
+
+**Two-legged handling**: checked, found real (statistically robust,
+concentrated in ~8% of the total population), not dismissed — lightweight
+fix implemented (retain round data going forward), heavier fix (a real
+aggregate-context feature) deliberately deferred pending live
+monitoring evidence, per rule 4.
+
+**Europa League and Conference League joined the validated-split
+cohort** (now 11 leagues total, alongside the original 9 from Addenda
+1–14 and the 3 unseen-population leagues from Addendum 19). Neither
+produced a confirmed edge — Europa League's CI spans zero on an
+indicative-only sample in line with every other league; Conference
+League's split is methodologically clean but its result is too thin
+and noisy to read as signal, flagged explicitly as such via
+`status: 'validated_thin'` rather than presented at face value.
+
+**Constraints honoured**: no change to `LEAGUE_CONFIG` real/paper
+status — both remain whatever `leagueModes` already had them set to.
+Auto-retrain gate re-verified before and after every deploy this task
+(`autoRetrainEnabled: false`, `retrainPending: false`, model
+`trainedAt`/`trainN` unchanged throughout). All three temp diagnostic
+endpoints added during this task
+(`/api/diagnostics/two-legged-check`, `/api/diagnostics/two-legged-aggregate`,
+`/api/diagnostics/el-conf-split-planning`) have been removed.
+
+**Total API usage this task**: ~29 API-Sports calls (~8,785 fixtures
+fetched, for the two-legged aggregate-state investigation only — Part
+B's split used data already on disk). Zero Odds API credits spent —
+the EL/Conf split worked entirely from already-ingested
+`backfill-historical.json` and `closing-odds.json`.
