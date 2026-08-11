@@ -6746,6 +6746,33 @@ function getWOWYHighConfCount() {
   _wowyHighConfCache = count;
   return count;
 }
+// TEMP DIAGNOSTIC — walk-forward block planning. Month-level scoredRecords counts
+// for the in-sample leagues, so block boundaries can be set against real volumes
+// instead of guessed. Excludes Carabao Cup/League One/League Two (never in-sample)
+// and does not need Conference League's own volume (it's folded into training but
+// not block-boundary-planning-relevant given its short, recent history). Remove
+// after block boundaries are finalized.
+app.get('/api/diagnostics/walkforward-planning', (_req, res) => {
+  const IN_SAMPLE_LEAGUE_IDS = [39, 140, 135, 78, 61, 179, 88, 94, 2, 3];
+  const hist = readJSON('backfill-historical.json') || {};
+  const records = (hist.scoredRecords || []).filter(r =>
+    IN_SAMPLE_LEAGUE_IDS.includes(parseInt(r.leagueId, 10)) && r.date
+  );
+
+  const monthHistogram = {};
+  for (const r of records) {
+    const ym = r.date.slice(0, 7);
+    monthHistogram[ym] = (monthHistogram[ym] || 0) + 1;
+  }
+
+  const dates = records.map(r => r.date).sort();
+  res.json({
+    totalInSample: records.length,
+    dateRange: dates.length ? [dates[0], dates[dates.length - 1]] : null,
+    monthHistogram,
+  });
+});
+
 app.get('/api/startup/status', (_req, res) => {
   const hist    = readJSON('backfill-historical.json');
   const stats   = readJSON('fixture-stats.json') || {};
