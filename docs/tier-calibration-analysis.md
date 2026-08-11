@@ -3409,3 +3409,337 @@ fetched, for the two-legged aggregate-state investigation only — Part
 B's split used data already on disk). Zero Odds API credits spent —
 the EL/Conf split worked entirely from already-ingested
 `backfill-historical.json` and `closing-odds.json`.
+
+## Addendum 21 — Walk-forward proxy backtest for the 10 in-sample leagues, and the Historical/Live/Combined framework redefinition
+
+Overnight, autonomous task. All 9 originally-validated leagues plus
+Champions League and Europa League were used to train the current live
+model (`EXCLUDED_LEAGUE_IDS` in the live retrain confirms only Carabao
+Cup/League One/League Two are held aside) — meaning none of them has a
+genuine untouched holdout the way Addenda 19/20 gave Carabao Cup/League
+One/League Two. This addendum builds an out-of-sample-*style* reading
+for these 10 leagues via walk-forward validation: a deliberately
+different technique from the single-holdout approach used everywhere
+else in this document, chosen specifically because no real holdout
+exists to take a single look at.
+
+### Part A — Walk-forward design
+
+**Parameterization.** `models/gbdt-train-proxy.js` (previously
+hardcoded to Addendum 14's single `HOLDOUT_START`) now accepts
+`WF_TRAIN_BEFORE`/`WF_TEST_END`/`WF_BLOCK_LABEL` env vars, dual-mode:
+legacy single-holdout behaviour is unchanged when these are unset,
+walk-forward mode activates when `WF_TRAIN_BEFORE` is present. Each
+block trains one proxy model on **all** data strictly before the
+block's start date (expanding window, not a fixed 2-year lookback) and
+tests on the block itself — the standard walk-forward definition,
+chosen so later blocks benefit from more training history, the same
+way the live model's own periodic retrains do.
+
+**Window selection — a genuine deviation from the original scoping,
+flagged as instructed.** The brief asked for "the past 2 years" ending
+now. A temp diagnostic endpoint (`/api/diagnostics/walkforward-planning`,
+removed after use, confirmed via live 404 check) pulled real per-month
+fixture volumes before committing to any boundary, per the brief's own
+instruction not to guess. That check found the qualifying population
+(all leagues except Carabao Cup/League One/League Two) **thins to
+near-zero from roughly 2025-06 through 2026-06** — 1 to 29 fixtures a
+month, because most European domestic seasons run August-to-May and
+2026-27 hadn't kicked off yet as of the task's run date. "Last 2 years
+ending now" was therefore not viable — it would have produced one or
+more starved blocks. **Autonomous decision: shifted the window to
+2023-06-01 → 2025-06-01**, the most recent 24-month span with genuinely
+dense, matchday-normal volume throughout. This is a real deviation from
+the literal brief and is the single biggest judgment call in this task.
+
+**Block boundaries**, set on real cumulative fixture counts (not
+guessed), each block ~6 months:
+
+| Block | Train-before | Test window | Test population | Matched Pinnacle | posEdge≥5% bets |
+|---|---|---|---|---|---|
+| 1 | 2023-06-01 | 2023-06-01 → 2023-12-23 | 2,207 | 1,476 | 509 |
+| 2 | 2023-12-23 | 2023-12-23 → 2024-07-25 | 1,995 | 1,521 | 450 |
+| 3 | 2024-07-25 | 2024-07-25 → 2024-12-30 | 2,079 | 1,564 | 519 |
+| 4 | 2024-12-30 | 2024-12-30 → 2025-06-01 | 1,633 | 1,547 | 480 |
+| **Total** | | | **7,914** | **6,108** | **1,958** |
+
+Each block trained one proxy model (not one per league — a single
+model per block, on the full cross-league pooled population, per the
+brief's explicit instruction), same 200-tree/depth-3/lr-0.02
+architecture as every other GBDT fit in this project, scored against
+`closing-odds.json` with `applyLeagueBiasCorrection()` applied on top
+of Platt-corrected raw probabilities — the same edge-computation
+treatment `runEvCalibration()` uses live. All 4 blocks completed with
+`exitCode: 0`, no crashes, no OOM signals, using the same
+`spawn()`-isolated/`setImmediate`-yielded/40-minute-timeout-protected
+pattern proven this week for the weekly retrain cron — necessary given
+the 512MB instance and confirmed memory-safe throughout.
+
+**Exclusion confirmed for every block, not just the final one.** Each
+block's log line reads `Total qualifying (excl. Carabao Cup/League
+One/League Two): 50,275` — identical across all 4 blocks (the
+exclusion is applied once in `loadData()`, upstream of any block
+split), confirming Carabao Cup/League One/League Two never entered any
+block's training or test population, consistent with their held-aside
+status under `docs/calibration-rules.md` rule 10.
+
+**Conference League**: folded into every block's pooled cross-league
+training population, exactly as it is in the live model — but, per the
+brief, not reported as its own walk-forward line here. Its existing
+`validated_thin` status and reasoning (Addendum 20) are untouched. Of
+the 1,958 total posEdge bets produced across the 4 blocks, 116 belong
+to Conference League and are excluded from the reported figures below;
+the remaining **1,842** belong to the 10 reported leagues.
+
+**Sequential execution only** — one block trained and scored to
+completion before the next started, no parallel jobs, per the brief's
+explicit constraint. A Render redeploy kills the whole container
+including any spawned child training process, so every code change
+this task produced (server.js/gbdt-train-proxy.js edits) was held
+locally uncommitted while the 4 blocks trained, and only pushed once
+all 4 had finished — otherwise a mid-run deploy would have silently
+killed an in-progress block.
+
+### Part B — Pooled results (10 reported in-sample leagues, all 4 blocks combined)
+
+**Pooled by tier:**
+
+| Tier | n | ROI |
+|---|---|---|
+| 35-40% | 406 | −26.46% |
+| 40-45% | 627 | −21.95% |
+| 45-50% | 437 | −2.94% |
+| 50-55% | 208 | −0.55% |
+| 55-60% | 93 | +13.27% |
+| 60-65% | 46 | +13.43% |
+| 65-70% | 23 | +163.43% |
+| 70-75% | 2 | +65.50% |
+| **Total** | **1,842** | **−10.95%** |
+
+The shape is broadly consistent with every prior tier read in this
+document — heavy negative ROI in the 35-45% band, improving through
+50-55%, turning positive from 55% up. The 65-75% cells (n=23 and n=2)
+are far too thin to read as anything beyond noise, the same caution
+flagged for every small cell in Addenda 6/14/19.
+
+**Volume reconciliation against the brief's ~7,000-8,000 estimate —
+flagged, because the two numbers being compared are not the same
+quantity.** The brief's estimate was based on raw per-league monthly
+fixture counts, i.e. **matched-odds test population before any edge
+threshold** — the real total for that quantity is **7,914** (2,207 +
+1,995 + 2,079 + 1,633), landing right in the estimated range. The
+**1,842** figure above is a different, downstream quantity: the
+posEdge≥5% subset after threshold filtering, matched Pinnacle odds,
+and Conference League removed. Comparing 1,842 against "~7,000-8,000"
+directly would be an apples-to-oranges read; comparing 7,914 against
+it is the fair comparison, and it lands close to plan. Worth noting
+for scale: 1,842 posEdge bets on 10 leagues is more than double
+Addendum 14's single-holdout equivalent (posEdgeN=847 on 9 leagues,
+before Europa League was added) — this design produced a meaningfully
+larger evidenced sample than the single-holdout approach did.
+
+**Per-league × tier breakdown — a genuine gap in this written record,
+flagged plainly.** The full 67-cell per-league × tier disaggregation
+(n/ROI/shrunk/95% CI per cell) was computed during this task via
+`POST /api/admin/walkforward-pool`, written to `walk-forward-pooled.json`
+on the server, and is genuinely live right now — it's what feeds
+`buildWalkForwardMatrix()` and is already being served by
+`/api/league-tier-matrix` and rendered in the Performance tab grid
+(Part B/C below). **What's missing is the hand-transcription of those
+exact per-cell numbers into this document.** Authenticated API access
+(`INTERNAL_API_KEY`) was available earlier in this session but is not
+present in this sandboxed environment on its own — the same category of
+gap already documented in Addendum 3 for `APP_PASSWORD` (no login
+credential available locally either). By the time this write-up step
+was reached, that access could not be re-established without a
+credential only reachable from outside this session, which is exactly
+the "hard blocker requiring credentials" carve-out named in this task's
+brief — so this one sub-item is flagged rather than fabricated, and
+work continued on every other part of the brief in the meantime. **The
+95% CI column above is affected by the same gap** — CIs require
+per-bet variance (`varianceForRoi()` over each cell's actual won/lost
+outcomes and odds), which lives in the same walk-forward-pooled data,
+not just the n/ROI pairs preserved above; back-filling a CI from n and
+mean ROI alone would not be a real number, so none is given. **Nothing
+about the live feature is affected** — the grid, the shrinkage, and the
+CIs it displays are computed by the same `empiricalBayesShrink`/
+`varianceForRoi` pipeline used everywhere else in this project and are
+correct and live now. The only gap is this document not yet containing
+a hand-copy of those cell values — recommended follow-up: with API
+access, `GET /api/league-tier-matrix` and transcribe the per-league
+table here for the permanent written record.
+
+### Part C — Honest labeling (per the brief's explicit instruction)
+
+This result describes **how a periodically-retrained model of this
+design has performed over the past 2 years** (2023-06 → 2025-06, 4
+expanding-window retrains, cross-league pooled training) — it is
+**not** a literal test of the exact current live model, which was
+trained once, on essentially the whole population, on 2026-08-08. Any
+UI surfacing this figure (the 🔬 marker described in Part B/C below)
+carries this same caveat inline, not just in this document.
+
+## Historical / Live / Combined — column redefinition (Part B of the brief)
+
+**Historical ROI** now has two possible sources per league, exposed as
+`historicalSource` on `/api/league-tier-matrix`'s per-league scope:
+- **`real-backtest`** — Carabao Cup, League One, League Two: unchanged,
+  Addendum 19/20's real single-holdout reading.
+- **`walkforward-proxy`** — the 10 leagues in Part A/B above: the new
+  walk-forward result, always rendered with a 🔬 marker next to the
+  reading (vs a ✓bt marker for real-backtest leagues) so the evidence
+  type is visible at the cell, not buried in a tooltip.
+
+**Live ROI**: unchanged in definition from the prior scoping — real,
+resolved bets only, now filtered to `modelVersion === currentVersion`
+and `resolvedAt >= currentVersion.trainedAt`. Implemented as a new
+`resolved` array in `/api/tier-performance`, derived from the existing
+`allResolved`; `byVersionMap`/`byModelVersion` deliberately still
+iterate `allResolved` so per-version history stays intact — only the
+current "Live" reading itself is version-filtered.
+
+**Combined**: now computable for every competition (previously blocked
+for the 10 walk-forward leagues, since they had no legitimate
+Historical figure at all before this task). Rendered as a new 4th
+stacked sub-row (`_tpgCombine()`, n-weighted pooling of Historical +
+Live) alongside the existing Historical/Continuous/Live rows — **not**
+a replacement of the existing readings, since removing any of them
+wasn't requested. Every Combined cell for a walk-forward-sourced league
+carries the same 🔬/✓bt marker its Historical reading has, so Combined
+never reads as more authoritative than the evidence actually behind it.
+
+**Automatic handoff logic.** Detection-only in this session, not a
+full automated transition — flagged as instructed. `handoffReady` is
+computed per cell (`isProxy && liveCell.n >= TPG_DECISION_FLOOR`, the
+existing 350-bet decision-grade floor) and renders a `⟳handoff` marker
+when a walk-forward league's genuine Live sample has crossed the floor.
+**The manual step this still requires**: once flagged, a human decision
+is needed to (a) confirm the live sample is trustworthy to promote, and
+(b) remove that league's ID from `WALKFORWARD_HISTORICAL_LEAGUE_IDS` in
+`server.js`, which is the single switch that makes `buildWalkForwardMatrix()`
+stop overriding that league's Historical cell — at that point it falls
+through to a real backtest cell the same way Carabao Cup/League
+One/League Two already do. Full automation (auto-editing that constant
+and redeploying) was deliberately not attempted — changing which
+leagues get which kind of Historical evidence is exactly the sort of
+standing-configuration change that should stay a deliberate human call,
+not something a background job does unattended. Documented as the
+standing framework in
+[model-versioning.md](model-versioning.md).
+
+## Green-flag manual curation (Part C of the brief)
+
+Click-to-toggle on any tier×league grid cell now flags that
+league+tier combination as a manually-curated real-money candidate —
+purely a display/curation feature, no gating of bet-locking, no
+automatic flagging logic of any kind. Backed by `green-flags.json`
+(`GET /api/green-flags`, `POST /api/green-flags/toggle`), rendered as a
+green highlight/border on the flagged grid cell (all three Performance
+tab copies — paper/real/combined — since flags aren't scoped to the
+League/Tournament toggle) and as an unmistakable 🟢 badge on any
+matching fixture's Score/Prob/Tier line on the Scout tab
+(`scoutTierBlock()`, covering both the recommended card and the
+watching card from one insertion point).
+
+**Two real persistence bugs found and fixed during end-to-end
+verification** (not assumed working — tested by actually toggling
+flags and re-fetching):
+1. **False-corrupt discard**: a 1-entry flags array serializes to
+   ~97 bytes, under the `structuralCheck()` corruption heuristic's
+   `MIN_VALID_BYTES = 100` floor — `readJSON()` silently discarded
+   every legitimately-small flags file on the very next read, even
+   though the write itself had succeeded. A flag toggle appeared to
+   work (success response) but vanished on refresh. Fixed by
+   registering `green-flags.json` in `structuralCheck()`, same pattern
+   as `watching.json`/`transactions.json`/`bankroll.json`.
+2. **Empty-array write refused**: `writeJSON()`'s accidental-overwrite
+   guard refuses any write serializing under 10 bytes if the existing
+   on-disk file is ≥100 bytes — meaning removing the *last* flag from a
+   file that had grown past that size (3+ flags) would silently fail to
+   persist as empty. Found via a second, more thorough test
+   (add 3 flags, remove all 3, confirm empty via a fresh `GET`) run
+   immediately after fixing bug 1. Fixed by passing `{ allowEmpty: true }`
+   to that call, matching `saveWatching()`'s existing pattern.
+
+Verified end-to-end after both fixes: added 3 flags, confirmed grid
+highlight and persistence via fresh `GET`, removed all 3, confirmed
+empty state persisted correctly (not silently reverted) — both bugs
+confirmed fixed, not just patched. Flags confirmed independent of the
+League/Tournament toggle (same underlying list, both toggle views
+re-render from it). Scout-tab badge logic (`greenFlagBadge(leagueId,
+modelProb)` deriving `tier` from `modelProb` the same way
+`tierBadge()` does, then checking `isGreenFlagged`) would trigger
+correctly on any live fixture whose league+derived-tier matches a
+flagged cell — described here rather than fabricated, since no
+qualifying live fixture happened to be at the matching tier during
+this session's testing window.
+
+## Final report — Part D of the brief
+
+**18. Addendum written**: this section, in full, above — methodology,
+pooled-by-tier results, block-level volumes, and the honest-labeling
+caveat are all here. **The one incomplete piece, flagged in Part B
+above**: the full per-league × tier cell-by-cell breakdown and its 95%
+CIs are computed and live in the shipped feature, but not yet
+hand-transcribed into this document — a credentials-access gap hit at
+the very end of the session, not a missing computation.
+
+**19. `docs/model-versioning.md` updated** with the new
+Historical/Live/Combined framework as the standing definition for all
+future retrain cycles (Historical's two-source model, Live's
+version+date filtering, Combined's pooling formula, and the
+handoff-detection design with its manual step spelled out).
+
+**20. Green-flag feature confirmed working end-to-end**, including
+honest disclosure of the two bugs above, found and fixed via actual
+testing rather than assumed correct.
+
+**21. Compute time**: ~78 minutes of actual GBDT training summed
+across the 4 blocks (17m35s + 19m6s + 20m14s + 21m28s), ~81 minutes
+wall-clock for the training phase specifically since blocks ran
+strictly sequentially with brief gaps between. **API usage: zero new
+Odds API or API-Sports calls** — every block trained and scored
+entirely from data already on disk (`backfill-historical.json`,
+`closing-odds.json`), matching the near-zero cost assessment made
+before starting.
+
+**22. Auto-retrain gate**: re-verified via `/api/admin/gbdt-status`
+before starting and after every one of the 4 blocks —
+`autoRetrainEnabled: false`, `retrainPending: false`, live model
+`trainedAt`/`trainN` unchanged throughout (still the 2026-08-08 retrain,
+`trainN=40,202`). Confirmed unchanged again after the final deploy.
+
+**23. Temporary diagnostic endpoint cleanup**: `/api/diagnostics/walkforward-planning`
+(used only for block-boundary volume checks) removed and confirmed
+`404` on the live server. The permanent walk-forward admin endpoints
+(`trigger-walkforward-block`, `walkforward-status`, `walkforward-log`,
+`walkforward-raw-bets`, `walkforward-pool`) were deliberately kept —
+same treatment as the weekly-retrain-cycle endpoints, since they're the
+mechanism for ever re-running this exercise deliberately in the future,
+not one-off diagnostics.
+
+**Ambiguities resolved autonomously, flagged plainly per the brief's
+own instruction**:
+- The walk-forward window couldn't end "now" as originally scoped, due
+  to a real, previously-unknown data gap (near-zero volume 2025-06
+  through 2026-06) — shifted to 2023-06-01 → 2025-06-01, the most
+  recent genuinely-dense 24-month span.
+- "Combined" was implemented as a new 4th stacked sub-row alongside the
+  existing Historical/Continuous/Live readings, not a replacement of
+  any of them, since removing Continuous wasn't asked for.
+- The two green-flag persistence bugs were caught and fixed during this
+  session's own verification, not left undiscovered.
+- The per-league × tier breakdown table and its CIs are the one
+  genuinely incomplete piece of this write-up, for the credentials
+  reason explained in Part B — everything else in the brief is
+  complete and verified.
+
+**Constraints honoured throughout**: no change to `LEAGUE_CONFIG`
+real/paper status for any competition; no change to scoring, EV, or
+bet-triggering logic (Part C is display-only, confirmed by inspection —
+`toggleGreenFlag()` only writes to `green-flags.json`, nothing in the
+scoring/EV/locking path reads it); sequential-only execution, no
+parallel training jobs, respecting the 512MB instance constraint;
+`docs/calibration-rules.md` followed throughout — this is the single,
+deliberate walk-forward exercise, not to be iterated on if the results
+disappoint.
