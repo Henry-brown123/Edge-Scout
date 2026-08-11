@@ -6284,6 +6284,63 @@ app.get('/api/performance/real', (_req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// TEMPORARY diagnostic endpoint — memory-ceiling investigation for the deferred
+// team-profile rebuild (task: "Resolve the deferred team-profile rebuild for
+// Carabao Cup, League One, League Two — memory-safe approach"). Reports
+// process.memoryUsage() at rest, and optionally after loading/grouping the full
+// historical fixture pool, to characterise the actual memory growth involved
+// before designing a fix — this instance is Render's `starter` plan (512MB per
+// render.yaml), which is the working theory for why the rebuild kept crashing
+// even after the event-loop-yield fixes.
+app.get('/api/debug/memory-check', async (req, res) => {
+  try {
+    const stage = req.query.stage || 'idle';
+    const before = process.memoryUsage();
+    let extra = {};
+
+    if (stage === 'load' || stage === 'group') {
+      const existing = readJSON('backfill-historical.json');
+      const afterLoad = process.memoryUsage();
+      extra.afterLoad = {
+        rssMB: Math.round(afterLoad.rss / 1048576),
+        heapUsedMB: Math.round(afterLoad.heapUsed / 1048576),
+        externalMB: Math.round(afterLoad.external / 1048576),
+      };
+      extra.fixtureCount = existing?.fixtures?.length ?? 0;
+
+      if (stage === 'group') {
+        const teamData = {};
+        for (const fix of existing.fixtures) {
+          const hid = fix.teams?.home?.id, aid = fix.teams?.away?.id;
+          if (!hid || !aid) continue;
+          if (!teamData[hid]) teamData[hid] = [];
+          if (!teamData[aid]) teamData[aid] = [];
+          teamData[hid].push(fix);
+          teamData[aid].push(fix);
+        }
+        const afterGroup = process.memoryUsage();
+        extra.distinctTeams = Object.keys(teamData).length;
+        extra.afterGroup = {
+          rssMB: Math.round(afterGroup.rss / 1048576),
+          heapUsedMB: Math.round(afterGroup.heapUsed / 1048576),
+          externalMB: Math.round(afterGroup.external / 1048576),
+        };
+      }
+    }
+
+    res.json({
+      stage,
+      before: {
+        rssMB: Math.round(before.rss / 1048576),
+        heapUsedMB: Math.round(before.heapUsed / 1048576),
+        heapTotalMB: Math.round(before.heapTotal / 1048576),
+        externalMB: Math.round(before.external / 1048576),
+      },
+      ...extra,
+    });
+  } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
+});
+
 const _serverStartedAt = new Date().toISOString();
 
 app.get('/api/server-status', async (_req, res) => {
