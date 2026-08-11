@@ -29,11 +29,25 @@ const L2_LAMBDA = 1.0;  // L2 regularisation on leaf values (Newton step)
 // local data/ dir only when DATA_DIR truly isn't set (e.g. run standalone in dev).
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../data');
 
+// Carabao Cup / League One / League Two — deliberately held-aside, never-yet-
+// calibrated population (docs/tier-calibration-analysis.md Addenda 16-19,
+// calibration-rules.md rule 10). gbdt-train.js has never had an exclusion
+// mechanism before this — it always drew its training pool from the entirety
+// of whatever backfill-historical.json it was pointed at (see "train/test
+// merge decision" in docs/model-versioning.md) — so without this filter, the
+// weekly retrain cycle would silently absorb this population into training
+// the very first time it ran. Folding it in is meant to be its own explicit,
+// deliberate future decision (Addendum 19), not something this recurring job
+// does on its own. Remove/adjust this set only as that deliberate step, with
+// its own documented reasoning — not as an incidental edit to this script.
+const EXCLUDED_LEAGUE_IDS = new Set([48, 41, 42]);
+
 function loadData() {
   const raw = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'backfill-historical.json'), 'utf8'));
   const records = raw.scoredRecords || [];
   return records
     .filter(r => r.homeFactors && r.awayFactors && r.actualOutcome && r.context)
+    .filter(r => !EXCLUDED_LEAGUE_IDS.has(parseInt(r.leagueId, 10)))
     .map(r => ({
       x:        buildFeatures(r.homeFactors, r.awayFactors, r.context),
       y:        r.actualOutcome,   // 'home' | 'draw' | 'away'
@@ -119,7 +133,18 @@ function treePredict(node, x) {
 
 // ─── GBDT TRAINER ─────────────────────────────────────────────────────────────
 // One-vs-rest binary log-loss GBDT with stochastic subsampling + Newton steps.
-function trainClassifier(samples, classLabel) {
+// Async, not for this function's own math (still plain synchronous tree-building)
+// but so the training run yields periodically — same pattern used to fix this
+// week's scoring-loop/optimiser/profile-rebuild crashes on the same 512MB
+// instance. This runs in a spawned child process, not the main server, so it was
+// never blocking live traffic — but the child is still a single Node process on
+// the same memory-constrained container, and 200 synchronous tree-builds over a
+// growing weekly population with zero yields is exactly the same risk shape as
+// those earlier bugs, just in a different process. Yielding here also means a
+// SIGKILL from hitting the memory ceiling lands between trees rather than mid-
+// tree, and gives the OS a chance to reclaim per-iteration garbage (subX/subG/
+// subH/allIdx are all rebuilt fresh every tree) before the next allocation.
+async function trainClassifier(samples, classLabel) {
   const X = samples.map(s => s.x);
   const y = samples.map(s => s.y === classLabel ? 1 : 0);
   const n = X.length;
@@ -154,6 +179,7 @@ function trainClassifier(samples, classLabel) {
     for (let i = 0; i < n; i++) F[i] += LR * treePredict(tree, X[i]);
 
     if ((t + 1) % 30 === 0) process.stdout.write(`${t + 1} `);
+    if ((t + 1) % 20 === 0) await new Promise(r => setImmediate(r));
   }
   console.log('done');
 
@@ -253,7 +279,7 @@ function bandAccuracy(records, probFn) {
 }
 
 // ─── MAIN ─────────────────────────────────────────────────────────────────────
-(function main() {
+(async function main() {
   console.log('\n╔══════════════════════════════════════════════════╗');
   console.log('║  GBDT + Platt Scaling — Training & Validation   ║');
   console.log('╚══════════════════════════════════════════════════╝\n');
@@ -270,9 +296,9 @@ function bandAccuracy(records, probFn) {
   // ── Train classifiers ──
   console.log(`Training (${N_TREES} trees, depth ${DEPTH}, lr ${LR})...`);
   const classifiers = {
-    home: trainClassifier(train, 'home'),
-    draw: trainClassifier(train, 'draw'),
-    away: trainClassifier(train, 'away'),
+    home: await trainClassifier(train, 'home'),
+    draw: await trainClassifier(train, 'draw'),
+    away: await trainClassifier(train, 'away'),
   };
 
   // ── Fit Platt scaling on validation set ──
@@ -393,4 +419,14 @@ function bandAccuracy(records, probFn) {
   };
   fs.writeFileSync(outPath, JSON.stringify(weightsOut));
   console.log(`\n  Written: ${outPath} (${(fs.statSync(outPath).size / 1024).toFixed(0)} KB)`);
-})();
+})().catch(e => {
+  // Explicit catch rather than relying on Node's default unhandledRejection
+  // behaviour — this must fail loudly with a clear, attributable message (the
+  // parent process's child.on('close', code) handler in server.js treats any
+  // non-zero exit as a failed run and logs it), not hang or exit silently/
+  // ambiguously if something throws after an await (e.g. an OOM-adjacent
+  // allocation failure surfacing as a thrown error rather than a signal).
+  console.error(`\n[GBDT] FATAL — training run failed: ${e.message}`);
+  console.error(e.stack);
+  process.exit(1);
+});

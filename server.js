@@ -168,6 +168,13 @@ const SETTINGS_DEFAULTS = {
   // the pre-lock scoring-stage Kelly preview shown before a mode is chosen.
   paperKellyFraction: 0.5,
   realKellyFraction: 0.25,
+  // Weekly walk-forward retrain cycle (docs/model-versioning.md) — explicit,
+  // visible manual override, distinct from autoRetrainEnabled (the old, now-
+  // permanently-disabled every-500-record trigger this cycle supersedes).
+  // Defaults to running; set true via PUT /api/settings or the admin UI toggle
+  // to skip cycles deliberately (e.g. a review in progress, or a week's data
+  // looking anomalous) without touching the cron schedule itself.
+  weeklyRetrainPaused: false,
   activeLeagues: ['1','39','140','78','135','61','2','179','88','94','3','848','48','41','42'], successThreshold: 40,
   calibrationFactor: 1.08,
   wowyActive: true,
@@ -1984,6 +1991,17 @@ function setupScheduler() {
     }
   }, { timezone: 'UTC' });
 
+  // 2a2. Monday 05:15 UTC — weekly walk-forward retrain cycle (docs/model-versioning.md).
+  // Sequenced after the nightly backfill's own 05:00 UTC cutoff (so this week's
+  // freshly-resolved fixtures are already scored and in backfill-historical.json
+  // by the time this runs) and before the 06:00 EV-calibration refresh and 07:00
+  // morning scan, so it's never competing with either for the same window.
+  // Low-fixture time of day/week by design — early Monday UTC, between weekend
+  // and the new week's fixtures.
+  cron.schedule('15 5 * * 1', () => {
+    runWeeklyRetrainCycle().catch(e => console.error(`[Cron:WeeklyRetrain] ${e.message}`));
+  }, { timezone: 'UTC' });
+
   // 2b. Monday 06:00 UTC (before the morning scan) — weekly EV calibration refresh.
   // Keeps ev-calibration.json fresh for canGoLive() and the paperKellyFraction auto-
   // recommendation below, which otherwise only refresh when someone manually hits
@@ -2543,7 +2561,12 @@ function checkAndRetrain(previousCount, newCount) {
 // loop free; progress/completion is tracked in retrain-status.json and polled via
 // GET /api/admin/retrain-status rather than waited on synchronously.
 let _retrainProcess = null;
-function runGbdtRetrain(reason) {
+// onComplete(result), if provided, fires once after the child process fully exits
+// (success or failure) — used by the weekly retrain cycle to write its audit-log
+// entry with the actual resulting trainN/trainedAt rather than just the trigger
+// moment. The manual POST /api/admin/trigger-retrain path doesn't pass one; its
+// callers already poll GET /api/admin/retrain-status instead.
+function runGbdtRetrain(reason, onComplete) {
   if (_retrainProcess) {
     return { success: false, error: 'A retrain is already in progress.' };
   }
@@ -2569,14 +2592,16 @@ function runGbdtRetrain(reason) {
   // minutes, not wildly beyond it. 40 minutes gives real headroom without leaving a
   // runaway process to hold the slot open indefinitely.
   const SAFETY_TIMEOUT_MS = 40 * 60 * 1000;
+  let timedOut = false;
   const killTimer = setTimeout(() => {
     if (_retrainProcess === child) {
+      timedOut = true;
       console.error('[GBDT] Retrain exceeded 40-minute safety timeout — killing');
       child.kill('SIGKILL');
     }
   }, SAFETY_TIMEOUT_MS);
 
-  child.on('close', (code) => {
+  child.on('close', (code, signal) => {
     clearTimeout(killTimer);
     _retrainProcess = null;
     const finishedAt = new Date().toISOString();
@@ -2588,9 +2613,24 @@ function runGbdtRetrain(reason) {
       console.log('[GBDT] Retraining complete — new weights will be picked up on next predict()');
       writeJSON('retrain-pending.json', { pending: false });
       writeJSON('retrain-status.json', { status: 'success', reason, startedAt, finishedAt, error: null, exitCode: code, tail: output.slice(-4000) });
+      let weights = null;
+      try { weights = readJSON('gbdt-weights.json'); } catch {}
+      onComplete?.({ success: true, trainedAt: weights?.trainedAt, trainN: weights?.trainN, testN: weights?.testN });
     } else {
-      console.error(`[GBDT] Retraining failed — exit code ${code}`);
-      writeJSON('retrain-status.json', { status: 'failed', reason, startedAt, finishedAt, error: `exit code ${code}`, exitCode: code, tail: output.slice(-4000) });
+      // Distinguish *why* a non-zero/no exit happened rather than just logging a bare
+      // code — signal is set (code is null) when the process was killed rather than
+      // exiting on its own; SIGKILL with our own timedOut flag false is exactly the
+      // OOM-kill signature this task exists to guard against, versus SIGKILL with
+      // timedOut true (our own 40-minute cap) or a clean non-zero exit (a thrown JS
+      // error, already logged with a stack trace by gbdt-train.js's own catch handler
+      // above in the captured stdout/stderr tail).
+      const cause = signal
+        ? (timedOut ? `killed — exceeded ${SAFETY_TIMEOUT_MS / 60000}min safety timeout (signal ${signal})`
+                    : `killed unexpectedly (signal ${signal}) — likely OOM on this 512MB instance if this recurs`)
+        : `exit code ${code}`;
+      console.error(`[GBDT] Retraining failed — ${cause}`);
+      writeJSON('retrain-status.json', { status: 'failed', reason, startedAt, finishedAt, error: cause, exitCode: code, signal: signal || null, tail: output.slice(-4000) });
+      onComplete?.({ success: false, error: cause });
     }
   });
 
@@ -2599,9 +2639,105 @@ function runGbdtRetrain(reason) {
     _retrainProcess = null;
     console.error('[GBDT] Retraining failed to start:', e.message);
     writeJSON('retrain-status.json', { status: 'failed', reason, startedAt, finishedAt: new Date().toISOString(), error: e.message });
+    onComplete?.({ success: false, error: e.message });
   });
 
   return { success: true, started: true };
+}
+
+// ─── WEEKLY WALK-FORWARD RETRAIN CYCLE ────────────────────────────────────────
+// The sanctioned, ongoing path forward (docs/model-versioning.md) — supersedes
+// the old every-500-record checkAndRetrain() trigger, which stays permanently
+// disabled (autoRetrainEnabled is never flipped true by this). Runs on a fixed
+// weekly schedule (see cron.schedule below) rather than continuously: batches
+// whatever fixtures resolved since the last cycle, folds them into training via
+// the normal runGbdtRetrain() path, and logs what changed.
+//
+// Mirrors gbdt-train.js's own EXCLUDED_LEAGUE_IDS filter for the audit-log
+// breakdown only — the actual training-data exclusion is enforced inside
+// gbdt-train.js itself (the source of truth), this is just so the "new
+// fixtures folded in, by competition" log entry doesn't count fixtures that
+// were never actually eligible to be folded in.
+const WEEKLY_RETRAIN_EXCLUDED_LEAGUE_IDS = new Set([48, 41, 42]);
+
+function getEligibleTrainingSnapshot() {
+  const hist = readJSON('backfill-historical.json') || {};
+  const records = hist.scoredRecords || [];
+  const eligible = records.filter(r =>
+    r.homeFactors && r.awayFactors && r.actualOutcome && r.context &&
+    !WEEKLY_RETRAIN_EXCLUDED_LEAGUE_IDS.has(parseInt(r.leagueId, 10))
+  );
+  const byLeague = {};
+  for (const r of eligible) {
+    const lid = parseInt(r.leagueId, 10);
+    byLeague[lid] = (byLeague[lid] || 0) + 1;
+  }
+  return { total: eligible.length, byLeague };
+}
+
+function getWeeklyRetrainLog() { return readJSON('weekly-retrain-log.json') || []; }
+function appendWeeklyRetrainLog(entry) {
+  const log = getWeeklyRetrainLog();
+  log.push(entry);
+  writeJSON('weekly-retrain-log.json', log);
+}
+
+async function runWeeklyRetrainCycle() {
+  const settings = readJSON('settings.json') || {};
+  const cycleAt  = new Date().toISOString();
+  const snapshot = getEligibleTrainingSnapshot();
+
+  const log        = getWeeklyRetrainLog();
+  const lastEntry  = log.length ? log[log.length - 1] : null;
+  // Always compares against the most recent entry's snapshot regardless of
+  // whether that entry retrained or was skipped/paused — every entry records
+  // an accurate current-state snapshot (see below), so a paused week doesn't
+  // corrupt the following week's "new since last cycle" count.
+  const previousTotal    = lastEntry?.eligibleTotalAfter ?? 0;
+  const previousByLeague = lastEntry?.eligibleByLeagueAfter ?? {};
+  const newSinceLastCycle = snapshot.total - previousTotal;
+  const newByLeague = {};
+  for (const [lid, count] of Object.entries(snapshot.byLeague)) {
+    const delta = count - (previousByLeague[lid] || 0);
+    if (delta > 0) newByLeague[lid] = delta;
+  }
+
+  const baseEntry = {
+    cycleAt,
+    newFixturesSinceLastCycle: newSinceLastCycle,
+    newFixturesByLeague: newByLeague,
+    eligibleTotalBefore: previousTotal,
+    eligibleTotalAfter: snapshot.total,
+    eligibleByLeagueAfter: snapshot.byLeague,
+  };
+
+  if (settings.weeklyRetrainPaused === true) {
+    console.log(`[WeeklyRetrain] Skipped — weeklyRetrainPaused is true (${newSinceLastCycle} new eligible fixtures accumulating).`);
+    appendWeeklyRetrainLog({ ...baseEntry, decision: 'skipped_paused', reason: 'settings.weeklyRetrainPaused is true' });
+    return;
+  }
+
+  const previousModel = readJSON('gbdt-weights.json');
+  const previousVersion = previousModel?.trainedAt ?? null;
+
+  console.log(`[WeeklyRetrain] Starting cycle — ${newSinceLastCycle} new eligible fixtures since last cycle (total eligible: ${snapshot.total}, previous version: ${previousVersion ?? 'none'})`);
+
+  runGbdtRetrain(`weekly walk-forward cycle (${cycleAt})`, (result) => {
+    appendWeeklyRetrainLog({
+      ...baseEntry,
+      decision: result.success ? 'retrained' : 'failed',
+      previousVersion,
+      newVersion: result.success ? (result.trainedAt ?? previousVersion) : null,
+      trainN: result.success ? (result.trainN ?? null) : null,
+      testN: result.success ? (result.testN ?? null) : null,
+      // gbdt-train.js's own improvement gate can legitimately keep the previous
+      // weights (trainedAt unchanged) even on a "successful" run that completed
+      // without error — distinct from a failed run, worth surfacing separately.
+      versionChanged: !!(result.success && result.trainedAt && result.trainedAt !== previousVersion),
+      error: result.success ? null : result.error,
+    });
+    console.log(`[WeeklyRetrain] Cycle complete — success=${result.success} versionChanged=${result.success && result.trainedAt !== previousVersion} trainN=${result.trainN ?? 'n/a'}`);
+  });
 }
 
 // Diagnostic PROXY training — entirely separate process/status-file/output-file from
@@ -6470,6 +6606,37 @@ app.post('/api/admin/trigger-retrain', (_req, res) => {
 
 app.get('/api/admin/retrain-status', (_req, res) => {
   res.json(readJSON('retrain-status.json') || { status: 'never_run' });
+});
+
+// Manual trigger for the weekly walk-forward cycle — same code path the Monday
+// 05:15 UTC cron uses, exposed so a cycle can be run/tested on demand without
+// waiting for the schedule (and so this task's memory-safety test against the
+// real population didn't need to wait a week). Respects weeklyRetrainPaused
+// exactly like the cron does — this is a manual RUN, not a manual OVERRIDE of
+// the pause; unpause first via PUT /api/admin/weekly-retrain-pause if needed.
+app.post('/api/admin/trigger-weekly-retrain', (_req, res) => {
+  runWeeklyRetrainCycle().catch(e => console.error(`[WeeklyRetrain] ${e.message}`));
+  res.json({ success: true, started: true, message: 'Weekly retrain cycle started — poll GET /api/admin/retrain-status for the underlying training run, GET /api/admin/weekly-retrain-log for the audit entry once it completes.' });
+});
+
+app.get('/api/admin/weekly-retrain-log', (_req, res) => {
+  const log = getWeeklyRetrainLog();
+  const settings = readJSON('settings.json') || {};
+  res.json({
+    paused: settings.weeklyRetrainPaused === true,
+    nextScheduled: 'Mondays 05:15 UTC',
+    entries: log,
+  });
+});
+
+app.put('/api/admin/weekly-retrain-pause', (req, res) => {
+  const { paused } = req.body || {};
+  if (typeof paused !== 'boolean') return res.status(400).json({ error: 'body must include { paused: true|false }' });
+  const settings = getSettings();
+  settings.weeklyRetrainPaused = paused;
+  writeJSON('settings.json', settings);
+  console.log(`[WeeklyRetrain] ${paused ? 'PAUSED' : 'RESUMED'} via PUT /api/admin/weekly-retrain-pause`);
+  res.json({ success: true, weeklyRetrainPaused: paused });
 });
 
 // Diagnostic proxy model — never live, see models/gbdt-train-proxy.js and
