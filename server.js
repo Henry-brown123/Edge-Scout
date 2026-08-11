@@ -3200,6 +3200,30 @@ app.get('/api/divergence-report', (_req, res) => {
   res.json({ summary, rows });
 });
 
+// ─── GREEN-FLAG MANUAL CURATION (Addendum 21 Part C) ─────────────────────────
+// Purely manual, display-only curation of league+tier combinations as real-money
+// candidates worth a closer look — a simple stored list, no automatic flagging
+// logic, no gating of bet-locking or any scoring/EV behaviour. Persisted as a flat
+// array of { leagueId, tier } in green-flags.json; toggled from the Performance-
+// tab tier x league grid, surfaced as a badge on matching Scout-tab fixture cards.
+function getGreenFlags() { return readJSON('green-flags.json') || []; }
+
+app.get('/api/green-flags', (_req, res) => {
+  res.json({ flags: getGreenFlags() });
+});
+
+app.post('/api/green-flags/toggle', (req, res) => {
+  const { leagueId, tier } = req.body || {};
+  if (leagueId == null || !tier) return res.status(400).json({ error: 'body must include { leagueId, tier }' });
+  const lid = parseInt(leagueId, 10);
+  const flags = getGreenFlags();
+  const idx = flags.findIndex(f => f.leagueId === lid && f.tier === tier);
+  if (idx >= 0) flags.splice(idx, 1);
+  else flags.push({ leagueId: lid, tier, flaggedAt: new Date().toISOString() });
+  writeJSON('green-flags.json', flags);
+  res.json({ flags });
+});
+
 // GET full state (bets, watching, bankroll)
 app.get('/api/state', (_req, res) => {
   const scanMeta = readJSON('scan-meta.json') || {};
@@ -3695,11 +3719,28 @@ function tierOfProbShared(p) {
 
 app.get('/api/tier-performance', (req, res) => {
   const mode = req.query.mode || 'paper'; // 'paper' | 'real' | 'all'
-  const resolved = getBets().filter(b => {
+  const allResolved = getBets().filter(b => {
     if (mode === 'paper' && b.mode === 'real') return false;
     if (mode === 'real'  && b.mode !== 'real') return false;
     if (!(b.placementStatus === 'placed' || b.placementConfirmed)) return false;
     return b.result === 'win' || b.result === 'loss';
+  });
+
+  // Live ROI (Addendum 21 Part B, point 10) — real resolved bets, filtered to the
+  // CURRENT live model version, resolved on/after that version's own trainedAt.
+  // Previously this pooled every resolved bet ever, including ones scored by
+  // model versions since superseded — a bet locked under a retired version was
+  // still counting toward "today's" Live ROI. For GBDT, getVersion() IS the
+  // trainedAt ISO string, so the two conditions are almost always the same
+  // check in practice; both are applied explicitly rather than assumed
+  // equivalent, since a linear-fallback version ('linear-fallback', a fixed
+  // string not a date) can't be date-compared the same way.
+  const currentVersion = model.getVersion();
+  const currentTrainedAt = /^\d{4}-\d{2}-\d{2}T/.test(currentVersion) ? currentVersion : null;
+  const resolved = allResolved.filter(b => {
+    if (b.modelVersion !== currentVersion) return false;
+    if (currentTrainedAt && b.resolvedAt && new Date(b.resolvedAt) < new Date(currentTrainedAt)) return false;
+    return true;
   });
 
   function groupByTier(bets) {
@@ -3762,7 +3803,7 @@ app.get('/api/tier-performance', (req, res) => {
   // as a single threshold since this is a whole-version count, not a per-tier cell.
   const MODEL_VERSION_DECISION_FLOOR = 350;
   const byVersionMap = {};
-  for (const b of resolved) {
+  for (const b of allResolved) { // every version, deliberately not the current-version-only `resolved` — this is the one reading that needs the full history
     const v = b.modelVersion || 'pre-versioning';
     if (!byVersionMap[v]) byVersionMap[v] = { n: 0, staked: 0, pnl: 0, firstSeen: b.lockedAt, lastSeen: b.lockedAt };
     const g = byVersionMap[v];
@@ -4965,20 +5006,76 @@ app.get('/api/pre-retrain-calibration-matrix', (_req, res) => {
   });
 });
 
+// In-sample leagues whose Historical reading now comes from the walk-forward
+// backtest (Addendum 21) rather than LEAGUE_TIER_MATRIX's original Addendum 6
+// hardcoded snapshot. Deliberately the same set models/gbdt-train-proxy.js
+// reports on (WF_REPORTED_LEAGUE_IDS there) — kept in two places because one is
+// a training script and one is a request handler, not worth a shared module for
+// a single Set literal.
+const WALKFORWARD_HISTORICAL_LEAGUE_IDS = new Set([39, 140, 135, 78, 61, 179, 88, 94, 2, 3]);
+
+// Builds a LEAGUE_TIER_MATRIX-shaped object from walk-forward-pooled.json (Addendum
+// 21) — { [leagueId]: { name, cells: { [tier]: {n, roi, ciLow, ciHigh, thin, shrunk} } } }.
+// Shrinkage is computed here (not at pooling time) via the same empiricalBayesShrink
+// utility LEAGUE_TIER_MATRIX's original hand-computed `shrunk` values used, grouped
+// by tier across these 10 leagues — matches the existing pooling axis exactly.
+function buildWalkForwardMatrix() {
+  const pooled = readJSON('walk-forward-pooled.json');
+  if (!pooled?.cells?.length) return {};
+  const { empiricalBayesShrink, varianceForRoi } = require('./shrinkage');
+
+  const byTier = {};
+  for (const c of pooled.cells) {
+    if (!c.reported) continue; // Conference League etc. — trained on, not individually reported (Addendum 21 Part A point 5)
+    if (!byTier[c.tier]) byTier[c.tier] = [];
+    byTier[c.tier].push(c);
+  }
+
+  const matrix = {};
+  for (const [tier, cells] of Object.entries(byTier)) {
+    const shrinkInput = cells.map(c => ({ id: String(c.leagueId), n: c.n, value: c.roi, sampleVariance: c.sampleVariance }));
+    const shrunkResults = empiricalBayesShrink(shrinkInput, varianceForRoi);
+    for (const sr of shrunkResults) {
+      const lid = parseInt(sr.id, 10);
+      const src = cells.find(c => c.leagueId === lid);
+      if (!matrix[lid]) matrix[lid] = { name: LEAGUE_CONFIG[lid]?.name || `League ${lid}`, cells: {} };
+      matrix[lid].cells[tier] = { n: src.n, roi: src.roi, ciLow: src.ciLow, ciHigh: src.ciHigh, thin: src.thin, shrunk: sr.shrunk };
+    }
+  }
+  return matrix;
+}
+
 app.get('/api/league-tier-matrix', (_req, res) => {
   const leagueIds = Object.keys(LEAGUE_TIER_MATRIX).map(Number);
+  const walkForwardMatrix = buildWalkForwardMatrix();
+
+  // Merged Historical matrix: walk-forward result for in-sample leagues (once
+  // computed — falls back to the original Addendum 6 hardcoded snapshot if
+  // walk-forward-pooled.json doesn't exist yet), untouched real-backtest
+  // LEAGUE_TIER_MATRIX entries for Carabao Cup/League One/League Two.
+  const mergedMatrix = { ...LEAGUE_TIER_MATRIX };
+  const historicalSourceByLeague = {};
+  for (const id of leagueIds) {
+    historicalSourceByLeague[id] = WALKFORWARD_HISTORICAL_LEAGUE_IDS.has(id) && walkForwardMatrix[id]
+      ? 'walkforward-proxy' : 'real-backtest';
+  }
+  for (const [lid, entry] of Object.entries(walkForwardMatrix)) {
+    mergedMatrix[lid] = entry;
+    historicalSourceByLeague[lid] = 'walkforward-proxy';
+  }
+  const mergedLeagueIds = Object.keys(mergedMatrix).map(Number);
 
   // n-weighted shrunk average per league (row) and per tier (column) — secondary
   // read only, see the doc addendum for why this shouldn't replace cell-level detail.
-  const leagueAverages = leagueIds.map(id => {
+  const leagueAverages = mergedLeagueIds.map(id => {
     let wSum = 0, nSum = 0;
-    for (const cell of Object.values(LEAGUE_TIER_MATRIX[id].cells)) { wSum += cell.shrunk * cell.n; nSum += cell.n; }
-    return { leagueId: id, name: LEAGUE_TIER_MATRIX[id].name, n: nSum, avgShrunkRoi: nSum > 0 ? +(wSum / nSum).toFixed(4) : null };
+    for (const cell of Object.values(mergedMatrix[id].cells)) { wSum += cell.shrunk * cell.n; nSum += cell.n; }
+    return { leagueId: id, name: mergedMatrix[id].name, n: nSum, avgShrunkRoi: nSum > 0 ? +(wSum / nSum).toFixed(4) : null };
   });
   const tierAverages = LEAGUE_TIER_MATRIX_TIER_ORDER.map(tier => {
     let wSum = 0, nSum = 0;
-    for (const id of leagueIds) {
-      const cell = LEAGUE_TIER_MATRIX[id].cells[tier];
+    for (const id of mergedLeagueIds) {
+      const cell = mergedMatrix[id].cells[tier];
       if (cell) { wSum += cell.shrunk * cell.n; nSum += cell.n; }
     }
     return { tier, n: nSum, avgShrunkRoi: nSum > 0 ? +(wSum / nSum).toFixed(4) : null };
@@ -4989,33 +5086,20 @@ app.get('/api/league-tier-matrix', (_req, res) => {
   // Full grid-eligible competition list, League/Tournament toggle (Addendum 20
   // follow-up) — driven entirely by COMPETITION_TYPE rather than a UI-side list,
   // so a future addition is one config line, not a hunt through public/index.html.
-  // Includes Europa League/Conference League even though they have no
-  // LEAGUE_TIER_MATRIX entry yet (Addendum 20 deliberately didn't build one, the
-  // populations are thin) — their Historical/Continuous cells render as "no data"
-  // client-side, same as any other missing cell, while Live still works normally
-  // off /api/tier-performance.
   //
   // hasHistoricalMatrix / hasContinuousMatrix are competition-level flags, not
-  // cell-level — added after finding LEAGUE_TIER_MATRIX (Historical) and
-  // CONTINUOUS_LEAGUE_TIER_MATRIX (Continuous) are two independently-built, static
-  // snapshots from different addenda: Historical is each league's own train/test
-  // split test-only population (Addendum 6, live model, a different date boundary
-  // per league); Continuous is Addendum 14's single shared proxy-model holdout
-  // window (≥2024-08-07, a model never used live), scoped to only the original 9
-  // leagues that existed when it was written. They are NOT the same population
-  // filtered by edge threshold, so "Continuous n ≥ Historical n" holds only
-  // empirically for those 9 (both happen to be similarly-sized snapshots), not by
-  // construction — and CONTINUOUS_LEAGUE_TIER_MATRIX has zero entries at all for
-  // Carabao Cup/League One/League Two (added in Addendum 19, after Addendum 14 was
-  // written) or Europa League/Conference League (Addendum 20). The frontend uses
-  // these two flags to render "n/a — no backtest exists for this competition" for
-  // a whole competition, distinct from an ordinary empty cell within an audited one.
+  // cell-level. historicalSource (Addendum 21) tells the frontend whether a
+  // league's Historical reading is a genuine real backtest (Carabao Cup/League
+  // One/League Two, Addendum 19) or a walk-forward proxy estimate (Addendum 21,
+  // in-sample leagues) — surfaced directly in the UI wherever Combined is shown,
+  // not buried in a tooltip, per that task's explicit requirement.
   const gridLeagues = Object.keys(COMPETITION_TYPE).map(Number).map(id => ({
     id,
-    name: LEAGUE_TIER_MATRIX[id]?.name || LEAGUE_CONFIG[id]?.name || `League ${id}`,
+    name: mergedMatrix[id]?.name || LEAGUE_CONFIG[id]?.name || `League ${id}`,
     competitionType: COMPETITION_TYPE[id],
-    hasHistoricalMatrix: !!LEAGUE_TIER_MATRIX[id],
+    hasHistoricalMatrix: !!mergedMatrix[id],
     hasContinuousMatrix: !!CONTINUOUS_LEAGUE_TIER_MATRIX[id],
+    historicalSource: mergedMatrix[id] ? historicalSourceByLeague[id] : null,
   }));
 
   res.json({
@@ -5024,10 +5108,10 @@ app.get('/api/league-tier-matrix', (_req, res) => {
       validatedLeagues: leagueIds.filter(id => !UNSEEN_POPULATION_LEAGUES.has(id)).map(id => ({ id, name: LEAGUE_TIER_MATRIX[id].name })),
       unseenPopulationLeagues: leagueIds.filter(id => UNSEEN_POPULATION_LEAGUES.has(id)).map(id => ({ id, name: LEAGUE_TIER_MATRIX[id].name })),
       tierLabels: LEAGUE_TIER_MATRIX_TIER_ORDER,
-      note: 'Reference/diagnostic snapshot, not live-computed and not a gate. Raw = uncorrected posEdge ROI. For validatedLeagues: test-only, post-train/test-split (Addendum 6). For unseenPopulationLeagues (Carabao Cup/League One/League Two): the FULL matched population, since none of it was ever used for tuning — no split needed or performed (calibration-rules.md rule 10, Addendum 19). Shrunk pools within each of those two groups separately, never merged — the original 9-league shrinkage values are untouched by the 3 newer leagues\' addition.',
-      continuousNote: 'continuousMatrix (Addendum 14 Part C) is the same population with no 5% edge threshold applied — only covers 35-40% through 65-70%, the range that analysis actually had matched-odds volume for. Scoped to the original 9 validatedLeagues only.',
+      note: 'Reference/diagnostic snapshot, not live-computed and not a gate. Raw = uncorrected posEdge ROI. For unseenPopulationLeagues (Carabao Cup/League One/League Two): the FULL matched population, since none of it was ever used for tuning — no split needed or performed (calibration-rules.md rule 10, Addendum 19). For in-sample leagues (Addendum 21): a pooled 4-block walk-forward proxy estimate, not a genuine holdout — see historicalSource per league in scope.leagues and Addendum 21 for the full caveat.',
+      continuousNote: 'continuousMatrix (Addendum 14 Part C) is the same population with no 5% edge threshold applied — only covers 35-40% through 65-70%, the range that analysis actually had matched-odds volume for. Scoped to the original 9 validatedLeagues only. Unaffected by the Addendum 21 walk-forward Historical change.',
     },
-    matrix: LEAGUE_TIER_MATRIX,
+    matrix: mergedMatrix,
     continuousMatrix: CONTINUOUS_LEAGUE_TIER_MATRIX,
     continuousTierTotals: CONTINUOUS_TIER_POOLED,
     leagueAverages,
@@ -6836,15 +6920,15 @@ app.post('/api/admin/walkforward-pool', (_req, res) => {
     const n = cellBets.length;
     const returns = cellBets.map(b => b.won ? (b.pinnacleOdds - 1) : -1);
     const mean = returns.reduce((s, v) => s + v, 0) / n;
-    let ciLow = null, ciHigh = null;
+    let ciLow = null, ciHigh = null, sampleVariance = null;
     if (n > 1) {
-      const variance = returns.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1);
-      const se = Math.sqrt(variance / n);
+      sampleVariance = returns.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1);
+      const se = Math.sqrt(sampleVariance / n);
       ciLow  = +(mean - 1.96 * se).toFixed(4);
       ciHigh = +(mean + 1.96 * se).toFixed(4);
     }
     return {
-      leagueId, tier, n, roi: +mean.toFixed(4), ciLow, ciHigh,
+      leagueId, tier, n, roi: +mean.toFixed(4), ciLow, ciHigh, sampleVariance,
       thin: n < 30,
       reported: WF_REPORTED_LEAGUE_IDS.has(leagueId),
     };

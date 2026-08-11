@@ -296,6 +296,10 @@ td.mono { font-family: var(--font-data); }
 .tpg-sub:last-child { border-bottom: none; }
 .tpg-sub-label { font-size: 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; flex-shrink: 0; }
 .tpg-sub-dash { color: var(--muted); }
+/* Green-flag manual curation (Addendum 21 Part C) — display-only, no gating */
+.tpg-cell.tpg-clickable { cursor: pointer; transition: background .1s; }
+.tpg-cell.tpg-clickable:hover { background: rgba(0,255,135,.06); }
+.tpg-cell.tpg-flagged { background: rgba(0,255,135,.14) !important; box-shadow: inset 0 0 0 2px var(--green); }
 
 /* ── Badge ── */
 .badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-family: var(--font-head); font-weight: 700; }
@@ -724,10 +728,14 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       <button class="btn btn-ghost btn-sm" onclick="renderTierPerf('paper','')">↻ Refresh</button>
     </div>
     <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 10px">
-      Every cell stacks three readings: <strong style="color:var(--text1)">H</strong>istorical (backtest baseline,
-      posEdge≥5%) · <strong style="color:var(--text1)">C</strong>ontinuous (same backtest, no edge threshold) ·
-      <strong style="color:var(--text1)">L</strong>ive (actual accumulating results, this model version). Scoped to
-      the nine leagues with a genuine train/test split. Reference view, not a gate.
+      Every cell stacks four readings: <strong style="color:var(--text1)">H</strong>istorical (posEdge≥5% —
+      🔬 a walk-forward proxy estimate for in-sample leagues, ✓bt a genuine backtest for out-of-sample ones,
+      see Addendum 21) · <strong style="color:var(--text1)">C</strong>ontinuous (same-era backtest, no edge
+      threshold, original 9 leagues only) · <strong style="color:var(--text1)">L</strong>ive (real resolved bets,
+      current model version only) · <strong style="color:var(--text1)">X</strong> Combined (n-weighted pool of
+      Historical + Live — the biggest single sample available; ⟳handoff marks a proxy-sourced reading whose Live
+      leg has cleared the 350-bet floor and is ready for manual review). Click any per-league cell to green-flag
+      it as a real-money candidate. Reference view, not a gate.
     </p>
     <div style="display:flex;gap:4px;margin-bottom:12px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:4px;width:fit-content">
       <button class="perf-view-btn tpg-view-btn active-combined-view" id="tpg-view-league-btn" onclick="setTpgView('league')">League</button>
@@ -974,10 +982,14 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       <button class="btn btn-ghost btn-sm" onclick="renderTierPerf('real','real-')">↻ Refresh</button>
     </div>
     <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 10px">
-      Every cell stacks three readings: <strong style="color:var(--text1)">H</strong>istorical (backtest baseline,
-      posEdge≥5%) · <strong style="color:var(--text1)">C</strong>ontinuous (same backtest, no edge threshold) ·
-      <strong style="color:var(--text1)">L</strong>ive (actual accumulating results, this model version). Scoped to
-      the nine leagues with a genuine train/test split. Reference view, not a gate.
+      Every cell stacks four readings: <strong style="color:var(--text1)">H</strong>istorical (posEdge≥5% —
+      🔬 a walk-forward proxy estimate for in-sample leagues, ✓bt a genuine backtest for out-of-sample ones,
+      see Addendum 21) · <strong style="color:var(--text1)">C</strong>ontinuous (same-era backtest, no edge
+      threshold, original 9 leagues only) · <strong style="color:var(--text1)">L</strong>ive (real resolved bets,
+      current model version only) · <strong style="color:var(--text1)">X</strong> Combined (n-weighted pool of
+      Historical + Live — the biggest single sample available; ⟳handoff marks a proxy-sourced reading whose Live
+      leg has cleared the 350-bet floor and is ready for manual review). Click any per-league cell to green-flag
+      it as a real-money candidate. Reference view, not a gate.
     </p>
     <div style="display:flex;gap:4px;margin-bottom:12px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:4px;width:fit-content">
       <button class="perf-view-btn tpg-view-btn active-combined-view" id="real-tpg-view-league-btn" onclick="setTpgView('league')">League</button>
@@ -1224,10 +1236,14 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       <button class="btn btn-ghost btn-sm" onclick="renderTierPerf('combined','combined-')">↻ Refresh</button>
     </div>
     <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 10px">
-      Every cell stacks three readings: <strong style="color:var(--text1)">H</strong>istorical (backtest baseline,
-      posEdge≥5%) · <strong style="color:var(--text1)">C</strong>ontinuous (same backtest, no edge threshold) ·
-      <strong style="color:var(--text1)">L</strong>ive (actual accumulating results, this model version). Scoped to
-      the nine leagues with a genuine train/test split. Reference view, not a gate.
+      Every cell stacks four readings: <strong style="color:var(--text1)">H</strong>istorical (posEdge≥5% —
+      🔬 a walk-forward proxy estimate for in-sample leagues, ✓bt a genuine backtest for out-of-sample ones,
+      see Addendum 21) · <strong style="color:var(--text1)">C</strong>ontinuous (same-era backtest, no edge
+      threshold, original 9 leagues only) · <strong style="color:var(--text1)">L</strong>ive (real resolved bets,
+      current model version only) · <strong style="color:var(--text1)">X</strong> Combined (n-weighted pool of
+      Historical + Live — the biggest single sample available; ⟳handoff marks a proxy-sourced reading whose Live
+      leg has cleared the 350-bet floor and is ready for manual review). Click any per-league cell to green-flag
+      it as a real-money candidate. Reference view, not a gate.
     </p>
     <div style="display:flex;gap:4px;margin-bottom:12px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:4px;width:fit-content">
       <button class="perf-view-btn tpg-view-btn active-combined-view" id="combined-tpg-view-league-btn" onclick="setTpgView('league')">League</button>
@@ -2260,12 +2276,14 @@ function apiFetchWithTimeout(url, opts = {}, ms = 5000) {
 
 async function loadState() {
   try {
-    const [s, meta, tierPerf] = await Promise.all([
+    const [s, meta, tierPerf, greenFlags] = await Promise.all([
       apiFetch('/api/state'),
       apiFetch('/api/scan-meta').catch(() => null),
       apiFetch('/api/tier-performance?mode=all').catch(() => null),
+      apiFetch('/api/green-flags').catch(() => null),
     ]);
     STATE = s;
+    STATE.greenFlags = greenFlags?.flags || []; // green-flag manual curation (Addendum 21 Part C)
     STATE.tierPerf = tierPerf; // used by Scout-page tier context lines — see tierContextLine()
     renderScout();
     updateBankrollBadge();
@@ -2339,6 +2357,31 @@ function tierOfProb(p) {
     if (p >= TIER_EDGES[i] && p < TIER_EDGES[i + 1]) return `${Math.round(TIER_EDGES[i]*100)}-${Math.round(TIER_EDGES[i+1]*100)}%`;
   }
   return '80%+';
+}
+// Green-flag manual curation (Addendum 21 Part C) — purely manual, display-only.
+// No automatic flagging, no gating of bet-locking or scoring behaviour anywhere.
+function isGreenFlagged(leagueId, tier) {
+  return (STATE.greenFlags || []).some(f => String(f.leagueId) === String(leagueId) && f.tier === tier);
+}
+async function toggleGreenFlag(leagueId, tier) {
+  try {
+    const result = await apiFetch('/api/green-flags/toggle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ leagueId, tier }),
+    });
+    STATE.greenFlags = result.flags;
+  } catch (e) { return; }
+  // Re-render whichever grids are currently mounted so the click reflects instantly
+  // rather than waiting for the next loadState() poll.
+  renderTierPerf('paper', '');
+  renderTierPerf('real', 'real-');
+  renderTierPerf('combined', 'combined-');
+}
+function greenFlagBadge(leagueId, modelProb) {
+  const tier = tierOfProb(modelProb);
+  if (!tier || !isGreenFlagged(leagueId, tier)) return '';
+  return `<span class="badge" style="background:rgba(0,255,135,.16);color:var(--green);border:1px solid var(--green);font-weight:800" title="Manually flagged as a real-money candidate for ${tier} in this league">🟢 FLAGGED</span>`;
 }
 function tierBadge(modelProb) {
   const tier = tierOfProb(modelProb);
@@ -2417,7 +2460,7 @@ function scoutTierBlock(modelProb, leagueId, pickType) {
     }
   }
   return `<div style="margin-top:4px;font-size:10.5px;font-family:'DM Mono',monospace;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-    ${tierBadge(modelProb)}${pickTypeBadge(pickType)}<span>${contextHtml}</span>
+    ${tierBadge(modelProb)}${pickTypeBadge(pickType)}${greenFlagBadge(leagueId, modelProb)}<span>${contextHtml}</span>
   </div>${pickTypeHtml}`;
 }
 
@@ -3161,6 +3204,20 @@ function toggleTpgMethodology(prefix) {
 // a bug, it's honest about how thin any single cell necessarily is.
 const TPG_DECISION_FLOOR = 350;
 
+// Combined reading (Addendum 21 Part B, point 11) — n-weighted pool of Historical
+// and Live for the same cell, giving the biggest single sample available, now
+// computable for every competition since both out-of-sample leagues (a real
+// backtest) and in-sample leagues (a walk-forward proxy) have a legitimate
+// Historical figure to pool with Live. Purely a display-side combination —
+// doesn't touch either underlying reading.
+function _tpgCombine(histCell, liveCell) {
+  const hN = histCell?.n || 0, lN = liveCell?.n || 0;
+  const n = hN + lN;
+  if (n === 0) return { n: 0, roi: null, thin: true };
+  const roi = ((histCell?.roi || 0) * hN + (liveCell?.roi || 0) * lN) / n;
+  return { n, roi, thin: n < 30 };
+}
+
 // One stacked sub-row (Historical/Continuous/Live) inside a grid cell. n==null/0
 // renders a clean dash rather than an error or blank — most cells, especially Live
 // and Continuous, don't have data yet at current volume. `unavailable`, when true,
@@ -3169,7 +3226,15 @@ const TPG_DECISION_FLOOR = 350;
 // comment in /api/league-tier-matrix) rather than this one tier/cell just being
 // empty within an otherwise-audited competition — those are different situations
 // and read differently: "n/a" here, a plain dash for a genuine empty cell.
-function _tpgFmtSub(label, n, roi, thin, unavailable) {
+// sourceMarker (Addendum 21 Part B) — visible provenance for a reading that's
+// fed partly or wholly by evidence type that isn't obvious from the number alone
+// (a real backtest vs. a walk-forward proxy estimate). Rendered inline, not just
+// as a title= tooltip, per that task's explicit "not just buried in a tooltip"
+// requirement. handoffReady additionally marks a proxy-sourced reading whose Live
+// leg has crossed the 350-bet decision-grade floor — the automatic-handoff
+// *detection* (docs/tier-calibration-analysis.md Addendum 21); the actual
+// switch-over to a real backtest is a deliberate manual step, not automated.
+function _tpgFmtSub(label, n, roi, thin, unavailable, sourceMarker, handoffReady) {
   if (unavailable) {
     return `<div class="tpg-sub"><span class="tpg-sub-label">${label}</span><span class="tpg-sub-dash" title="No ${label === 'H' ? 'Historical' : 'Continuous'} backtest exists for this competition yet">n/a</span></div>`;
   }
@@ -3179,7 +3244,9 @@ function _tpgFmtSub(label, n, roi, thin, unavailable) {
     const roiStr = roi != null ? `${roi >= 0 ? '+' : ''}${(roi*100).toFixed(1)}%` : '—';
     const thinMark  = thin ? '<span style="color:var(--muted);font-size:8px">*</span>' : '';
     const floorMark = n >= TPG_DECISION_FLOOR ? ' <span style="color:var(--green);font-size:8px" title="Meets the ~350-bet decision-grade floor">✓350</span>' : '';
-    valueHtml = `<span class="${cls}">${roiStr}</span>${thinMark}<span style="color:var(--muted);font-size:9px"> (${n})</span>${floorMark}`;
+    const srcMark   = sourceMarker || '';
+    const handoffMark = handoffReady ? ' <span style="color:var(--amber);font-size:8px" title="Live has cleared the 350-bet floor for a walk-forward-sourced league — review recommended: this proxy Historical reading could be replaced with a genuine backtest or retired in favour of Live. Not automatic — a deliberate step, same as every other split in this project.">⟳handoff</span>' : '';
+    valueHtml = `<span class="${cls}">${roiStr}</span>${thinMark}${srcMark}<span style="color:var(--muted);font-size:9px"> (${n})</span>${floorMark}${handoffMark}`;
   }
   return `<div class="tpg-sub"><span class="tpg-sub-label">${label}</span><span>${valueHtml}</span></div>`;
 }
@@ -3227,20 +3294,38 @@ async function renderTierPerf(mode = 'paper', prefix = '') {
       const histCell = ltm?.matrix?.[l.id]?.cells?.[r.tier];
       const contCell = ltm?.continuousMatrix?.[l.id]?.cells?.[r.tier];
       const liveCell = r.byLeague?.find(x => x.leagueId === l.id);
-      return `<td class="tpg-cell">
-        ${_tpgFmtSub('H', histCell?.n, histCell?.roi, histCell?.thin, l.hasHistoricalMatrix === false)}
+      // Green-flag manual curation (Addendum 21 Part C) — click any per-league cell
+      // to toggle it as a flagged real-money candidate. Display-only: doesn't touch
+      // scoring/EV/bet-locking, independent of which League/Tournament view is active.
+      const flagged = isGreenFlagged(l.id, r.tier);
+      const combined = _tpgCombine(histCell, liveCell);
+      const isProxy = l.historicalSource === 'walkforward-proxy';
+      const srcMark = histCell?.n
+        ? (isProxy
+            ? '<span style="color:var(--amber);font-size:8px" title="Historical is a walk-forward proxy estimate (Addendum 21), not a genuine holdout">🔬</span>'
+            : '<span style="color:var(--green);font-size:8px" title="Historical is a genuine real backtest (train/test split or unseen-population read)">✓bt</span>')
+        : '';
+      const handoffReady = isProxy && liveCell?.n >= TPG_DECISION_FLOOR;
+      return `<td class="tpg-cell tpg-clickable${flagged ? ' tpg-flagged' : ''}" onclick="toggleGreenFlag(${l.id}, '${r.tier}')" title="Click to ${flagged ? 'un' : ''}flag ${l.name} ${r.tier} as a real-money candidate">
+        ${_tpgFmtSub('H', histCell?.n, histCell?.roi, histCell?.thin, l.hasHistoricalMatrix === false, srcMark)}
         ${_tpgFmtSub('C', contCell?.n, contCell?.roi, contCell?.thin, l.hasContinuousMatrix === false)}
         ${_tpgFmtSub('L', liveCell?.n, liveCell?.roi, liveCell?.thin)}
+        ${_tpgFmtSub('X', combined.n, combined.roi, combined.thin, false, isProxy ? srcMark : '', handoffReady)}
       </td>`;
     }).join('');
     // Total column — pooled across all 9 leagues, sourced directly rather than summed
     // client-side from the per-league cells (Historical/Live are already pooled reads
     // elsewhere on this row; Continuous uses Addendum 14 Part C's own pooled figure).
+    // No single "source" marker for Total — it blends leagues on both real-backtest
+    // and walk-forward-proxy Historical, so its Combined row is left unmarked rather
+    // than implying one uniform provenance.
     const contTotal = ltm?.continuousTierTotals?.[r.tier];
+    const totalCombined = _tpgCombine(r.historical, r.live);
     const totalCell = `<td class="tpg-cell tpg-total-cell">
       ${_tpgFmtSub('H', r.historical?.n, r.historical?.roi, r.historical?.thin)}
       ${_tpgFmtSub('C', contTotal?.n, contTotal?.roi, contTotal?.thin)}
       ${_tpgFmtSub('L', r.live?.n, r.live?.roi, r.live?.thin)}
+      ${_tpgFmtSub('X', totalCombined.n, totalCombined.roi, totalCombined.thin)}
     </td>`;
     tr.innerHTML = `<td class="tpg-tier-cell">${r.tier}</td>${cells}${totalCell}`;
     tbody.appendChild(tr);

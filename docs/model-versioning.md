@@ -310,3 +310,71 @@ train" is therefore: once the DATA_DIR bug (below) is fixed, `gbdt-train.js`
 naturally draws from the full ~48,000-fixture live population, with no
 manual exclusion of the fixtures previously called "test" — those are simply
 part of the pool it does its own split over now.
+
+## Historical / Live / Combined — the standing framework (Addendum 21)
+
+Every model version, past and future, produces four readings per league × tier
+cell on the Performance tab's Calibration Tier Performance grid. This section
+is the standing definition — apply it to every future retrain cycle, not just
+the one that motivated it.
+
+**Historical** — the best available *out-of-sample-style* read for that
+competition, sourced one of two ways depending on whether the competition's
+full history was used to train the current live model:
+
+- **Out-of-sample competitions** (never in the live model's training pool —
+  Carabao Cup, League One, League Two as of this writing, per
+  `EXCLUDED_LEAGUE_IDS` in `gbdt-train.js`): a **genuine backtest** — a real
+  train/test split, or for these three specifically the full matched
+  population read once as an unseen-population evidence (Addendum 19,
+  `calibration-rules.md` rule 10). Marked `historicalSource: 'real-backtest'`
+  in `/api/league-tier-matrix`'s `scope.leagues`, rendered with a ✓bt marker.
+- **In-sample competitions** (used to train the live model — the 8 original
+  domestic leagues plus Champions League and Europa League as of this
+  writing): no genuine holdout exists, so Historical is a **walk-forward
+  proxy estimate** (Addendum 21) — 4 sequential blocks, each trained on all
+  data strictly before that block and tested on the block itself, pooled.
+  This describes *how a periodically-retrained model of this design has
+  performed*, not a literal test of the exact current live model's weights.
+  Marked `historicalSource: 'walkforward-proxy'`, rendered with a 🔬 marker —
+  **always visibly, wherever the reading is shown, never only in a tooltip.**
+- Any competition with neither (e.g. Conference League, whose own history is
+  too thin — Addendum 20 — to backtest on its own) shows `n/a`, not a dash,
+  distinguishing "no backtest exists for this competition" from an ordinary
+  empty cell within an audited one.
+
+**Live** — real, resolved bets, filtered to `modelVersion === ` the current
+live model's version and `resolvedAt >= ` that version's own `trainedAt`. For
+GBDT, `getVersion()` *is* the `trainedAt` ISO string, so in practice these are
+almost always the same check — both are applied explicitly rather than
+assumed equivalent, since a bet resolved before its own model version existed
+should never be possible but is worth defending against rather than trusting.
+This was tightened by Addendum 21 — previously every resolved bet ever
+counted toward "Live," including ones scored by since-superseded versions.
+`byModelVersion` (above) is unaffected — it deliberately still spans every
+version, that's its whole purpose.
+
+**Combined** — an n-weighted pool of that cell's Historical and Live figures:
+`n = H.n + L.n`, `roi = (H.n·H.roi + L.n·L.roi) / n`. The biggest single
+sample available for a cell, now computable for every grid-eligible
+competition since both out-of-sample and in-sample competitions have a
+legitimate Historical figure to pool with. Purely a display-side combination
+— touches neither underlying reading, gates nothing.
+
+**Automatic handoff — detection only, action is manual.** When a walk-forward-
+sourced competition's Live leg clears the 350-bet decision-grade floor (the
+same threshold `byModelVersion` already uses), the grid marks that cell
+`⟳handoff` — a visible signal that real live evidence has now accumulated to
+where the proxy estimate could be replaced with a genuine backtest, or simply
+retired in favour of Live+Combined alone. **This detection is automatic; the
+transition itself is not, and should not be** — deciding how to re-validate a
+competition is exactly the kind of deliberate, reviewed step
+`calibration-rules.md` rules 1-3 require for every other split in this
+project, not something safe to trigger from a script. The manual step: when
+`⟳handoff` appears, run the same process used for every other league's split
+(a genuine time-based train/test boundary, base rates tuned on train only,
+single test-set look) and update `WALKFORWARD_HISTORICAL_LEAGUE_IDS` in
+`server.js` to drop that league once it has one. The same applies if a future
+retrain deliberately holds a competition's data out again (making it
+genuinely out-of-sample once more) — that's also a manual decision to make,
+not an automatic consequence of a retrain completing.
