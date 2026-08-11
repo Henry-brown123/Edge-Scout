@@ -6424,6 +6424,64 @@ app.get('/api/debug/memory-trace', (_req, res) => {
   } catch (e) { res.status(404).json({ error: 'no trace file yet', message: e.message }); }
 });
 
+// Team ids in scope for the deferred profile catch-up — any team that appears in
+// a Carabao Cup/League One/League Two fixture (leagues 48/41/42), whether or not
+// they also play in an already-tracked domestic league. Deliberately NOT "every
+// team without a profile" — scoping to these three leagues specifically matches
+// the task boundary (an already-tracked Premier League club that played a Carabao
+// Cup tie is legitimately due an update from that; a club that's never touched any
+// of these three competitions is not touched at all).
+const NEW_LEAGUE_IDS_FOR_PROFILE_CATCHUP = new Set([48, 41, 42]);
+
+app.get('/api/debug/profile-catchup-scope', async (req, res) => {
+  try {
+    const existing = readJSON('backfill-historical.json');
+    if (!existing) return res.status(404).json({ error: 'backfill-historical.json not found' });
+    const teamIds = new Set();
+    for (const f of existing.fixtures) {
+      if (!NEW_LEAGUE_IDS_FOR_PROFILE_CATCHUP.has(f.league?.id)) continue;
+      if (f.teams?.home?.id) teamIds.add(f.teams.home.id);
+      if (f.teams?.away?.id) teamIds.add(f.teams.away.id);
+    }
+    const sorted = [...teamIds].sort((a, b) => a - b);
+    res.json({ totalTeams: sorted.length, teamIds: sorted });
+  } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
+});
+
+// Processes one bounded batch (?offset=&limit=, default limit 150) of the scope
+// above through updateTeamProfiles' onlyTeamIds parameter — each call is a
+// separate request, so memory from one batch's temporary structures is fully
+// released (GC'd) before the next, keeping peak memory bounded to one batch
+// rather than all ~1200 teams at once. Each team's profile is still built from
+// its own FULL fixture history (grouping scans the whole pool regardless — that
+// part was already confirmed cheap), so batching doesn't thin out any profile,
+// it only bounds how many get built in one synchronous request.
+app.post('/api/debug/profile-catchup-batch', async (req, res) => {
+  try {
+    const offset = parseInt(req.query.offset, 10) || 0;
+    const limit  = parseInt(req.query.limit, 10) || 150;
+    const existing = readJSON('backfill-historical.json');
+    if (!existing) return res.status(404).json({ error: 'backfill-historical.json not found' });
+    const teamIds = new Set();
+    for (const f of existing.fixtures) {
+      if (!NEW_LEAGUE_IDS_FOR_PROFILE_CATCHUP.has(f.league?.id)) continue;
+      if (f.teams?.home?.id) teamIds.add(f.teams.home.id);
+      if (f.teams?.away?.id) teamIds.add(f.teams.away.id);
+    }
+    const sorted = [...teamIds].sort((a, b) => a - b);
+    const batch = sorted.slice(offset, offset + limit);
+    if (batch.length === 0) {
+      return res.json({ offset, limit, batchSize: 0, totalTeams: sorted.length, done: true, profileCount: 0 });
+    }
+    const profileCount = await updateTeamProfiles(existing.fixtures, batch);
+    res.json({
+      offset, limit, batchSize: batch.length, totalTeams: sorted.length,
+      done: offset + limit >= sorted.length, profileCount,
+      nextOffset: offset + limit < sorted.length ? offset + limit : null,
+    });
+  } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
+});
+
 const _serverStartedAt = new Date().toISOString();
 
 app.get('/api/server-status', async (_req, res) => {
