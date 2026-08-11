@@ -4736,12 +4736,14 @@ app.get('/api/league-tier-matrix', (_req, res) => {
     return { tier, n: nSum, avgShrunkRoi: nSum > 0 ? +(wSum / nSum).toFixed(4) : null };
   }).filter(t => t.n > 0);
 
+  const UNSEEN_POPULATION_LEAGUES = new Set([48, 41, 42]);
   res.json({
     scope: {
-      validatedLeagues: leagueIds.map(id => ({ id, name: LEAGUE_TIER_MATRIX[id].name })),
+      validatedLeagues: leagueIds.filter(id => !UNSEEN_POPULATION_LEAGUES.has(id)).map(id => ({ id, name: LEAGUE_TIER_MATRIX[id].name })),
+      unseenPopulationLeagues: leagueIds.filter(id => UNSEEN_POPULATION_LEAGUES.has(id)).map(id => ({ id, name: LEAGUE_TIER_MATRIX[id].name })),
       tierLabels: LEAGUE_TIER_MATRIX_TIER_ORDER,
-      note: 'Reference/diagnostic snapshot, not live-computed and not a gate. Raw = uncorrected posEdge ROI, test-only. Shrunk = empirical-Bayes estimate pooling toward the tier average across all 9 leagues. See docs/tier-calibration-analysis.md Addendum 6.',
-      continuousNote: 'continuousMatrix (Addendum 14 Part C) is the same population with no 5% edge threshold applied — only covers 35-40% through 65-70%, the range that analysis actually had matched-odds volume for.',
+      note: 'Reference/diagnostic snapshot, not live-computed and not a gate. Raw = uncorrected posEdge ROI. For validatedLeagues: test-only, post-train/test-split (Addendum 6). For unseenPopulationLeagues (Carabao Cup/League One/League Two): the FULL matched population, since none of it was ever used for tuning — no split needed or performed (calibration-rules.md rule 10, Addendum 19). Shrunk pools within each of those two groups separately, never merged — the original 9-league shrinkage values are untouched by the 3 newer leagues\' addition.',
+      continuousNote: 'continuousMatrix (Addendum 14 Part C) is the same population with no 5% edge threshold applied — only covers 35-40% through 65-70%, the range that analysis actually had matched-odds volume for. Scoped to the original 9 validatedLeagues only.',
     },
     matrix: LEAGUE_TIER_MATRIX,
     continuousMatrix: CONTINUOUS_LEAGUE_TIER_MATRIX,
