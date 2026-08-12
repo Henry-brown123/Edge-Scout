@@ -625,6 +625,20 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     <button id="perf-view-combined" class="perf-view-btn" onclick="switchPerfView('combined')">Combined</button>
   </div>
 
+  <!-- Walk-forward proxy-to-real handoff alert — fires when a walk-forward-proxy
+       league's genuine (real-money) Live sample clears the 350-bet decision-grade
+       floor (TPG_DECISION_FLOOR). Visible regardless of which Paper/Real/Combined
+       sub-view is active, since it's about promoting a league's Historical source,
+       not scoped to one of those tabs. Populated by checkHandoffCandidates(). -->
+  <div id="handoff-banner" style="display:none;margin-bottom:16px;background:rgba(255,209,102,.1);border:1px solid rgba(255,209,102,.5);border-radius:10px;padding:14px 16px;align-items:center;gap:14px;flex-wrap:wrap">
+    <span style="font-size:20px;line-height:1">⟳</span>
+    <div style="flex:1;min-width:200px">
+      <div style="font-family:'Syne',sans-serif;font-weight:700;font-size:13px;color:var(--amber)">Proxy-to-real handoff ready</div>
+      <div id="handoff-banner-detail" style="font-size:11px;color:var(--text2);margin-top:2px"></div>
+    </div>
+    <div id="handoff-banner-actions" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+  </div>
+
   <!-- Period filter bar -->
   <div class="perf-filter-bar" id="perf-filter-bar">
     <button class="pf-btn" data-period="7d"     onclick="setPerfPeriod('7d')">7D</button>
@@ -2242,7 +2256,7 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.classList.add('active');
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
     if (btn.dataset.tab === 'model')       renderModel();
-    if (btn.dataset.tab === 'performance') { switchPerfView('paper'); renderPerformance(); renderLeagueTierMatrix(); renderPreRetrainCalibrationMatrix(); }
+    if (btn.dataset.tab === 'performance') { switchPerfView('paper'); renderPerformance(); renderLeagueTierMatrix(); renderPreRetrainCalibrationMatrix(); checkHandoffCandidates(); }
     if (btn.dataset.tab === 'settings')  { renderSettings(); loadBackfillStatus(); loadOddsHistoryStats(); loadStartupStatus(); loadAccounts(); loadLeagueWeights(); }
   });
 });
@@ -3249,6 +3263,123 @@ function _tpgFmtSub(label, n, roi, thin, unavailable, sourceMarker, handoffReady
     valueHtml = `<span class="${cls}">${roiStr}</span>${thinMark}${srcMark}<span style="color:var(--muted);font-size:9px"> (${n})</span>${floorMark}${handoffMark}`;
   }
   return `<div class="tpg-sub"><span class="tpg-sub-label">${label}</span><span>${valueHtml}</span></div>`;
+}
+
+// ─── PROXY-TO-REAL HANDOFF ALERT ──────────────────────────────────────────────
+// Upgrades the passive ⟳handoff marker above from "only visible if you happen to
+// scroll to that exact grid cell" to a can't-miss banner + an actionable one-click
+// review flow. Uses the EXACT same trigger condition the marker already used —
+// isProxy && liveCell.n >= TPG_DECISION_FLOOR — just gathered across every
+// league/tier cell instead of read one cell at a time. Deliberately keyed off
+// mode=real specifically (genuine real-money resolved bets), not paper or
+// combined — "genuine Live ROI" clearing the floor is what actually justifies
+// retiring a proxy estimate, and paper bets shouldn't count toward that. Purely
+// a visibility/action layer: this does not change when the underlying signal
+// fires, and promotion still requires an explicit confirm click server-side.
+let _handoffDismissed = new Set(); // session-only "remind me later" — not persisted, resets on reload
+let _handoffCandidates = [];
+let _handoffVisible = [];   // _handoffCandidates minus dismissed, re-set each renderHandoffBanner() call
+let _handoffCurrent = null; // candidate the review modal currently has open
+
+async function checkHandoffCandidates() {
+  const ltm = await _getLtmData();
+  if (!ltm) return;
+  let realPerf;
+  try { realPerf = await apiFetch('/api/tier-performance?mode=real'); } catch (e) { return; }
+
+  const candidates = [];
+  for (const l of ltm.scope.leagues || []) {
+    if (l.historicalSource !== 'walkforward-proxy') continue; // already real-backtest, or already promoted
+    for (const row of realPerf.rows) {
+      const liveCell = row.byLeague?.find(x => x.leagueId === l.id);
+      if (!liveCell || liveCell.n < TPG_DECISION_FLOOR) continue;
+      const histCell = ltm.matrix?.[l.id]?.cells?.[row.tier];
+      candidates.push({
+        leagueId: l.id, leagueName: l.name, tier: row.tier,
+        historicalN: histCell?.n ?? null, historicalRoi: histCell?.roi ?? null,
+        liveN: liveCell.n, liveRoi: liveCell.roi,
+      });
+    }
+  }
+  _handoffCandidates = candidates;
+  renderHandoffBanner();
+}
+
+function renderHandoffBanner() {
+  const banner = document.getElementById('handoff-banner');
+  const detail = document.getElementById('handoff-banner-detail');
+  const actions = document.getElementById('handoff-banner-actions');
+  if (!banner) return;
+  const visible = _handoffCandidates.filter(c => !_handoffDismissed.has(`${c.leagueId}|${c.tier}`));
+  if (!visible.length) { banner.style.display = 'none'; return; }
+
+  banner.style.display = 'flex';
+  detail.textContent = visible.length === 1
+    ? `${visible[0].leagueName} (${visible[0].tier}) — Live has ${visible[0].liveN} real-money resolved bets, clearing the ${TPG_DECISION_FLOOR}-bet floor. Review before switching its Historical source off the walk-forward proxy.`
+    : `${visible.length} league/tier combinations have cleared the ${TPG_DECISION_FLOOR}-bet floor on real-money Live results. Review each before switching its Historical source off the walk-forward proxy.`;
+  actions.innerHTML = visible.map((c, i) =>
+    `<button class="btn btn-primary btn-sm" style="background:var(--amber);color:#000;font-weight:700" onclick="openHandoffReview(${i})">Review — ${c.leagueName} (${c.tier})</button>`
+  ).join('');
+  // Re-index against the visible (filtered) array so the button's onclick index matches.
+  window._handoffVisible = visible;
+}
+
+function openHandoffReview(visibleIdx) {
+  const c = window._handoffVisible?.[visibleIdx];
+  if (!c) return;
+  window._handoffCurrent = c;
+  document.getElementById('handoff-league-name').textContent = c.leagueName;
+  document.getElementById('handoff-tier-name').textContent = c.tier;
+  const fmtPct = v => v == null ? '—' : `${v >= 0 ? '+' : ''}${(v*100).toFixed(1)}%`;
+  document.getElementById('handoff-hist-roi').textContent = fmtPct(c.historicalRoi);
+  document.getElementById('handoff-hist-n').textContent = c.historicalN != null ? `n=${c.historicalN}` : 'n/a';
+  document.getElementById('handoff-live-roi').textContent = fmtPct(c.liveRoi);
+  document.getElementById('handoff-live-n').textContent = `n=${c.liveN}`;
+  document.getElementById('handoff-modal').style.display = 'flex';
+}
+
+function closeHandoffReview() {
+  document.getElementById('handoff-modal').style.display = 'none';
+}
+
+// Explicit "review later" — session-only, does not promote. Distinct from
+// closing the modal (×  or backdrop click), which also just closes without
+// dismissing — either way, nothing is promoted unless Confirm is clicked.
+function dismissHandoff() {
+  const c = window._handoffCurrent;
+  if (c) _handoffDismissed.add(`${c.leagueId}|${c.tier}`);
+  closeHandoffReview();
+  renderHandoffBanner();
+}
+
+async function confirmHandoffPromotion() {
+  const c = window._handoffCurrent;
+  if (!c) return;
+  const btn = document.getElementById('handoff-confirm-btn');
+  btn.disabled = true;
+  btn.textContent = 'Promoting…';
+  try {
+    await apiFetch('/api/admin/promote-walkforward-league', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        leagueId: c.leagueId, tier: c.tier,
+        historicalN: c.historicalN, historicalRoi: c.historicalRoi,
+        liveN: c.liveN, liveRoi: c.liveRoi,
+      }),
+    });
+    toast(`${c.leagueName} promoted — Historical now reads real-backtest`, 'success');
+    _ltmDataCache = null; // force a fresh fetch so the grid picks up the new historicalSource
+    closeHandoffReview();
+    await Promise.all([renderLeagueTierMatrix(), renderTierPerf('paper',''), renderTierPerf('real','real-'), renderTierPerf('combined','combined-')]);
+    await checkHandoffCandidates(); // this league should no longer appear
+  } catch (e) {
+    toast('Promotion failed — see console', 'error');
+    console.error(e);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Confirm Promotion';
+  }
 }
 
 async function renderTierPerf(mode = 'paper', prefix = '') {
@@ -5992,6 +6123,47 @@ async function updateMaxStake(bmId, bmName, current) {
     <div style="display:flex;gap:10px;justify-content:flex-end">
       <button class="btn btn-ghost" onclick="closeGoLiveModal()">Cancel</button>
       <button id="go-live-confirm" class="btn btn-primary" onclick="executeGoLive()" disabled style="background:var(--amber);color:#000;font-weight:700">Go Live</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── HANDOFF REVIEW MODAL — walk-forward proxy → real-backtest promotion ────
+     Opened from the Performance-tab handoff banner. Shows the walk-forward proxy
+     Historical reading and the real, resolved-mode-real Live reading side by
+     side for the league/tier that triggered the alert, so Confirm is an informed
+     decision, not a rubber stamp. Confirm is the ONLY thing that calls POST
+     /api/admin/promote-walkforward-league — closing or dismissing never does. ── -->
+<div id="handoff-modal" style="display:none;position:fixed;inset:0;z-index:9000;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px)" onclick="if(event.target===this)closeHandoffReview()">
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:14px;padding:28px;max-width:460px;width:90%;box-shadow:0 24px 48px rgba(0,0,0,0.4)">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <div>
+        <div style="font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--amber)">REVIEW & CONFIRM PROMOTION</div>
+        <div id="handoff-league-name" style="font-size:18px;font-weight:700;font-family:var(--font-head);margin-top:4px">—</div>
+      </div>
+      <button onclick="closeHandoffReview()" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;line-height:1">×</button>
+    </div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:18px">
+      Triggered by the <span id="handoff-tier-name" style="color:var(--text2)">—</span> tier's Live sample
+      clearing the 350-bet decision-grade floor. Promoting swaps this league's Historical
+      reading from the walk-forward proxy estimate (Addendum 21) to its real-backtest
+      snapshot — the same status Carabao Cup/League One/League Two already carry.
+      This does not touch Live itself, and does not change anything for any other league.
+    </div>
+    <div style="display:flex;gap:12px;margin-bottom:20px">
+      <div style="flex:1;background:var(--surface3);border-radius:8px;padding:12px">
+        <div style="font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--amber);margin-bottom:6px">🔬 HISTORICAL (proxy)</div>
+        <div id="handoff-hist-roi" style="font-size:20px;font-weight:700;font-family:var(--font-head)">—</div>
+        <div id="handoff-hist-n" style="font-size:11px;color:var(--muted);margin-top:2px">—</div>
+      </div>
+      <div style="flex:1;background:var(--surface3);border-radius:8px;padding:12px">
+        <div style="font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--green);margin-bottom:6px">✓ LIVE (real money)</div>
+        <div id="handoff-live-roi" style="font-size:20px;font-weight:700;font-family:var(--font-head)">—</div>
+        <div id="handoff-live-n" style="font-size:11px;color:var(--muted);margin-top:2px">—</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn btn-ghost" onclick="dismissHandoff()">Dismiss — review later</button>
+      <button id="handoff-confirm-btn" class="btn btn-primary" onclick="confirmHandoffPromotion()" style="background:var(--amber);color:#000;font-weight:700">Confirm Promotion</button>
     </div>
   </div>
 </div>

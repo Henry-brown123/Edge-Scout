@@ -3504,17 +3504,24 @@ killed an in-progress block.
 
 **Pooled by tier:**
 
-| Tier | n | ROI |
-|---|---|---|
-| 35-40% | 406 | −26.46% |
-| 40-45% | 627 | −21.95% |
-| 45-50% | 437 | −2.94% |
-| 50-55% | 208 | −0.55% |
-| 55-60% | 93 | +13.27% |
-| 60-65% | 46 | +13.43% |
-| 65-70% | 23 | +163.43% |
-| 70-75% | 2 | +65.50% |
-| **Total** | **1,842** | **−10.95%** |
+| Tier | n | ROI | 95% CI |
+|---|---|---|---|
+| 35-40% | 406 | −26.46% | (−40.4%, −12.5%) |
+| 40-45% | 627 | −21.95% | (−32.4%, −11.5%) |
+| 45-50% | 437 | −2.94% | (−16.1%, +10.2%) |
+| 50-55% | 208 | −0.55% | (−19.9%, +18.8%) |
+| 55-60% | 93 | +13.27% | (−9.4%, +35.9%) |
+| 60-65% | 46 | +13.43% | (−42.3%, +69.2%) |
+| 65-70% | 23 | +163.43% | (−28.4%, +355.3%) |
+| 70-75% | 2 | +65.50% | (+35.1%, +95.9%) |
+| **Total** | **1,842** | **−10.95%** | |
+
+Three cells exclude zero: 35-40% and 40-45% (both negative, both with
+n in the hundreds) and 70-75% (positive, but n=2 — far too thin to
+mean anything despite technically excluding zero, the same caution
+flagged for every small cell in Addenda 6/14/19). The rest span zero —
+no confirmed edge either direction at current sample sizes, the same
+pattern nearly every other read in this document has shown.
 
 The shape is broadly consistent with every prior tier read in this
 document — heavy negative ROI in the 35-45% band, improving through
@@ -3538,36 +3545,47 @@ Addendum 14's single-holdout equivalent (posEdgeN=847 on 9 leagues,
 before Europa League was added) — this design produced a meaningfully
 larger evidenced sample than the single-holdout approach did.
 
-**Per-league × tier breakdown — a genuine gap in this written record,
-flagged plainly.** The full 67-cell per-league × tier disaggregation
-(n/ROI/shrunk/95% CI per cell) was computed during this task via
-`POST /api/admin/walkforward-pool`, written to `walk-forward-pooled.json`
-on the server, and is genuinely live right now — it's what feeds
-`buildWalkForwardMatrix()` and is already being served by
-`/api/league-tier-matrix` and rendered in the Performance tab grid
-(Part B/C below). **What's missing is the hand-transcription of those
-exact per-cell numbers into this document.** Authenticated API access
-(`INTERNAL_API_KEY`) was available earlier in this session but is not
-present in this sandboxed environment on its own — the same category of
-gap already documented in Addendum 3 for `APP_PASSWORD` (no login
-credential available locally either). By the time this write-up step
-was reached, that access could not be re-established without a
-credential only reachable from outside this session, which is exactly
-the "hard blocker requiring credentials" carve-out named in this task's
-brief — so this one sub-item is flagged rather than fabricated, and
-work continued on every other part of the brief in the meantime. **The
-95% CI column above is affected by the same gap** — CIs require
-per-bet variance (`varianceForRoi()` over each cell's actual won/lost
-outcomes and odds), which lives in the same walk-forward-pooled data,
-not just the n/ROI pairs preserved above; back-filling a CI from n and
-mean ROI alone would not be a real number, so none is given. **Nothing
-about the live feature is affected** — the grid, the shrinkage, and the
-CIs it displays are computed by the same `empiricalBayesShrink`/
-`varianceForRoi` pipeline used everywhere else in this project and are
-correct and live now. The only gap is this document not yet containing
-a hand-copy of those cell values — recommended follow-up: with API
-access, `GET /api/league-tier-matrix` and transcribe the per-league
-table here for the permanent written record.
+**Per-league × tier breakdown.** Pulled live from
+`GET /api/league-tier-matrix` (raw posEdge≥5% ROI(n) per cell — the
+same numbers behind the Performance tab's 🔬-marked Historical rows,
+before empirical-Bayes shrinkage; shrunk values are shown in the grid
+itself, not reproduced here since they collapse hard toward the tier
+pool at these per-league sample sizes, the same pattern every prior
+shrunk grid in this document has shown):
+
+| League | 35-40% | 40-45% | 45-50% | 50-55% | 55-60% | 60-65% | 65-70% | 70-75% |
+|---|---|---|---|---|---|---|---|---|
+| Premier League | −38.1%(52) | −28.3%(76) | +27.7%(40) | −23.8%(12) | −31.3%(7) | +370.3%(3) | −16.0%(2) | — |
+| La Liga | −24.2%(56) | −8.5%(93) | −17.9%(73) | +19.8%(36) | −14.9%(17) | −19.5%(14) | +20.0%(7) | +65.5%(2) |
+| Serie A | −35.1%(71) | −12.0%(85) | −4.3%(47) | +19.9%(21) | +63.1%(10) | −1.0%(9) | — | — |
+| Bundesliga | −5.1%(41) | −40.4%(67) | −20.9%(35) | +7.0%(24) | +54.9%(8) | +42.2%(5) | +81.0%(1) | — |
+| Ligue 1 | −16.2%(61) | −26.6%(47) | +4.1%(32) | +19.6%(12) | +36.0%(9) | — | −19.0%(2) | — |
+| Scottish Premiership | −71.5%(21) | −21.2%(57) | −4.9%(50) | +6.4%(27) | −8.6%(5) | +0.4%(9) | +77.2%(4) | — |
+| Eredivisie | −18.1%(39) | −4.7%(49) | −31.2%(40) | −26.9%(13) | +33.8%(6) | — | −100.0%(1) | — |
+| Primeira Liga | −13.5%(42) | −35.9%(72) | −19.4%(47) | +20.9%(21) | +30.3%(11) | −100.0%(2) | +808.5%(4) | — |
+| Champions League | +22.2%(8) | +4.9%(51) | +34.2%(27) | −32.4%(17) | −76.2%(8) | −42.0%(3) | — | — |
+| Europa League | −75.0%(15) | −69.0%(30) | +26.1%(46) | −42.8%(25) | +35.8%(12) | −100.0%(1) | +82.5%(2) | — |
+
+Column totals reconcile exactly with the pooled-by-tier table above
+(e.g. 35-40%'s 10 league values sum to n=406) and the grand total is
+1,842 — a live cross-check, not an assumed one. Reading this the same
+way every other per-league grid in this document has been read: most
+individual cells are far below the ~300-400 decision-grade floor
+(rule 6), so the pooled-by-tier and Total readings above are the ones
+worth trusting; this table exists to show *shape and volume*
+per league, not to support a league-level ROI claim on its own. The
+occasional extreme reading (Primeira Liga 60-65% +808.5%, Eredivisie
+65-70% −100.0%) is exactly the single-digit-n noise every prior
+addendum has warned about, not a finding — several of these leagues'
+individual cells sit at n=1 to n=5.
+
+This backfills the one item flagged as an incomplete write-up in the
+overnight session that produced this addendum: the underlying data was
+always live in the shipped feature (`/api/league-tier-matrix`,
+Performance tab grid), only the hand-transcription into this document
+was missing, blocked by a lost authenticated-session credential at the
+time. That credential became available in this follow-up session, so
+the record is now complete.
 
 ### Part C — Honest labeling (per the brief's explicit instruction)
 
@@ -3677,12 +3695,12 @@ this session's testing window.
 ## Final report — Part D of the brief
 
 **18. Addendum written**: this section, in full, above — methodology,
-pooled-by-tier results, block-level volumes, and the honest-labeling
-caveat are all here. **The one incomplete piece, flagged in Part B
-above**: the full per-league × tier cell-by-cell breakdown and its 95%
-CIs are computed and live in the shipped feature, but not yet
-hand-transcribed into this document — a credentials-access gap hit at
-the very end of the session, not a missing computation.
+pooled-by-tier results with 95% CIs, the full per-league × tier
+breakdown, block-level volumes, and the honest-labeling caveat are all
+here. (A follow-up session backfilled the per-league table and the
+pooled CIs, which the original overnight write-up had flagged as
+missing due to a lost credential at the time — see the note at the end
+of Part B above.)
 
 **19. `docs/model-versioning.md` updated** with the new
 Historical/Live/Combined framework as the standing definition for all

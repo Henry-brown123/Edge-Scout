@@ -104,6 +104,9 @@ function structuralCheck(file, parsed) {
   // as "possibly corrupt") until this was registered here. Same fix shape as
   // watching.json/transactions.json above.
   if (file === 'green-flags.json')  return Array.isArray(parsed);
+  // walkforward-promotions.json — same small-array shape as green-flags.json,
+  // registered up front this time rather than discovered by the same bug twice.
+  if (file === 'walkforward-promotions.json') return Array.isArray(parsed);
   return null;
 }
 
@@ -3233,6 +3236,58 @@ app.post('/api/green-flags/toggle', (req, res) => {
   res.json({ flags });
 });
 
+// ─── WALK-FORWARD PROXY-TO-REAL HANDOFF (promotion) ──────────────────────────
+// The automatic-handoff *detection* (Addendum 21 Part B) — a walk-forward-proxy
+// league's genuine Live sample clearing TPG_DECISION_FLOOR — was always meant to
+// stay a deliberate human step, not an automatic switch (docs/model-versioning.md).
+// Originally that step was "go edit WALKFORWARD_HISTORICAL_LEAGUE_IDS in server.js
+// and redeploy" — easy to miss and not something a non-engineer could action. This
+// promotes the same decision into a stored list + a one-click confirm endpoint,
+// still requiring an explicit call (never automatic), still reviewable before
+// committing (POST body carries the historical/live figures the reviewer saw,
+// kept as an audit trail — not re-derived, so the promotion record reflects
+// exactly what was on screen when it was confirmed).
+function getWalkforwardPromotions() { return readJSON('walkforward-promotions.json') || []; }
+
+// The set WALKFORWARD_HISTORICAL_LEAGUE_IDS (Addendum 21) minus anything since
+// promoted — this, not the raw constant, is what /api/league-tier-matrix must use
+// so a promoted league actually stops being proxy-sourced.
+function getEffectiveWalkforwardHistoricalLeagueIds() {
+  const promoted = new Set(getWalkforwardPromotions().map(p => p.leagueId));
+  return new Set([...WALKFORWARD_HISTORICAL_LEAGUE_IDS].filter(id => !promoted.has(id)));
+}
+
+app.get('/api/admin/walkforward-promotions', (_req, res) => {
+  res.json({ promotions: getWalkforwardPromotions() });
+});
+
+app.post('/api/admin/promote-walkforward-league', (req, res) => {
+  const { leagueId, tier, historicalN, historicalRoi, liveN, liveRoi } = req.body || {};
+  if (leagueId == null || !tier) return res.status(400).json({ error: 'body must include { leagueId, tier }' });
+  const lid = parseInt(leagueId, 10);
+  if (!WALKFORWARD_HISTORICAL_LEAGUE_IDS.has(lid)) {
+    return res.status(400).json({ error: `League ${lid} is not a walk-forward-proxy league — nothing to promote` });
+  }
+  const promotions = getWalkforwardPromotions();
+  if (promotions.some(p => p.leagueId === lid)) {
+    return res.status(409).json({ error: `League ${lid} is already promoted`, promotions });
+  }
+  // liveN/liveRoi aren't re-validated against TPG_DECISION_FLOOR server-side —
+  // this endpoint trusts the reviewer's explicit confirm click (the UI already
+  // gated opening this review on the same floor), same "manual, not gated"
+  // principle the green-flag feature uses. The figures are stored purely as an
+  // audit record of what was reviewed, not re-checked as a precondition.
+  promotions.push({
+    leagueId: lid, tier,
+    historicalN: historicalN ?? null, historicalRoi: historicalRoi ?? null,
+    liveN: liveN ?? null, liveRoi: liveRoi ?? null,
+    promotedAt: new Date().toISOString(),
+  });
+  writeJSON('walkforward-promotions.json', promotions, { allowEmpty: true });
+  console.log(`[Handoff] League ${lid} promoted off walk-forward-proxy Historical (triggered by ${tier} tier, live n=${liveN})`);
+  res.json({ success: true, promotions });
+});
+
 // GET full state (bets, watching, bankroll)
 app.get('/api/state', (_req, res) => {
   const scanMeta = readJSON('scan-meta.json') || {};
@@ -5064,11 +5119,23 @@ app.get('/api/league-tier-matrix', (_req, res) => {
   // LEAGUE_TIER_MATRIX entries for Carabao Cup/League One/League Two.
   const mergedMatrix = { ...LEAGUE_TIER_MATRIX };
   const historicalSourceByLeague = {};
+  // effectiveWalkforwardIds (not the raw WALKFORWARD_HISTORICAL_LEAGUE_IDS
+  // constant) reflects any promotion recorded via POST
+  // /api/admin/promote-walkforward-league (Handoff feature) — a promoted
+  // league must stop being proxy-sourced here, not just in the marker text.
+  const effectiveWalkforwardIds = getEffectiveWalkforwardHistoricalLeagueIds();
   for (const id of leagueIds) {
-    historicalSourceByLeague[id] = WALKFORWARD_HISTORICAL_LEAGUE_IDS.has(id) && walkForwardMatrix[id]
+    historicalSourceByLeague[id] = effectiveWalkforwardIds.has(id) && walkForwardMatrix[id]
       ? 'walkforward-proxy' : 'real-backtest';
   }
   for (const [lid, entry] of Object.entries(walkForwardMatrix)) {
+    // Bug fixed alongside the Handoff feature: this loop previously applied the
+    // walk-forward override unconditionally for every league walkForwardMatrix
+    // had data for, regardless of effectiveWalkforwardIds — meaning a promoted
+    // league would still get its proxy Historical cells reinstated here even
+    // though the loop above correctly marked it 'real-backtest'. A promotion
+    // would have silently done nothing to the actual numbers shown.
+    if (!effectiveWalkforwardIds.has(parseInt(lid, 10))) continue;
     mergedMatrix[lid] = entry;
     historicalSourceByLeague[lid] = 'walkforward-proxy';
   }
@@ -5119,6 +5186,12 @@ app.get('/api/league-tier-matrix', (_req, res) => {
       tierLabels: LEAGUE_TIER_MATRIX_TIER_ORDER,
       note: 'Reference/diagnostic snapshot, not live-computed and not a gate. Raw = uncorrected posEdge ROI. For unseenPopulationLeagues (Carabao Cup/League One/League Two): the FULL matched population, since none of it was ever used for tuning — no split needed or performed (calibration-rules.md rule 10, Addendum 19). For in-sample leagues (Addendum 21): a pooled 4-block walk-forward proxy estimate, not a genuine holdout — see historicalSource per league in scope.leagues and Addendum 21 for the full caveat.',
       continuousNote: 'continuousMatrix (Addendum 14 Part C) is the same population with no 5% edge threshold applied — only covers 35-40% through 65-70%, the range that analysis actually had matched-odds volume for. Scoped to the original 9 validatedLeagues only. Unaffected by the Addendum 21 walk-forward Historical change.',
+      // Handoff feature — leagues manually promoted off walk-forward-proxy
+      // Historical via POST /api/admin/promote-walkforward-league. Surfaced here
+      // so the frontend doesn't need a second fetch to know what's already
+      // promoted (though it doesn't strictly need to — a promoted league already
+      // reads historicalSource:'real-backtest' above like any other).
+      walkforwardPromotions: getWalkforwardPromotions(),
     },
     matrix: mergedMatrix,
     continuousMatrix: CONTINUOUS_LEAGUE_TIER_MATRIX,
