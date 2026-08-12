@@ -5732,6 +5732,261 @@ app.get('/api/diagnostics/factor-distribution', (req, res) => {
   res.json({ factors: result, totalRecords: data.scoredRecords.length });
 });
 
+// ═══ PHASE 0 DIAGNOSTIC PASS (temp — model-strength deep-dive scoping) ═══════
+// Hypothesis-generation only. Read-only against already-stored data: no new API
+// calls, no retraining, no data ingestion. Only computes the two pre-registered
+// accuracy metrics (log-loss, calibration-error-by-tier) — never ROI, anywhere
+// in these three endpoints. Removed once the hypothesis list is delivered.
+
+function _phase0LoadWeights(file) {
+  const w = readJSON(file);
+  if (!w) throw new Error(`${file} not found`);
+  return w;
+}
+function _phase0Sigmoid(z) { return 1 / (1 + Math.exp(-Math.max(-500, Math.min(500, z)))); }
+function _phase0Traverse(node, x) {
+  if (node.leaf) return node.value;
+  return x[node.feature] <= node.threshold ? _phase0Traverse(node.left, x) : _phase0Traverse(node.right, x);
+}
+function _phase0EnsembleRaw(ensemble, x) {
+  let F = ensemble.initValue;
+  for (const t of ensemble.trees) F += ensemble.lr * _phase0Traverse(t, x);
+  return F;
+}
+function _phase0Predict(weights, x) {
+  const rawHome = _phase0EnsembleRaw(weights.classifiers.home, x);
+  const rawDraw = _phase0EnsembleRaw(weights.classifiers.draw, x);
+  const rawAway = _phase0EnsembleRaw(weights.classifiers.away, x);
+  const pHome = _phase0Sigmoid(weights.platt.home.A * rawHome + weights.platt.home.B);
+  const pDraw = _phase0Sigmoid(weights.platt.draw.A * rawDraw + weights.platt.draw.B);
+  const pAway = _phase0Sigmoid(weights.platt.away.A * rawAway + weights.platt.away.B);
+  const sum = pHome + pDraw + pAway;
+  return { home: pHome / sum, draw: pDraw / sum, away: pAway / sum };
+}
+
+// Matches models/gbdt.js buildFeatures() ordering exactly (24 features).
+const PHASE0_FEATURE_NAMES = [
+  'form_home', 'form_away', 'homeAdv_home', 'homeAdv_away', 'xg_home', 'xg_away',
+  'h2h_home', 'h2h_away', 'defense_home', 'defense_away', 'momentum_home', 'momentum_away',
+  'injuries_home', 'injuries_away', 'standings_home', 'standings_away',
+  'form_diff', 'xg_diff', 'defense_diff', 'momentum_diff', 'standings_diff',
+  'ctx_domestic', 'ctx_european', 'ctx_international',
+];
+function _phase0FeatureGroup(f) {
+  if (f.startsWith('ctx_')) return 'context';
+  return f.replace(/_home$|_away$|_diff$/, '');
+}
+function _phase0WalkImportance(node, depth, counts, depthWeighted) {
+  if (node.leaf) return;
+  counts[node.feature] = (counts[node.feature] || 0) + 1;
+  depthWeighted[node.feature] = (depthWeighted[node.feature] || 0) + Math.pow(2, -depth);
+  _phase0WalkImportance(node.left, depth + 1, counts, depthWeighted);
+  _phase0WalkImportance(node.right, depth + 1, counts, depthWeighted);
+}
+
+// Feature-importance introspection — the live model plus all 4 walk-forward block
+// models (Addendum 21), so importance patterns can be cross-checked for stability
+// across independent retrains, not just read once. Gain isn't persisted in the
+// stored tree nodes (only feature/threshold/left/right/leaf/value — see
+// models/gbdt.js traverseTree), so this uses split-count and depth-weighted
+// split-count (root-level splits affect more of the population than deep ones,
+// meaningful at DEPTH=3) as the importance proxy instead.
+app.get('/api/diagnostics/phase0-feature-importance', (_req, res) => {
+  const files = {
+    live:   'gbdt-weights.json',
+    block1: 'gbdt-walkforward-block1.json',
+    block2: 'gbdt-walkforward-block2.json',
+    block3: 'gbdt-walkforward-block3.json',
+    block4: 'gbdt-walkforward-block4.json',
+  };
+  const result = {};
+  for (const [label, file] of Object.entries(files)) {
+    let w;
+    try { w = _phase0LoadWeights(file); } catch (e) { result[label] = { error: e.message }; continue; }
+    const counts = {}, depthWeighted = {};
+    for (const cls of ['home', 'draw', 'away']) {
+      for (const tree of w.classifiers[cls].trees) _phase0WalkImportance(tree, 0, counts, depthWeighted);
+    }
+    const totalCount    = Object.values(counts).reduce((a, b) => a + b, 0) || 1;
+    const totalWeighted = Object.values(depthWeighted).reduce((a, b) => a + b, 0) || 1;
+    const perFeature = PHASE0_FEATURE_NAMES.map((name, i) => ({
+      feature: name,
+      splitCount: counts[i] || 0,
+      splitSharePct: +((counts[i] || 0) / totalCount * 100).toFixed(2),
+      depthWeightedSharePct: +((depthWeighted[i] || 0) / totalWeighted * 100).toFixed(2),
+    }));
+    const groupTotals = {};
+    for (const pf of perFeature) {
+      const g = _phase0FeatureGroup(pf.feature);
+      groupTotals[g] = (groupTotals[g] || 0) + pf.splitSharePct;
+    }
+    result[label] = {
+      trainedAt: w.trainedAt || null,
+      perFeature: perFeature.sort((a, b) => b.splitSharePct - a.splitSharePct),
+      byFactorGroup: Object.entries(groupTotals).sort((a, b) => b[1] - a[1]).map(([group, pct]) => ({ group, splitSharePct: +pct.toFixed(2) })),
+    };
+  }
+  res.json(result);
+});
+
+// Chronological out-of-sample trend — the ONE genuinely-blind read available for
+// "is the model getting stronger or weaker over time": each walk-forward block's
+// own model was trained only on data strictly before that block's window (Addendum
+// 21), so scoring each block's own test window with its own model is a real,
+// non-circular per-period accuracy read, not an in-sample one. Mirrors
+// gbdt-train-proxy.js's own EXCLUDED_LEAGUE_IDS/block-boundary logic exactly.
+const PHASE0_BLOCKS = [
+  { label: 'block1', file: 'gbdt-walkforward-block1.json', testStart: '2023-06-01T00:00:00Z', testEnd: '2023-12-23T00:00:00Z' },
+  { label: 'block2', file: 'gbdt-walkforward-block2.json', testStart: '2023-12-23T00:00:00Z', testEnd: '2024-07-25T00:00:00Z' },
+  { label: 'block3', file: 'gbdt-walkforward-block3.json', testStart: '2024-07-25T00:00:00Z', testEnd: '2024-12-30T00:00:00Z' },
+  { label: 'block4', file: 'gbdt-walkforward-block4.json', testStart: '2024-12-30T00:00:00Z', testEnd: '2025-06-01T00:00:00Z' },
+];
+const PHASE0_EXCLUDED_LEAGUE_IDS = new Set([48, 41, 42]);
+
+app.get('/api/diagnostics/phase0-block-trend', (_req, res) => {
+  const hist = readJSON('backfill-historical.json');
+  const records = (hist?.scoredRecords || []).filter(r =>
+    r.homeFactors && r.awayFactors && r.actualOutcome && r.context && !PHASE0_EXCLUDED_LEAGUE_IDS.has(parseInt(r.leagueId, 10)));
+  const gbdtBuild = require('./models/gbdt');
+
+  const blockResults = PHASE0_BLOCKS.map(b => {
+    let w;
+    try { w = _phase0LoadWeights(b.file); } catch (e) { return { block: b.label, error: e.message }; }
+    const testRecords = records.filter(r => r.date >= b.testStart && r.date < b.testEnd);
+    let sumNegLogLik = 0, sumBrier = 0, n = 0;
+    const tierAgg = {};
+    for (const r of testRecords) {
+      const x = gbdtBuild.buildFeatures(r.homeFactors, r.awayFactors, r.context);
+      const probs = _phase0Predict(w, x);
+      const pActual = probs[r.actualOutcome];
+      if (!pActual || pActual <= 0) continue;
+      sumNegLogLik += -Math.log(Math.max(pActual, 1e-9));
+      for (const o of ['home', 'draw', 'away']) {
+        const yTrue = (o === r.actualOutcome) ? 1 : 0;
+        sumBrier += (probs[o] - yTrue) ** 2;
+      }
+      n++;
+      const top  = ['home', 'draw', 'away'].reduce((a, c) => probs[c] > probs[a] ? c : a, 'home');
+      const tier = tierOfProbShared(probs[top]);
+      if (!tierAgg[tier]) tierAgg[tier] = { n: 0, sumPred: 0, hits: 0 };
+      tierAgg[tier].n++;
+      tierAgg[tier].sumPred += probs[top];
+      tierAgg[tier].hits += (top === r.actualOutcome) ? 1 : 0;
+    }
+    const calibration = Object.entries(tierAgg).map(([tier, a]) => ({
+      tier, n: a.n,
+      meanPredicted: +(a.sumPred / a.n).toFixed(4),
+      actualHitRate: +(a.hits / a.n).toFixed(4),
+      errorPp: +(((a.sumPred / a.n) - (a.hits / a.n)) * 100).toFixed(2),
+    })).sort((x, y) => x.tier.localeCompare(y.tier));
+    return {
+      block: b.label, testWindow: [b.testStart, b.testEnd], n,
+      logLoss: n ? +(sumNegLogLik / n).toFixed(4) : null,
+      brier:   n ? +(sumBrier / n / 3).toFixed(4) : null,
+      calibration,
+    };
+  });
+  res.json({ blocks: blockResults, note: 'Each block scored by its OWN model, trained only on data before that block\'s window — genuinely out-of-sample per block, not in-sample.' });
+});
+
+// Wide in-sample sweep — live model against the full scored population. Honestly
+// in-sample for most leagues (Phase 2.6's train/test merge decision means the live
+// model has trained on nearly everything it's scored here) — fine for Phase-0
+// hypothesis generation, not held-out evidence. One deliberate exception: league
+// IDs 41/42/48 (Carabao Cup/League One/League Two) are gbdt-train.js's own
+// EXCLUDED_LEAGUE_IDS and have NEVER been trained on — their rows are a genuine
+// unseen-population read, same status as Addendum 19's backtest.
+const PHASE0_SMALLER_LEAGUES  = new Set([41, 42, 48, 848, 179]); // League One/Two, Carabao Cup, Conference League, Scottish Prem
+const PHASE0_TOP_LEAGUES      = new Set([39, 140, 135, 78, 61]); // PL, La Liga, Serie A, Bundesliga, Ligue 1
+const PHASE0_EURO_TOURNAMENTS = new Set([2, 3]);                 // Champions League, Europa League
+
+app.get('/api/diagnostics/phase0-live-sweep', (_req, res) => {
+  const hist = readJSON('backfill-historical.json');
+  const records = (hist?.scoredRecords || []).filter(r => r.homeFactors && r.awayFactors && r.actualOutcome && r.context);
+  const gbdtBuild = require('./models/gbdt');
+  let liveWeights;
+  try { liveWeights = _phase0LoadWeights('gbdt-weights.json'); } catch (e) { return res.status(500).json({ error: e.message }); }
+
+  const homeTierAgg = {}, awayTierAgg = {}, leagueTierAgg = {};
+  const compTypeAgg  = { league: { n: 0, sumPred: 0, hits: 0 }, tournament: { n: 0, sumPred: 0, hits: 0 } };
+  const sizeGroupAgg = { smaller: { n: 0, sumPred: 0, hits: 0 }, top: { n: 0, sumPred: 0, hits: 0 }, european: { n: 0, sumPred: 0, hits: 0 } };
+  const leagueCount = {}, dateRangeByLeague = {}, standingsNeutralCount = {};
+  let overallNegLogLik = 0, overallN = 0;
+
+  for (const r of records) {
+    const lid = parseInt(r.leagueId, 10);
+    leagueCount[lid] = (leagueCount[lid] || 0) + 1;
+    if (!dateRangeByLeague[lid]) dateRangeByLeague[lid] = { min: r.date, max: r.date };
+    else {
+      if (r.date < dateRangeByLeague[lid].min) dateRangeByLeague[lid].min = r.date;
+      if (r.date > dateRangeByLeague[lid].max) dateRangeByLeague[lid].max = r.date;
+    }
+    if (!standingsNeutralCount[lid]) standingsNeutralCount[lid] = { home50: 0, away50: 0, total: 0 };
+    standingsNeutralCount[lid].total++;
+    if (r.homeFactors.standings === 50) standingsNeutralCount[lid].home50++;
+    if (r.awayFactors.standings === 50) standingsNeutralCount[lid].away50++;
+
+    const x = gbdtBuild.buildFeatures(r.homeFactors, r.awayFactors, r.context);
+    const probs = _phase0Predict(liveWeights, x);
+    const pActual = probs[r.actualOutcome];
+    if (pActual > 0) { overallNegLogLik += -Math.log(Math.max(pActual, 1e-9)); overallN++; }
+
+    const homeTier = tierOfProbShared(probs.home);
+    if (!homeTierAgg[homeTier]) homeTierAgg[homeTier] = { n: 0, sumPred: 0, hits: 0 };
+    homeTierAgg[homeTier].n++; homeTierAgg[homeTier].sumPred += probs.home; homeTierAgg[homeTier].hits += (r.actualOutcome === 'home' ? 1 : 0);
+
+    const awayTier = tierOfProbShared(probs.away);
+    if (!awayTierAgg[awayTier]) awayTierAgg[awayTier] = { n: 0, sumPred: 0, hits: 0 };
+    awayTierAgg[awayTier].n++; awayTierAgg[awayTier].sumPred += probs.away; awayTierAgg[awayTier].hits += (r.actualOutcome === 'away' ? 1 : 0);
+
+    const top  = ['home', 'draw', 'away'].reduce((a, c) => probs[c] > probs[a] ? c : a, 'home');
+    const topTier = tierOfProbShared(probs[top]);
+    const hit  = top === r.actualOutcome ? 1 : 0;
+
+    const lkey = `${lid}|${topTier}`;
+    if (!leagueTierAgg[lkey]) leagueTierAgg[lkey] = { leagueId: lid, tier: topTier, n: 0, sumPred: 0, hits: 0 };
+    leagueTierAgg[lkey].n++; leagueTierAgg[lkey].sumPred += probs[top]; leagueTierAgg[lkey].hits += hit;
+
+    const compType = COMPETITION_TYPE[lid];
+    if (compType && compTypeAgg[compType]) { compTypeAgg[compType].n++; compTypeAgg[compType].sumPred += probs[top]; compTypeAgg[compType].hits += hit; }
+
+    let sizeGroup = null;
+    if (PHASE0_SMALLER_LEAGUES.has(lid)) sizeGroup = 'smaller';
+    else if (PHASE0_TOP_LEAGUES.has(lid)) sizeGroup = 'top';
+    else if (PHASE0_EURO_TOURNAMENTS.has(lid)) sizeGroup = 'european';
+    if (sizeGroup) { sizeGroupAgg[sizeGroup].n++; sizeGroupAgg[sizeGroup].sumPred += probs[top]; sizeGroupAgg[sizeGroup].hits += hit; }
+  }
+
+  const summarize = (agg) => Object.entries(agg).map(([k, a]) => ({
+    key: k, n: a.n,
+    meanPredicted: a.n ? +(a.sumPred / a.n).toFixed(4) : null,
+    actualHitRate: a.n ? +(a.hits / a.n).toFixed(4) : null,
+    errorPp: a.n ? +(((a.sumPred / a.n) - (a.hits / a.n)) * 100).toFixed(2) : null,
+  }));
+
+  res.json({
+    totalRecords: records.length,
+    overallLogLoss: overallN ? +(overallNegLogLik / overallN).toFixed(4) : null,
+    note: 'IN-SAMPLE for most leagues (live model trained on nearly everything here, see docs/model-versioning.md train/test merge decision) — EXCEPT leagueId 41/42/48, gbdt-train.js\'s own EXCLUDED_LEAGUE_IDS, which are a genuine unseen-population read.',
+    homeCalibration: summarize(homeTierAgg).sort((a, b) => a.key.localeCompare(b.key)),
+    awayCalibration: summarize(awayTierAgg).sort((a, b) => a.key.localeCompare(b.key)),
+    byCompetitionType: summarize(compTypeAgg),
+    bySizeGroup: summarize(sizeGroupAgg),
+    byLeagueTier: Object.values(leagueTierAgg).map(a => ({
+      leagueId: a.leagueId, tier: a.tier, n: a.n,
+      meanPredicted: +(a.sumPred / a.n).toFixed(4),
+      actualHitRate: +(a.hits / a.n).toFixed(4),
+      errorPp: +(((a.sumPred / a.n) - (a.hits / a.n)) * 100).toFixed(2),
+    })).sort((x, y) => x.leagueId - y.leagueId || x.tier.localeCompare(y.tier)),
+    leagueRecordCounts: Object.entries(leagueCount).map(([lid, n]) => ({ leagueId: parseInt(lid, 10), n, dateRange: dateRangeByLeague[lid] })).sort((a, b) => b.n - a.n),
+    standingsNeutralRate: Object.entries(standingsNeutralCount).map(([lid, s]) => ({
+      leagueId: parseInt(lid, 10), total: s.total,
+      homeNeutralPct: +(s.home50 / s.total * 100).toFixed(1),
+      awayNeutralPct: +(s.away50 / s.total * 100).toFixed(1),
+    })).sort((a, b) => b.homeNeutralPct - a.homeNeutralPct),
+  });
+});
+
 // ─── BACKFILL CHAIN ──────────────────────────────────────────────────────────
 
 let _startupStatus = { phase: 'idle', startedAt: null, completedAt: null, skipped: false, error: null };
