@@ -742,14 +742,14 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       <button class="btn btn-ghost btn-sm" onclick="renderTierPerf('paper','')">↻ Refresh</button>
     </div>
     <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 10px">
-      Every cell stacks four readings: <strong style="color:var(--text1)">H</strong>istorical (posEdge≥5% —
+      Every cell stacks three readings: <strong style="color:var(--text1)">H</strong>istorical (posEdge≥5% —
       🔬 a walk-forward proxy estimate for in-sample leagues, ✓bt a genuine backtest for out-of-sample ones,
-      see Addendum 21) · <strong style="color:var(--text1)">C</strong>ontinuous (same-era backtest, no edge
-      threshold, original 9 leagues only) · <strong style="color:var(--text1)">L</strong>ive (real resolved bets,
+      see Addendum 21) · <strong style="color:var(--text1)">L</strong>ive (real resolved bets,
       current model version only) · <strong style="color:var(--text1)">X</strong> Combined (n-weighted pool of
       Historical + Live — the biggest single sample available; ⟳handoff marks a proxy-sourced reading whose Live
       leg has cleared the 350-bet floor and is ready for manual review). Click any per-league cell to green-flag
-      it as a real-money candidate. Reference view, not a gate.
+      it as a real-money candidate. Reference view, not a gate. (A fourth reading, Continuous, was removed from
+      this grid — stale and superseded; see <span class="mono">docs/continuous-roi-methodology.md</span>.)
     </p>
     <div style="display:flex;gap:4px;margin-bottom:12px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:4px;width:fit-content">
       <button class="perf-view-btn tpg-view-btn active-combined-view" id="tpg-view-league-btn" onclick="setTpgView('league')">League</button>
@@ -758,9 +758,8 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     <div style="margin-bottom:12px">
       <button class="btn btn-ghost btn-sm" id="tpg-toggle-btn" onclick="toggleTpgMethodology('')">▸ Methodology notes</button>
       <div id="tpg-methodology" style="display:none;margin-top:8px;font-family:'DM Mono',monospace;font-size:.68rem;color:var(--muted);line-height:1.5">
-        Historical/Continuous are static backtest snapshots (<span class="mono">docs/tier-calibration-analysis.md</span>,
-        Addenda 6 &amp; 14 Part C) — never live-computed, never gate anything. Continuous only covers 35-40% through
-        65-70% (the range that analysis had matched-odds volume for). Live model probability includes team-profile/
+        Historical is a static backtest snapshot (<span class="mono">docs/tier-calibration-analysis.md</span>,
+        Addendum 21) — never live-computed, never gates anything. Live model probability includes team-profile/
         weather/WOWY adjustments the historical backtest population didn't have — directionally comparable, not a
         perfect match. No individual cell in this grid reaches the ~350-bet decision-grade floor from
         calibration-rules.md on its own (that floor is a whole-model-version/whole-tier-pooled read) — treat every
@@ -996,14 +995,14 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       <button class="btn btn-ghost btn-sm" onclick="renderTierPerf('real','real-')">↻ Refresh</button>
     </div>
     <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 10px">
-      Every cell stacks four readings: <strong style="color:var(--text1)">H</strong>istorical (posEdge≥5% —
+      Every cell stacks three readings: <strong style="color:var(--text1)">H</strong>istorical (posEdge≥5% —
       🔬 a walk-forward proxy estimate for in-sample leagues, ✓bt a genuine backtest for out-of-sample ones,
-      see Addendum 21) · <strong style="color:var(--text1)">C</strong>ontinuous (same-era backtest, no edge
-      threshold, original 9 leagues only) · <strong style="color:var(--text1)">L</strong>ive (real resolved bets,
+      see Addendum 21) · <strong style="color:var(--text1)">L</strong>ive (real resolved bets,
       current model version only) · <strong style="color:var(--text1)">X</strong> Combined (n-weighted pool of
       Historical + Live — the biggest single sample available; ⟳handoff marks a proxy-sourced reading whose Live
       leg has cleared the 350-bet floor and is ready for manual review). Click any per-league cell to green-flag
-      it as a real-money candidate. Reference view, not a gate.
+      it as a real-money candidate. Reference view, not a gate. (A fourth reading, Continuous, was removed from
+      this grid — stale and superseded; see <span class="mono">docs/continuous-roi-methodology.md</span>.)
     </p>
     <div style="display:flex;gap:4px;margin-bottom:12px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:4px;width:fit-content">
       <button class="perf-view-btn tpg-view-btn active-combined-view" id="real-tpg-view-league-btn" onclick="setTpgView('league')">League</button>
@@ -1012,9 +1011,8 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     <div style="margin-bottom:12px">
       <button class="btn btn-ghost btn-sm" id="real-tpg-toggle-btn" onclick="toggleTpgMethodology('real-')">▸ Methodology notes</button>
       <div id="real-tpg-methodology" style="display:none;margin-top:8px;font-family:'DM Mono',monospace;font-size:.68rem;color:var(--muted);line-height:1.5">
-        Historical/Continuous are static backtest snapshots (<span class="mono">docs/tier-calibration-analysis.md</span>,
-        Addenda 6 &amp; 14 Part C) — never live-computed, never gate anything. Continuous only covers 35-40% through
-        65-70% (the range that analysis had matched-odds volume for). Live model probability includes team-profile/
+        Historical is a static backtest snapshot (<span class="mono">docs/tier-calibration-analysis.md</span>,
+        Addendum 21) — never live-computed, never gates anything. Live model probability includes team-profile/
         weather/WOWY adjustments the historical backtest population didn't have — directionally comparable, not a
         perfect match. No individual cell in this grid reaches the ~350-bet decision-grade floor from
         calibration-rules.md on its own (that floor is a whole-model-version/whole-tier-pooled read) — treat every
@@ -1250,14 +1248,14 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       <button class="btn btn-ghost btn-sm" onclick="renderTierPerf('combined','combined-')">↻ Refresh</button>
     </div>
     <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 10px">
-      Every cell stacks four readings: <strong style="color:var(--text1)">H</strong>istorical (posEdge≥5% —
+      Every cell stacks three readings: <strong style="color:var(--text1)">H</strong>istorical (posEdge≥5% —
       🔬 a walk-forward proxy estimate for in-sample leagues, ✓bt a genuine backtest for out-of-sample ones,
-      see Addendum 21) · <strong style="color:var(--text1)">C</strong>ontinuous (same-era backtest, no edge
-      threshold, original 9 leagues only) · <strong style="color:var(--text1)">L</strong>ive (real resolved bets,
+      see Addendum 21) · <strong style="color:var(--text1)">L</strong>ive (real resolved bets,
       current model version only) · <strong style="color:var(--text1)">X</strong> Combined (n-weighted pool of
       Historical + Live — the biggest single sample available; ⟳handoff marks a proxy-sourced reading whose Live
       leg has cleared the 350-bet floor and is ready for manual review). Click any per-league cell to green-flag
-      it as a real-money candidate. Reference view, not a gate.
+      it as a real-money candidate. Reference view, not a gate. (A fourth reading, Continuous, was removed from
+      this grid — stale and superseded; see <span class="mono">docs/continuous-roi-methodology.md</span>.)
     </p>
     <div style="display:flex;gap:4px;margin-bottom:12px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:4px;width:fit-content">
       <button class="perf-view-btn tpg-view-btn active-combined-view" id="combined-tpg-view-league-btn" onclick="setTpgView('league')">League</button>
@@ -1266,9 +1264,8 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     <div style="margin-bottom:12px">
       <button class="btn btn-ghost btn-sm" id="combined-tpg-toggle-btn" onclick="toggleTpgMethodology('combined-')">▸ Methodology notes</button>
       <div id="combined-tpg-methodology" style="display:none;margin-top:8px;font-family:'DM Mono',monospace;font-size:.68rem;color:var(--muted);line-height:1.5">
-        Historical/Continuous are static backtest snapshots (<span class="mono">docs/tier-calibration-analysis.md</span>,
-        Addenda 6 &amp; 14 Part C) — never live-computed, never gate anything. Continuous only covers 35-40% through
-        65-70% (the range that analysis had matched-odds volume for). Live model probability includes team-profile/
+        Historical is a static backtest snapshot (<span class="mono">docs/tier-calibration-analysis.md</span>,
+        Addendum 21) — never live-computed, never gates anything. Live model probability includes team-profile/
         weather/WOWY adjustments the historical backtest population didn't have — directionally comparable, not a
         perfect match. No individual cell in this grid reaches the ~350-bet decision-grade floor from
         calibration-rules.md on its own (that floor is a whole-model-version/whole-tier-pooled read) — treat every
@@ -3232,14 +3229,15 @@ function _tpgCombine(histCell, liveCell) {
   return { n, roi, thin: n < 30 };
 }
 
-// One stacked sub-row (Historical/Continuous/Live) inside a grid cell. n==null/0
-// renders a clean dash rather than an error or blank — most cells, especially Live
-// and Continuous, don't have data yet at current volume. `unavailable`, when true,
-// means this whole competition has no backtest of this type at all (Historical or
-// Continuous never computed for it — see the hasHistoricalMatrix/hasContinuousMatrix
-// comment in /api/league-tier-matrix) rather than this one tier/cell just being
-// empty within an otherwise-audited competition — those are different situations
-// and read differently: "n/a" here, a plain dash for a genuine empty cell.
+// One stacked sub-row (Historical/Live/Combined — Continuous removed from this grid,
+// see docs/continuous-roi-methodology.md) inside a grid cell. n==null/0 renders a
+// clean dash rather than an error or blank — most cells, especially Live, don't have
+// data yet at current volume. `unavailable`, when true, means this whole competition
+// has no backtest of this type at all (Historical never computed for it — see the
+// hasHistoricalMatrix comment in /api/league-tier-matrix) rather than this one
+// tier/cell just being empty within an otherwise-audited competition — those are
+// different situations and read differently: "n/a" here, a plain dash for a genuine
+// empty cell.
 // sourceMarker (Addendum 21 Part B) — visible provenance for a reading that's
 // fed partly or wholly by evidence type that isn't obvious from the number alone
 // (a real backtest vs. a walk-forward proxy estimate). Rendered inline, not just
@@ -3423,7 +3421,6 @@ async function renderTierPerf(mode = 'paper', prefix = '') {
     const tr = document.createElement('tr');
     const cells = leagues.map(l => {
       const histCell = ltm?.matrix?.[l.id]?.cells?.[r.tier];
-      const contCell = ltm?.continuousMatrix?.[l.id]?.cells?.[r.tier];
       const liveCell = r.byLeague?.find(x => x.leagueId === l.id);
       // Green-flag manual curation (Addendum 21 Part C) — click any per-league cell
       // to toggle it as a flagged real-money candidate. Display-only: doesn't touch
@@ -3437,24 +3434,26 @@ async function renderTierPerf(mode = 'paper', prefix = '') {
             : '<span style="color:var(--green);font-size:8px" title="Historical is a genuine real backtest (train/test split or unseen-population read)">✓bt</span>')
         : '';
       const handoffReady = isProxy && liveCell?.n >= TPG_DECISION_FLOOR;
+      // Continuous (C) row deliberately removed from this grid — stale (frozen on the
+      // Addendum 14 proxy model / single 2024-08-07+ window, never extended to
+      // competitions added since), superseded day-to-day by Historical/Live/Combined.
+      // The underlying data/endpoint (ltm.continuousMatrix) is untouched — see
+      // docs/continuous-roi-methodology.md for what it measures and how to refresh it
+      // if that specific EV-threshold question ever needs re-checking.
       return `<td class="tpg-cell tpg-clickable${flagged ? ' tpg-flagged' : ''}" onclick="toggleGreenFlag(${l.id}, '${r.tier}')" title="Click to ${flagged ? 'un' : ''}flag ${l.name} ${r.tier} as a real-money candidate">
         ${_tpgFmtSub('H', histCell?.n, histCell?.roi, histCell?.thin, l.hasHistoricalMatrix === false, srcMark)}
-        ${_tpgFmtSub('C', contCell?.n, contCell?.roi, contCell?.thin, l.hasContinuousMatrix === false)}
         ${_tpgFmtSub('L', liveCell?.n, liveCell?.roi, liveCell?.thin)}
         ${_tpgFmtSub('X', combined.n, combined.roi, combined.thin, false, isProxy ? srcMark : '', handoffReady)}
       </td>`;
     }).join('');
     // Total column — pooled across all 9 leagues, sourced directly rather than summed
     // client-side from the per-league cells (Historical/Live are already pooled reads
-    // elsewhere on this row; Continuous uses Addendum 14 Part C's own pooled figure).
-    // No single "source" marker for Total — it blends leagues on both real-backtest
-    // and walk-forward-proxy Historical, so its Combined row is left unmarked rather
-    // than implying one uniform provenance.
-    const contTotal = ltm?.continuousTierTotals?.[r.tier];
+    // elsewhere on this row). No single "source" marker for Total — it blends leagues
+    // on both real-backtest and walk-forward-proxy Historical, so its Combined row is
+    // left unmarked rather than implying one uniform provenance.
     const totalCombined = _tpgCombine(r.historical, r.live);
     const totalCell = `<td class="tpg-cell tpg-total-cell">
       ${_tpgFmtSub('H', r.historical?.n, r.historical?.roi, r.historical?.thin)}
-      ${_tpgFmtSub('C', contTotal?.n, contTotal?.roi, contTotal?.thin)}
       ${_tpgFmtSub('L', r.live?.n, r.live?.roi, r.live?.thin)}
       ${_tpgFmtSub('X', totalCombined.n, totalCombined.roi, totalCombined.thin)}
     </td>`;

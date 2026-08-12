@@ -68,3 +68,23 @@ calibration exactly as much as fitting one on contaminated data would be.
 `marketEfficiency`/`drawBaseWeight`/`homeAdvBaseWeight` default to `1.0`
 (a genuine no-op) until real evidence exists. First applied 2026-08-10 for
 the Carabao Cup, League One, and League Two additions.
+
+## 11. If the question is "is the EV threshold itself well-calibrated" (not "is there an edge"), that's Continuous ROI, not Historical/Live.
+Every other ROI reading in this document — Historical, Live, Combined — is
+filtered to `posEdge ≥ 5%`, so none of them can tell you whether that
+threshold is drawn in the right place: they only ever look at bets on one
+side of it. **Continuous ROI** is the specific diagnostic for that
+question — the same tier-binned ROI computed against the full matched-odds
+population with no edge filter, so it can be split cleared-vs-blocked and
+compared directly (see `docs/tier-calibration-analysis.md` Addendum 14
+Part C and its Extension for the original worked example, the 40-45%
+tier's cleared-vs-blocked finding). It is **not** part of the day-to-day
+tier×league grid — it was removed there for being stale (frozen on
+Addendum 14's proxy model and single 2024-08-07+ holdout, never extended
+to competitions added since). Before relying on it for anything, refresh
+it against the current model per `docs/continuous-roi-methodology.md`, the
+same one-look discipline as everything else in this doc — don't treat a
+2024-08-07 snapshot as still describing today's threshold. Consult (and
+likely refresh) this specifically if the EV-threshold-calibration question
+comes up again — e.g. during a future model-upgrade assessment, or before
+raising/lowering the live threshold.
