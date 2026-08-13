@@ -3761,3 +3761,245 @@ parallel training jobs, respecting the 512MB instance constraint;
 `docs/calibration-rules.md` followed throughout — this is the single,
 deliberate walk-forward exercise, not to be iterated on if the results
 disappoint.
+
+## Addendum 22 — Synthesis and decision-support report: current model state, and where to focus effort and money
+
+A pure synthesis pass — no new data, no new statistical test, no
+single-look budget spent anywhere in this addendum. Everything below is
+organization and reconciliation of findings already made (the Phase 0
+model-strength pass, Parts 1-5 of the standings/recency/tournament/
+live-calibration brief, and Addenda 19-21), plus arithmetic on
+already-computed, already-stored numbers (pooled averages of existing
+per-cell ROI figures — not a new CI, not a new model score). Written
+because real money is going live this weekend on specific green-flagged
+cells, and the prior work never pulled into one place what that
+specifically implies.
+
+### Part 1 — Where the model is demonstrably strong and weak, one narrative
+
+**Strong, high-confidence:**
+- **Home-outcome calibration is tight** — Phase 0's live sweep found
+  errors mostly under ~1.7pp through 75-80% (in-sample read, live model).
+- **Standings is a genuinely well-used signal architecturally** — the
+  single highest-usage GBDT feature (~21% of splits), consistent across
+  the live model and all 4 independently-trained walk-forward blocks
+  (Phase 0) — the earlier scoping-conversation concern that it was
+  underweighted was directly wrong; what *was* true is that the old
+  hand-set `WEIGHTS_BY_CONTEXT.standings` value is dead code for the
+  live GBDT path (confirmed by code read, Phase 0 follow-up).
+- **League One/League Two's pooled overall ROI is not distinguishable
+  from zero** (Addendum 19: League One −3.6% CI[−9.8%,+2.5%], League Two
+  +4.2% CI[−2.7%,+11.0%], both on decision-grade n) — a genuinely
+  evidenced null, not an under-sampled one, at the whole-league level.
+
+**Weak, high-confidence:**
+- **League One/League Two show real, tier-increasing overconfidence
+  from 50-55% upward** (Phase 0 live sweep) — and critically, this read
+  is **not** an in-sample artifact: `EXCLUDED_LEAGUE_IDS` in
+  `gbdt-train.js` means the live model has never trained on either
+  league, so this is a genuine unseen-population read, same evidentiary
+  status as Addendum 19's own backtest. League One: 50-55% +5.3pp →
+  80%+ +21.8pp. League Two: 50-55% +6.5pp → 80%+ +21.6pp. See the
+  per-cell reconciliation below for exactly which currently-flagged
+  cells this touches.
+- **League One's 50-55% tier has a real, CI-excluding-zero negative
+  finding**: n=230, ROI −15.5%, CI (−30.1%, −0.9%) — the single cell in
+  the entire League One/League Two matrix whose confidence interval
+  doesn't span zero (Addendum 19/`league-tier-matrix` data). This sits
+  directly between two currently-flagged cells (45-50% and 60-65%) —
+  see below.
+- **The historical scorer fabricates standings for cup/knockout
+  fixtures** (Part 1/4): `scoreFixtureFromPool` never calls
+  `standingsScore()`, instead reconstructing a naive rolling-points
+  table per `leagueId_season` — nonsensical for a pure-knockout
+  competition. Confirmed empirically: 0 of 9,551 CL/EL/Conf/Carabao Cup
+  training records have neutral-50 standings on either side — every one
+  gets a real-or-fabricated number, feeding the model's most-used
+  feature. **Does not affect League One/League Two** — both are genuine
+  round-robin league competitions, so the same rolling-points
+  reconstruction is legitimate there, not a bug (confirmed by
+  competition structure, not assumed).
+- **A full season (2025-26) plus the 2026-27 season-start is missing**
+  for PL/La Liga/Serie A/Bundesliga/Ligue 1/Champions League/Europa
+  League/Conference League (Part 2, root-caused as stale config, not a
+  scheduling artifact). **League One/League Two are much less affected**
+  — they have 2025-26 in full, missing only the just-started 2026-27
+  (Part 2) — the recency gap is not a material caveat for this
+  weekend's flagged cells specifically.
+
+**Weak, lower-confidence (real, but thinner evidence — don't over-read):**
+- **No confirmed model-strength trend over time.** The 4 walk-forward
+  blocks show log-loss 0.9869 / 0.9969 / 0.9844 / 1.0076 — no monotonic
+  direction, block 4 (most recent, 2024-12→2025-06) nominally worst on
+  both log-loss and Brier. See the dedicated resolution below — this
+  question gets a direct answer, not left ambiguous.
+- **Away-outcome calibration degrades at high confidence** more than
+  home does (Phase 0: 70-75% away errorPp −9.5pp on n=148 — real but
+  thin), and the population is structurally lopsided (69% of all
+  fixtures get <35% away-win probability) — a real pattern, but the
+  highest-tier cells are too thin to be more than directional.
+- **Calibration bias direction may be drifting block-to-block** — blocks
+  1/3 skew underconfident at upper tiers (the historically-documented
+  pattern since Addendum 2), block 4 skews mixed/overconfident at
+  several of the same tiers — but individual cells at n=65-101, genuinely
+  too thin to call this confirmed.
+- **Injuries (both sides) and `homeAdv_away` are zero-usage GBDT
+  features** — confirmed exactly 0 splits across all 5 independently-
+  trained models. Root-caused for injuries (lineup data covers only
+  ~8.9% of fixtures, the rest get a near-constant default). This is a
+  missed-opportunity finding, not something currently degrading live
+  predictions — these features were never contributing either way, so
+  this doesn't change anything about how much to trust current output.
+
+**Traceability**: every claim above cites its source finding (Phase 0,
+Part 1/2/3/4, or the named prior Addendum) — nothing here is a new
+number.
+
+### Part 2 — The block-4-weakest question, resolved plainly
+
+**Direct answer: the existing 4 walk-forward blocks cannot settle
+whether this is a real trend or noise, and the honest thing to do is
+say so rather than pick a side.** The observed spread (log-loss 0.9844
+to 1.0076, a range of 0.023) sits at a magnitude that's entirely
+plausible as sampling noise at n=1,633-2,207 per block — every CI this
+project has ever computed at comparable sample sizes (e.g. Addendum
+19's own league-level ROI reads, or the per-tier CIs in the
+`league-tier-matrix` data pulled for this addendum) has been wide
+enough that a gap this size would not exclude zero. Confirming or
+ruling this out for real would require a fresh statistical test against
+new data — explicitly out of scope for this synthesis-only pass.
+
+**What it implies for real money this weekend: very little, directly.**
+The walk-forward blocks' population is the 10 in-sample leagues (PL, La
+Liga, Serie A, Bundesliga, Ligue 1, Scottish Prem, Eredivisie, Primeira
+Liga, Champions League, Europa League) — `EXCLUDED_LEAGUE_IDS` keeps
+League One, League Two, and Carabao Cup out of every walk-forward block,
+same as out of live training. **None of the 6 currently green-flagged
+cells are in a league the block-4 question is even about.** The
+trend-ambiguity finding is real and worth carrying into Phase 1
+prioritization, but it is not a reason to hesitate on this weekend's
+specific decision — the two questions are about different leagues
+entirely.
+
+### Part 3 — Every currently green-flagged cell, reconciled against every relevant finding
+
+Pulled live from `/api/green-flags` (current state, not a new
+computation) and cross-referenced against `/api/league-tier-matrix`
+(Addendum 19's stored real-backtest ROI/CI) and Phase 0's live-sweep
+calibration read. Six cells, all in League One (41) and League Two
+(42) — none in any other currently-positive league.
+
+| League | Tier | n (backtest) | ROI | 95% CI | Calibration error (Phase 0) | Below decision floor? | Verdict |
+|---|---|---|---|---|---|---|---|
+| League One | 45-50% | 259 | +5.7% | (−10.5%, +21.9%) | +0.71pp (negligible) | Yes (n<300) | Cleanest of the six — CI spans zero but isn't badly skewed, calibration essentially fine |
+| League One | 60-65% | 144 | +11.3% | (−6.3%, +28.9%) | +6.07pp (moderate overconfidence) | Yes | Positive point estimate, but thin n and real measured overconfidence |
+| League Two | 45-50% | 335 | +15.4% | (−3.9%, +34.7%) | +1.24pp (negligible) | Borderline | Second cleanest — CI nearly clears zero on the low side, calibration fine |
+| League Two | 50-55% | 278 | +4.3% | (−10.9%, +19.4%) | +6.46pp (moderate overconfidence) | Yes | Inconclusive ROI, real amber flag from calibration |
+| League Two | 55-60% | 180 | +15.5% | (−5.5%, +36.5%) | +8.52pp (large overconfidence) | Yes, well below | Flattering point estimate on a thin, overconfidence-flagged cell — treat with real caution |
+| League Two | 65-70% | 77 | +3.8% | (−19.3%, +26.9%) | +7.97pp (large overconfidence) | Yes, very thin | Weakest-evidenced of the six — very thin n, real overconfidence |
+
+**Recency gap**: does not materially affect any of these six — League
+One/Two have full 2025-26 data, only missing the just-started 2026-27
+(Part 2).
+
+**Standings fabrication**: does not affect either league — both are
+genuine round-robin competitions, not the cup/knockout structure the
+Part 1 bug applies to.
+
+**The one piece of context every one of these six cells should be read
+against**: League One's 50-55% tier — immediately between two of the
+flagged cells (45-50% and 60-65%) — is the single cell in this entire
+matrix with a confidence interval that excludes zero, and it's negative
+(−15.5%, CI −30.1% to −0.9%). It was correctly not flagged. But its
+existence is a reminder that a clean reading at 45-50% or 60-65% doesn't
+tell you much about the tier five points away — this model's
+performance is not smooth or monotonic across nearby tiers in these two
+leagues, evidenced directly, not inferred.
+
+### Part 4 — Two priority lists
+
+**Model-improvement priority order (Phase 1 sequencing) — impact ×
+confidence, highest first:**
+
+1. **Fix standings fabrication in `scoreFixtureFromPool` for
+   cup/knockout competitions** (Part 1/4). Highest-usage feature,
+   confirmed bug (not a hypothesis), affects real training data for
+   CL/EL/Conf/Carabao Cup.
+2. **Close the league-recency gap** (Part 2). Root-caused, affects the
+   majority of major leagues' current-season signal freshness, and
+   blocks a cleaner future walk-forward re-run that could actually
+   resolve the block-4 trend question with fresh, current data.
+3. **Implement the last-season-standing proxy for early-season
+   fixtures** (Part 3). Evidenced (~2.6x current signal's correlation
+   at the exact population where neutral is used today), cheap, no new
+   data needed.
+4. **Extend the live domestic-blend mechanism to cover standings** for
+   cup fixtures (Part 1's missed-opportunity finding) — same population
+   as #1, live-prediction side rather than training side.
+5. **Re-attempt the block-4 trend question once #2 is closed** —
+   currently inconclusive on existing data; deprioritized until a
+   fresher walk-forward run is possible, not because it doesn't matter.
+6. **`homeAdv_away`/injuries feature-engineering review** (Part 4,
+   speculative). Lower priority — these features being unused isn't
+   currently hurting anything, just leaving value on the table.
+7. **Two-legged tie handling** (Addendum 20, revisited in Part 4 with
+   no new evidence this cycle). Lowest priority of the identified
+   threads — deferred twice now for lack of a clean way to fold it in.
+
+**Real-money deployment risk ranking — currently green-flagged cells,
+lowest risk to highest, per the reconciliation table above:**
+
+1. League One 45-50% — cleanest evidence, though still not decision-grade.
+2. League Two 45-50% — second cleanest, CI nearly clears zero.
+3. League Two 50-55% — inconclusive ROI, real calibration amber flag.
+4. League One 60-65% — thin n, real moderate overconfidence.
+5. League Two 55-60% — thin (well below decision floor), large measured
+   overconfidence behind a flattering point estimate.
+6. League Two 65-70% — thinnest and most overconfidence-flagged of the
+   six.
+
+This ranking is descriptive, not a recommendation to bet or not bet on
+any of them — it makes the existing evidence picture explicit so the
+decision can be made with full information, per the brief.
+
+### Part 5 — The pooling risk, addressed directly with real numbers
+
+The instinct this section exists to head off: pool "everything 45%+"
+across League One and League Two and it looks encouraging. Doing that
+arithmetic on the already-computed per-cell figures above (a weighted
+average, not a new statistical test):
+
+- League One, 45-50% through 80%+ pooled: n=991, ROI **−1.06%**.
+- League Two, 45-50% through 80%+ pooled: n=1,073, ROI **+7.50%**.
+- Both leagues combined, 45%+ pooled: n=2,064, ROI **+3.39%**.
+
+A pooled +3.39% looks like a mild, broadly positive signal. **It isn't
+one.** That number is arithmetically compatible with League One's 50-55%
+tier being genuinely, confidently negative (the one CI-excluding-zero
+cell in the whole matrix) sitting right next to two much smaller,
+CI-spanning-zero positive cells — the pool doesn't know the difference
+between "broadly positive" and "one bad cell smeared thin by several
+inconclusive neighbors." The same caution applies to League Two's
+pooled figure: two of its four best-looking cells (55-60%, 65-70%) are
+exactly the ones flagged above as thin and overconfidence-affected —
+their positive point estimates are doing real work in that +7.50%
+pooled number despite being the weakest-evidenced cells in the league.
+
+**Direct takeaway for "just bet everything 50%+" as an instinct**: the
+evidence here argues against reading any pooled figure above the
+cell level for these two leagues specifically. The six flagged cells
+were, correctly, chosen individually rather than as a blanket
+threshold — this section confirms that discipline mattered: a
+threshold-based approach would have included League One's 50-55% tier,
+the one cell this whole matrix has real, CI-excluding-zero negative
+evidence against.
+
+### Compliance
+
+Zero new API calls, zero new data, zero new statistical tests — every
+number in this addendum was already computed and stored (Phase 0,
+Parts 1-5, Addendum 19's `league-tier-matrix` entries) or is a plain
+weighted average over those existing numbers. Auto-retrain gate
+re-verified before and after this synthesis pass: `autoRetrainEnabled:
+false`, model unchanged (`trainedAt: 2026-08-08`, `trainN: 40,202`).
+No temp endpoints were created for this addendum — it required none.
