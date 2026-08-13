@@ -1286,6 +1286,51 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     <div id="combined-tier-perf-model-versions" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
   </div>
 
+  <!-- Live Calibration — predicted-vs-actual for the FULL scored population, not
+       bet-gated. A deliberately separate signal from Live ROI above: Live ROI only
+       ever sees fixtures that became a bet (needs a stake); this sees every fixture
+       the model ever scored and that has since resolved, whether or not it was
+       ever bet. Display/aggregation only — reads calibration.json, which was
+       already being populated for every scan; nothing here can trigger a
+       retrain or recalibration. -->
+  <div class="card" style="margin-top:16px;border-left:3px solid var(--cyan)">
+    <div class="card-header">
+      <span class="card-title">Live Calibration — Full Scored Population</span>
+      <button class="btn btn-ghost btn-sm" onclick="renderLiveCalibration()">↻ Refresh</button>
+    </div>
+    <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 10px">
+      A distinct signal from Live ROI above — <strong style="color:var(--text1)">not bet-gated</strong>.
+      Live ROI only sees fixtures that became a real/paper bet (it needs a stake). This reads every
+      fixture the model has scored and that has since resolved, whether or not it was ever locked as
+      a bet — predicted probability for the model's top pick vs. whether that pick was actually
+      correct, current model version only. Reference/diagnostic view, not a gate, and not ROI —
+      <span class="mono">meanPredicted</span>/<span class="mono">actualHitRate</span> are probabilities,
+      never confuse this table's numbers with the ROI% shown elsewhere on this tab.
+    </p>
+    <div id="live-cal-summary" style="font-size:11px;color:var(--muted);margin-bottom:10px"></div>
+    <div class="table-wrap">
+      <table class="tpg-table">
+        <thead><tr><th class="tpg-tier-cell">Tier</th><th>n</th><th>Mean Predicted</th><th>Actual Hit Rate</th><th>Error</th></tr></thead>
+        <tbody id="live-cal-tier-body"></tbody>
+      </table>
+      <div class="empty" id="live-cal-empty" style="display:none">
+        <div class="empty-icon">🎯</div>
+        <p>No resolved calibration entries yet for the current model version.</p>
+      </div>
+    </div>
+    <div style="margin-top:12px">
+      <button class="btn btn-ghost btn-sm" id="live-cal-league-toggle-btn" onclick="toggleLiveCalByLeague()">▸ By league</button>
+      <div id="live-cal-league-wrap" style="display:none;margin-top:8px">
+        <div class="table-wrap">
+          <table class="tpg-table">
+            <thead><tr><th class="tpg-tier-cell">League</th><th>n</th><th>Mean Predicted</th><th>Actual Hit Rate</th><th>Error</th></tr></thead>
+            <tbody id="live-cal-league-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Home vs. Away — pooled across leagues, periodic-review table, not a primary read -->
   <div class="card" style="margin-top:16px;border-left:3px solid var(--muted)">
     <div class="card-header">
@@ -2900,7 +2945,7 @@ function _refreshPerfView() {
 
 function renderPerformance() { return renderPerfMode('paper'); }
 async function renderPerfReal()     { return renderPerfMode('real'); }
-async function renderPerfCombined() { return renderPerfMode('combined'); }
+async function renderPerfCombined() { renderLiveCalibration(); return renderPerfMode('combined'); }
 
 // Single engine driving all three Performance tabs — Paper, Real Money, Combined —
 // so they share one identical layout. `mode` picks the bet filter and API params;
@@ -3487,6 +3532,60 @@ async function renderTierPerf(mode = 'paper', prefix = '') {
   }
 
   renderTierPerfHomeAway(rows, data, prefix);
+}
+
+// Live Calibration (Combined tab, design brief Part 5) — predicted-vs-actual for
+// the full scored population, deliberately NOT bet-gated (unlike Live ROI above,
+// which needs a stake). Pulls from GET /api/live-calibration, which reads
+// calibration.json — a log that was already being written for every scanned
+// fixture regardless of whether it became a bet, so this reflects the complete
+// available history from the start, not just fixtures going forward. Display
+// only: this never writes anything, never touches scoring or training.
+let _liveCalLeagueOpen = false;
+async function renderLiveCalibration() {
+  let data;
+  try { data = await apiFetch('/api/live-calibration'); } catch (e) { return; }
+
+  const summaryEl = document.getElementById('live-cal-summary');
+  const tierBody  = document.getElementById('live-cal-tier-body');
+  const emptyEl   = document.getElementById('live-cal-empty');
+  const leagueBody = document.getElementById('live-cal-league-body');
+  if (!tierBody) return;
+
+  if (summaryEl) {
+    summaryEl.textContent = `Model ${data.currentModelVersion} — ${data.totalConsidered} resolved fixtures considered `
+      + `(${data.neverBetCount} never locked as a bet — included here, invisible to Live ROI) `
+      + `of ${data.totalResolvedEver} resolved ever across all model versions.`;
+  }
+
+  const fmtPct = v => v == null ? '—' : `${(v*100).toFixed(1)}%`;
+  const rowHtml = (label, r) => {
+    // Magnitude-based, not sign-based — neither over- nor under-confident is "good,"
+    // unlike ROI where positive is unambiguously better. Flag by how far from 0.
+    const absErr = Math.abs(r.errorPp);
+    const cls = absErr >= 8 ? 'c-red' : (absErr >= 3 ? 'c-amber' : 'c-green');
+    return `<tr>
+      <td class="tpg-tier-cell">${label}</td>
+      <td>${r.n}</td>
+      <td>${fmtPct(r.meanPredicted)}</td>
+      <td>${fmtPct(r.actualHitRate)}</td>
+      <td class="${cls}">${r.errorPp >= 0 ? '+' : ''}${r.errorPp.toFixed(1)}pp</td>
+    </tr>`;
+  };
+
+  tierBody.innerHTML = (data.byTier || []).map(r => rowHtml(r.tier, r)).join('');
+  if (emptyEl) emptyEl.style.display = (data.byTier || []).length ? 'none' : 'block';
+  if (leagueBody) {
+    leagueBody.innerHTML = (data.byLeague || []).map(r => rowHtml(r.leagueName || r.leagueId, r)).join('');
+  }
+}
+
+function toggleLiveCalByLeague() {
+  _liveCalLeagueOpen = !_liveCalLeagueOpen;
+  const wrap = document.getElementById('live-cal-league-wrap');
+  const btn  = document.getElementById('live-cal-league-toggle-btn');
+  if (wrap) wrap.style.display = _liveCalLeagueOpen ? 'block' : 'none';
+  if (btn)  btn.textContent = (_liveCalLeagueOpen ? '▾' : '▸') + ' By league';
 }
 
 // Part B — pooled home/away, tier-only (not crossed with league). Historical/Continuous

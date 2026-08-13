@@ -3943,6 +3943,68 @@ app.get('/api/tier-performance', (req, res) => {
   });
 });
 
+// ─── LIVE CALIBRATION (Combined tab, display/aggregation only) ──────────────
+// Predicted-vs-actual reliability for the FULL scored population, not gated on
+// whether a fixture ever became a bet — a genuinely different question from Live
+// ROI (which requires a stake and is necessarily a narrower subset). Every scan
+// already writes a calibration.json entry for every scored fixture regardless of
+// successScore (see the morning-scan loop above), and checkAndResolve() already
+// fills in actualResult/topPickCorrect for every one of them once the fixture
+// finishes — independent of betPlaced. That means this needed NO backfill script
+// and NO re-scoring: the full history was already being captured, just never
+// surfaced. Reading it here is the entire "backfill" — a query over already-
+// stored data, not a new computation, so this cannot trigger retraining or
+// recalibration by construction (same guarantee as reading bets.json for Live ROI).
+function computeLiveCalibration() {
+  const cal = getCalibration().filter(c => c.resolved && c.candidates?.length);
+  const currentVersion   = model.getVersion();
+  const currentTrainedAt = /^\d{4}-\d{2}-\d{2}T/.test(currentVersion) ? currentVersion : null;
+  const considered = cal.filter(c => {
+    if (c.modelVersion !== currentVersion) return false;
+    if (currentTrainedAt && c.resolvedAt && new Date(c.resolvedAt) < new Date(currentTrainedAt)) return false;
+    return true;
+  });
+
+  const tierAgg = {}, leagueAgg = {};
+  let neverBetCount = 0;
+  for (const c of considered) {
+    const topKey = c.projectedBetKey || c.projectedBet;
+    const top = c.candidates.find(x => x.bet === topKey);
+    if (!top || top.modelProb == null) continue;
+    const tier = tierOfProbShared(top.modelProb);
+    if (!tier) continue;
+    const hit = c.topPickCorrect ? 1 : 0;
+    if (!c.betPlaced) neverBetCount++;
+
+    if (!tierAgg[tier]) tierAgg[tier] = { n: 0, sumPred: 0, hits: 0 };
+    tierAgg[tier].n++; tierAgg[tier].sumPred += top.modelProb; tierAgg[tier].hits += hit;
+
+    const lid = parseInt(c.leagueId, 10);
+    if (!leagueAgg[lid]) leagueAgg[lid] = { leagueId: lid, leagueName: c.leagueName, n: 0, sumPred: 0, hits: 0 };
+    leagueAgg[lid].n++; leagueAgg[lid].sumPred += top.modelProb; leagueAgg[lid].hits += hit;
+  }
+
+  const fmt = a => ({
+    n: a.n,
+    meanPredicted: +(a.sumPred / a.n).toFixed(4),
+    actualHitRate: +(a.hits / a.n).toFixed(4),
+    errorPp: +(((a.sumPred / a.n) - (a.hits / a.n)) * 100).toFixed(2),
+  });
+
+  return {
+    currentModelVersion: currentVersion,
+    totalResolvedEver: cal.length,
+    totalConsidered: considered.length,
+    neverBetCount,
+    byTier: TIER_LABELS_SHARED.map(tier => tierAgg[tier] ? { tier, ...fmt(tierAgg[tier]) } : null).filter(Boolean),
+    byLeague: Object.values(leagueAgg).map(a => ({ leagueId: a.leagueId, leagueName: a.leagueName, ...fmt(a) })).sort((a, b) => b.n - a.n),
+  };
+}
+
+app.get('/api/live-calibration', (_req, res) => {
+  res.json(computeLiveCalibration());
+});
+
 app.get('/api/team-profile/:teamId', (req, res) => {
   const profiles = getTeamProfiles([parseInt(req.params.teamId, 10)]);
   const profile  = profiles[req.params.teamId] || null;
