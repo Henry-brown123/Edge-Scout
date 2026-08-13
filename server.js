@@ -515,21 +515,25 @@ const BACKFILL_CONFIG = [
   { leagueId: '5',  name: 'FIFA Nations League',         seasons: [2024, 2022] },
   { leagueId: '10', name: 'International Friendlies',    seasons: [2025, 2024] },
   // ── Club — 3 seasons per top-5 league + CL ────────────────────────────────
-  // NOTE (Option 3): PL 2024/25 season has ended. Seasons 2022/2023/2024 are
-  // fetched here so club profiles are populated for the 2025/26 season when it
-  // starts (August 2026). Re-run this backfill at season start to pick up 2025.
-  { leagueId: '39',  name: 'Premier League',             seasons: [2024, 2023, 2022, 2021, 2020] },
-  { leagueId: '140', name: 'La Liga',                    seasons: [2024, 2023, 2022, 2021, 2020] },
-  { leagueId: '78',  name: 'Bundesliga',                 seasons: [2024, 2023, 2022, 2021, 2020] },
-  { leagueId: '135', name: 'Serie A',                    seasons: [2024, 2023, 2022, 2021, 2020] },
-  { leagueId: '61',  name: 'Ligue 1',                    seasons: [2024, 2023, 2022, 2021, 2020] },
-  { leagueId: '2',   name: 'UEFA Champions League',      seasons: [2024, 2023, 2022, 2021, 2020] },
+  // Addendum 24 Part B: this was the same staleness class as HIST_SEASONS_2010
+  // above (a second, independent config that never got its "re-run at season
+  // start to pick up 2025" note actually acted on) — found by checking for other
+  // season-list configs with the same symptom, not assumed absent. This one feeds
+  // team-profile building (transfer/WOWY/quality modifiers), not the GBDT
+  // training population directly, but the same real-world seasons were missing
+  // from it. Fixed the same way: add 2025 and 2026.
+  { leagueId: '39',  name: 'Premier League',             seasons: [2026, 2025, 2024, 2023, 2022, 2021, 2020] },
+  { leagueId: '140', name: 'La Liga',                    seasons: [2026, 2025, 2024, 2023, 2022, 2021, 2020] },
+  { leagueId: '78',  name: 'Bundesliga',                 seasons: [2026, 2025, 2024, 2023, 2022, 2021, 2020] },
+  { leagueId: '135', name: 'Serie A',                    seasons: [2026, 2025, 2024, 2023, 2022, 2021, 2020] },
+  { leagueId: '61',  name: 'Ligue 1',                    seasons: [2026, 2025, 2024, 2023, 2022, 2021, 2020] },
+  { leagueId: '2',   name: 'UEFA Champions League',      seasons: [2026, 2025, 2024, 2023, 2022, 2021, 2020] },
   // New leagues — added July 2026
-  { leagueId: '179', name: 'Scottish Premiership',       seasons: [2024, 2023, 2022, 2021, 2020] },
-  { leagueId: '88',  name: 'Eredivisie',                 seasons: [2024, 2023, 2022, 2021, 2020] },
-  { leagueId: '94',  name: 'Primeira Liga',              seasons: [2024, 2023, 2022, 2021, 2020] },
-  { leagueId: '3',   name: 'Europa League',              seasons: [2024, 2023, 2022] },
-  { leagueId: '848', name: 'Conference League',          seasons: [2024, 2023, 2022] },
+  { leagueId: '179', name: 'Scottish Premiership',       seasons: [2026, 2025, 2024, 2023, 2022, 2021, 2020] },
+  { leagueId: '88',  name: 'Eredivisie',                 seasons: [2026, 2025, 2024, 2023, 2022, 2021, 2020] },
+  { leagueId: '94',  name: 'Primeira Liga',              seasons: [2026, 2025, 2024, 2023, 2022, 2021, 2020] },
+  { leagueId: '3',   name: 'Europa League',              seasons: [2026, 2025, 2024, 2023, 2022] },
+  { leagueId: '848', name: 'Conference League',          seasons: [2026, 2025, 2024, 2023, 2022] },
 ];
 
 // FIFA_RANK_FALLBACK and lookupFIFARank are now exported from scoring.js
@@ -2184,8 +2188,16 @@ async function runProfileBackfill(onProgress) {
 // splits (PL/Ligue1/CL/Serie A) — those splits are defined by a testFrom date only,
 // and every fixture added here is older than every one of those testFrom dates, so it
 // can only enlarge the train side, never touch test. See docs/tier-calibration-analysis.md.
-const HIST_SEASONS_2010 = [2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013, 2012, 2011, 2010];
-const HIST_SEASONS_EUROPA_2014 = [2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014];
+// Addendum 24 Part B: these two lists were last updated when 2024 was the newest
+// completed season and never revisited — confirmed via /api/diagnostics/data-coverage
+// that PL/La Liga/Serie A/Bundesliga/Ligue 1/Champions League/Europa
+// League/Conference League were all missing BOTH the completed 2025-26 season and
+// the just-started 2026-27 one as a direct result. Not a scheduling artifact (the
+// 179/88/94 entries below prove 2026 data is fetchable right now) — a stale
+// hardcoded list, same root cause the 179/88/94 comment already diagnosed for a
+// different symptom. Fixed the same way: add the missing season numbers.
+const HIST_SEASONS_2010 = [2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013, 2012, 2011, 2010];
+const HIST_SEASONS_EUROPA_2014 = [2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014];
 const HISTORICAL_BACKFILL_CONFIG = [
   { leagueId: '39',  name: 'Premier League',   seasons: HIST_SEASONS_2010 },
   { leagueId: '140', name: 'La Liga',           seasons: HIST_SEASONS_2010 },
@@ -2198,18 +2210,21 @@ const HISTORICAL_BACKFILL_CONFIG = [
   { leagueId: '31',  name: 'WC Qual CONCACAF',  seasons: [2026, 2022] },
   { leagueId: '5',   name: 'Nations League',    seasons: [2024, 2022] },
   { leagueId: '10',  name: 'Intl Friendlies',   seasons: [2024, 2023, 2022] },
-  // New leagues — added July 2026. 2026 added here: these three leagues score live
-  // fixtures against season 2026 (see LEAGUES config) but the historical config only
-  // ever listed seasons through 2024, so the active season was never fetched at all —
-  // not a caching-skip problem, a missing-season-entry problem.
-  { leagueId: '179', name: 'Scottish Premiership', seasons: [2026, ...HIST_SEASONS_2010] },
-  { leagueId: '88',  name: 'Eredivisie',            seasons: [2026, ...HIST_SEASONS_2010] },
-  { leagueId: '94',  name: 'Primeira Liga',         seasons: [2026, ...HIST_SEASONS_2010] },
+  // Previously a special-cased `[2026, ...HIST_SEASONS_2010]` (July 2026 fix, see
+  // git history) — now that HIST_SEASONS_2010 itself includes 2026, that prefix
+  // would have produced a duplicate 2026 entry, so it's removed rather than kept.
+  // That July fix also never noticed 2025 was independently missing (a gap in the
+  // middle of the list, confirmed via data-coverage: seasons had 2024 and 2026 but
+  // skipped 2025 entirely) — closed here as part of the same base-list fix, not a
+  // separate patch.
+  { leagueId: '179', name: 'Scottish Premiership', seasons: HIST_SEASONS_2010 },
+  { leagueId: '88',  name: 'Eredivisie',            seasons: HIST_SEASONS_2010 },
+  { leagueId: '94',  name: 'Primeira Liga',         seasons: HIST_SEASONS_2010 },
   { leagueId: '3',   name: 'Europa League',         seasons: HIST_SEASONS_EUROPA_2014 },
   // Conference League: UEFA competition only existed from the 2021-22 season —
   // API-Sports' own /leagues data confirms 2021 is the earliest season it has, so
   // there is no deeper archive to extend into here (checked, not assumed).
-  { leagueId: '848', name: 'Conference League',     seasons: [2024, 2023, 2022, 2021] },
+  { leagueId: '848', name: 'Conference League',     seasons: [2026, 2025, 2024, 2023, 2022, 2021] },
   // Carabao Cup / League One / League Two — added Aug 2026 (paper-only, see
   // Addendum 15 in docs/tier-calibration-analysis.md). API-Sports confirms
   // 2011-2026 depth (16 seasons) for all three — matches HIST_SEASONS_2010's
