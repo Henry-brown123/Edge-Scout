@@ -5896,6 +5896,77 @@ app.get('/api/diagnostics/phase3-standings-proxy', (_req, res) => {
   });
 });
 
+// ═══ TEMP — cup/tournament standings-gap impact test (design brief Part 4) ══
+// Does the Part 1 standings-blend gap actually show up as measurably worse
+// live-model calibration for cup/tournament fixtures, or is it a theoretical
+// concern only? Read-only, live model, already-scored population — no change.
+function _phase4Sigmoid(z) { return 1 / (1 + Math.exp(-Math.max(-500, Math.min(500, z)))); }
+function _phase4Traverse(node, x) {
+  if (node.leaf) return node.value;
+  return x[node.feature] <= node.threshold ? _phase4Traverse(node.left, x) : _phase4Traverse(node.right, x);
+}
+function _phase4EnsembleRaw(ensemble, x) {
+  let F = ensemble.initValue;
+  for (const t of ensemble.trees) F += ensemble.lr * _phase4Traverse(t, x);
+  return F;
+}
+function _phase4Predict(weights, x) {
+  const rawHome = _phase4EnsembleRaw(weights.classifiers.home, x);
+  const rawDraw = _phase4EnsembleRaw(weights.classifiers.draw, x);
+  const rawAway = _phase4EnsembleRaw(weights.classifiers.away, x);
+  const pHome = _phase4Sigmoid(weights.platt.home.A * rawHome + weights.platt.home.B);
+  const pDraw = _phase4Sigmoid(weights.platt.draw.A * rawDraw + weights.platt.draw.B);
+  const pAway = _phase4Sigmoid(weights.platt.away.A * rawAway + weights.platt.away.B);
+  const sum = pHome + pDraw + pAway;
+  return { home: pHome / sum, draw: pDraw / sum, away: pAway / sum };
+}
+
+app.get('/api/diagnostics/phase4-cup-standings-impact', (_req, res) => {
+  const CUP_LEAGUE_IDS = new Set([2, 3, 848, 48]); // Champions/Europa/Conference League, Carabao Cup
+  const hist = readJSON('backfill-historical.json');
+  const records = (hist?.scoredRecords || []).filter(r =>
+    r.homeFactors && r.awayFactors && r.actualOutcome && r.context &&
+    CUP_LEAGUE_IDS.has(parseInt(r.leagueId, 10)));
+  const gbdtBuild = require('./models/gbdt');
+  let liveWeights;
+  try { liveWeights = readJSON('gbdt-weights.json'); if (!liveWeights) throw new Error('gbdt-weights.json not found'); }
+  catch (e) { return res.status(500).json({ error: e.message }); }
+
+  const groups = { neutralBoth: [], hasSignal: [] };
+  for (const r of records) {
+    const neutral = r.homeFactors.standings === 50 && r.awayFactors.standings === 50;
+    (neutral ? groups.neutralBoth : groups.hasSignal).push(r);
+  }
+
+  function summarize(groupRecords) {
+    let sumNegLogLik = 0, n = 0;
+    const tierAgg = {};
+    for (const r of groupRecords) {
+      const x = gbdtBuild.buildFeatures(r.homeFactors, r.awayFactors, r.context);
+      const probs = _phase4Predict(liveWeights, x);
+      const pActual = probs[r.actualOutcome];
+      if (pActual > 0) { sumNegLogLik += -Math.log(Math.max(pActual, 1e-9)); n++; }
+      const top = ['home', 'draw', 'away'].reduce((a, c) => probs[c] > probs[a] ? c : a, 'home');
+      const tier = tierOfProbShared(probs[top]);
+      if (!tierAgg[tier]) tierAgg[tier] = { n: 0, sumPred: 0, hits: 0 };
+      tierAgg[tier].n++; tierAgg[tier].sumPred += probs[top]; tierAgg[tier].hits += (top === r.actualOutcome ? 1 : 0);
+    }
+    const calibration = Object.entries(tierAgg).map(([tier, a]) => ({
+      tier, n: a.n,
+      meanPredicted: +(a.sumPred / a.n).toFixed(4),
+      actualHitRate: +(a.hits / a.n).toFixed(4),
+      errorPp: +(((a.sumPred / a.n) - (a.hits / a.n)) * 100).toFixed(2),
+    })).sort((x, y) => x.tier.localeCompare(y.tier));
+    return { n, logLoss: n ? +(sumNegLogLik / n).toFixed(4) : null, calibration };
+  }
+
+  res.json({
+    note: 'neutralBoth = both homeFactors.standings and awayFactors.standings are exactly 50 (the fixture never got any differentiated standings signal). hasSignal = at least one side got a non-neutral value (real API standings for CL/EL/Conf once gamesPlayed>=3, OR — per Part 1\'s finding — a fabricated rolling-points pseudo-standing from scoreFixtureFromPool for pure-knockout Carabao Cup fixtures with cup history). In-sample (live model trained on nearly all of this).',
+    neutralBoth: { ...summarize(groups.neutralBoth), fixtureCount: groups.neutralBoth.length },
+    hasSignal:   { ...summarize(groups.hasSignal),   fixtureCount: groups.hasSignal.length },
+  });
+});
+
 // ─── BACKFILL CHAIN ──────────────────────────────────────────────────────────
 
 let _startupStatus = { phase: 'idle', startedAt: null, completedAt: null, skipped: false, error: null };
