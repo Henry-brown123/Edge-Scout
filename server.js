@@ -5768,7 +5768,17 @@ app.get('/api/diagnostics/phase3-standings-proxy', (_req, res) => {
   // buildStandingsIndex/scoreFixtureFromPool).
   const rows = [];
 
-  for (const [key, seasonFixtures] of Object.entries(bySeason)) {
+  // Chronological (season-ascending) order per league is required — the
+  // "last season" lookback below reads seasonEndRank entries populated by an
+  // earlier iteration of this same loop, so processing order matters, not
+  // just each season's own internal fixture order.
+  const orderedSeasonKeys = Object.keys(bySeason).sort((a, b) => {
+    const [aLid, aSea] = a.split('_').map(Number);
+    const [bLid, bSea] = b.split('_').map(Number);
+    return aLid - bLid || aSea - bSea;
+  });
+  for (const key of orderedSeasonKeys) {
+    const seasonFixtures = bySeason[key];
     const [leagueIdStr, seasonStr] = key.split('_');
     const leagueId = parseInt(leagueIdStr, 10), season = parseInt(seasonStr, 10);
     const pts = {}, played = {};
