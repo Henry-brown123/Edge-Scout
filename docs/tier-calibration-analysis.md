@@ -4003,3 +4003,192 @@ weighted average over those existing numbers. Auto-retrain gate
 re-verified before and after this synthesis pass: `autoRetrainEnabled:
 false`, model unchanged (`trainedAt: 2026-08-08`, `trainN: 40,202`).
 No temp endpoints were created for this addendum — it required none.
+
+## Addendum 23 — Reconciling League One/Two overconfidence against the original leagues' underconfidence history, and whether a narrower Platt-style correction is worth revisiting
+
+Synthesis/assessment only, per its own brief — no new statistical test,
+no retrain, no fresh single look spent anywhere below. Everything here
+reconciles and reasons from Addendum 2 (the original Platt-scaling
+test), Addendum 14's Extension 3 (the 50-55% pick-type deep dive), and
+Addendum 22/Phase 0's League One/League Two finding.
+
+### Part 1 — The underconfidence finding and the broad correction, stated plainly
+
+**Scope, precisely**: Addendum 2's Platt test covered 4 of the 9
+originally-validated leagues — the ones with a genuine `VALIDATED_SPLITS`
+boundary at the time (Premier League, Ligue 1, Champions League, Serie
+A) — restricted to the 45-70% predicted-probability band, on the model
+version live at that point (well before the current retrain).
+
+**The finding**: real, measured underconfidence throughout the band —
+before correction, calibration error ran −5.1pp to −26.7pp across tiers
+(worst at the thin 65-70% edge). A pooled Platt transform
+(`sigmoid(0.1585 + 1.8313·logit(raw))`, chosen over per-league fits on
+train-only evidence) fixed this convincingly in the 50-65% core:
+calibration error there went from −5.1pp/−9.5pp/−11.3pp to
++0.7pp/+0.0pp/+0.9pp — essentially exact.
+
+**What happened when it was applied**: pooled ROI on the single test-set
+look **dropped from +17.7% to +9.6%** (posEdgeN rose 203→312, a +54%
+volume increase). Two of four leagues declined sharply (Premier League
++21.3%→+2.7%, Serie A +21.8%→+11.5%); the other two were roughly flat
+(Ligue 1 +11.3%→+12.2%, Champions League +16.6%→+17.0%).
+
+**Why, mechanistically, despite the underlying miscalibration being
+real**: the correction only ever pushes probability *up* in this band
+(`A>1, B>0` structurally guarantees zero bets are ever dropped, only
+added). It doesn't re-price the existing edge — it pulls new marginal
+fixtures over the 5%-edge threshold that didn't qualify before, and
+those newly-qualified bets performed worse than the original set in
+every tier that had any (+4.2% at 45-50%, but **−3.7%, −9.0%, −8.8%**
+at 50-55/55-60/60-65%). The already-documented extension to this
+addendum pins the mechanism exactly: **the drag is concentrated, not
+uniform** — 45-50% (by far the highest-volume tier, the only cells in
+the whole exercise whose CI excludes zero, a genuine well-evidenced
+edge) was barely touched by the correction (+30.2%→+27.3%, still
+strongly positive) because raw calibration there was closest to
+accurate already. The 50-70% range is where the correction did its
+calibration work *and* where it added all of its unprofitable new
+exposure — the same place, which is the single clearest reason the
+pooled result came out negative-to-flat.
+
+### Part 2 — Reconciling against League One/Two, and where a narrower correction might actually work
+
+**The directional reconciliation, stated directly**: the original 4
+leagues' 45-70% band is **underconfident** (actual hit rate exceeds
+predicted — the model is too cautious, correctable only by pushing
+probabilities *up*). League One/League Two's 50%+ tiers are
+**overconfident** (predicted exceeds actual — the model is too bold,
+would need correcting *down*). These are opposite-direction problems in
+different corners of the same model, on different league populations,
+discovered by different methodologies (a fitted Platt transform vs. a
+live-sweep calibration read) — **there is no single global miscalibration
+story here, and no single global correction could address both at
+once.** This on its own is a real, useful reconciliation: it rules out
+"the model has one bias" as a mental model going forward, and confirms
+any future correction work has to be scoped per-population, never
+applied as a blanket multiplier — which is exactly the lesson the
+broad Platt attempt already taught the hard way, now showing up as a
+second, independent confirmation from the opposite direction.
+
+**Does the League One/Two finding itself suggest its own narrower
+correction?** Not yet, on existing evidence — flagged plainly rather
+than reached for. Nothing gathered in Phase 0 or Parts 1-5 broke League
+One/Two's overconfidence down by pick-type or by sub-league driver the
+way Extension 3 did for the original leagues' 50-55% tier. Recommending
+a specific narrow scope for a downward correction there would be
+reaching beyond the evidence — a real Phase 1 candidate in its own
+right (see Addendum 22's priority list), but a separate one, not a
+"narrower Platt" case yet.
+
+**Where a narrower version of the *original* underconfidence correction
+could plausibly succeed — reasoning from evidence already gathered:**
+
+- **Narrowing the *band* wouldn't obviously help.** A correction
+  restricted to just 50-65% (the tier range where calibration
+  improvement was cleanest) would still pull in exactly the same
+  newly-qualified population that lost money in every one of those
+  tiers (−3.7%, −9.0%, −8.8%) — without 45-50%'s genuine edge to offset
+  it. On the existing evidence, a band-narrowed-only correction looks
+  like it would perform *worse* than the original 45-70% version, not
+  better — the 45-50% tier wasn't diluting the pooled number, it was
+  propping it up.
+- **Narrowing by *pick-type* is the one candidate with real, coherent,
+  double-sourced support.** Addendum 14's Extension 3 (50-55% tier, all
+  9 original leagues, a different population/window than Addendum 2's
+  exact Platt test, so this is a corroborating adjacent signal, not a
+  literal re-use) found away picks almost three times more underconfident
+  than home picks (−11.2pp vs. −3.6pp, on a genuinely well-powered n=112
+  away calibration sample) — and away was also the pick type showing
+  the better (if thin, n=14) ROI. Phase 0's broader live sweep
+  independently found the same directional pattern at higher confidence
+  tiers too (away calibration degrading more than home's). A correction
+  scoped to away picks specifically, by construction, would never touch
+  the home-pick population at all — meaning it structurally cannot
+  repeat the exact failure mode that sank the broad version (diluting a
+  fine home-pick population with weak new exposure), because it
+  wouldn't add any home-pick bets in the first place.
+- **Narrowing by *league* is weaker evidence.** Addendum 2's own
+  per-league split shows real variation (Ligue 1/Champions League
+  roughly flat, PL/Serie A declining sharply) — a plausible lead, but
+  Extension 3's per-league calibration cross-check at 50-55% came back
+  genuinely mixed/inconsistent (Serie A's calibration gap lines up with
+  good ROI, Eredivisie's doesn't, La Liga shows good ROI *without* a
+  calibration gap at all) — not a clean enough story to recommend a
+  specific league-scoped target the way pick-type's is.
+
+### Part 3 — What's changed since the original test that could justify revisiting it
+
+Three concrete, real changes, none of which existed when Addendum 2's
+"not worth it, as tested" verdict was written:
+
+1. **Population has grown substantially** — the scored population is
+   67,791 records today; Addendum 2's test-band population was a few
+   hundred to ~1,000 fixtures per league within the 45-70% window.
+   Growth this large should meaningfully shrink the CI width on a
+   pick-type-scoped subset that was previously too thin to act on
+   (away picks at n=14/n=112 in the two readings above).
+2. **The live model has been properly retrained** since — Addendum 2's
+   correction was fit against an earlier model version, now superseded
+   (`trainedAt: 2026-08-08`, `trainN: 40,202`). A stale correction
+   shouldn't be assumed to transfer; any revisit needs a fresh fit
+   against the current model's own raw probabilities, not a reuse of
+   the old `A=1.8313, B=0.1585` parameters.
+3. **Genuine walk-forward infrastructure now exists** (Addendum 21) —
+   at the time, Addendum 2 explicitly flagged this exact gap: *"If this
+   is worth pursuing, it needs a fresh train/test cycle with the
+   narrower band decided in advance, not a re-slice of today's test
+   result."* A rolling walk-forward design is a stronger version of
+   that ask than even Addendum 2 anticipated — multiple genuinely
+   out-of-sample windows instead of one holdout, directly addressing
+   the "was this one test-set look just noise" concern that a single
+   fixed holdout can never fully answer.
+
+### Part 4 — Recommendation
+
+**Go — but narrowly, and only as a properly re-sequenced fresh cycle,
+not a revival of the old parameters.**
+
+**Suggested scope for a Phase 1 candidate, in priority order:**
+
+1. **Primary candidate: a pick-type-scoped correction (away picks only),
+   45-70% band, on the current model, fit train-only against a fresh
+   split.** This is the one candidate with real, coherent, two-source
+   supporting evidence, and the one whose scoping mechanism directly
+   avoids the exact failure mode that sank the broad version — it
+   cannot dilute the home-pick population because it never touches it.
+2. **Validate with the walk-forward infrastructure, not a single
+   holdout** — Addendum 21's block design is now the right tool for
+   exactly the concern Addendum 2 itself raised about one-off test
+   results, and gives a genuine multi-window read on whether an
+   away-pick correction's benefit is stable or was itself a one-window
+   artifact.
+3. **Do not narrow by band alone** — existing evidence argues this
+   would likely make pooled ROI worse, not better; not worth spending a
+   cycle on without pairing it with the pick-type scoping above.
+4. **League-scoping stays a secondary, lower-confidence lever** — worth
+   checking as a cut *within* the away-pick analysis (does Ligue
+   1/Champions League's relative flatness hold up there too), not as
+   its own primary axis.
+5. **League One/League Two's overconfidence is a separate, real
+   finding that needs its own evidence-gathering before any correction
+   design** — not folded into this recommendation. Its priority and
+   next step are already captured in Addendum 22's Phase 1 list;
+   nothing here changes that.
+
+**If the evidence didn't support this**, the honest call would be to
+say so — it doesn't fully clear that bar on its own yet (the away-pick
+ROI evidence specifically is still thin, n=14 in the one direct read),
+but the *combination* of a coherent, two-source calibration signal, a
+scoping mechanism that structurally avoids the known failure mode, and
+three genuine infrastructure/data improvements since the last look is
+enough to justify a properly-sequenced fresh cycle — not enough to
+justify skipping straight to a conclusion.
+
+### Compliance
+
+Zero new API calls, zero new data, zero new statistical tests, zero
+retraining — every figure above is quoted from Addendum 2, Addendum
+14's Extension 3, or Addendum 22, or is a plain restatement of already-
+published numbers. Auto-retrain gate re-verified: `autoRetrainEnabled:
+false`, model unchanged (`trainedAt: 2026-08-08`, `trainN: 40,202`).
