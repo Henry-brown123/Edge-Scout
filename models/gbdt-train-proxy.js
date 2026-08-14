@@ -38,6 +38,16 @@ const WF_TRAIN_BEFORE = process.env.WF_TRAIN_BEFORE || null;
 const WF_TEST_END     = process.env.WF_TEST_END || null; // null = through end of data
 const WF_BLOCK_LABEL  = process.env.WF_BLOCK_LABEL || null;
 const WALK_FORWARD_MODE = !!WF_TRAIN_BEFORE;
+// Phase 1 Part F — narrow, pick-type-scoped Platt correction. Opt-in via env var so
+// the existing Addendum 21 walk-forward mechanism (Part E of the same brief) is
+// completely unaffected unless explicitly enabled for a Part F run. Restricted to
+// away picks (topOutcome==='away') in the 45-70% probability band specifically — the
+// evidence (away picks ~3x more underconfident than home in the original 50-55%
+// deep-dive) doesn't say anything about home or draw picks, or about away picks
+// outside this band, so this must not touch either.
+const WF_ENABLE_NARROW_AWAY_PLATT = process.env.WF_ENABLE_NARROW_AWAY_PLATT === 'true';
+const NARROW_AWAY_BAND = { min: 0.45, max: 0.70 };
+const NARROW_AWAY_MIN_FIT_N = 30; // below this, the inner-test subset is too thin for a stable 2-parameter fit — skip correction for this block rather than force one
 
 // Carabao Cup / League One / League Two — same held-aside population gbdt-train.js
 // excludes (docs/tier-calibration-analysis.md Addenda 16-19, calibration-rules.md
@@ -244,6 +254,38 @@ function fitPlatt(logOdds, yBin) {
   return { A, B };
 }
 
+function logit(p) { return Math.log(p / (1 - p)); }
+
+// Phase 1 Part F — fits a second-stage Platt correction on the SAME inner-test
+// split ("Platt/gates only", never the block's true test holdout) the broad
+// per-outcome Platt fit above already uses, restricted to away-pick predictions
+// that already fall in the 45-70% band under the standard (broad-Platt +
+// league-bias-corrected) pipeline. Chaining a second calibration layer onto an
+// already-calibrated probability for a specific underperforming subregion is a
+// standard, legitimate technique — this does not touch home or draw picks, or
+// away picks outside the band, by construction (the picking logic itself is
+// unchanged; only the confidence assigned to already-away picks in-band is
+// adjusted). Returns null if the inner-test subset is too thin to fit stably.
+function fitNarrowAwayPlatt(test, gbdtProb) {
+  const logits = [];
+  const yBins = [];
+  for (const r of test) {
+    const probs = applyLeagueBiasCorrection(gbdtProb(r), parseInt(r.leagueId, 10), LEAGUE_CONFIG);
+    let topOutcome, modelProb;
+    if (probs.home >= probs.draw && probs.home >= probs.away) { topOutcome = 'home'; modelProb = probs.home; }
+    else if (probs.away >= probs.draw) { topOutcome = 'away'; modelProb = probs.away; }
+    else { topOutcome = 'draw'; modelProb = probs.draw; }
+    if (topOutcome !== 'away' || modelProb < NARROW_AWAY_BAND.min || modelProb >= NARROW_AWAY_BAND.max) continue;
+    logits.push(logit(modelProb));
+    yBins.push(r.y === 'away' ? 1 : 0);
+  }
+  if (logits.length < NARROW_AWAY_MIN_FIT_N) {
+    return { fitted: false, reason: `only ${logits.length} away-picks-in-band in inner-test, need >=${NARROW_AWAY_MIN_FIT_N}`, n: logits.length };
+  }
+  const { A, B } = fitPlatt(logits, yBins);
+  return { fitted: true, A, B, n: logits.length };
+}
+
 function ensembleRaw(classifier, x) {
   let F = classifier.initValue;
   for (const tree of classifier.trees) F += classifier.lr * treePredict(tree, x);
@@ -298,7 +340,7 @@ function tierOf(p) {
 // in the grid — the threshold reading, not the no-threshold Continuous reading).
 // Returns raw per-bet records (not pre-aggregated) so the final pooling step
 // across all 4 blocks can compute accurate variance/CI, not just a summed ROI.
-function scoreWalkForwardBlock(holdout, gbdtProb) {
+function scoreWalkForwardBlock(holdout, gbdtProb, narrowAwayPlatt = null) {
   const closingOdds = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'closing-odds.json'), 'utf8'));
   const bets = [];
   let matchedN = 0;
@@ -318,6 +360,15 @@ function scoreWalkForwardBlock(holdout, gbdtProb) {
     else { topOutcome = 'draw'; modelProb = probs.draw; pinnacleOdds = co.drawOdds; }
     if (!pinnacleOdds || pinnacleOdds <= 1) continue;
 
+    // Phase 1 Part F — the pick itself (topOutcome/pinnacleOdds) is decided above,
+    // unchanged. Only for an already-away pick already in the 45-70% band do we then
+    // adjust the confidence (modelProb) used for the edge calculation below.
+    let narrowCorrected = false;
+    if (narrowAwayPlatt?.fitted && topOutcome === 'away' && modelProb >= NARROW_AWAY_BAND.min && modelProb < NARROW_AWAY_BAND.max) {
+      modelProb = sigmoid(narrowAwayPlatt.A * logit(modelProb) + narrowAwayPlatt.B);
+      narrowCorrected = true;
+    }
+
     const pinnacleImplied = 1 / pinnacleOdds;
     const edge = (modelProb - pinnacleImplied) / pinnacleImplied;
     if (edge < 0.05) continue; // posEdge>=5% threshold — Historical ROI semantics
@@ -326,7 +377,7 @@ function scoreWalkForwardBlock(holdout, gbdtProb) {
     const tier = tierOf(modelProb);
     if (!tier) continue;
 
-    bets.push({ leagueId: lid, tier, pinnacleOdds, won, edge: +edge.toFixed(4) });
+    bets.push({ leagueId: lid, tier, pinnacleOdds, won, edge: +edge.toFixed(4), pickType: topOutcome, narrowCorrected });
   }
 
   return { matchedN, bets };
@@ -378,6 +429,17 @@ function scoreWalkForwardBlock(holdout, gbdtProb) {
     return { home: pHome / s, draw: pDraw / s, away: pAway / s };
   }
 
+  let narrowAwayPlatt = null;
+  if (WALK_FORWARD_MODE && WF_ENABLE_NARROW_AWAY_PLATT) {
+    console.log('\nFitting Phase 1 Part F narrow away-pick Platt correction (45-70% band, inner-test only)...');
+    narrowAwayPlatt = fitNarrowAwayPlatt(test, gbdtProb);
+    if (narrowAwayPlatt.fitted) {
+      console.log(`  fitted on n=${narrowAwayPlatt.n} away-picks-in-band: A=${narrowAwayPlatt.A.toFixed(4)}  B=${narrowAwayPlatt.B.toFixed(4)}`);
+    } else {
+      console.log(`  SKIPPED — ${narrowAwayPlatt.reason}`);
+    }
+  }
+
   console.log('\nComputing inner-test validation metrics (diagnostic only, not a gate for this script)...');
   const llGBDT   = logLoss(test, gbdtProb);
   const llLinear = logLoss(test, r => linearPredict(r));
@@ -411,7 +473,7 @@ function scoreWalkForwardBlock(holdout, gbdtProb) {
 
   // ─── WALK-FORWARD BLOCK MODE (Addendum 21) ──────────────────────────────────
   console.log(`\nScoring block against closing-odds.json (posEdge>=5%, applyLeagueBiasCorrection)...`);
-  const { matchedN, bets } = scoreWalkForwardBlock(holdout, gbdtProb);
+  const { matchedN, bets } = scoreWalkForwardBlock(holdout, gbdtProb, narrowAwayPlatt);
   console.log(`  Block test population: ${holdout.length}  |  Matched Pinnacle odds: ${matchedN}  |  posEdge>=5% bets: ${bets.length}`);
 
   // Block weights written for audit/debugging, not reloaded by the pooling step —
@@ -423,7 +485,7 @@ function scoreWalkForwardBlock(holdout, gbdtProb) {
     blockLabel: WF_BLOCK_LABEL, trainBefore: WF_TRAIN_BEFORE, testEnd: WF_TEST_END,
     trainN: train.length, innerTestN: test.length, blockTestN: holdout.length,
     innerTestMetrics: { logLossLinear: llLinear, logLossProxyGbdt: llGBDT, brierLinear: bsLinear, brierProxyGbdt: bsGBDT },
-    classifiers, platt,
+    classifiers, platt, narrowAwayPlatt,
   }));
   console.log(`  Block weights written: ${blockWeightsPath} (audit trail only)`);
 

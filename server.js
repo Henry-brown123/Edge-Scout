@@ -2775,7 +2775,7 @@ function runGbdtRetrain(reason, onComplete) {
 // blocks are done. Sequential only, same as runGbdtRetrain — no parallel training
 // jobs on this 512MB instance.
 let _walkForwardProcess = null;
-function runWalkForwardBlock(blockLabel, trainBefore, testEnd, onComplete) {
+function runWalkForwardBlock(blockLabel, trainBefore, testEnd, onComplete, extraEnv = {}) {
   if (_walkForwardProcess) {
     return { success: false, error: 'A walk-forward block is already in progress.' };
   }
@@ -2786,7 +2786,10 @@ function runWalkForwardBlock(blockLabel, trainBefore, testEnd, onComplete) {
   const { spawn } = require('child_process');
   const child = spawn('node', ['models/gbdt-train-proxy.js'], {
     cwd: __dirname,
-    env: { ...process.env, DATA_DIR: process.env.DATA_DIR, WF_TRAIN_BEFORE: trainBefore, WF_TEST_END: testEnd || '', WF_BLOCK_LABEL: blockLabel },
+    // extraEnv — Phase 1 Part F's WF_ENABLE_NARROW_AWAY_PLATT opt-in flag, empty {}
+    // (no-op) for every other caller so the existing Addendum 21 behavior (Part E)
+    // is completely unaffected.
+    env: { ...process.env, DATA_DIR: process.env.DATA_DIR, WF_TRAIN_BEFORE: trainBefore, WF_TEST_END: testEnd || '', WF_BLOCK_LABEL: blockLabel, ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   _walkForwardProcess = child;
@@ -7230,13 +7233,15 @@ app.post('/api/admin/reset-walkforward', (_req, res) => {
 // Sequential, one block at a time; the caller (an overnight orchestration script/
 // session) is responsible for waiting on GET .../walkforward-status between calls.
 app.post('/api/admin/trigger-walkforward-block', (req, res) => {
-  const { blockLabel, trainBefore, testEnd } = req.body || {};
+  const { blockLabel, trainBefore, testEnd, enableNarrowAwayPlatt } = req.body || {};
   if (!blockLabel || !trainBefore) {
     return res.status(400).json({ error: 'body must include { blockLabel, trainBefore, testEnd? }' });
   }
-  const result = runWalkForwardBlock(blockLabel, trainBefore, testEnd || null);
+  // Phase 1 Part F — opt-in only, defaults to unset (existing Addendum 21 behavior).
+  const extraEnv = enableNarrowAwayPlatt ? { WF_ENABLE_NARROW_AWAY_PLATT: 'true' } : {};
+  const result = runWalkForwardBlock(blockLabel, trainBefore, testEnd || null, undefined, extraEnv);
   if (!result.success) return res.status(409).json({ success: false, error: result.error });
-  res.json({ success: true, started: true, message: `Block ${blockLabel} started — poll GET /api/admin/walkforward-status.` });
+  res.json({ success: true, started: true, enableNarrowAwayPlatt: !!enableNarrowAwayPlatt, message: `Block ${blockLabel} started — poll GET /api/admin/walkforward-status.` });
 });
 
 app.get('/api/admin/walkforward-status', (_req, res) => {
@@ -7250,6 +7255,47 @@ app.get('/api/admin/walkforward-log', (_req, res) => {
 app.get('/api/admin/walkforward-raw-bets', (_req, res) => {
   const bets = readJSON('walk-forward-raw-bets.json') || [];
   res.json({ totalN: bets.length, byBlock: bets.reduce((acc, b) => { acc[b.blockLabel] = (acc[b.blockLabel]||0)+1; return acc; }, {}) });
+});
+
+// TEMP — Phase 1 Part E context only, remove after findings delivered. Reads the
+// pre-Phase-1 Addendum 21 pooled result (backed up by reset-walkforward before the
+// fresh run) so the fresh run's domestic-league ROI can be compared against the
+// pre-existing baseline — context only, not a re-test or adjustment of anything.
+app.get('/api/admin/walkforward-pooled-backup', (_req, res) => {
+  res.json(readJSON('walk-forward-pooled.pre-phase1-backup.json') || { error: 'no backup found' });
+});
+
+// TEMP — Phase 1 Part F report only, remove after findings delivered. Reads
+// walk-forward-raw-bets.json from a WF_ENABLE_NARROW_AWAY_PLATT=true run (pickType/
+// narrowCorrected fields only exist on bets scored by that code path) and slices by
+// pick type instead of league|tier — narrowCorrected===true bets are exactly, and
+// only, away picks that fell in the 45-70% band under the standard pipeline (see
+// gbdt-train-proxy.js's scoreWalkForwardBlock gating), so home/draw slices here are
+// a direct empirical readout that those picks were never touched, not just a
+// structural claim.
+app.get('/api/diagnostics/narrow-away-platt-report', (_req, res) => {
+  const bets = readJSON('walk-forward-raw-bets.json') || [];
+  function slice(fixtures) {
+    const n = fixtures.length;
+    if (n === 0) return { n: 0, roi: null, ciLow: null, ciHigh: null };
+    const returns = fixtures.map(b => b.won ? (b.pinnacleOdds - 1) : -1);
+    const mean = returns.reduce((s, v) => s + v, 0) / n;
+    let ciLow = null, ciHigh = null;
+    if (n > 1) {
+      const variance = returns.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1);
+      const se = Math.sqrt(variance / n);
+      ciLow = +(mean - 1.96 * se).toFixed(4);
+      ciHigh = +(mean + 1.96 * se).toFixed(4);
+    }
+    return { n, roi: +mean.toFixed(4), ciLow, ciHigh };
+  }
+  res.json({
+    totalBets: bets.length,
+    awayInBandCorrected: slice(bets.filter(b => b.narrowCorrected === true)),
+    awayOutsideBand: slice(bets.filter(b => b.pickType === 'away' && !b.narrowCorrected)),
+    homePicks: slice(bets.filter(b => b.pickType === 'home')),
+    drawPicks: slice(bets.filter(b => b.pickType === 'draw')),
+  });
 });
 
 // Pools all 4 blocks' raw bet outcomes per (league, tier) — n, ROI, 95% CI via
