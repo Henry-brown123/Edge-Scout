@@ -7031,8 +7031,17 @@ function devigOdds(homeOdds, drawOdds, awayOdds) {
   return { home: ih / overround, draw: id / overround, away: ia / overround };
 }
 
-function computeConsensusOdds(fixtureId) {
-  const multi = getClosingOddsMulti()[fixtureId];
+// closingOddsMulti param added 2026-08-14: this used to call
+// getClosingOddsMulti() internally, which re-reads and re-parses
+// closing-odds-multi.json from disk on EVERY call — fine for the single call
+// at line ~4698, but runEvCalibrationConsensus() below calls this once per
+// scored record lacking Pinnacle odds (tens of thousands of times against the
+// full population), so that was tens of thousands of synchronous full-file
+// re-reads in one request — confirmed via empirical testing to hang the
+// request for 60+ seconds, a much bigger cost than the model.predict() loop
+// itself. Callers now read the file once and pass it in.
+function computeConsensusOdds(fixtureId, closingOddsMulti) {
+  const multi = closingOddsMulti[fixtureId];
   if (!multi?.books) return null;
   const probs = [];
   for (const bookKey of CONSENSUS_BOOKS) {
@@ -7060,6 +7069,7 @@ async function runEvCalibrationConsensus() {
   const scoredRecords = historical.scoredRecords || [];
   const optWeights    = historical.optimisedWeights || {};
   const closingOdds   = readJSON('closing-odds.json') || {};
+  const closingOddsMulti = getClosingOddsMulti(); // read once — see computeConsensusOdds() comment
   const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG } = require('./scoring');
 
   const BANDS = [
@@ -7090,7 +7100,7 @@ async function runEvCalibrationConsensus() {
     let sourceOdds = null, source = null;
     if (co) { sourceOdds = co; source = 'pinnacle'; }
     else {
-      const consensus = computeConsensusOdds(String(rec.fixtureId));
+      const consensus = computeConsensusOdds(String(rec.fixtureId), closingOddsMulti);
       if (consensus) { sourceOdds = consensus; source = 'consensus'; }
     }
     if (!sourceOdds) continue;
