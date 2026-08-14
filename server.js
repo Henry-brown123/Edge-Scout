@@ -21,7 +21,7 @@ const {
   scoreGoalsMarkets,
   stalenessMultiplier, applyStalenessPull,
   CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND, DOMESTIC_LEAGUE_IDS_FOR_BLEND,
-  UEFA_SINGLE_PHASE_SEASON_FLOOR, rankToProxyScore, lookupStandingScore,
+  UEFA_SINGLE_PHASE_SEASON_FLOOR, EURO_COMPETITION_PHASE_GAMES_FLOOR, rankToProxyScore, lookupStandingScore,
 } = require('./scoring');
 
 const model = require('./models/interface');
@@ -922,9 +922,11 @@ async function fetchDomesticStandingsCached(leagueId, season) {
 // weightOptimiser.js's resolveStandingsScore(), same priority order:
 // 1. Own-competition table, only for Champions/Europa/Conference League from the
 //    single-league-phase era (season >= UEFA_SINGLE_PHASE_SEASON_FLOOR) and only
-//    once the team has played >=1 game in it — confirmed live (Addendum 24 Part 1)
-//    that this is a real, current, populated single table, not the old group-of-4
-//    format a cross-group rank would misrepresent.
+//    once the team has played >=EURO_COMPETITION_PHASE_GAMES_FLOOR games in it —
+//    confirmed live (Addendum 24 Part 1) that this is a real, current, populated
+//    single table, not the old group-of-4 format a cross-group rank would
+//    misrepresent. That floor is 3, not Part D's domestic floor of 1 — see
+//    scoring.js's EURO_COMPETITION_PHASE_GAMES_FLOOR for why these differ.
 // 2. Domestic-blend: this team's most recent domestic league+season (from the
 //    already-fetched fetchTeamDomesticForm list), fetched fresh (cached) and
 //    looked up the same way a domestic fixture's own standings would be.
@@ -939,7 +941,7 @@ async function resolveCupStandingsScore(fix, teamId, standings, domesticFixtures
 
   if (isNewFormatEuro) {
     const own = lookupStandingScore(standings, teamId);
-    if (own && own.gamesPlayed >= 1) return own.score;
+    if (own && own.gamesPlayed >= EURO_COMPETITION_PHASE_GAMES_FLOOR) return own.score;
   }
 
   if (domesticFixtures?.length) {
@@ -1037,8 +1039,9 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
       .sort((a, b) => new Date(b.fixture?.date) - new Date(a.fixture?.date));
 
     // Addendum 24 Part C: standings for cup/tournament fixtures — own-competition
-    // table for new-format Euro once gamesPlayed>=1, domestic blend otherwise
-    // (Carabao Cup always; old-format Euro; or a thin own-competition sample).
+    // table for new-format Euro once gamesPlayed>=EURO_COMPETITION_PHASE_GAMES_FLOOR,
+    // domestic blend otherwise (Carabao Cup always; old-format Euro; a thin
+    // own-competition sample; or new-format Euro below that floor).
     // Reuses the exact homeDomestic/awayDomestic fetch above — no extra API calls
     // beyond the domestic standings lookup itself.
     [homeStandingsOverride, awayStandingsOverride] = await Promise.all([

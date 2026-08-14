@@ -4,7 +4,7 @@ const {
   formScore, homeAdvScore, xgScore, defenseScore, momentumScore,
   h2hScore, classifyFixture, WEIGHTS_BY_CONTEXT, computeModelProb,
   CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND, DOMESTIC_LEAGUE_IDS_FOR_BLEND,
-  UEFA_SINGLE_PHASE_SEASON_FLOOR, rankToProxyScore,
+  UEFA_SINGLE_PHASE_SEASON_FLOOR, EURO_COMPETITION_PHASE_GAMES_FLOOR, rankToProxyScore,
 } = require('./scoring');
 
 // ─── RECENCY WEIGHT ───────────────────────────────────────────────────────────
@@ -176,9 +176,12 @@ function lookupDomesticStanding(domesticTimeline, teamId, asOfDate) {
 
 // Resolves one team's standings factor for one fixture — the historical-path
 // equivalent of scoring.js's standingsScore(), same priority order:
-// 1. Own-competition table, if it's a genuinely valid single round-robin
-//    (domestic league, or Champions/Europa/Conference League from the single-
-//    league-phase era) AND the team has played at least 1 game in it.
+// 1. Own-competition table, if it's a genuinely valid single round-robin (domestic
+//    league, or Champions/Europa/Conference League from the single-league-phase
+//    era) AND the team has played enough games in it to be meaningful — >=1 for
+//    domestic (Part D's evidenced floor), >=3 for the Euro competition phase (the
+//    brief's own separate prior finding for that competition type — see
+//    EURO_COMPETITION_PHASE_GAMES_FLOOR in scoring.js for why these floors differ).
 // 2. Domestic-blend timeline (Carabao Cup always; old-format Euro; or a thin
 //    own-competition sample) — naturally includes the last-season fallback, see
 //    buildDomesticTimeline's note above.
@@ -193,7 +196,8 @@ function resolveStandingsScore(fix, teamId, isHome, ownSnap, domesticTimeline) {
 
   if ((isDomestic || isNewFormatEuro) && ownSnap) {
     const gamesPlayed = isHome ? ownSnap.homeGamesPlayed : ownSnap.awayGamesPlayed;
-    if (gamesPlayed >= 1) {
+    const floor = isNewFormatEuro ? EURO_COMPETITION_PHASE_GAMES_FLOOR : 1;
+    if (gamesPlayed >= floor) {
       const rank = isHome ? ownSnap.homeRank : ownSnap.awayRank;
       return rankToProxyScore(rank, ownSnap.leagueSize);
     }

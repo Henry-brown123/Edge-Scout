@@ -79,6 +79,18 @@ const DOMESTIC_LEAGUE_IDS_FOR_BLEND = new Set([39, 140, 135, 78, 61, 179, 88, 94
 // (Addendum 24 Part 1 investigation: /standings returns a real, current, populated
 // 36-team single table for the 2025-26 season).
 const UEFA_SINGLE_PHASE_SEASON_FLOOR = 2024;
+// Games-played floor for trusting a Champions/Europa/Conference League team's OWN
+// competition-phase table position, per the brief's own prior finding (Phase 1 Part C
+// point 10: "competition-phase standing is real and meaningful once gamesPlayed>=3 in
+// that competition"). Deliberately NOT the same as the domestic gamesPlayed>=1 floor
+// (Part D) — that threshold was evidenced specifically for full-season domestic
+// tables; the Euro league phase is only 8 fixtures total, self-selects to two
+// unevenly-strong halves by matchday 1-2 (seeded pots), and single-phase play only
+// started 2024-25, so there is no separate evidence base yet to justify a lower
+// floor here. Applying Part D's domestic threshold to this competition type without
+// its own evidence would just be a subtler version of the exact mistake Part A fixed
+// (trusting a table position without confirming it is actually meaningful yet).
+const EURO_COMPETITION_PHASE_GAMES_FLOOR = 3;
 
 // ─── CONTEXT-AWARE WEIGHTS ────────────────────────────────────────────────────
 
@@ -766,6 +778,7 @@ module.exports = {
   LEAGUE_CONFIG,
   DEFAULT_WEIGHTS,
   CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND, DOMESTIC_LEAGUE_IDS_FOR_BLEND, UEFA_SINGLE_PHASE_SEASON_FLOOR,
+  EURO_COMPETITION_PHASE_GAMES_FLOOR,
   recencyAvg, outcomePoints,
   formScore, homeAdvScore, xgScore, defenseScore,
   momentumScore, h2hScore, standingsScore, injuryScore,
