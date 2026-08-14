@@ -7494,6 +7494,19 @@ app.get('/api/admin/walkforward-log', (_req, res) => {
   res.json({ entries: readJSON('walk-forward-log.json') || [] });
 });
 
+// TEMP — Track A: reset walk-forward-raw-bets.json/walk-forward-log.json before
+// a fresh 4-block run. runWalkForwardBlock's underlying script only appends
+// (no dedup/replace-by-blockLabel), so re-running the same 4 block labels
+// without clearing first would mix pre-Track-A and post-Track-A bets under
+// identical labels, corrupting the pool. Remove after Track A's walk-forward
+// re-run completes.
+app.post('/api/admin/walkforward-reset', (_req, res) => {
+  const before = { raw: (readJSON('walk-forward-raw-bets.json') || []).length, log: (readJSON('walk-forward-log.json') || []).length };
+  writeJSON('walk-forward-raw-bets.json', [], { allowEmpty: true });
+  writeJSON('walk-forward-log.json', [], { allowEmpty: true });
+  res.json({ reset: true, clearedRawBets: before.raw, clearedLogEntries: before.log });
+});
+
 app.get('/api/admin/walkforward-raw-bets', (_req, res) => {
   const bets = readJSON('walk-forward-raw-bets.json') || [];
   res.json({ totalN: bets.length, byBlock: bets.reduce((acc, b) => { acc[b.blockLabel] = (acc[b.blockLabel]||0)+1; return acc; }, {}) });
