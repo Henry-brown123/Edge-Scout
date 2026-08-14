@@ -5882,6 +5882,83 @@ app.get('/api/diagnostics/factor-distribution', (req, res) => {
   res.json({ factors: result, totalRecords: data.scoredRecords.length });
 });
 
+// TEMP — Phase 1 Part C verification only, remove after findings delivered.
+app.get('/api/diagnostics/standings-blend-verify', (req, res) => {
+  const { buildTeamIndex, buildStandingsIndex, buildDomesticTimeline, scoreFixtureFromPool } = require('./weightOptimiser');
+  const { DOMESTIC_LEAGUE_IDS_FOR_BLEND } = require('./scoring');
+  const data = readJSON('backfill-historical.json');
+  if (!data?.fixtures?.length) return res.json({ error: 'No historical data' });
+
+  const allFixtures = data.fixtures;
+  const teamIndex = buildTeamIndex(allFixtures);
+  const standingsIndex = buildStandingsIndex(allFixtures);
+  const domesticTimeline = buildDomesticTimeline(allFixtures);
+  const scoredMap = new Map((data.scoredRecords || []).map(r => [r.fixtureId, r]));
+
+  const CARABAO_CUP = 48;
+  const finalStatuses = new Set(['FT', 'AET', 'PEN']);
+  const cupFixtures = allFixtures.filter(f => f.league?.id === CARABAO_CUP && finalStatuses.has(f.fixture?.status?.short));
+
+  // Part C check 1+2: before/after + cross-division, across every scored Carabao Cup fixture
+  const cupResults = [];
+  for (const f of cupFixtures) {
+    const fid = f.fixture?.id;
+    const rec = scoredMap.get(fid);
+    if (!rec?.homeFactors || !rec?.awayFactors) continue;
+    const recomputed = scoreFixtureFromPool(f, teamIndex, standingsIndex, domesticTimeline);
+    if (!recomputed) continue;
+    const homeDom = domesticTimeline[String(f.teams?.home?.id)]?.filter(s => new Date(s.date) < new Date(f.fixture?.date)).pop();
+    const awayDom = domesticTimeline[String(f.teams?.away?.id)]?.filter(s => new Date(s.date) < new Date(f.fixture?.date)).pop();
+    cupResults.push({
+      fixtureId: fid, date: f.fixture?.date,
+      home: f.teams?.home?.name, away: f.teams?.away?.name,
+      oldStoredStandings: { home: rec.homeFactors.standings, away: rec.awayFactors.standings },
+      newStandings: { home: recomputed.homeFactors.standings, away: recomputed.awayFactors.standings },
+      homeDomesticSnapshot: homeDom ? { rank: homeDom.rank, leagueSize: homeDom.leagueSize, gamesPlayed: homeDom.gamesPlayed, asOf: homeDom.date } : null,
+      awayDomesticSnapshot: awayDom ? { rank: awayDom.rank, leagueSize: awayDom.leagueSize, gamesPlayed: awayDom.gamesPlayed, asOf: awayDom.date } : null,
+    });
+  }
+
+  // Part C check 3: regression on already-tracked domestic leagues — NEW vs OLD stored value
+  const domesticFixtures = allFixtures.filter(f => DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(f.league?.id) && finalStatuses.has(f.fixture?.status?.short));
+  let domesticChecked = 0, domesticMatched = 0;
+  const domesticMismatchSample = [];
+  for (const f of domesticFixtures) {
+    const fid = f.fixture?.id;
+    const rec = scoredMap.get(fid);
+    if (!rec?.homeFactors || !rec?.awayFactors) continue;
+    const recomputed = scoreFixtureFromPool(f, teamIndex, standingsIndex, domesticTimeline);
+    if (!recomputed) continue;
+    domesticChecked++;
+    const homeMatch = rec.homeFactors.standings === recomputed.homeFactors.standings;
+    const awayMatch = rec.awayFactors.standings === recomputed.awayFactors.standings;
+    if (homeMatch && awayMatch) {
+      domesticMatched++;
+    } else if (domesticMismatchSample.length < 15) {
+      const ownSnap = standingsIndex.byFixture.get(fid);
+      domesticMismatchSample.push({
+        fixtureId: fid, league: f.league?.id, season: f.league?.season, date: f.fixture?.date,
+        home: f.teams?.home?.name, away: f.teams?.away?.name,
+        oldStandings: { home: rec.homeFactors.standings, away: rec.awayFactors.standings },
+        newStandings: { home: recomputed.homeFactors.standings, away: recomputed.awayFactors.standings },
+        gamesPlayedAtFixture: { home: ownSnap?.homeGamesPlayed, away: ownSnap?.awayGamesPlayed },
+      });
+    }
+  }
+
+  res.json({
+    cupFixturesChecked: cupResults.length,
+    cupSample: cupResults.slice(0, 40),
+    domesticRegression: {
+      checked: domesticChecked,
+      matched: domesticMatched,
+      mismatched: domesticChecked - domesticMatched,
+      matchRate: domesticChecked ? +(domesticMatched / domesticChecked).toFixed(4) : null,
+      mismatchSample: domesticMismatchSample,
+    },
+  });
+});
+
 // ─── BACKFILL CHAIN ──────────────────────────────────────────────────────────
 
 let _startupStatus = { phase: 'idle', startedAt: null, completedAt: null, skipped: false, error: null };
