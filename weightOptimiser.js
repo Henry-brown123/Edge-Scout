@@ -419,7 +419,7 @@ async function optimiseWeights(records, context, iterations = 200) {
 // Runs gradient descent on fixtures from a single league only.
 // Returns null if fewer than 500 scored records (fall back to context defaults).
 
-function optimiseLeagueWeights(leagueId, allRecords) {
+async function optimiseLeagueWeights(leagueId, allRecords) {
   const leagueRecords = allRecords.filter(r => r.leagueId === String(leagueId));
   if (leagueRecords.length < 500) {
     console.log(`[WeightOpt] League ${leagueId}: only ${leagueRecords.length} records — using context defaults`);
@@ -463,6 +463,13 @@ function optimiseLeagueWeights(leagueId, allRecords) {
     const newLoss = lossForLeague(nw);
     if (newLoss < bestLoss) { bestLoss = newLoss; bestW = { ...nw }; }
     w = nw;
+
+    // Same yield cadence as optimiseWeights() above — /api/optimise/leagues
+    // calls this once per league in a tight loop with no other yield points,
+    // so without this a full pass over ~20 leagues runs as one uninterrupted
+    // synchronous block, starving the event loop the same way the historical
+    // scoring loop and team-profile rebuild did before they got this fix.
+    if ((iter + 1) % 20 === 0) await new Promise(r => setImmediate(r));
   }
 
   const rounded = {};

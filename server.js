@@ -4376,7 +4376,7 @@ app.post('/api/optimise/leagues', (req, res) => {
       // Gather unique league IDs from records
       const leagueIds = [...new Set(data.scoredRecords.map(r => r.leagueId).filter(Boolean))];
       for (const lid of leagueIds) {
-        const result = optimiseLeagueWeights(lid, data.scoredRecords);
+        const result = await optimiseLeagueWeights(lid, data.scoredRecords);
         if (result) {
           leagueWeights[lid] = result.weights;
           leagueMeta[lid]    = {
