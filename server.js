@@ -5900,6 +5900,91 @@ app.get('/api/diagnostics/factor-distribution', (req, res) => {
   res.json({ factors: result, totalRecords: data.scoredRecords.length });
 });
 
+// TEMP — Phase 1 Part E supplementary diagnostic only, remove after findings delivered.
+// The 4-block walk-forward (Addendum 21 technique) covers Champions/Europa League and
+// the 8 domestic leagues, but not Carabao Cup/Conference League (excluded from
+// WF_REPORTED_LEAGUE_IDS), and its pooled raw-bet records don't retain enough detail to
+// isolate early-season domestic fixtures. This reads the ALREADY-TRAINED live model's
+// actual prediction pipeline (model.predict -> applyLeagueBiasCorrection, identical to
+// runEvCalibration/scoreOneFixture) against the now-corrected scoredRecords + real
+// closing odds, for exactly the 3 populations the walk-forward can't reach: Carabao
+// Cup, Conference League, and domestic fixtures where either team had <3 games played
+// at fixture time (the pre-Part-D neutral-fallback threshold, used here as "early
+// season" for slicing, not as a scoring threshold). Single deliberate read.
+app.get('/api/diagnostics/standings-affected-roi', (req, res) => {
+  const { buildStandingsIndex } = require('./weightOptimiser');
+  const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG, DOMESTIC_LEAGUE_IDS_FOR_BLEND } = require('./scoring');
+  const historical = readJSON('backfill-historical.json') || {};
+  const scoredRecords = historical.scoredRecords || [];
+  const optWeights = historical.optimisedWeights || {};
+  const closingOdds = readJSON('closing-odds.json') || {};
+  if (!scoredRecords.length) return res.json({ error: 'No historical data' });
+
+  const standingsIndex = buildStandingsIndex(historical.fixtures || []);
+
+  const matched = [];
+  for (const rec of scoredRecords) {
+    const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
+    if (!co || !rec.actualOutcome || !rec.homeFactors || !rec.awayFactors) continue;
+
+    const context = rec.context || classifyFixture(rec.leagueId);
+    const weights = optWeights[context] || optWeights.club_domestic;
+    if (!weights) continue;
+
+    const leagueId = parseInt(rec.leagueId, 10);
+    const rawProbs = model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]);
+    const probs = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
+
+    let topOutcome, modelProb, pinnacleOdds;
+    if (probs.home >= probs.draw && probs.home >= probs.away) {
+      topOutcome = 'home'; modelProb = probs.home; pinnacleOdds = co.homeOdds;
+    } else if (probs.away >= probs.draw) {
+      topOutcome = 'away'; modelProb = probs.away; pinnacleOdds = co.awayOdds;
+    } else {
+      topOutcome = 'draw'; modelProb = probs.draw; pinnacleOdds = co.drawOdds;
+    }
+    if (!pinnacleOdds || pinnacleOdds <= 1) continue;
+
+    const pinnacleImplied = 1 / pinnacleOdds;
+    const edge = (modelProb - pinnacleImplied) / pinnacleImplied;
+    const won = rec.actualOutcome === topOutcome;
+    const snap = standingsIndex.byFixture.get(rec.fixtureId);
+    const earlySeason = !!snap && (snap.homeGamesPlayed < 3 || snap.awayGamesPlayed < 3);
+
+    matched.push({ leagueId, edge, won, pinnacleOdds, earlySeason });
+  }
+
+  function slice(fixtures) {
+    const n = fixtures.length;
+    const posEdge = fixtures.filter(f => f.edge >= 0.05);
+    const pn = posEdge.length;
+    if (pn === 0) return { n, posEdgeN: 0, roi: null, ciLow: null, ciHigh: null };
+    const returns = posEdge.map(f => f.won ? (f.pinnacleOdds - 1) : -1);
+    const mean = returns.reduce((s, v) => s + v, 0) / pn;
+    let ciLow = null, ciHigh = null;
+    if (pn > 1) {
+      const variance = returns.reduce((s, v) => s + (v - mean) ** 2, 0) / (pn - 1);
+      const se = Math.sqrt(variance / pn);
+      ciLow = +(mean - 1.96 * se).toFixed(4);
+      ciHigh = +(mean + 1.96 * se).toFixed(4);
+    }
+    return { n, posEdgeN: pn, roi: +mean.toFixed(4), ciLow, ciHigh };
+  }
+
+  const carabaoCup = matched.filter(f => f.leagueId === 48);
+  const conferenceLeague = matched.filter(f => f.leagueId === 848);
+  const earlySeasonDomestic = matched.filter(f => DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(f.leagueId) && f.earlySeason);
+  const domesticOverall = matched.filter(f => DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(f.leagueId));
+
+  res.json({
+    totalMatched: matched.length,
+    carabaoCup: slice(carabaoCup),
+    conferenceLeague: slice(conferenceLeague),
+    earlySeasonDomestic: slice(earlySeasonDomestic),
+    domesticOverall_forComparison: slice(domesticOverall),
+  });
+});
+
 // ─── BACKFILL CHAIN ──────────────────────────────────────────────────────────
 
 let _startupStatus = { phase: 'idle', startedAt: null, completedAt: null, skipped: false, error: null };
