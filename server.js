@@ -5965,6 +5965,23 @@ app.get('/api/diagnostics/factor-distribution', (req, res) => {
   res.json({ factors: result, totalRecords: data.scoredRecords.length });
 });
 
+// TEMP — Track A verification only, remove after findings delivered.
+app.get('/api/diagnostics/inspect-record', (req, res) => {
+  const ids = String(req.query.ids || '').split(',').map(s => parseInt(s.trim(), 10)).filter(Boolean);
+  const data = readJSON('backfill-historical.json');
+  if (!data?.scoredRecords?.length) return res.json({ error: 'No historical data' });
+  const scoredMap = new Map(data.scoredRecords.map(r => [r.fixtureId, r]));
+  const results = ids.map(id => {
+    const rec = scoredMap.get(id);
+    if (!rec) return { fixtureId: id, error: 'not found' };
+    return {
+      fixtureId: id, homeTeamName: rec.homeTeamName, awayTeamName: rec.awayTeamName,
+      homeFormCount: rec.homeFormCount, awayFormCount: rec.awayFormCount,
+    };
+  });
+  res.json({ totalRecords: data.scoredRecords.length, results });
+});
+
 // ─── BACKFILL CHAIN ──────────────────────────────────────────────────────────
 
 let _startupStatus = { phase: 'idle', startedAt: null, completedAt: null, skipped: false, error: null };
