@@ -52,6 +52,34 @@ function classifyFixture(leagueId) {
   return 'club_domestic';
 }
 
+// ─── DOMESTIC BLEND CLASSIFICATION (shared: server.js live path + weightOptimiser.js
+// historical path, Addendum 24 Part C) ─────────────────────────────────────────
+// Competitions whose own recent history is too thin/structurally unsuitable for
+// form/xg/defense/momentum/standings to mean anything on their own (knockout format
+// — a handful of matches per season at most — or, for Carabao Cup, no backfilled
+// history at all) — these pull each team's real current domestic-league data
+// instead. Single source of truth so the live and historical paths can never
+// silently drift out of sync with each other.
+const CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND = new Set([48, 2, 3, 848]); // Carabao Cup, Champions League, Europa League, Conference League
+// Domestic leagues eligible as a source of "real current form" for the blend above —
+// every currently-tracked top-flight-or-below domestic league. Deliberately excludes
+// other cup competitions (keeps the blend one-directional) and anything outside
+// LEAGUES (an untracked league contributes nothing, same limit the international
+// blend already has for non-backfilled competitions).
+const DOMESTIC_LEAGUE_IDS_FOR_BLEND = new Set([39, 140, 135, 78, 61, 179, 88, 94, 41, 42]);
+// UEFA's competition reform (Champions League, Europa League, Conference League all
+// moved from group-of-4 stages to a single 36-team league-phase table) took effect
+// the 2024-25 season — API-Sports' own `season` field uses the year a season starts,
+// so season>=2024 is the single-phase era. Football-justified cutoff, not arbitrary:
+// before this, "rank across the whole competition" mixed teams from different
+// 4-team groups that never played each other — no more meaningful as a single
+// ranking than Carabao Cup's own cross-round table was (Addendum 24 Part A/C's
+// finding). From 2024-25 on, every team in the competition plays the same 8-fixture
+// league phase, so a single table position is genuinely comparable, confirmed live
+// (Addendum 24 Part 1 investigation: /standings returns a real, current, populated
+// 36-team single table for the 2025-26 season).
+const UEFA_SINGLE_PHASE_SEASON_FLOOR = 2024;
+
 // ─── CONTEXT-AWARE WEIGHTS ────────────────────────────────────────────────────
 
 const WEIGHTS_BY_CONTEXT = {
@@ -202,20 +230,61 @@ function h2hScore(h2hFixtures, homeTeamId, window = 5, decay = 0.05) {
   return Math.round((recencyAvg(pts, decay) / 3) * 100);
 }
 
-function standingsScore(standings, teamId, fixtureContext) {
+// Shared rank->0-100 conversion, extracted so the live path (below), the historical
+// scorer (weightOptimiser.js, post Addendum-24 fix), and the last-season proxy all
+// use the exact same formula rather than three near-identical inline copies drifting
+// apart over time.
+function rankToProxyScore(rank, leagueSize) {
+  if (!leagueSize) return 50;
+  return Math.round(((leagueSize - rank + 1) / leagueSize) * 100);
+}
+
+// Looks up a team's rank in a (possibly already-flattened) standings array and
+// converts it via rankToProxyScore — shared by both the current-season lookup below
+// and the last-season proxy, so "how do we read a standings array" only exists once.
+function lookupStandingScore(standings, teamId) {
+  if (!standings?.length) return null;
+  const flat = Array.isArray(standings[0]) ? standings.flat() : standings;
+  const entry = flat.find(s => s.team?.id === teamId);
+  if (!entry) return null;
+  return { score: rankToProxyScore(entry.rank, flat.length), gamesPlayed: entry.all?.played || 0 };
+}
+
+// Addendum 24 Part D — last-season final standing as the early-season proxy. Tested
+// train-only against real outcomes (docs/tier-calibration-analysis.md, the standings-
+// proxy candidate test): r=0.36 vs. the in-season rolling signal's r=0.14 at the exact
+// population where neutral is used today, ~2.6x stronger. Returns null (not 50) when
+// unavailable — the caller decides the final fallback — so a promoted/newly-tracked
+// team (no prior-season rank in this league) is distinguishable from "found last
+// season's table and this team was mid-table," which do carry different information.
+function lastSeasonStandingScore(lastSeasonStandings, teamId) {
+  const looked = lookupStandingScore(lastSeasonStandings, teamId);
+  return looked ? looked.score : null;
+}
+
+// gamesPlayed threshold tightened from <3 to <1 (Addendum 24 Part D) — tested
+// train-only: at exactly 0 games played the in-season rolling rank is genuine noise
+// (r=-0.01, justifying neutral/proxy there), but by 1 game played it already carries
+// real signal (r=0.23) that a hardcoded neutral was needlessly throwing away.
+// lastSeasonStandings (optional, 4th arg) — Addendum 24 Part D's proxy, tried before
+// falling back to neutral. Backward compatible: omitting it just means the proxy step
+// is skipped, same behaviour as before this addendum except for the tightened
+// threshold.
+function standingsScore(standings, teamId, fixtureContext, lastSeasonStandings) {
   // Group standings within a 4-team WC/tournament group are meaningless for quality
   // differentiation — all qualifiers are elite and a "rank 2 of 4" score of 75
   // tells us nothing about relative team strength. Return neutral for international.
   if (fixtureContext === 'international') return 50;
-  if (!standings?.length) return 50;
-  const flat = Array.isArray(standings[0]) ? standings.flat() : standings;
-  const entry = flat.find(s => s.team?.id === teamId);
-  if (!entry) return 50;
-  // Early-season table positions are arbitrary or carried over from last season's
-  // finish — not meaningful until each team has a real sample of results.
-  const gamesPlayed = entry.all?.played || 0;
-  if (gamesPlayed < 3) return 50;
-  return Math.round(((flat.length - entry.rank + 1) / flat.length) * 100);
+  const current = lookupStandingScore(standings, teamId);
+  // No current-season entry at all (very first fixtures of a season, before this
+  // team has been added to any live table snapshot) or fewer than 1 game played —
+  // early-season table positions below that are arbitrary or carried over from last
+  // season's finish, not meaningful yet. Try the evidenced proxy before neutral.
+  if (!current || current.gamesPlayed < 1) {
+    const proxy = lastSeasonStandingScore(lastSeasonStandings, teamId);
+    return proxy ?? 50;
+  }
+  return current.score;
 }
 
 // Discounts factor confidence based on how long ago a team's most recent fixture
@@ -696,9 +765,11 @@ module.exports = {
   CONTEXT_CONFIG,
   LEAGUE_CONFIG,
   DEFAULT_WEIGHTS,
+  CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND, DOMESTIC_LEAGUE_IDS_FOR_BLEND, UEFA_SINGLE_PHASE_SEASON_FLOOR,
   recencyAvg, outcomePoints,
   formScore, homeAdvScore, xgScore, defenseScore,
   momentumScore, h2hScore, standingsScore, injuryScore,
+  rankToProxyScore, lookupStandingScore, lastSeasonStandingScore,
   stalenessMultiplier, applyStalenessPull,
   internationalFormScore, internationalQualityScore,
   lookupFIFARank, FIFA_RANK_FALLBACK,

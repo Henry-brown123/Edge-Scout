@@ -20,6 +20,8 @@ const {
   reloadXgStore, getXgStore, lookupXg,
   scoreGoalsMarkets,
   stalenessMultiplier, applyStalenessPull,
+  CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND, DOMESTIC_LEAGUE_IDS_FOR_BLEND,
+  UEFA_SINGLE_PHASE_SEASON_FLOOR, rankToProxyScore, lookupStandingScore,
 } = require('./scoring');
 
 const model = require('./models/interface');
@@ -36,6 +38,7 @@ const {
 const {
   buildTeamIndex,
   buildStandingsIndex,
+  buildDomesticTimeline,
   scoreFixtureFromPool,
   optimiseWeights: optimiseModelWeights,
   optimiseLeagueWeights,
@@ -862,23 +865,14 @@ function _getWeightsForFixture(leagueId, context, settings) {
   return settings.optimisedWeights?.[context] || WEIGHTS_BY_CONTEXT[context];
 }
 
-// Cup/continental competitions whose entrants typically have little-to-no
-// same-competition history (knockout format — a handful of matches per season at
-// most — or, for the Carabao Cup, brand new to this system with zero backfill).
-// These draw on each team's actual domestic-league form instead (see
-// fetchTeamDomesticForm below). Domestic leagues themselves are NOT in this set,
-// so a domestic fixture's own scoring is completely untouched by this mechanism —
-// docs/tier-calibration-analysis.md Addendum 15's "no unintended effect on
-// already-tracked leagues" requirement is satisfied by construction, not by a
-// runtime check.
-const CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND = new Set([48, 2, 3, 848]); // Carabao Cup, Champions League, Europa League, Conference League
-// Domestic leagues eligible as a source of "real current form" for the blend above —
-// every currently-tracked top-flight-or-below domestic league. Deliberately excludes
-// other cup competitions (keeps the blend one-directional: cup fixtures pull in
-// domestic form, not the reverse) and anything outside LEAGUES (an untracked
-// league simply contributes nothing, same limitation the international blend
-// already has for non-backfilled competitions).
-const DOMESTIC_LEAGUE_IDS_FOR_BLEND = new Set([39, 140, 135, 78, 61, 179, 88, 94, 41, 42]);
+// CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND / DOMESTIC_LEAGUE_IDS_FOR_BLEND now live in
+// scoring.js (Addendum 24 Part C) — a single source of truth shared with
+// weightOptimiser.js's historical path, imported above. Original reasoning
+// preserved there: cup/continental competitions have little-to-no same-competition
+// history to score from (knockout format, or for Carabao Cup, zero backfill), so
+// they draw on each team's actual domestic-league form/standings instead (see
+// fetchTeamDomesticForm below); domestic leagues are never in the cup set, so a
+// domestic fixture's own scoring is untouched by construction, not a runtime check.
 
 // Live per-team fetch of a club's actual recent domestic-league matches, used to
 // fill a cup fixture's scoring pool. Deliberately live rather than backfill-sourced
@@ -900,6 +894,66 @@ async function fetchTeamDomesticForm(teamId) {
     console.error(`[DomesticBlend] fetch failed for team ${teamId}: ${e.message}`);
     return [];
   }
+}
+
+// Addendum 24 Part C — a domestic league's table doesn't change within a scan run
+// (or meaningfully within a day), so cache per leagueId_season for a while rather
+// than re-fetching for every cup fixture that happens to touch the same domestic
+// league (e.g. two different Carabao Cup ties both involving Championship sides).
+const _domesticStandingsCache = new Map(); // `${leagueId}_${season}` -> {data, fetchedAt}
+const DOMESTIC_STANDINGS_CACHE_MS = 30 * 60 * 1000;
+
+async function fetchDomesticStandingsCached(leagueId, season) {
+  const key = `${leagueId}_${season}`;
+  const cached = _domesticStandingsCache.get(key);
+  if (cached && (Date.now() - cached.fetchedAt) < DOMESTIC_STANDINGS_CACHE_MS) return cached.data;
+  try {
+    const { data } = await apiSports.get('/standings', { params: { league: leagueId, season } });
+    const standingsData = data?.response?.[0]?.league?.standings || [];
+    _domesticStandingsCache.set(key, { data: standingsData, fetchedAt: Date.now() });
+    return standingsData;
+  } catch (e) {
+    console.error(`[DomesticBlend] standings fetch failed for league ${leagueId}/${season}: ${e.message}`);
+    return [];
+  }
+}
+
+// Resolves a cup/tournament team's standings signal — the live-path equivalent of
+// weightOptimiser.js's resolveStandingsScore(), same priority order:
+// 1. Own-competition table, only for Champions/Europa/Conference League from the
+//    single-league-phase era (season >= UEFA_SINGLE_PHASE_SEASON_FLOOR) and only
+//    once the team has played >=1 game in it — confirmed live (Addendum 24 Part 1)
+//    that this is a real, current, populated single table, not the old group-of-4
+//    format a cross-group rank would misrepresent.
+// 2. Domestic-blend: this team's most recent domestic league+season (from the
+//    already-fetched fetchTeamDomesticForm list), fetched fresh (cached) and
+//    looked up the same way a domestic fixture's own standings would be.
+// Returns null (not 50) when neither is available — scoreOneFixture falls back to
+// the standard standingsScore() call in that case, which has its own neutral/
+// last-season-proxy handling (Addendum 24 Part D), so "nothing available" is
+// handled in exactly one place, not duplicated here.
+async function resolveCupStandingsScore(fix, teamId, standings, domesticFixtures) {
+  const leagueId = parseInt(fix.league?.id, 10);
+  const season = fix.league?.season ?? new Date().getFullYear();
+  const isNewFormatEuro = leagueId !== 48 && CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND.has(leagueId) && season >= UEFA_SINGLE_PHASE_SEASON_FLOOR;
+
+  if (isNewFormatEuro) {
+    const own = lookupStandingScore(standings, teamId);
+    if (own && own.gamesPlayed >= 1) return own.score;
+  }
+
+  if (domesticFixtures?.length) {
+    const sorted = [...domesticFixtures].sort((a, b) => new Date(b.fixture?.date) - new Date(a.fixture?.date));
+    const mostRecent = sorted[0];
+    const domLeagueId = mostRecent.league?.id, domSeason = mostRecent.league?.season;
+    if (domLeagueId && domSeason) {
+      const domStandings = await fetchDomesticStandingsCached(domLeagueId, domSeason);
+      const dom = lookupStandingScore(domStandings, teamId);
+      if (dom && dom.gamesPlayed >= 1) return dom.score;
+    }
+  }
+
+  return null;
 }
 
 async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap, settings, totalsMap = {}) {
@@ -948,6 +1002,11 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   // happened to be batched into the same scan. Reusing this same live fetch (no
   // extra API calls) makes that deliberate and correct on every run instead.
   let domesticBlendFixtures = [];
+  // Addendum 24 Part C — resolved inside the needsDomesticBlend branch below;
+  // stays null (meaning "use the standard standingsScore() call") for every
+  // fixture that isn't a cup/tournament fixture, or where neither the
+  // own-competition table nor the domestic blend had a usable entry.
+  let homeStandingsOverride = null, awayStandingsOverride = null;
   if (context === 'international') {
     const hist = readJSON('backfill-historical.json');
     if (hist?.fixtures?.length) {
@@ -976,6 +1035,16 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     for (const f of formFixtures) poolMap.set(f.fixture.id, f);
     scoringPool = [...poolMap.values()]
       .sort((a, b) => new Date(b.fixture?.date) - new Date(a.fixture?.date));
+
+    // Addendum 24 Part C: standings for cup/tournament fixtures — own-competition
+    // table for new-format Euro once gamesPlayed>=1, domestic blend otherwise
+    // (Carabao Cup always; old-format Euro; or a thin own-competition sample).
+    // Reuses the exact homeDomestic/awayDomestic fetch above — no extra API calls
+    // beyond the domestic standings lookup itself.
+    [homeStandingsOverride, awayStandingsOverride] = await Promise.all([
+      resolveCupStandingsScore(fix, homeId, standings, homeDomestic),
+      resolveCupStandingsScore(fix, awayId, standings, awayDomestic),
+    ]);
   }
 
   // Neutral venue: WC group stage and knockout are played at neutral sites — no home advantage.
@@ -991,7 +1060,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     defense:   defenseScore(scoringPool, homeId, d),
     momentum:  momentumScore(scoringPool, homeId),
     injuries:  injuryScore(injuries, homeId),
-    standings: standingsScore(standings, homeId, context),
+    standings: homeStandingsOverride ?? standingsScore(standings, homeId, context),
   };
   const awayF = {
     form:      formScore(scoringPool, awayId, fw, d),
@@ -1001,7 +1070,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     defense:   defenseScore(scoringPool, awayId, d),
     momentum:  momentumScore(scoringPool, awayId),
     injuries:  injuryScore(injuries, awayId),
-    standings: standingsScore(standings, awayId, context),
+    standings: awayStandingsOverride ?? standingsScore(standings, awayId, context),
   };
 
   // Staleness pull: recencyAvg's decay is ordinal (per-game index), not calendar-based —
@@ -2378,9 +2447,13 @@ async function runHistoricalBackfill({ rescore = false, skipOptimise = false, on
     const unscoredCount = [...fixtureMap.values()].filter(f => !scoredMap.has(f.fixture?.id)).length;
     if (newCount > 0 || unscoredCount > 0) {
       _historicalBackfillStatus.phase = 'scoring';
-      const allFixtures    = [...fixtureMap.values()];
-      const teamIndex      = buildTeamIndex(allFixtures);
-      const standingsIndex = buildStandingsIndex(allFixtures);
+      const allFixtures      = [...fixtureMap.values()];
+      const teamIndex        = buildTeamIndex(allFixtures);
+      const standingsIndex   = buildStandingsIndex(allFixtures);
+      // Addendum 24 Part A/C — built once per run, reused for every fixture below,
+      // same cost profile as teamIndex/standingsIndex above (one pass over
+      // allFixtures, not per-fixture work).
+      const domesticTimeline = buildDomesticTimeline(allFixtures);
       let   scored         = 0;
       let   nextOptimiseAt = Math.ceil(scoredMap.size / OPTIMISE_EVERY) * OPTIMISE_EVERY;
       if (nextOptimiseAt <= scoredMap.size) nextOptimiseAt += OPTIMISE_EVERY;
@@ -2409,7 +2482,7 @@ async function runHistoricalBackfill({ rescore = false, skipOptimise = false, on
         // record is skipped and logged rather than aborting everything after it.
         let record;
         try {
-          record = scoreFixtureFromPool(fix, teamIndex, standingsIndex);
+          record = scoreFixtureFromPool(fix, teamIndex, standingsIndex, domesticTimeline);
         } catch (e) {
           console.error(`[HistoricalBackfill] scoreFixtureFromPool failed for fixture ${fix.fixture?.id} (${fix.league?.id}/${fix.league?.season}): ${e.message}`);
           continue;

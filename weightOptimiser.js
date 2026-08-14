@@ -3,6 +3,8 @@
 const {
   formScore, homeAdvScore, xgScore, defenseScore, momentumScore,
   h2hScore, classifyFixture, WEIGHTS_BY_CONTEXT, computeModelProb,
+  CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND, DOMESTIC_LEAGUE_IDS_FOR_BLEND,
+  UEFA_SINGLE_PHASE_SEASON_FLOOR, rankToProxyScore,
 } = require('./scoring');
 
 // ─── RECENCY WEIGHT ───────────────────────────────────────────────────────────
@@ -37,9 +39,31 @@ function buildTeamIndex(fixtures) {
 // For each fixture date, a team's rank is its cumulative points position among all
 // teams in that league/season using only fixtures completed before that date.
 // This avoids look-ahead bias and gives a genuine standings-based factor.
-
+//
+// Addendum 24 Part A/C: this rolling-points reconstruction is only a *meaningful*
+// ranking for competitions that are genuinely one round-robin table — domestic
+// leagues, and Champions/Europa/Conference League from the 2024-25 season onward
+// (UEFA's single 36-team league-phase reform — see scoring.js's
+// UEFA_SINGLE_PHASE_SEASON_FLOOR, confirmed live that /standings returns a real,
+// current, single table for the current season). For anything else grouped under a
+// leagueId_season key here — Carabao Cup's pure-knockout rounds, or CL/EL/Conf's
+// old group-of-4 format — a "rank" computed this way mixes fixtures that never
+// really competed against each other and isn't meaningful on its own (this was the
+// exact bug: scoreFixtureFromPool used to trust this blindly for every competition,
+// fabricating a standings number for Carabao Cup specifically). This function still
+// builds the index unconditionally for every competition — that's correct and
+// needed, not the bug — resolveStandingsScore() below is what decides whether a
+// given leagueId/season's own table is trustworthy or whether to route to the
+// domestic-blend timeline instead.
+//
+// Returns { byFixture: Map(fixtureId -> {homeRank, awayRank, leagueSize,
+// homeGamesPlayed, awayGamesPlayed}), seasonEnd: Map(`${leagueId}_${season}` ->
+// Map(teamId -> {rank, leagueSize})) }. seasonEnd is the final table each
+// league-season reached — used as a same-competition "last season" fallback for
+// domestic leagues and new-format Euro competitions (Carabao Cup and old-format
+// Euro route through the domestic timeline instead, which has its own
+// season-crossing behaviour — see buildDomesticTimeline below).
 function buildStandingsIndex(fixtures) {
-  // Group fixtures by league+season key
   const groups = {};
   for (const f of fixtures) {
     const lid = f.league?.id;
@@ -50,16 +74,13 @@ function buildStandingsIndex(fixtures) {
     groups[key].push(f);
   }
 
-  // For each fixture, compute standings as of that date using prior results
-  // Returns Map: fixtureId -> { homeRank, awayRank, leagueSize }
-  const index = new Map();
+  const byFixture = new Map();
+  const seasonEnd = new Map();
 
-  for (const [, leagueFixtures] of Object.entries(groups)) {
-    // Sort ascending for chronological processing
+  for (const [key, leagueFixtures] of Object.entries(groups)) {
     const sorted = [...leagueFixtures].sort((a, b) => new Date(a.fixture?.date) - new Date(b.fixture?.date));
 
-    // Rolling points accumulator
-    const pts = {}; // teamId -> points
+    const pts = {};    // teamId -> points
     const played = {}; // teamId -> games played
 
     for (const f of sorted) {
@@ -70,17 +91,18 @@ function buildStandingsIndex(fixtures) {
 
       // Compute standings BEFORE this match
       const allTeams = Object.keys(pts);
-      // Include this match's teams even if no points yet
       const teamSet = new Set([...allTeams, String(hid), String(aid)]);
       const teamList = [...teamSet];
-
-      // Rank by points descending
       teamList.sort((a, b) => (pts[b] || 0) - (pts[a] || 0));
       const leagueSize = teamList.length;
 
       const homeRank = teamList.indexOf(String(hid)) + 1;
       const awayRank = teamList.indexOf(String(aid)) + 1;
-      index.set(fid, { homeRank, awayRank, leagueSize });
+      byFixture.set(fid, {
+        homeRank, awayRank, leagueSize,
+        homeGamesPlayed: played[String(hid)] || 0,
+        awayGamesPlayed: played[String(aid)] || 0,
+      });
 
       // Update points AFTER recording standings (no look-ahead)
       const hg = Number(f.goals?.home ?? f.score?.fulltime?.home);
@@ -92,10 +114,97 @@ function buildStandingsIndex(fixtures) {
       if (hg > ag) { pts[String(hid)] += 3; }
       else if (hg < ag) { pts[String(aid)] += 3; }
       else { pts[String(hid)] += 1; pts[String(aid)] += 1; }
+      played[String(hid)] = (played[String(hid)] || 0) + 1;
+      played[String(aid)] = (played[String(aid)] || 0) + 1;
+    }
+
+    // Final table this league-season reached — the season-end snapshot.
+    const finalTeams = [...new Set(Object.keys(played))];
+    finalTeams.sort((a, b) => (pts[b] || 0) - (pts[a] || 0));
+    const finalMap = new Map();
+    finalTeams.forEach((tid, i) => finalMap.set(tid, { rank: i + 1, leagueSize: finalTeams.length }));
+    seasonEnd.set(key, finalMap);
+  }
+
+  return { byFixture, seasonEnd };
+}
+
+// ─── DOMESTIC STANDINGS TIMELINE (Addendum 24 Part C) ─────────────────────────
+// Per-team chronological history of domestic-league standing, restricted to
+// genuine domestic leagues (DOMESTIC_LEAGUE_IDS_FOR_BLEND — real round-robin
+// competitions, the same set the live domestic-form blend already uses). Lets any
+// fixture — domestic or cup — ask "what was this team's most recent domestic
+// standing before date X" regardless of which competition the fixture actually
+// being scored belongs to. Reuses buildStandingsIndex's exact rolling-points math
+// (same function, filtered input) rather than a second copy of the algorithm.
+//
+// A useful side effect of "most recent snapshot before date X": for a team with
+// zero games so far in its current domestic season, the most recent snapshot
+// naturally comes from the END of its previous domestic season (the last fixture
+// processed for that league-season group before the gap) — which is exactly the
+// Part D last-season proxy, for free, without a second lookup structure. Deep
+// gaps (more than one season back, e.g. from the recency gap Part B closed)
+// degrade gracefully to whatever's actually there, not a crash or a wrong number.
+function buildDomesticTimeline(fixtures) {
+  const domesticFixtures = fixtures.filter(f => DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(f.league?.id));
+  const { byFixture } = buildStandingsIndex(domesticFixtures);
+  const sorted = [...domesticFixtures].sort((a, b) => new Date(a.fixture?.date) - new Date(b.fixture?.date));
+
+  const byTeam = {};
+  for (const f of sorted) {
+    const fid = f.fixture?.id;
+    const snap = byFixture.get(fid);
+    if (!snap) continue;
+    const hid = f.teams?.home?.id, aid = f.teams?.away?.id;
+    const date = f.fixture?.date;
+    if (hid) { const k = String(hid); if (!byTeam[k]) byTeam[k] = []; byTeam[k].push({ date, rank: snap.homeRank, leagueSize: snap.leagueSize, gamesPlayed: snap.homeGamesPlayed }); }
+    if (aid) { const k = String(aid); if (!byTeam[k]) byTeam[k] = []; byTeam[k].push({ date, rank: snap.awayRank, leagueSize: snap.leagueSize, gamesPlayed: snap.awayGamesPlayed }); }
+  }
+  return byTeam; // already chronological — built from the sorted loop above
+}
+
+// Most recent domestic snapshot for a team strictly before asOfDate, or null.
+function lookupDomesticStanding(domesticTimeline, teamId, asOfDate) {
+  const timeline = domesticTimeline[String(teamId)];
+  if (!timeline?.length) return null;
+  let result = null;
+  for (const snap of timeline) {
+    if (snap.date < asOfDate) result = snap; else break;
+  }
+  return result;
+}
+
+// Resolves one team's standings factor for one fixture — the historical-path
+// equivalent of scoring.js's standingsScore(), same priority order:
+// 1. Own-competition table, if it's a genuinely valid single round-robin
+//    (domestic league, or Champions/Europa/Conference League from the single-
+//    league-phase era) AND the team has played at least 1 game in it.
+// 2. Domestic-blend timeline (Carabao Cup always; old-format Euro; or a thin
+//    own-competition sample) — naturally includes the last-season fallback, see
+//    buildDomesticTimeline's note above.
+// 3. Neutral (50) — genuinely nothing available (e.g. a newly-tracked team with
+//    no domestic history in the backfilled pool at all).
+function resolveStandingsScore(fix, teamId, isHome, ownSnap, domesticTimeline) {
+  const leagueId = parseInt(fix.league?.id, 10);
+  const season = fix.league?.season;
+  const fixDate = fix.fixture?.date;
+  const isDomestic = DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(leagueId);
+  const isNewFormatEuro = CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND.has(leagueId) && leagueId !== 48 && season >= UEFA_SINGLE_PHASE_SEASON_FLOOR;
+
+  if ((isDomestic || isNewFormatEuro) && ownSnap) {
+    const gamesPlayed = isHome ? ownSnap.homeGamesPlayed : ownSnap.awayGamesPlayed;
+    if (gamesPlayed >= 1) {
+      const rank = isHome ? ownSnap.homeRank : ownSnap.awayRank;
+      return rankToProxyScore(rank, ownSnap.leagueSize);
     }
   }
 
-  return index;
+  const domesticSnap = lookupDomesticStanding(domesticTimeline, teamId, fixDate);
+  if (domesticSnap && domesticSnap.gamesPlayed >= 1) {
+    return rankToProxyScore(domesticSnap.rank, domesticSnap.leagueSize);
+  }
+
+  return 50; // genuinely nothing available
 }
 
 // ─── HISTORICAL FIXTURE SCORER ────────────────────────────────────────────────
@@ -112,7 +221,12 @@ function buildStandingsIndex(fixtures) {
 // one place, so it defends itself rather than trusting every caller to have pre-filtered.
 const FINAL_RESULT_STATUSES = new Set(['FT', 'AET', 'PEN']);
 
-function scoreFixtureFromPool(fix, teamIndex, standingsIndex) {
+// standingsIndex — the { byFixture, seasonEnd } object from buildStandingsIndex().
+// domesticTimeline — from buildDomesticTimeline(); optional for backward
+// compatibility (callers that don't pass it get the pre-Addendum-24 behaviour of
+// "own-competition table or neutral", just without ever fabricating a knockout
+// pseudo-table, since resolveStandingsScore only trusts a genuinely valid table).
+function scoreFixtureFromPool(fix, teamIndex, standingsIndex, domesticTimeline) {
   const homeId = fix.teams?.home?.id;
   const awayId = fix.teams?.away?.id;
   if (!homeId || !awayId) return null;
@@ -134,14 +248,15 @@ function scoreFixtureFromPool(fix, teamIndex, standingsIndex) {
     f.teams?.home?.id === awayId || f.teams?.away?.id === awayId
   ).slice(0, 5);
 
-  // Derive standings score from rolling in-pool points rank (no look-ahead)
-  const standSnap = standingsIndex?.get(fid);
-  const homeStandings = standSnap
-    ? Math.round(((standSnap.leagueSize - standSnap.homeRank + 1) / standSnap.leagueSize) * 100)
-    : 50;
-  const awayStandings = standSnap
-    ? Math.round(((standSnap.leagueSize - standSnap.awayRank + 1) / standSnap.leagueSize) * 100)
-    : 50;
+  // Addendum 24 Part A/C: standings resolved via resolveStandingsScore() — own
+  // competition's table only when it's a genuinely valid single round-robin
+  // (domestic, or new-format Euro), domestic-blend timeline otherwise (Carabao
+  // Cup, old-format Euro, or a thin own-competition sample). Replaces the old
+  // "trust this leagueId_season's rolling table unconditionally" logic, which is
+  // exactly what fabricated a standings number for pure-knockout competitions.
+  const ownSnap = standingsIndex?.byFixture?.get(fid);
+  const homeStandings = resolveStandingsScore(fix, homeId, true,  ownSnap, domesticTimeline || {});
+  const awayStandings = resolveStandingsScore(fix, awayId, false, ownSnap, domesticTimeline || {});
 
   const homeFactors = {
     form:      formScore(homeFixtures, homeId, 6, 0.05),
@@ -377,6 +492,7 @@ function optimiseLeagueWeights(leagueId, allRecords) {
 module.exports = {
   buildTeamIndex,
   buildStandingsIndex,
+  buildDomesticTimeline,
   scoreFixtureFromPool,
   optimiseWeights,
   optimiseLeagueWeights,
