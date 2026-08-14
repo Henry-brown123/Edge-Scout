@@ -5900,38 +5900,6 @@ app.get('/api/diagnostics/factor-distribution', (req, res) => {
   res.json({ factors: result, totalRecords: data.scoredRecords.length });
 });
 
-// TEMP — Phase 1 Part D verification only, remove after findings delivered.
-// Real current-season standings + real last-season standings for a domestic league,
-// showing standingsScore() with vs without the last-season proxy for every team
-// currently at <1 game played — the exact function/params the live path uses.
-app.get('/api/diagnostics/last-season-proxy-verify', async (req, res) => {
-  try {
-    const leagueId = parseInt(req.query.league, 10) || 39; // Premier League default
-    const season = parseInt(req.query.season, 10) || new Date().getFullYear();
-    const [curRes, lastRes] = await Promise.all([
-      apiSports.get('/standings', { params: { league: leagueId, season } }),
-      apiSports.get('/standings', { params: { league: leagueId, season: season - 1 } }),
-    ]);
-    const currentStandings = curRes.data?.response?.[0]?.league?.standings || [];
-    const lastSeasonStandings = lastRes.data?.response?.[0]?.league?.standings || [];
-    const flat = Array.isArray(currentStandings[0]) ? currentStandings.flat() : currentStandings;
-
-    const results = flat.map(entry => {
-      const teamId = entry.team?.id;
-      const withoutProxy = standingsScore(currentStandings, teamId, 'club_domestic');
-      const withProxy = standingsScore(currentStandings, teamId, 'club_domestic', lastSeasonStandings);
-      return {
-        team: entry.team?.name, gamesPlayed: entry.all?.played || 0,
-        withoutProxy, withProxy, proxyChangedValue: withoutProxy !== withProxy,
-      };
-    });
-
-    res.json({ league: leagueId, season, teamsAtLowGames: results.filter(r => r.gamesPlayed < 1).length, results });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
 // ─── BACKFILL CHAIN ──────────────────────────────────────────────────────────
 
 let _startupStatus = { phase: 'idle', startedAt: null, completedAt: null, skipped: false, error: null };
