@@ -4258,6 +4258,27 @@ app.post('/api/admin/rescore-standings-affected', async (req, res) => {
   }
 });
 
+// TEMP — Phase 1 Part A verification only, remove after findings delivered.
+// Read-only lookup of current stored scoredRecords standings for specific fixture IDs.
+app.get('/api/admin/inspect-fixtures', (req, res) => {
+  const ids = String(req.query.ids || '').split(',').map(s => parseInt(s.trim(), 10)).filter(Boolean);
+  const data = readJSON('backfill-historical.json');
+  if (!data?.scoredRecords?.length) return res.json({ error: 'No historical data' });
+  const fixtureMap = new Map((data.fixtures || []).map(f => [f.fixture?.id, f]));
+  const scoredMap = new Map(data.scoredRecords.map(r => [r.fixtureId, r]));
+  const results = ids.map(id => {
+    const rec = scoredMap.get(id);
+    const fix = fixtureMap.get(id);
+    if (!rec) return { fixtureId: id, error: 'not found' };
+    return {
+      fixtureId: id, date: fix?.fixture?.date, league: fix?.league?.id, season: fix?.league?.season,
+      home: fix?.teams?.home?.name, away: fix?.teams?.away?.name,
+      standings: { home: rec.homeFactors?.standings, away: rec.awayFactors?.standings },
+    };
+  });
+  res.json({ results });
+});
+
 // Apply optimised weights to settings (so live scoring uses them)
 app.post('/api/backfill/historical/apply-weights', (req, res) => {
   const meta = readJSON('backfill-historical-meta.json');
