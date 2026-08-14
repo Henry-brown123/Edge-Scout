@@ -974,18 +974,33 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   const competitionPhase = classifyCompetitionPhase(fix, leagueId);
   const needsDomesticBlend = CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND.has(parseInt(leagueId, 10));
 
-  // H2H + injuries + (cup fixtures only) each team's live domestic-form fetch, all
-  // in parallel — same Promise.allSettled batch, no added latency over the
-  // pre-existing two calls when this fixture doesn't need the domestic blend.
-  const [h2hRes, injRes, homeDomesticRes, awayDomesticRes] = await Promise.allSettled([
+  // Addendum 24 Part D — last-season-standings proxy for genuinely domestic (non-cup)
+  // fixtures. Cup/tournament fixtures already get their own proxy via the domestic-
+  // blend timeline below; this covers a domestic league's OWN early-season fixtures,
+  // where the evidenced proxy (r=0.36) beats both neutral and the noisy in-season
+  // signal (r=0.14) at low games-played. Only fetched when actually needed (either
+  // side shows <1 game played in the current table) — most of a season this check is
+  // false and costs nothing beyond the synchronous lookup.
+  const needsLastSeasonProxy = context !== 'international' && !needsDomesticBlend && (
+    (lookupStandingScore(standings, homeId)?.gamesPlayed ?? 0) < 1 ||
+    (lookupStandingScore(standings, awayId)?.gamesPlayed ?? 0) < 1
+  );
+
+  // H2H + injuries + (cup fixtures only) each team's live domestic-form fetch +
+  // (early-season domestic fixtures only) last season's standings, all in parallel —
+  // same Promise.allSettled batch, no added latency over the pre-existing calls when
+  // a fixture doesn't need either the domestic blend or the last-season proxy.
+  const [h2hRes, injRes, homeDomesticRes, awayDomesticRes, lastSeasonRes] = await Promise.allSettled([
     apiSports.get('/fixtures/headtohead', { params: { h2h: `${homeId}-${awayId}`, last: 5 } }),
     fix._injuries ? Promise.resolve({ data: { response: fix._injuries } })
       : apiSports.get('/injuries', { params: { fixture: fix.fixture.id } }),
     needsDomesticBlend ? fetchTeamDomesticForm(homeId) : Promise.resolve([]),
     needsDomesticBlend ? fetchTeamDomesticForm(awayId) : Promise.resolve([]),
+    needsLastSeasonProxy ? fetchDomesticStandingsCached(leagueId, (fix.league?.season ?? new Date().getFullYear()) - 1) : Promise.resolve([]),
   ]);
   const h2hFixtures = h2hRes.status === 'fulfilled' ? h2hRes.value.data?.response || [] : [];
   const injuries    = injRes.status  === 'fulfilled' ? injRes.value.data?.response  || [] : [];
+  const lastSeasonStandings = lastSeasonRes.status === 'fulfilled' ? lastSeasonRes.value : [];
 
   const d  = settings.decay;
   const fw = settings.formWindow;
@@ -1063,7 +1078,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     defense:   defenseScore(scoringPool, homeId, d),
     momentum:  momentumScore(scoringPool, homeId),
     injuries:  injuryScore(injuries, homeId),
-    standings: homeStandingsOverride ?? standingsScore(standings, homeId, context),
+    standings: homeStandingsOverride ?? standingsScore(standings, homeId, context, lastSeasonStandings),
   };
   const awayF = {
     form:      formScore(scoringPool, awayId, fw, d),
@@ -1073,7 +1088,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     defense:   defenseScore(scoringPool, awayId, d),
     momentum:  momentumScore(scoringPool, awayId),
     injuries:  injuryScore(injuries, awayId),
-    standings: awayStandingsOverride ?? standingsScore(standings, awayId, context),
+    standings: awayStandingsOverride ?? standingsScore(standings, awayId, context, lastSeasonStandings),
   };
 
   // Staleness pull: recencyAvg's decay is ordinal (per-game index), not calendar-based —
