@@ -5995,6 +5995,26 @@ app.get('/api/diagnostics/edge-check', (req, res) => {
     const sample = scoredRecords.slice(0, 3).map(r => ({ fixtureId: r.fixtureId, leagueId: r.leagueId, context: r.context }));
     return res.json({ totalRecords: scoredRecords.length, counts, sample });
   }
+  if (req.query.rawFixtureCheck) {
+    const fixtures = historical.fixtures || [];
+    const fetchedLeagues = historical.fetchedLeagues || {};
+    const UNSEEN_IDS = [48, 41, 42];
+    const rawCounts = {};
+    for (const f of fixtures) {
+      const lid = f.league?.id;
+      rawCounts[lid] = (rawCounts[lid] || 0) + 1;
+    }
+    const targetBreakdown = UNSEEN_IDS.map(id => ({
+      leagueId: id,
+      rawFixtureCount: rawCounts[id] || 0,
+      fetchedLeaguesKeys: Object.keys(fetchedLeagues).filter(k => k.startsWith(`${id}_`)),
+    }));
+    return res.json({
+      totalRawFixtures: fixtures.length,
+      totalFetchedLeagueSeasonKeys: Object.keys(fetchedLeagues).length,
+      targetBreakdown,
+    });
+  }
   const optWeights = historical.optimisedWeights || {};
   const closingOdds = readJSON('closing-odds.json') || {};
   const inLeague = scoredRecords.filter(r => !leagueId || parseInt(r.leagueId, 10) === leagueId);
