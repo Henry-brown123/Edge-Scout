@@ -5982,6 +5982,36 @@ app.get('/api/diagnostics/inspect-record', (req, res) => {
   res.json({ totalRecords: data.scoredRecords.length, results });
 });
 
+app.get('/api/diagnostics/edge-check', (req, res) => {
+  const leagueId = req.query.leagueId ? parseInt(req.query.leagueId, 10) : null;
+  const historical = readJSON('backfill-historical.json') || {};
+  const scoredRecords = historical.scoredRecords || [];
+  const optWeights = historical.optimisedWeights || {};
+  const closingOdds = readJSON('closing-odds.json') || {};
+  const inLeague = scoredRecords.filter(r => !leagueId || parseInt(r.leagueId, 10) === leagueId);
+  const withOdds = inLeague.filter(r => {
+    const co = closingOdds[r.fixtureId] || closingOdds[String(r.fixtureId)];
+    return co && co.homeOdds && co.awayOdds && co.drawOdds;
+  });
+  const withOutcome = withOdds.filter(r => r.actualOutcome);
+  const withFactors = withOutcome.filter(r => r.homeFactors && r.awayFactors);
+  const matched = computeMatchedEdgeFixtures().filter(f => !leagueId || parseInt(f.leagueId, 10) === leagueId);
+  const posEdge = matched.filter(f => f.edge >= 0.05);
+  res.json({
+    optWeightsContexts: Object.keys(optWeights),
+    optWeightsSample: optWeights.club_domestic || null,
+    inLeague: inLeague.length,
+    withOdds: withOdds.length,
+    withOutcome: withOutcome.length,
+    withFactors: withFactors.length,
+    matchedTotal: matched.length,
+    posEdgeCount: posEdge.length,
+    sampleMatched: matched.slice(0, 5).map(f => ({
+      fixtureId: f.fixtureId, modelProb: f.modelProb, calProb: f.calProb, edge: f.edge, pinnacleImplied: f.pinnacleImplied, won: f.won,
+    })),
+  });
+});
+
 // ─── BACKFILL CHAIN ──────────────────────────────────────────────────────────
 
 let _startupStatus = { phase: 'idle', startedAt: null, completedAt: null, skipped: false, error: null };
