@@ -4337,11 +4337,14 @@ app.get('/api/backfill/historical/status', (_req, res) => {
   // previously let a stale, unrelated prior run's leftover meta satisfy a
   // completely different run's "did it finish?" check.
   if (meta.status === 'running') {
+    // ...meta spread FIRST — meta.status/message must not survive to override
+    // the explicit values below (an earlier version had this backwards, so
+    // meta's own status:'running' silently clobbered the intended 'crashed').
     return res.json({
+      ...meta,
       running: false,
       status: 'crashed',
       message: `Run ${meta.runId} (started ${meta.startedAt}) did not complete — process was likely killed (OOM or platform restart) before it could report success or error. Already-scored/persisted data from before the crash is retained; re-trigger to resume.`,
-      ...meta,
     });
   }
   res.json({ running: false, status: meta.error ? 'error' : 'complete', ...meta });
