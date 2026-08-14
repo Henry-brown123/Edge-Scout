@@ -7121,6 +7121,26 @@ app.put('/api/admin/weekly-retrain-pause', (req, res) => {
   res.json({ success: true, weeklyRetrainPaused: paused });
 });
 
+// TEMP — Phase 1 Part E only. gbdt-train-proxy.js APPENDS to walk-forward-raw-bets.json
+// and walk-forward-log.json rather than overwriting, so a fresh 4-block run needs these
+// (plus walkforward-status.json/walk-forward-pooled.json) cleared first, or it would
+// double-count against the prior Addendum 21 run (predates all of Phase 1's fixes).
+// Backs up (renamed, not deleted) rather than destroying the old run's data.
+app.post('/api/admin/reset-walkforward', (_req, res) => {
+  const files = ['walk-forward-raw-bets.json', 'walk-forward-log.json', 'walk-forward-pooled.json', 'walkforward-status.json'];
+  const backedUp = [];
+  for (const name of files) {
+    const p = path.join(DATA_DIR, name);
+    if (fs.existsSync(p)) {
+      const backupPath = path.join(DATA_DIR, name.replace('.json', `.pre-phase1-backup.json`));
+      fs.copyFileSync(p, backupPath);
+      fs.unlinkSync(p);
+      backedUp.push(name);
+    }
+  }
+  res.json({ backedUp });
+});
+
 // Walk-forward in-sample backtest (Addendum 21) — see runWalkForwardBlock() above.
 // Sequential, one block at a time; the caller (an overnight orchestration script/
 // session) is responsible for waiting on GET .../walkforward-status between calls.
