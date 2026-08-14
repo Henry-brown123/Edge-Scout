@@ -4187,6 +4187,77 @@ app.get('/api/backfill/historical/status', (_req, res) => {
   res.json({ running: false, status: meta.error ? 'error' : 'complete', ...meta });
 });
 
+// TEMP — Phase 1 Part A: re-score only the standings-fabrication-affected
+// competitions (Carabao Cup, Champions/Europa/Conference League), not a full
+// rescore=true of the entire ~71k-fixture population. This is a targeted data
+// correction (known-wrong values from the old unconditional rolling-points
+// fabrication, fixed in Part C), not a full re-derivation of every factor for
+// every league — scoping to the affected ~9.5k records keeps this fast and low-
+// risk instead of repeating the full-population blocking incident from Part B/C.
+// Removed after Part A findings are delivered.
+app.post('/api/admin/rescore-standings-affected', async (req, res) => {
+  if (_historicalBackfillRunning) {
+    return res.status(409).json({ error: 'Historical backfill is running — wait for it to finish' });
+  }
+  _historicalBackfillRunning = true;
+  try {
+    const { buildTeamIndex, buildStandingsIndex, buildDomesticTimeline, scoreFixtureFromPool } = require('./weightOptimiser');
+    const existing = readJSON('backfill-historical.json');
+    if (!existing?.fixtures?.length) return res.status(400).json({ error: 'No historical data' });
+
+    const AFFECTED_LEAGUE_IDS = new Set([48, 2, 3, 848]); // Carabao Cup, Champions League, Europa League, Conference League
+    const finalStatuses = new Set(['FT', 'AET', 'PEN']);
+
+    const allFixtures = existing.fixtures;
+    const teamIndex = buildTeamIndex(allFixtures);
+    const standingsIndex = buildStandingsIndex(allFixtures);
+    const domesticTimeline = buildDomesticTimeline(allFixtures);
+    const scoredMap = new Map(existing.scoredRecords.map(r => [r.fixtureId, r]));
+
+    const targetFixtures = allFixtures.filter(f => AFFECTED_LEAGUE_IDS.has(f.league?.id) && finalStatuses.has(f.fixture?.status?.short));
+
+    let rescored = 0, failed = 0, sinceYield = 0;
+    const byLeague = {};
+    for (const f of targetFixtures) {
+      const lid = f.league?.id;
+      byLeague[lid] = byLeague[lid] || { attempted: 0, rescored: 0 };
+      byLeague[lid].attempted++;
+      let record;
+      try {
+        record = scoreFixtureFromPool(f, teamIndex, standingsIndex, domesticTimeline);
+      } catch (e) {
+        console.error(`[RescoreStandingsAffected] scoreFixtureFromPool failed for fixture ${f.fixture?.id}: ${e.message}`);
+        failed++;
+        continue;
+      }
+      if (record) {
+        scoredMap.set(record.fixtureId, record);
+        byLeague[lid].rescored++;
+        rescored++;
+      }
+      if (++sinceYield >= 500) {
+        sinceYield = 0;
+        await new Promise(r => setImmediate(r));
+      }
+    }
+
+    existing.scoredRecords = [...scoredMap.values()];
+    existing.scoredCount = scoredMap.size;
+    existing.lastUpdated = new Date().toISOString();
+    const histPath = path.join(DATA_DIR, 'backfill-historical.json');
+    const histTmp = histPath + '.tmp';
+    fs.writeFileSync(histTmp, JSON.stringify(existing));
+    fs.renameSync(histTmp, histPath);
+
+    res.json({ targetFixtures: targetFixtures.length, rescored, failed, byLeague });
+  } catch (e) {
+    console.error('[RescoreStandingsAffected]', e.message);
+    res.status(500).json({ error: e.message });
+  } finally {
+    _historicalBackfillRunning = false;
+  }
+});
+
 // Apply optimised weights to settings (so live scoring uses them)
 app.post('/api/backfill/historical/apply-weights', (req, res) => {
   const meta = readJSON('backfill-historical-meta.json');
