@@ -7065,11 +7065,26 @@ function computeConsensusOdds(fixtureId, closingOddsMulti) {
 // against the restored ~71,614-record population to be a live-endpoint OOM
 // risk, not just a background-job one.
 async function runEvCalibrationConsensus() {
-  const historical    = readJSON('backfill-historical.json') || {};
+  // Track A follow-up (2026-08-14): even after fixing the redundant re-read
+  // inside computeConsensusOdds(), this endpoint still crashed the 512MB
+  // instance almost immediately (~1.3s) against the full ~71,614-record
+  // population. Working theory confirmed: three large JSON files parsed
+  // synchronously back-to-back at function entry (backfill-historical.json
+  // ~58MB, closing-odds.json, closing-odds-multi.json) spiked peak memory
+  // before the per-record loop's yield points ever ran. Staggered with
+  // yields between each read, and drop the `historical` fixtures/other
+  // fields immediately after pulling out just what's needed (scoredRecords/
+  // optimisedWeights) so they're GC-eligible before the next large parse,
+  // not held for the rest of the function.
+  let historical = readJSON('backfill-historical.json') || {};
   const scoredRecords = historical.scoredRecords || [];
-  const optWeights    = historical.optimisedWeights || {};
+  const optWeights     = historical.optimisedWeights || {};
+  historical = null; // release before the next large parse
+  await new Promise(r => setImmediate(r));
   const closingOdds   = readJSON('closing-odds.json') || {};
+  await new Promise(r => setImmediate(r));
   const closingOddsMulti = getClosingOddsMulti(); // read once — see computeConsensusOdds() comment
+  await new Promise(r => setImmediate(r));
   const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG } = require('./scoring');
 
   const BANDS = [
