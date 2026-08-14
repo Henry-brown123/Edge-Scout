@@ -2106,9 +2106,9 @@ function setupScheduler() {
   // Keeps ev-calibration.json fresh for canGoLive() and the paperKellyFraction auto-
   // recommendation below, which otherwise only refresh when someone manually hits
   // /api/ev-calibration.
-  cron.schedule('0 6 * * 1', () => {
+  cron.schedule('0 6 * * 1', async () => {
     try {
-      runEvCalibration();
+      await runEvCalibration();
       console.log('[Cron:EVCalib] Weekly EV calibration refresh complete.');
     } catch (e) {
       console.error(`[Cron:EVCalib] Error: ${e.message}`);
@@ -4890,14 +4890,19 @@ app.get('/api/backfill/closing-odds/status', (req, res) => res.json(_closingOdds
 
 // Per-league diagnostic: actual vs model home/draw/away rates from scored records
 // GET /api/league/diagnostic?leagues=88,94  (omit for all leagues)
-app.get('/api/league/diagnostic', (req, res) => {
+app.get('/api/league/diagnostic', async (req, res) => {
   const data = readJSON('backfill-historical.json');
   if (!data?.scoredRecords?.length) return res.json({ leagues: {} });
   const filter = req.query.leagues ? new Set(req.query.leagues.split(',').map(s => s.trim())) : null;
   const settings = getSettings();
 
   const byLeague = {};
+  let sinceYield = 0;
   for (const rec of data.scoredRecords) {
+    if (++sinceYield >= 500) {
+      sinceYield = 0;
+      await new Promise(r => setImmediate(r));
+    }
     const lid = String(rec.leagueId);
     if (filter && !filter.has(lid)) continue;
     if (!rec.actualOutcome) continue;
@@ -4946,7 +4951,7 @@ app.get('/api/league/diagnostic', (req, res) => {
 });
 
 // Calibration data from all historical scored records for Fix 3 chart
-app.get('/api/backfill/historical/calibration', (req, res) => {
+app.get('/api/backfill/historical/calibration', async (req, res) => {
   const { computeModelProb, WEIGHTS_BY_CONTEXT } = require('./scoring');
   const data = readJSON('backfill-historical.json');
   if (!data?.scoredRecords?.length) return res.json({ bands: {}, total: 0 });
@@ -4960,7 +4965,12 @@ app.get('/api/backfill/historical/calibration', (req, res) => {
     '70%+':  { w: 0, l: 0, sum: 0 },
   };
 
+  let sinceYield = 0;
   for (const r of data.scoredRecords) {
+    if (++sinceYield >= 500) {
+      sinceYield = 0;
+      await new Promise(resolve => setImmediate(resolve));
+    }
     try {
       const weights = _getWeightsForFixture(r.leagueId, r.context, settings);
       const lc      = LEAGUE_CONFIG[parseInt(r.leagueId, 10)] || null;
@@ -5428,10 +5438,10 @@ function buildWalkForwardMatrix() {
 // rule 10 protects their full history as a single clean look, no expanding-window
 // retraining), so this reads the full matched population directly, same as the
 // original Addendum 19 methodology, just with the corrected edge/dataConf.
-function buildUnseenPopulationMatrix() {
+async function buildUnseenPopulationMatrix() {
   const { empiricalBayesShrink, varianceForRoi } = require('./shrinkage');
   const UNSEEN_IDS = new Set([48, 41, 42]);
-  const matched = computeMatchedEdgeFixtures().filter(f => UNSEEN_IDS.has(parseInt(f.leagueId, 10)) && f.edge >= 0.05);
+  const matched = (await computeMatchedEdgeFixtures()).filter(f => UNSEEN_IDS.has(parseInt(f.leagueId, 10)) && f.edge >= 0.05);
 
   const byCell = {};
   for (const f of matched) {
@@ -5474,10 +5484,10 @@ function buildUnseenPopulationMatrix() {
   return matrix;
 }
 
-app.get('/api/league-tier-matrix', (_req, res) => {
+app.get('/api/league-tier-matrix', async (_req, res) => {
   const leagueIds = Object.keys(LEAGUE_TIER_MATRIX).map(Number);
   const walkForwardMatrix = buildWalkForwardMatrix();
-  const unseenPopulationMatrix = buildUnseenPopulationMatrix();
+  const unseenPopulationMatrix = await buildUnseenPopulationMatrix();
 
   // Merged Historical matrix: walk-forward result for in-sample leagues (once
   // computed — falls back to the original Addendum 6 hardcoded snapshot if
@@ -6121,7 +6131,7 @@ app.get('/api/diagnostics/inspect-record', (req, res) => {
   res.json({ totalRecords: data.scoredRecords.length, results });
 });
 
-app.get('/api/diagnostics/edge-check', (req, res) => {
+app.get('/api/diagnostics/edge-check', async (req, res) => {
   const leagueId = req.query.leagueId ? parseInt(req.query.leagueId, 10) : null;
   const historical = readJSON('backfill-historical.json') || {};
   const scoredRecords = historical.scoredRecords || [];
@@ -6163,7 +6173,7 @@ app.get('/api/diagnostics/edge-check', (req, res) => {
   });
   const withOutcome = withOdds.filter(r => r.actualOutcome);
   const withFactors = withOutcome.filter(r => r.homeFactors && r.awayFactors);
-  const matched = computeMatchedEdgeFixtures().filter(f => !leagueId || parseInt(f.leagueId, 10) === leagueId);
+  const matched = (await computeMatchedEdgeFixtures()).filter(f => !leagueId || parseInt(f.leagueId, 10) === leagueId);
   const posEdge = matched.filter(f => f.edge >= 0.05);
   res.json({
     optWeightsContexts: Object.keys(optWeights),
@@ -6765,7 +6775,16 @@ const VALIDATED_SPLITS = {
 // runEvCalibration, the unseen-population league-tier matrix builder, and any
 // future historical-evidence reader, so they can never independently drift the
 // way runEvCalibration's old relative-edge computation did.
-function computeMatchedEdgeFixtures() {
+// Made async 2026-08-14: this loop runs model.predict() (GBDT — tree
+// ensemble, not the cheap linear model) once per scored record, unyielded.
+// Never a problem against the smaller pre-Track-A population, but discovered
+// OOM-crashing the live server once the full ~71,614-record population
+// (including the newly-restored Carabao Cup/League One/League Two) was
+// current — this function backs live endpoints (/api/league-tier-matrix,
+// /api/ev-calibration), not just background jobs, so a single unyielded pass
+// over the full population is a standing crash risk every time those load.
+// Same yield treatment as the other full-population loops fixed today.
+async function computeMatchedEdgeFixtures() {
   const historical     = readJSON('backfill-historical.json') || {};
   const scoredRecords  = historical.scoredRecords || [];
   const optWeights     = historical.optimisedWeights || {};
@@ -6776,7 +6795,12 @@ function computeMatchedEdgeFixtures() {
   const calFactor = settings.calibrationFactor ?? 1.08;
 
   const matched = [];
+  let sinceYield = 0;
   for (const rec of scoredRecords) {
+    if (++sinceYield >= 500) {
+      sinceYield = 0;
+      await new Promise(r => setImmediate(r));
+    }
     const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
     if (!co || !co.homeOdds || !co.awayOdds || !co.drawOdds) continue;
     if (!rec.actualOutcome) continue;
@@ -6819,8 +6843,8 @@ function computeMatchedEdgeFixtures() {
 
 // Extracted so the weekly cron (setupScheduler) can refresh ev-calibration.json
 // without going through HTTP — see the '0 6 * * 1' schedule below.
-function runEvCalibration() {
-    const matched = computeMatchedEdgeFixtures();
+async function runEvCalibration() {
+    const matched = await computeMatchedEdgeFixtures();
     const { LEAGUE_CONFIG } = require('./scoring');
 
     const BANDS = [
@@ -7019,7 +7043,11 @@ function computeConsensusOdds(fixtureId) {
   };
 }
 
-function runEvCalibrationConsensus() {
+// Made async 2026-08-14 — same reason as computeMatchedEdgeFixtures(): a
+// full-population model.predict() loop (GBDT), unyielded, now big enough
+// against the restored ~71,614-record population to be a live-endpoint OOM
+// risk, not just a background-job one.
+async function runEvCalibrationConsensus() {
   const historical    = readJSON('backfill-historical.json') || {};
   const scoredRecords = historical.scoredRecords || [];
   const optWeights    = historical.optimisedWeights || {};
@@ -7037,7 +7065,12 @@ function runEvCalibrationConsensus() {
 
   const matched = [];
   let pinnacleN = 0, consensusN = 0;
+  let sinceYield = 0;
   for (const rec of scoredRecords) {
+    if (++sinceYield >= 500) {
+      sinceYield = 0;
+      await new Promise(r => setImmediate(r));
+    }
     if (!rec.actualOutcome || !rec.homeFactors || !rec.awayFactors) continue;
     const context = rec.context || classifyFixture(rec.leagueId);
     const weights  = optWeights[context] || optWeights.club_domestic;
@@ -7121,17 +7154,17 @@ function runEvCalibrationConsensus() {
   };
 }
 
-app.get('/api/ev-calibration-consensus', (_req, res) => {
+app.get('/api/ev-calibration-consensus', async (_req, res) => {
   try {
-    res.json(runEvCalibrationConsensus());
+    res.json(await runEvCalibrationConsensus());
   } catch (e) {
     res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0, 5) });
   }
 });
 
-app.get('/api/ev-calibration', (_req, res) => {
+app.get('/api/ev-calibration', async (_req, res) => {
   try {
-    res.json(runEvCalibration());
+    res.json(await runEvCalibration());
   } catch (e) {
     res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0, 5) });
   }
