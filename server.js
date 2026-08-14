@@ -4902,7 +4902,7 @@ app.get('/api/league/diagnostic', async (req, res) => {
   const byLeague = {};
   let sinceYield = 0;
   for (const rec of data.scoredRecords) {
-    if (++sinceYield >= 500) {
+    if (++sinceYield >= 200) {
       sinceYield = 0;
       await new Promise(r => setImmediate(r));
     }
@@ -4970,7 +4970,7 @@ app.get('/api/backfill/historical/calibration', async (req, res) => {
 
   let sinceYield = 0;
   for (const r of data.scoredRecords) {
-    if (++sinceYield >= 500) {
+    if (++sinceYield >= 200) {
       sinceYield = 0;
       await new Promise(resolve => setImmediate(resolve));
     }
@@ -6800,7 +6800,12 @@ async function computeMatchedEdgeFixtures() {
   const matched = [];
   let sinceYield = 0;
   for (const rec of scoredRecords) {
-    if (++sinceYield >= 500) {
+    // Empirically retightened (2026-08-14): every-500 still let the server
+    // OOM/timeout on this instance — GBDT model.predict() below is a 200-tree
+    // ensemble per record, not the cheap linear model, so 500 records between
+    // yields is still too large a synchronous chunk. Same lesson as the
+    // per-league optimiser fix earlier today (every-20 also had to tighten).
+    if (++sinceYield >= 50) {
       sinceYield = 0;
       await new Promise(r => setImmediate(r));
     }
@@ -7070,7 +7075,9 @@ async function runEvCalibrationConsensus() {
   let pinnacleN = 0, consensusN = 0;
   let sinceYield = 0;
   for (const rec of scoredRecords) {
-    if (++sinceYield >= 500) {
+    // Same retightening as computeMatchedEdgeFixtures() — GBDT model.predict()
+    // per record, every-500 wasn't tight enough on this instance.
+    if (++sinceYield >= 50) {
       sinceYield = 0;
       await new Promise(r => setImmediate(r));
     }
