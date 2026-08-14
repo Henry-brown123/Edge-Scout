@@ -5919,8 +5919,14 @@ app.get('/api/diagnostics/standings-blend-verify', (req, res) => {
     });
   }
 
-  // Part C check 3: regression on already-tracked domestic leagues — NEW vs OLD stored value
-  const domesticFixtures = allFixtures.filter(f => DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(f.league?.id) && finalStatuses.has(f.fixture?.status?.short));
+  // Part C check 3: regression on already-tracked domestic leagues — NEW vs OLD stored value.
+  // Sampled (every 30th fixture, evenly spread across leagues/seasons) rather than the full
+  // ~50k-fixture domestic population run synchronously in one request — the full-population
+  // version of this endpoint blocked the event loop for the whole server (self-inflicted repeat
+  // of the exact Part B backfill failure mode). A ~1,600-fixture stratified sample is still a
+  // statistically solid regression read without the cost blowup.
+  const domesticFixturesAll = allFixtures.filter(f => DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(f.league?.id) && finalStatuses.has(f.fixture?.status?.short));
+  const domesticFixtures = domesticFixturesAll.filter((_, i) => i % 30 === 0);
   let domesticChecked = 0, domesticMatched = 0;
   const domesticMismatchSample = [];
   for (const f of domesticFixtures) {
@@ -5950,6 +5956,8 @@ app.get('/api/diagnostics/standings-blend-verify', (req, res) => {
     cupFixturesChecked: cupResults.length,
     cupSample: cupResults.slice(0, 40),
     domesticRegression: {
+      domesticPopulationTotal: domesticFixturesAll.length,
+      sampledEvery: 30,
       checked: domesticChecked,
       matched: domesticMatched,
       mismatched: domesticChecked - domesticMatched,
