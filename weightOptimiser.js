@@ -464,12 +464,13 @@ async function optimiseLeagueWeights(leagueId, allRecords) {
     if (newLoss < bestLoss) { bestLoss = newLoss; bestW = { ...nw }; }
     w = nw;
 
-    // Same yield cadence as optimiseWeights() above — /api/optimise/leagues
-    // calls this once per league in a tight loop with no other yield points,
-    // so without this a full pass over ~20 leagues runs as one uninterrupted
-    // synchronous block, starving the event loop the same way the historical
-    // scoring loop and team-profile rebuild did before they got this fix.
-    if ((iter + 1) % 20 === 0) await new Promise(r => setImmediate(r));
+    // Empirically verified (2026-08-14) against the live deployed data: every-
+    // 20-iterations (optimiseWeights()'s cadence) left the server completely
+    // unresponsive for 50-60+ straight seconds while /api/optimise/leagues
+    // ran — each 20-iteration chunk, scanning a full league's records 17
+    // times per iteration, was still too large a synchronous block on this
+    // instance's CPU. Tightened to every 2 iterations.
+    if ((iter + 1) % 2 === 0) await new Promise(r => setImmediate(r));
   }
 
   const rounded = {};
