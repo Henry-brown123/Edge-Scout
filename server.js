@@ -6117,82 +6117,6 @@ app.get('/api/diagnostics/factor-distribution', (req, res) => {
   res.json({ factors: result, totalRecords: data.scoredRecords.length });
 });
 
-// TEMP — Track A verification only, remove after findings delivered.
-app.get('/api/diagnostics/inspect-record', (req, res) => {
-  const ids = String(req.query.ids || '').split(',').map(s => parseInt(s.trim(), 10)).filter(Boolean);
-  const data = readJSON('backfill-historical.json');
-  if (!data?.scoredRecords?.length) return res.json({ error: 'No historical data' });
-  const scoredMap = new Map(data.scoredRecords.map(r => [r.fixtureId, r]));
-  const results = ids.map(id => {
-    const rec = scoredMap.get(id);
-    if (!rec) return { fixtureId: id, error: 'not found' };
-    return {
-      fixtureId: id, homeTeamName: rec.homeTeamName, awayTeamName: rec.awayTeamName,
-      homeFormCount: rec.homeFormCount, awayFormCount: rec.awayFormCount,
-    };
-  });
-  res.json({ totalRecords: data.scoredRecords.length, results });
-});
-
-app.get('/api/diagnostics/edge-check', async (req, res) => {
-  const leagueId = req.query.leagueId ? parseInt(req.query.leagueId, 10) : null;
-  const historical = readJSON('backfill-historical.json') || {};
-  const scoredRecords = historical.scoredRecords || [];
-  if (req.query.leagueBreakdown) {
-    const counts = {};
-    for (const r of scoredRecords) {
-      const k = `${r.leagueId}(${typeof r.leagueId})`;
-      counts[k] = (counts[k] || 0) + 1;
-    }
-    const sample = scoredRecords.slice(0, 3).map(r => ({ fixtureId: r.fixtureId, leagueId: r.leagueId, context: r.context }));
-    return res.json({ totalRecords: scoredRecords.length, counts, sample });
-  }
-  if (req.query.rawFixtureCheck) {
-    const fixtures = historical.fixtures || [];
-    const fetchedLeagues = historical.fetchedLeagues || {};
-    const UNSEEN_IDS = [48, 41, 42];
-    const rawCounts = {};
-    for (const f of fixtures) {
-      const lid = f.league?.id;
-      rawCounts[lid] = (rawCounts[lid] || 0) + 1;
-    }
-    const targetBreakdown = UNSEEN_IDS.map(id => ({
-      leagueId: id,
-      rawFixtureCount: rawCounts[id] || 0,
-      fetchedLeaguesKeys: Object.keys(fetchedLeagues).filter(k => k.startsWith(`${id}_`)),
-    }));
-    return res.json({
-      totalRawFixtures: fixtures.length,
-      totalFetchedLeagueSeasonKeys: Object.keys(fetchedLeagues).length,
-      targetBreakdown,
-    });
-  }
-  const optWeights = historical.optimisedWeights || {};
-  const closingOdds = readJSON('closing-odds.json') || {};
-  const inLeague = scoredRecords.filter(r => !leagueId || parseInt(r.leagueId, 10) === leagueId);
-  const withOdds = inLeague.filter(r => {
-    const co = closingOdds[r.fixtureId] || closingOdds[String(r.fixtureId)];
-    return co && co.homeOdds && co.awayOdds && co.drawOdds;
-  });
-  const withOutcome = withOdds.filter(r => r.actualOutcome);
-  const withFactors = withOutcome.filter(r => r.homeFactors && r.awayFactors);
-  const matched = (await computeMatchedEdgeFixtures()).filter(f => !leagueId || parseInt(f.leagueId, 10) === leagueId);
-  const posEdge = matched.filter(f => f.edge >= 0.05);
-  res.json({
-    optWeightsContexts: Object.keys(optWeights),
-    optWeightsSample: optWeights.club_domestic || null,
-    inLeague: inLeague.length,
-    withOdds: withOdds.length,
-    withOutcome: withOutcome.length,
-    withFactors: withFactors.length,
-    matchedTotal: matched.length,
-    posEdgeCount: posEdge.length,
-    sampleMatched: matched.slice(0, 5).map(f => ({
-      fixtureId: f.fixtureId, modelProb: f.modelProb, calProb: f.calProb, edge: f.edge, pinnacleImplied: f.pinnacleImplied, won: f.won,
-    })),
-  });
-});
-
 // ─── BACKFILL CHAIN ──────────────────────────────────────────────────────────
 
 let _startupStatus = { phase: 'idle', startedAt: null, completedAt: null, skipped: false, error: null };
@@ -7507,19 +7431,6 @@ app.get('/api/admin/walkforward-status', (_req, res) => {
 
 app.get('/api/admin/walkforward-log', (_req, res) => {
   res.json({ entries: readJSON('walk-forward-log.json') || [] });
-});
-
-// TEMP — Track A: reset walk-forward-raw-bets.json/walk-forward-log.json before
-// a fresh 4-block run. runWalkForwardBlock's underlying script only appends
-// (no dedup/replace-by-blockLabel), so re-running the same 4 block labels
-// without clearing first would mix pre-Track-A and post-Track-A bets under
-// identical labels, corrupting the pool. Remove after Track A's walk-forward
-// re-run completes.
-app.post('/api/admin/walkforward-reset', (_req, res) => {
-  const before = { raw: (readJSON('walk-forward-raw-bets.json') || []).length, log: (readJSON('walk-forward-log.json') || []).length };
-  writeJSON('walk-forward-raw-bets.json', [], { allowEmpty: true });
-  writeJSON('walk-forward-log.json', [], { allowEmpty: true });
-  res.json({ reset: true, clearedRawBets: before.raw, clearedLogEntries: before.log });
 });
 
 app.get('/api/admin/walkforward-raw-bets', (_req, res) => {
