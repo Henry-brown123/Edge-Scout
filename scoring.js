@@ -507,6 +507,52 @@ function kelly(prob, odds, fraction = 0.5, bankroll = 1000) {
   return { fullKelly: k, fracKelly: fracK, stake: parseFloat((fracK * bankroll).toFixed(2)) };
 }
 
+// ─── UNIFIED MARKET EDGE (Track A — historical/live edge unification) ─────────
+// The live path (scoreOneFixture) and every historical-evidence read
+// (runEvCalibration, tier-performance's League One/Two snapshot, the walk-forward
+// proxy) used to compute "edge" three different ways: different probability inputs
+// (raw modelProb vs a calFactor-boosted one), different market benchmarks (raw
+// Pinnacle closing price vs margin-stripped true probability), and different edge
+// units (relative %, (p-q)/q, vs absolute probability-point gap, p-q). This is the
+// single source of truth both paths now share, so "edge" means the same thing
+// wherever it's computed. applyCalFactor is a genuine parameter, not always true —
+// the walk-forward proxy model fits its own fresh Platt calibration per block,
+// which already serves the same corrective purpose as calFactor; applying both
+// would double-correct a model calFactor was never fit against.
+
+// Data confidence — capped at 1 once a team has >=15 fixtures in its own pool
+// (0.70 cap for international, thinner cross-competition comparability). Shared
+// so historical reads use the exact same definition scoreOneFixture does, instead
+// of a separate approximation.
+function computeDataConf(homeFormCount, awayFormCount, context) {
+  const confCap = context === 'international' ? 0.70 : 1;
+  const homeDataConf = Math.min(homeFormCount / 15, confCap);
+  const awayDataConf = Math.min(awayFormCount / 15, confCap);
+  return Math.min(homeDataConf, awayDataConf);
+}
+
+// Margin-stripped ("true") implied probabilities from raw 3-way Pinnacle odds —
+// normalizes so the three implied probabilities sum to 1, removing the
+// bookmaker's built-in margin. Same market benchmark scoreOneFixture uses
+// (pinnStripped) when a full 3-way Pinnacle price is available.
+function marginStrippedImplied(rawOdds) {
+  const rawImplied = { home: 1 / rawOdds.home, away: 1 / rawOdds.away, draw: 1 / rawOdds.draw };
+  const sum = rawImplied.home + rawImplied.away + rawImplied.draw;
+  return { home: rawImplied.home / sum, away: rawImplied.away / sum, draw: rawImplied.draw / sum };
+}
+
+// The unified edge: calFactor-boosted modelProb (when applicable) minus the
+// margin-stripped market probability for the picked outcome — an absolute
+// probability-point gap, matching entry.edge in scoreOneFixture exactly (the
+// edge value actually stored on every live bet/watching record and shown in the
+// UI), not computeSuccessScore's separate internal edge sub-term.
+function computeUnifiedEdge(modelProb, rawOdds, topOutcome, { applyCalFactor = true, calFactor = 1.08 } = {}) {
+  const calProb = applyCalFactor ? Math.min(0.97, modelProb * calFactor) : modelProb;
+  const stripped = marginStrippedImplied(rawOdds);
+  const edge = calProb - stripped[topOutcome];
+  return { calProb, stripped, edge };
+}
+
 // ─── SUCCESS SCORE ────────────────────────────────────────────────────────────
 // 0-99: win probability (0-35) + value/edge (0-45) + confidence/data (0-19)
 // dataConf multiplier suppresses scores when historical data is thin.
@@ -788,6 +834,7 @@ module.exports = {
   lookupFIFARank, FIFA_RANK_FALLBACK,
   computeModelProb, applyLeagueBiasCorrection, computeXGProxy, classifyCompetitionPhase,
   kelly, computeSuccessScore,
+  computeDataConf, marginStrippedImplied, computeUnifiedEdge,
   historicalWeight, weatherModifier,
   reloadXgStore, getXgStore, lookupXg,
   scoreGoalsMarkets,

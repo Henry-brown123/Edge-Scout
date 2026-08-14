@@ -297,6 +297,12 @@ function scoreFixtureFromPool(fix, teamIndex, standingsIndex, domesticTimeline) 
     awayTeamName: fix.teams?.away?.name,
     homeFactors,
     awayFactors,
+    // Track A — same counts scoreOneFixture's homeFormCount/awayFormCount use
+    // (fixtures in the team's own pool, already computed above for form/xg/etc),
+    // so dataConf can be computed historically via computeDataConf() with the
+    // exact same definition live uses, not a read-time approximation.
+    homeFormCount: homeFixtures.length,
+    awayFormCount: awayFixtures.length,
     actualOutcome: hg > ag ? 'home' : hg < ag ? 'away' : 'draw',
     goals:         { home: hg, away: ag },
     recencyWeight: recencyWeight(fix.fixture?.date),

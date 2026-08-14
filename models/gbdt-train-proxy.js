@@ -28,7 +28,7 @@
 
 const path = require('path');
 const fs   = require('fs');
-const { computeModelProb, WEIGHTS_BY_CONTEXT, LEAGUE_CONFIG, applyLeagueBiasCorrection } = require('../scoring');
+const { computeModelProb, WEIGHTS_BY_CONTEXT, LEAGUE_CONFIG, applyLeagueBiasCorrection, computeUnifiedEdge } = require('../scoring');
 const { buildFeatures } = require('./gbdt-proxy');
 
 const HOLDOUT_START = '2024-08-07T00:00:00.000Z';
@@ -348,7 +348,7 @@ function scoreWalkForwardBlock(holdout, gbdtProb, narrowAwayPlatt = null) {
   for (const r of holdout) {
     const lid = parseInt(r.leagueId, 10);
     const co  = closingOdds[r.fixtureId] || closingOdds[String(r.fixtureId)];
-    if (!co) continue;
+    if (!co || !co.homeOdds || !co.awayOdds || !co.drawOdds) continue;
     matchedN++;
 
     const rawProbs = gbdtProb(r);
@@ -369,8 +369,14 @@ function scoreWalkForwardBlock(holdout, gbdtProb, narrowAwayPlatt = null) {
       narrowCorrected = true;
     }
 
-    const pinnacleImplied = 1 / pinnacleOdds;
-    const edge = (modelProb - pinnacleImplied) / pinnacleImplied;
+    // Track A — unified edge: margin-stripped Pinnacle benchmark, absolute (not
+    // relative) probability-point gap, matching entry.edge in scoreOneFixture.
+    // applyCalFactor:false deliberately — this block's modelProb comes from a
+    // freshly-trained proxy GBDT with its own fresh Platt-scaling fit just above
+    // (a genuine per-block calibration correction), not the live model calFactor
+    // was tuned against. Applying both would double-correct with no evidence
+    // behind the combination.
+    const { edge } = computeUnifiedEdge(modelProb, co, topOutcome, { applyCalFactor: false });
     if (edge < 0.05) continue; // posEdge>=5% threshold — Historical ROI semantics
 
     const won = r.y === topOutcome;

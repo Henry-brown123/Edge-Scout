@@ -5280,14 +5280,72 @@ function buildWalkForwardMatrix() {
   return matrix;
 }
 
+// Track A — live-computed replacement for LEAGUE_TIER_MATRIX's Carabao Cup/League
+// One/League Two entries, which were a hand-written snapshot (Addendum 19) computed
+// against the OLD relative-edge/no-calFactor/raw-Pinnacle formula. Same shape and
+// shrinkage treatment as buildWalkForwardMatrix() above, sourced from
+// computeMatchedEdgeFixtures() (the now-unified edge) instead of walk-forward-
+// pooled.json — these 3 leagues were never walk-forward-covered (calibration-rules
+// rule 10 protects their full history as a single clean look, no expanding-window
+// retraining), so this reads the full matched population directly, same as the
+// original Addendum 19 methodology, just with the corrected edge/dataConf.
+function buildUnseenPopulationMatrix() {
+  const { empiricalBayesShrink, varianceForRoi } = require('./shrinkage');
+  const UNSEEN_IDS = new Set([48, 41, 42]);
+  const matched = computeMatchedEdgeFixtures().filter(f => UNSEEN_IDS.has(parseInt(f.leagueId, 10)) && f.edge >= 0.05);
+
+  const byCell = {};
+  for (const f of matched) {
+    const tier = tierOfProbShared(f.modelProb);
+    if (!tier) continue;
+    const lid = parseInt(f.leagueId, 10);
+    const key = `${lid}|${tier}`;
+    if (!byCell[key]) byCell[key] = { leagueId: lid, tier, fixtures: [] };
+    byCell[key].fixtures.push(f);
+  }
+
+  const cells = Object.values(byCell).map(({ leagueId, tier, fixtures }) => {
+    const n = fixtures.length;
+    const returns = fixtures.map(f => f.won ? (f.pinnacleOdds - 1) : -1);
+    const mean = returns.reduce((s, v) => s + v, 0) / n;
+    let sampleVariance = null, ciLow = null, ciHigh = null;
+    if (n > 1) {
+      sampleVariance = returns.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1);
+      const se = Math.sqrt(sampleVariance / n);
+      ciLow = +(mean - 1.96 * se).toFixed(4);
+      ciHigh = +(mean + 1.96 * se).toFixed(4);
+    }
+    return { leagueId, tier, n, roi: +mean.toFixed(4), sampleVariance, ciLow, ciHigh, thin: n < 30 };
+  });
+
+  const byTier = {};
+  for (const c of cells) { if (!byTier[c.tier]) byTier[c.tier] = []; byTier[c.tier].push(c); }
+
+  const matrix = {};
+  for (const [tier, tierCells] of Object.entries(byTier)) {
+    const shrinkInput = tierCells.map(c => ({ id: String(c.leagueId), n: c.n, value: c.roi, sampleVariance: c.sampleVariance }));
+    const shrunkResults = empiricalBayesShrink(shrinkInput, varianceForRoi);
+    for (const sr of shrunkResults) {
+      const lid = parseInt(sr.id, 10);
+      const src = tierCells.find(c => c.leagueId === lid);
+      if (!matrix[lid]) matrix[lid] = { name: LEAGUE_CONFIG[lid]?.name || `League ${lid}`, cells: {} };
+      matrix[lid].cells[tier] = { n: src.n, roi: src.roi, ciLow: src.ciLow, ciHigh: src.ciHigh, thin: src.thin, shrunk: sr.shrunk };
+    }
+  }
+  return matrix;
+}
+
 app.get('/api/league-tier-matrix', (_req, res) => {
   const leagueIds = Object.keys(LEAGUE_TIER_MATRIX).map(Number);
   const walkForwardMatrix = buildWalkForwardMatrix();
+  const unseenPopulationMatrix = buildUnseenPopulationMatrix();
 
   // Merged Historical matrix: walk-forward result for in-sample leagues (once
   // computed — falls back to the original Addendum 6 hardcoded snapshot if
-  // walk-forward-pooled.json doesn't exist yet), untouched real-backtest
-  // LEAGUE_TIER_MATRIX entries for Carabao Cup/League One/League Two.
+  // walk-forward-pooled.json doesn't exist yet), live-computed unified-edge result
+  // for Carabao Cup/League One/League Two (Track A — replaces the old hand-written
+  // LEAGUE_TIER_MATRIX snapshot for these 3, which was frozen on the pre-unification
+  // formula; falls back to that snapshot only if the live computation finds nothing).
   const mergedMatrix = { ...LEAGUE_TIER_MATRIX };
   const historicalSourceByLeague = {};
   // effectiveWalkforwardIds (not the raw WALKFORWARD_HISTORICAL_LEAGUE_IDS
@@ -5298,6 +5356,10 @@ app.get('/api/league-tier-matrix', (_req, res) => {
   for (const id of leagueIds) {
     historicalSourceByLeague[id] = effectiveWalkforwardIds.has(id) && walkForwardMatrix[id]
       ? 'walkforward-proxy' : 'real-backtest';
+  }
+  for (const [lid, entry] of Object.entries(unseenPopulationMatrix)) {
+    mergedMatrix[lid] = entry;
+    historicalSourceByLeague[lid] = 'real-backtest';
   }
   for (const [lid, entry] of Object.entries(walkForwardMatrix)) {
     // Bug fixed alongside the Handoff feature: this loop previously applied the
@@ -6482,15 +6544,69 @@ const VALIDATED_SPLITS = {
   848: { testFrom: '2024-11-07T14:30:00Z', splitCommit: 'fbb8dbd' }, // Conference League, 2026-08-11
 };
 
+// Track A — single source of truth for "match scoredRecords against closing odds
+// and compute the unified edge" — the exact logic scoreOneFixture uses (calFactor
+// boost, margin-stripped Pinnacle benchmark, absolute edge), shared by
+// runEvCalibration, the unseen-population league-tier matrix builder, and any
+// future historical-evidence reader, so they can never independently drift the
+// way runEvCalibration's old relative-edge computation did.
+function computeMatchedEdgeFixtures() {
+  const historical     = readJSON('backfill-historical.json') || {};
+  const scoredRecords  = historical.scoredRecords || [];
+  const optWeights     = historical.optimisedWeights || {};
+  const closingOdds    = readJSON('closing-odds.json') || {};   // keyed by fixtureId
+
+  const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG, computeUnifiedEdge } = require('./scoring');
+  const settings = getSettings();
+  const calFactor = settings.calibrationFactor ?? 1.08;
+
+  const matched = [];
+  for (const rec of scoredRecords) {
+    const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
+    if (!co || !co.homeOdds || !co.awayOdds || !co.drawOdds) continue;
+    if (!rec.actualOutcome) continue;
+    if (!rec.homeFactors || !rec.awayFactors) continue;
+
+    const context    = rec.context || classifyFixture(rec.leagueId);
+    const weights    = optWeights[context] || optWeights.club_domestic;
+    if (!weights) continue;
+
+    // Real live pipeline: GBDT model.predict() -> applyLeagueBiasCorrection(),
+    // matching scoreOneFixture() exactly (server.js:882-883). computeModelProb
+    // (the linear model) is never used for live predictions — see docs/july-upgrade-notes.md.
+    const leagueId  = parseInt(rec.leagueId, 10);
+    const rawProbs  = model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]);
+    const probs     = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
+
+    let topOutcome, modelProb, pinnacleOdds;
+    if (probs.home >= probs.draw && probs.home >= probs.away) {
+      topOutcome = 'home'; modelProb = probs.home; pinnacleOdds = co.homeOdds;
+    } else if (probs.away >= probs.draw) {
+      topOutcome = 'away'; modelProb = probs.away; pinnacleOdds = co.awayOdds;
+    } else {
+      topOutcome = 'draw'; modelProb = probs.draw; pinnacleOdds = co.drawOdds;
+    }
+
+    if (!pinnacleOdds || pinnacleOdds <= 1) continue;
+
+    // Track A — unified edge: calFactor-boosted modelProb vs margin-stripped
+    // Pinnacle, absolute (not relative) gap. Matches entry.edge in
+    // scoreOneFixture exactly — the same quantity live gating actually uses.
+    const { calProb, edge } = computeUnifiedEdge(modelProb, co, topOutcome, { applyCalFactor: true, calFactor });
+    const pinnacleImplied = 1 / pinnacleOdds; // kept for display/back-compat only, not used for edge
+    const won  = rec.actualOutcome === topOutcome;
+
+    matched.push({ fixtureId: rec.fixtureId, leagueId: rec.leagueId, context,
+      topOutcome, modelProb, calProb, pinnacleOdds, pinnacleImplied, edge, won, date: rec.date });
+  }
+  return matched;
+}
+
 // Extracted so the weekly cron (setupScheduler) can refresh ev-calibration.json
 // without going through HTTP — see the '0 6 * * 1' schedule below.
 function runEvCalibration() {
-    const historical     = readJSON('backfill-historical.json') || {};
-    const scoredRecords  = historical.scoredRecords || [];
-    const optWeights     = historical.optimisedWeights || {};
-    const closingOdds    = readJSON('closing-odds.json') || {};   // keyed by fixtureId
-
-    const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG } = require('./scoring');
+    const matched = computeMatchedEdgeFixtures();
+    const { LEAGUE_CONFIG } = require('./scoring');
 
     const BANDS = [
       { label: '< 0%',   min: -Infinity, max: 0    },
@@ -6500,43 +6616,6 @@ function runEvCalibration() {
       { label: '15–20%', min: 0.15,      max: 0.20 },
       { label: '20%+',   min: 0.20,      max: Infinity },
     ];
-
-    const matched = [];
-    for (const rec of scoredRecords) {
-      const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
-      if (!co) continue;
-      if (!rec.actualOutcome) continue;
-      if (!rec.homeFactors || !rec.awayFactors) continue;
-
-      const context    = rec.context || classifyFixture(rec.leagueId);
-      const weights    = optWeights[context] || optWeights.club_domestic;
-      if (!weights) continue;
-
-      // Real live pipeline: GBDT model.predict() -> applyLeagueBiasCorrection(),
-      // matching scoreOneFixture() exactly (server.js:882-883). computeModelProb
-      // (the linear model) is never used for live predictions — see docs/july-upgrade-notes.md.
-      const leagueId  = parseInt(rec.leagueId, 10);
-      const rawProbs  = model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]);
-      const probs     = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
-
-      let topOutcome, modelProb, pinnacleOdds;
-      if (probs.home >= probs.draw && probs.home >= probs.away) {
-        topOutcome = 'home'; modelProb = probs.home; pinnacleOdds = co.homeOdds;
-      } else if (probs.away >= probs.draw) {
-        topOutcome = 'away'; modelProb = probs.away; pinnacleOdds = co.awayOdds;
-      } else {
-        topOutcome = 'draw'; modelProb = probs.draw; pinnacleOdds = co.drawOdds;
-      }
-
-      if (!pinnacleOdds || pinnacleOdds <= 1) continue;
-
-      const pinnacleImplied = 1 / pinnacleOdds;
-      const edge = (modelProb - pinnacleImplied) / pinnacleImplied;
-      const won  = rec.actualOutcome === topOutcome;
-
-      matched.push({ fixtureId: rec.fixtureId, leagueId: rec.leagueId, context,
-        topOutcome, modelProb, pinnacleOdds, pinnacleImplied, edge, won, date: rec.date });
-    }
 
     function bandStats(fixtures) {
       return BANDS.map(b => {
