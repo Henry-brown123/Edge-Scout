@@ -2329,6 +2329,17 @@ const HISTORICAL_BACKFILL_CONFIG = [
 ];
 
 const OPTIMISE_EVERY = 500; // run weight optimisation after every N scored records
+// Track A memory-safety fix (2026-08-14 OOM incident): on a large one-off
+// rescore=true run, OPTIMISE_EVERY's inline-optimisation checkpoint re-runs
+// full-population gradient descent (200 iterations x ~17 loss evals x 3
+// contexts, each scanning the entire scored-so-far array) at every 500-record
+// mark against an ever-growing population — confirmed to exceed this
+// instance's 512MB heap partway through a full pass, crashing the whole app.
+// Large runs use this much cheaper persistence-only cadence instead (no
+// optimisation call), and defer the actual optimisation to a single isolated
+// child-process pass at the end (see runOptimisationIsolated). Bounds crash
+// loss to at most this many records' worth of scoring, not hours of work.
+const LARGE_RUN_PERSIST_EVERY = 2000;
 
 // Strip a raw API-Sports fixture down to fields needed for profiling + factor scoring.
 function stripFixture(f) {
@@ -2352,7 +2363,17 @@ let _historicalBackfillStatus  = null; // in-progress status for polling
 async function runHistoricalBackfill({ rescore = false, skipOptimise = false, onProgress } = {}) {
   if (_historicalBackfillRunning) return { error: 'already_running' };
   _historicalBackfillRunning = true;
-  _historicalBackfillStatus  = { phase: 'fetching', leaguesDone: 0, totalLeagues: 0, fixturesFetched: 0, scored: 0, startedAt: new Date().toISOString() };
+  const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  _historicalBackfillStatus  = { phase: 'fetching', leaguesDone: 0, totalLeagues: 0, fixturesFetched: 0, scored: 0, startedAt: new Date().toISOString(), runId };
+  // Track A fix (2026-08-14): write a "running" marker for THIS run's runId
+  // immediately, before any real work happens. Previously nothing was written
+  // until Phase 4 (success) or the catch block (error) — a hard kill (OOM,
+  // platform restart) skips both, so /api/backfill/historical/status silently
+  // kept serving whatever completion record was last written, potentially by
+  // a completely unrelated earlier run. Writing this now means a crashed run
+  // leaves status:'running' with no matching completion, which the status
+  // endpoint below now surfaces explicitly instead of masking with stale data.
+  writeJSON('backfill-historical-meta.json', { status: 'running', runId, startedAt: _historicalBackfillStatus.startedAt });
 
   try {
     // Load persisted data
@@ -2463,6 +2484,15 @@ async function runHistoricalBackfill({ rescore = false, skipOptimise = false, on
 
     // ── Phase 2: Score new fixtures (or re-score if cached records were cleared) ──
     const unscoredCount = [...fixtureMap.values()].filter(f => !scoredMap.has(f.fixture?.id)).length;
+    // Track A fix (2026-08-14): rescore=true is exactly the "large one-off
+    // catch-up run" scenario skipOptimise's own comment already called out as
+    // OOM-risky (full population rebuilt from empty). Routine nightly runs
+    // (rescore=false, a handful of newly-unscored fixtures on top of an
+    // already-large stable population) keep the existing inline-checkpoint
+    // behaviour, proven safe at that scale. Large runs use a cheaper
+    // persistence-only cadence below and defer optimisation to an isolated
+    // process (Phase 3).
+    const isLargeRun = rescore === true;
     if (newCount > 0 || unscoredCount > 0) {
       _historicalBackfillStatus.phase = 'scoring';
       const allFixtures      = [...fixtureMap.values()];
@@ -2473,8 +2503,9 @@ async function runHistoricalBackfill({ rescore = false, skipOptimise = false, on
       // allFixtures, not per-fixture work).
       const domesticTimeline = buildDomesticTimeline(allFixtures);
       let   scored         = 0;
-      let   nextOptimiseAt = Math.ceil(scoredMap.size / OPTIMISE_EVERY) * OPTIMISE_EVERY;
-      if (nextOptimiseAt <= scoredMap.size) nextOptimiseAt += OPTIMISE_EVERY;
+      const checkpointEvery = isLargeRun ? LARGE_RUN_PERSIST_EVERY : OPTIMISE_EVERY;
+      let   nextCheckpointAt = Math.ceil(scoredMap.size / checkpointEvery) * checkpointEvery;
+      if (nextCheckpointAt <= scoredMap.size) nextCheckpointAt += checkpointEvery;
 
       // This loop is entirely synchronous per-fixture (scoreFixtureFromPool does no
       // I/O), and on a large catch-up run (tens of thousands of newly-unscored
@@ -2524,8 +2555,12 @@ async function runHistoricalBackfill({ rescore = false, skipOptimise = false, on
         // progress, since only Phase 4 persisted scoredRecords. Saving here too means a
         // restart loses at most one checkpoint's worth of scoring, matching Phase 1's
         // resilience.
-        if (scoredMap.size >= nextOptimiseAt && scoredMap.size >= OPTIMISE_EVERY) {
-          if (!skipOptimise) {
+        if (scoredMap.size >= nextCheckpointAt && scoredMap.size >= checkpointEvery) {
+          // isLargeRun: persistence only, no inline optimisation — see the
+          // LARGE_RUN_PERSIST_EVERY comment for why (this is the checkpoint
+          // that OOM-crashed the whole app on 2026-08-14). Optimisation for
+          // large runs happens once, in Phase 3, via an isolated process.
+          if (!isLargeRun && !skipOptimise) {
             const msg = `[Optimise] Checkpoint at ${scoredMap.size} records — running optimisation…`;
             console.log(msg); onProgress?.(msg);
             await _runOptimisation([...scoredMap.values()], existing, onProgress);
@@ -2536,7 +2571,9 @@ async function runHistoricalBackfill({ rescore = false, skipOptimise = false, on
           const histTmp  = histPath + '.tmp';
           fs.writeFileSync(histTmp, JSON.stringify(existing));
           fs.renameSync(histTmp, histPath);
-          nextOptimiseAt += OPTIMISE_EVERY;
+          nextCheckpointAt += checkpointEvery;
+          const msg2 = `[Checkpoint] Persisted at ${scoredMap.size} records${isLargeRun ? ' (optimisation deferred — large run)' : ''}`;
+          console.log(msg2); onProgress?.(msg2);
           // Yield right after the heaviest chunk of work too, not just every 200
           // fixtures — a single checkpoint's optimisation pass can itself take longer
           // than the gap between two yield points above.
@@ -2550,40 +2587,54 @@ async function runHistoricalBackfill({ rescore = false, skipOptimise = false, on
     }
 
     // ── Phase 3: Final weight optimisation ─────────────────────────────────
-    // skipOptimise exists for large one-off catch-up runs (e.g. ingesting several
-    // new leagues' full history at once) where optimiseWeights' full-population
-    // gradient descent — even yielding internally — was still crashing the process
-    // (see commit 889f5b1's comment; yielding fixed unresponsiveness but not
-    // whatever repeatedly killed the process afterward, most likely a memory
-    // ceiling on the hosting instance rather than a CPU/responsiveness issue).
-    // Scoring (this function's actual deliverable — the scoredRecords population)
-    // is entirely unaffected by skipping this: optimisedWeights/accuracy are
-    // reporting-only figures that are never auto-applied to live settings (only a
-    // separate, manual POST /api/backfill/historical/apply-weights call does that),
-    // so deferring them to a later, smaller, deliberate run costs nothing but a
-    // stale accuracy readout in the meantime.
+    // skipOptimise exists for callers that just want scoring done, weights
+    // untouched this call. It's no longer the only safe option for large runs
+    // (see below) — Scoring (this function's actual deliverable — the
+    // scoredRecords population) is entirely unaffected by skipping this:
+    // optimisedWeights/accuracy are reporting-only figures that are never
+    // auto-applied to live settings (only a separate, manual
+    // POST /api/backfill/historical/apply-weights call does that), so
+    // deferring them costs nothing but a stale accuracy readout meanwhile.
     //
     // Also gated on changedTeamIds.size > 0 (i.e. something was actually newly
     // scored this run) — previously this ran unconditionally on every nightly cron
     // firing whenever the population was >= OPTIMISE_EVERY, which is every night
     // from now on regardless of whether anything changed. Re-optimising against an
-    // unchanged population is pure waste (same input, same output) with the same
-    // crash risk as the original bug — confirmed as the actual ongoing cause of
-    // nightly crash/restart cycles via the 00:05 UTC cron (which calls this
-    // function unconditionally every night through runBackfillChain), independent
-    // of any one-off catch-up task.
+    // unchanged population is pure waste (same input, same output).
     const allRecords = [...scoredMap.values()];
-    if (!skipOptimise && changedTeamIds.size > 0 && allRecords.length >= OPTIMISE_EVERY) {
-      _historicalBackfillStatus.phase = 'optimising';
-      const msg = `[Optimise] Final pass on ${allRecords.length} records…`;
-      console.log(msg); onProgress?.(msg);
-      await _runOptimisation(allRecords, existing, onProgress);
-    } else if (skipOptimise) {
+    if (skipOptimise) {
       const msg = `[Optimise] Skipped for this run (skipOptimise=true) — existing optimisedWeights/accuracy left as-is.`;
       console.log(msg); onProgress?.(msg);
     } else if (changedTeamIds.size === 0) {
       const msg = `[Optimise] Skipped — nothing newly scored this run, re-optimising against unchanged data would be a no-op.`;
       console.log(msg); onProgress?.(msg);
+    } else if (allRecords.length >= OPTIMISE_EVERY) {
+      if (isLargeRun) {
+        // Track A fix (2026-08-14): large runs' optimisation pass runs in an
+        // isolated child process (scripts/gbdt-optimise-weights.js) — same
+        // spawn()-isolated pattern as runGbdtRetrain — so a crash here (this
+        // exact full-population gradient descent OOM-killed the whole app
+        // inline, on this run, earlier today) only kills this short-lived
+        // child. The already-scored/persisted population above is
+        // unaffected either way.
+        _historicalBackfillStatus.phase = 'optimising';
+        const msg = `[Optimise] Final pass on ${allRecords.length} records, isolated process (large run)…`;
+        console.log(msg); onProgress?.(msg);
+        const result = await runOptimisationIsolated(m => onProgress?.(m));
+        if (result.success) {
+          existing.optimisedWeights = result.optimisedWeights;
+          existing.accuracy         = result.accuracy;
+          existing.lastOptimisedAt  = result.lastOptimisedAt;
+        } else {
+          const msg2 = `[Optimise] Isolated optimisation failed (${result.error}) — scored population is unaffected; optimisedWeights left as previously persisted. Re-trigger later to retry just the optimisation step.`;
+          console.error(msg2); onProgress?.(msg2);
+        }
+      } else {
+        _historicalBackfillStatus.phase = 'optimising';
+        const msg = `[Optimise] Final pass on ${allRecords.length} records…`;
+        console.log(msg); onProgress?.(msg);
+        await _runOptimisation(allRecords, existing, onProgress);
+      }
     }
 
     // ── Phase 4: Persist ───────────────────────────────────────────────────
@@ -2622,6 +2673,7 @@ async function runHistoricalBackfill({ rescore = false, skipOptimise = false, on
     }
 
     const summary = {
+      runId,
       totalFixtures:    fixtureMap.size,
       scoredCount:      scoredMap.size,
       newFixtures:      newCount,
@@ -2638,8 +2690,8 @@ async function runHistoricalBackfill({ rescore = false, skipOptimise = false, on
 
   } catch (e) {
     console.error('[HistoricalBackfill] Fatal:', e.message);
-    _historicalBackfillStatus = { phase: 'error', error: e.message };
-    writeJSON('backfill-historical-meta.json', { error: e.message, completedAt: new Date().toISOString() });
+    _historicalBackfillStatus = { phase: 'error', error: e.message, runId };
+    writeJSON('backfill-historical-meta.json', { error: e.message, runId, completedAt: new Date().toISOString() });
     throw e;
   } finally {
     _historicalBackfillRunning = false;
@@ -3020,6 +3072,76 @@ async function _runOptimisation(records, existing, onProgress) {
   existing.optimisedWeights = optimisedWeights;
   existing.accuracy         = accuracy;
   existing.lastOptimisedAt  = new Date().toISOString();
+}
+
+// Track A memory-safety fix (2026-08-14 OOM incident) — isolated-process
+// counterpart to _runOptimisation() above, for large (rescore=true) runs.
+// Spawns scripts/gbdt-optimise-weights.js, same pattern as runGbdtRetrain():
+// its own OS process/heap, so full-population gradient descent crashing on
+// this 512MB instance only kills this short-lived child, never the live app
+// or the already-scored/persisted population. Resolves (never rejects) with
+// {success, ...} either way so callers don't need a try/catch.
+let _optimiseProcess = null;
+function runOptimisationIsolated(onProgress) {
+  return new Promise((resolve) => {
+    if (_optimiseProcess) {
+      resolve({ success: false, error: 'already_running' });
+      return;
+    }
+    const startedAt = new Date().toISOString();
+    writeJSON('optimise-weights-status.json', { status: 'running', startedAt, finishedAt: null, error: null });
+
+    const { spawn } = require('child_process');
+    const child = spawn('node', ['scripts/gbdt-optimise-weights.js'], {
+      cwd: __dirname,
+      env: { ...process.env, DATA_DIR: process.env.DATA_DIR },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    _optimiseProcess = child;
+
+    let output = '';
+    child.stdout.on('data', d => { output += d; process.stdout.write(d); onProgress?.(d.toString().trim()); });
+    child.stderr.on('data', d => { output += d; process.stderr.write(d); });
+
+    // Same reasoning as runGbdtRetrain's safety cap — full-population gradient
+    // descent across up to 3 contexts on the whole scored population.
+    const SAFETY_TIMEOUT_MS = 30 * 60 * 1000;
+    let timedOut = false;
+    const killTimer = setTimeout(() => {
+      if (_optimiseProcess === child) {
+        timedOut = true;
+        console.error('[OptimiseWeights] Exceeded 30-minute safety timeout — killing');
+        child.kill('SIGKILL');
+      }
+    }, SAFETY_TIMEOUT_MS);
+
+    child.on('close', (code, signal) => {
+      clearTimeout(killTimer);
+      _optimiseProcess = null;
+      const finishedAt = new Date().toISOString();
+      if (code === 0) {
+        const result = readJSON('optimised-weights.json');
+        writeJSON('optimise-weights-status.json', { status: 'success', startedAt, finishedAt, error: null });
+        resolve({ success: true, ...(result || {}) });
+      } else {
+        const cause = signal
+          ? (timedOut ? `killed — exceeded ${SAFETY_TIMEOUT_MS / 60000}min safety timeout (signal ${signal})`
+                      : `killed unexpectedly (signal ${signal}) — likely OOM on this 512MB instance if this recurs`)
+          : `exit code ${code}`;
+        console.error(`[OptimiseWeights] Failed — ${cause}`);
+        writeJSON('optimise-weights-status.json', { status: 'failed', startedAt, finishedAt, error: cause, tail: output.slice(-4000) });
+        resolve({ success: false, error: cause });
+      }
+    });
+
+    child.on('error', (e) => {
+      clearTimeout(killTimer);
+      _optimiseProcess = null;
+      console.error('[OptimiseWeights] Failed to start:', e.message);
+      writeJSON('optimise-weights-status.json', { status: 'failed', startedAt, finishedAt: new Date().toISOString(), error: e.message });
+      resolve({ success: false, error: e.message });
+    });
+  });
 }
 
 // ─── EXPRESS APP ─────────────────────────────────────────────────────────────
@@ -4205,6 +4327,23 @@ app.get('/api/backfill/historical/status', (_req, res) => {
   }
   const meta = readJSON('backfill-historical-meta.json');
   if (!meta) return res.json({ status: 'not_run' });
+  // Track A fix (2026-08-14): a run writes status:'running' the moment it
+  // starts (before any real work), then overwrites it with a real completion
+  // or error on the way out. If status is still 'running' here, this process
+  // is NOT currently running that run (checked above) — the only way to reach
+  // that combination is a hard kill (OOM, platform restart) that bypassed
+  // both the success and catch paths. Surface this explicitly rather than
+  // falling through to `status: 'complete'`/'error' inference below, which
+  // previously let a stale, unrelated prior run's leftover meta satisfy a
+  // completely different run's "did it finish?" check.
+  if (meta.status === 'running') {
+    return res.json({
+      running: false,
+      status: 'crashed',
+      message: `Run ${meta.runId} (started ${meta.startedAt}) did not complete — process was likely killed (OOM or platform restart) before it could report success or error. Already-scored/persisted data from before the crash is retained; re-trigger to resume.`,
+      ...meta,
+    });
+  }
   res.json({ running: false, status: meta.error ? 'error' : 'complete', ...meta });
 });
 
