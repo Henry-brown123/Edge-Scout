@@ -4520,11 +4520,17 @@ async function deleteBet(id) {
   } catch(e) { toast(e.message, 'error'); }
 }
 
-// Inline stake/odds/result correction for a bet-log row. Changing away from an
-// already-resolved result goes through /revert first — PATCH refuses to overwrite
-// an existing result directly (see the guard added after the accidental Crawley
-// Town vs Crewe resolution), so this mirrors that same rule rather than working
-// around it.
+// Inline stake/odds/(bookmaker)/result correction — the one shared correction
+// flow for a bet's recorded figures, callable from either the Performance-tab
+// bet log or the Scout-tab drawer's "Edit…" action, so there's a single place
+// this logic lives regardless of which screen you're on. Changing away from an
+// already-resolved result goes through /revert first — PATCH refuses to
+// overwrite an existing result directly (see the guard added after the
+// accidental Crawley Town vs Crewe resolution), so this mirrors that same rule
+// rather than working around it. Bookmaker is only asked for real-money bets,
+// and only accepted if it matches an existing bookmaker exactly — a mismatched
+// free-text bookmakerId would silently break the exchange-commission lookup at
+// settlement (that lookup matches on bookmakerId against the known list).
 async function editBet(id) {
   const b = (STATE.bets || []).find(x => x.id === id);
   if (!b) return;
@@ -4533,6 +4539,22 @@ async function editBet(id) {
   if (stakeStr === null) return;
   const oddsStr = prompt(`Odds for ${b.fixture}:`, String(b.actualOdds ?? b.bookOdds ?? ''));
   if (oddsStr === null) return;
+
+  let newBookmakerId = null, newBookmakerName = null;
+  if (b.mode === 'real') {
+    const bmStr = prompt(`Bookmaker for ${b.fixture} (must match an existing bookmaker's name exactly — leave unchanged to skip):`, b.bookmakerUsed || '');
+    if (bmStr === null) return;
+    const trimmed = bmStr.trim();
+    if (trimmed && trimmed !== (b.bookmakerUsed || '')) {
+      let books = [];
+      try { books = await apiFetch('/api/bookmakers'); } catch {}
+      const match = books.find(bm => bm.name.toLowerCase() === trimmed.toLowerCase());
+      if (!match) { toast(`No bookmaker matches "${trimmed}" — nothing saved, try again`, 'error'); return; }
+      newBookmakerId   = match.id;
+      newBookmakerName = match.name;
+    }
+  }
+
   const resultStr = prompt(`Result for ${b.fixture} — pending, win, loss, or void:`, b.result || 'pending');
   if (resultStr === null) return;
 
@@ -4548,6 +4570,7 @@ async function editBet(id) {
       await apiFetch(`/api/bets/${id}/revert`, { method: 'POST' });
     }
     const body = { actualStake: newStake, actualOdds: newOdds };
+    if (newBookmakerId) { body.bookmakerId = newBookmakerId; body.bookmakerUsed = newBookmakerName; }
     if (newResult !== 'pending' && newResult !== b.result) body.result = newResult;
     await apiFetch(`/api/bets/${id}`, {
       method: 'PATCH',
@@ -4556,7 +4579,11 @@ async function editBet(id) {
     });
     toast('Bet updated', 'success');
     await loadState();
+    renderScout();
     _refreshPerfView();
+    // If the drawer is open on this same bet, refresh it in place — otherwise
+    // it'd keep showing the pre-edit figures until closed and re-opened.
+    if (_drawerBetId === id) openBetDrawerById(id);
   } catch(e) { toast(e.message, 'error'); }
 }
 
@@ -5536,6 +5563,7 @@ function openDrawer(w) {
 function closeDrawer() {
   document.getElementById('drawer-overlay').classList.remove('open');
   document.getElementById('drawer').classList.remove('open');
+  _drawerBetId = null;
 }
 
 // ─── LOCKED-BET DETAIL DRAWER ─────────────────────────────────────────────────
@@ -5546,12 +5574,16 @@ function closeDrawer() {
 // this shows what's actually available (model prob, edge, EV, Kelly, factor
 // breakdown, weather, bookmaker routing) rather than force-fitting the richer
 // watching-card view and silently rendering blank sections.
+let _drawerBetId = null; // tracks which bet the drawer is currently showing, so
+                          // editBet() can refresh it in place after a save instead
+                          // of leaving the old figures on screen until re-opened.
 function openBetDrawerById(id) {
   const b = (STATE.bets || []).find(x => x.id === id);
   if (b) openBetDrawer(b);
 }
 
 function openBetDrawer(b) {
+  _drawerBetId = b.id;
   const vsIdx = (b.fixture || '').indexOf(' vs ');
   const home = vsIdx > -1 ? b.fixture.slice(0, vsIdx) : b.fixture;
   const away = vsIdx > -1 ? b.fixture.slice(vsIdx + 4) : '';
@@ -5616,6 +5648,7 @@ function openBetDrawer(b) {
 
     <div class="drawer-actions">
       ${(b.mode !== 'real' && !b.result) ? `<button class="btn btn-sm" style="background:var(--amber);color:#000;border:none;font-weight:700" onclick="closeDrawer();openBmPanel('${b.id}')">Convert to Real…</button>` : ''}
+      ${(b.mode === 'real' && !b.result) ? `<button class="btn btn-ghost btn-sm" style="border-color:var(--amber);color:var(--amber)" onclick="editBet('${b.id}')">Edit stake/odds/bookmaker…</button>` : ''}
       <button class="btn btn-ghost btn-sm" onclick="closeDrawer()">Close</button>
     </div>`;
 
