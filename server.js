@@ -5243,41 +5243,6 @@ app.get('/api/backfill/lineups/status', (_req, res) => {
 
 // TEMP DIAGNOSTIC — before/after verification for the 2025/2026 LINEUP_SEASONS/
 // STATS_SEASONS fix. Remove once the season-addition ingestion is verified.
-app.get('/api/_diag/season-coverage', (_req, res) => {
-  const historical = readJSON('backfill-historical.json');
-  const lineupsDb  = getLineups();
-  const statsDb    = getFixtureStats();
-  const rows = [];
-  for (const lid of LINEUP_LEAGUES) {
-    for (const season of [2025, 2026]) {
-      const fixtures = (historical?.fixtures || []).filter(f => f.league?.id === lid && f.league?.season === season);
-      const withLineup = fixtures.filter(f => lineupsDb[String(f.fixture?.id)]).length;
-      const withStats  = fixtures.filter(f => statsDb[String(f.fixture?.id)]).length;
-      const sample = fixtures[0];
-      rows.push({
-        league: lid, season, fixtureCount: fixtures.length, withLineup, withStats,
-        sampleFixtureId: sample?.fixture?.id || null,
-        sampleHasLineup: sample ? !!lineupsDb[String(sample.fixture?.id)] : null,
-        sampleTeams: sample ? `${sample.teams?.home?.name} vs ${sample.teams?.away?.name}` : null,
-      });
-    }
-  }
-  res.json({ rows });
-});
-
-// TEMP DIAGNOSTIC — probe why /fixtures/statistics isn't landing on 2025-season
-// fixtures despite repeated runs. Remove once diagnosed.
-app.get('/api/_diag/stats-probe', async (req, res) => {
-  const fixtureId = req.query.fixture;
-  if (!fixtureId) return res.status(400).json({ error: 'fixture query param required' });
-  try {
-    const { data } = await apiSports.get('/fixtures/statistics', { params: { fixture: fixtureId } });
-    res.json({ fixtureId, responseLength: data?.response?.length ?? null, errors: data?.errors ?? null, raw: data });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
 // StatsBomb xG import — runs scripts/import-statsbomb.js server-side
 let _xgImportRunning = false;
 app.post('/api/backfill/xg', async (req, res) => {
