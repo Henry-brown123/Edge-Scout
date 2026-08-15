@@ -2328,6 +2328,50 @@ const HISTORICAL_BACKFILL_CONFIG = [
   { leagueId: '42', name: 'League Two',  seasons: [2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013, 2012, 2011] },
 ];
 
+// ─── LINEUP / STATS BACKFILL CONFIG ────────────────────────────────────────────
+// Leagues+seasons for lineup and fixture-stats backfill (feeds WOWY player-
+// dependency data). Previously 4 independently-edited duplicates split across
+// the HTTP-triggered handlers and their cron-callable equivalents, all still
+// reading {2022, 2023, 2024} as of 2026-08 despite ~40 subsequent commits
+// touching adjacent lineup/WOWY code — the third instance of this staleness
+// class (see HIST_SEASONS_2010 and BACKFILL_CONFIG above). Consolidated to a
+// single source of truth here so there's one place left to go stale, and
+// registered below so SEASON_LIST_CONFIGS catches it automatically next time.
+const LINEUP_LEAGUES = new Set([39, 2, 140, 135, 78, 61]); // PL, CL, La Liga, Serie A, Bundesliga, Ligue 1
+const STATS_LEAGUES  = LINEUP_LEAGUES;
+const LINEUP_SEASONS = new Set([2022, 2023, 2024, 2025, 2026]);
+const STATS_SEASONS  = LINEUP_SEASONS;
+
+// ─── SEASON-LIST STALENESS SAFEGUARD ───────────────────────────────────────────
+// Standing check against the recurring "season-list config never gets updated
+// as the season rolls over" bug — three confirmed instances so far
+// (HIST_SEASONS_2010, team-profile BACKFILL_CONFIG, LINEUP_SEASONS/STATS_SEASONS
+// above), each previously found only by a manual deep-dive after live data was
+// already visibly missing. Registry-driven so adding a new season-list config
+// later means adding one entry here, not writing a new check from scratch.
+const SEASON_LIST_CONFIGS = [
+  { name: 'HIST_SEASONS_2010',          mostRecentSeason: () => Math.max(...HIST_SEASONS_2010) },
+  { name: 'HIST_SEASONS_EUROPA_2014',   mostRecentSeason: () => Math.max(...HIST_SEASONS_EUROPA_2014) },
+  { name: 'HISTORICAL_BACKFILL_CONFIG', mostRecentSeason: () => Math.max(...HISTORICAL_BACKFILL_CONFIG.flatMap(e => e.seasons)) },
+  { name: 'BACKFILL_CONFIG (team-profile)', mostRecentSeason: () => Math.max(...BACKFILL_CONFIG.flatMap(e => e.seasons)) },
+  { name: 'LINEUP_SEASONS',             mostRecentSeason: () => Math.max(...LINEUP_SEASONS) },
+  { name: 'STATS_SEASONS',              mostRecentSeason: () => Math.max(...STATS_SEASONS) },
+];
+
+function checkSeasonListStaleness() {
+  // Mirrors the isActiveSeason convention already used in runHistoricalBackfill's
+  // Phase 1 (current season == calendar year); "more than one season behind"
+  // means more than one year short of that.
+  const currentSeason = new Date().getFullYear();
+  for (const cfg of SEASON_LIST_CONFIGS) {
+    const mostRecent = cfg.mostRecentSeason();
+    if (mostRecent < currentSeason - 1) {
+      console.warn(`[ConfigStaleness] ${cfg.name}'s most recent season is ${mostRecent}, more than one season behind ${currentSeason} — likely stale, check for a missed update.`);
+    }
+  }
+}
+checkSeasonListStaleness();
+
 const OPTIMISE_EVERY = 500; // run weight optimisation after every N scored records
 // Track A memory-safety fix (2026-08-14 OOM incident): on a large one-off
 // rescore=true run, OPTIMISE_EVERY's inline-optimisation checkpoint re-runs
@@ -5013,9 +5057,6 @@ app.post('/api/backfill/fixture-stats', async (req, res) => {
   _statsBackfillRunning = true;
   res.json({ started: true });
 
-  const STATS_LEAGUES  = new Set([39, 2, 140, 135, 78, 61]);  // PL, CL, La Liga, Serie A, Bundesliga, Ligue 1
-  const STATS_SEASONS  = new Set([2022, 2023, 2024]);
-
   try {
     const historical = readJSON('backfill-historical.json');
     if (!historical?.fixtures?.length) {
@@ -5091,9 +5132,6 @@ app.post('/api/backfill/lineups', async (req, res) => {
   // ?rebuild=true clears existing lineups + WOWY data so a clean re-run can add player names
   const rebuild = req.query.rebuild === 'true' || req.body?.rebuild === true;
   res.json({ started: true, rebuild });
-
-  const LINEUP_LEAGUES = new Set([39, 2, 140, 135, 78, 61]);
-  const LINEUP_SEASONS = new Set([2022, 2023, 2024]);
 
   try {
     const historical = readJSON('backfill-historical.json');
@@ -6317,8 +6355,6 @@ function startupCheck() {
 
 // Extracted backfill logic callable without HTTP context
 async function runFixtureStatsBackfillFn({ budget = 2000 } = {}) {
-  const STATS_LEAGUES = new Set([39, 2, 140, 135, 78, 61]);
-  const STATS_SEASONS = new Set([2022, 2023, 2024]);
   const historical = readJSON('backfill-historical.json');
   if (!historical?.fixtures?.length) return;
 
@@ -6386,8 +6422,6 @@ async function runFixtureStatsBackfillFn({ budget = 2000 } = {}) {
 }
 
 async function runLineupsBackfillFn({ rebuild = false, budget = 7000 } = {}) {
-  const LINEUP_LEAGUES = new Set([39, 2, 140, 135, 78, 61]);
-  const LINEUP_SEASONS = new Set([2022, 2023, 2024]);
   const historical = readJSON('backfill-historical.json');
   if (!historical?.fixtures?.length) return;
 
