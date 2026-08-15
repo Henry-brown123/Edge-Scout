@@ -6071,6 +6071,60 @@ app.post('/api/bets/:id/confirm-placement', (req, res) => {
   res.json({ bet, bookmaker: bm || null });
 });
 
+// POST convert a paper-locked bet to real, at the actual bookmaker/odds obtained.
+// This is the missing counterpart to the original lock-time Paper/Real choice —
+// deciding to go real happens live, looking at the fixture, sometimes after a
+// bet has already locked paper, not from the historical log afterward. Re-sizes
+// the stake with the real Kelly fraction against the real bankroll (never the
+// paper fraction/bankroll it was originally locked with), same formula as the
+// original real-money lock path.
+app.post('/api/bets/:id/convert-to-real', (req, res) => {
+  const bets = getBets();
+  const bet  = bets.find(b => b.id === req.params.id);
+  if (!bet) return res.status(404).json({ error: 'Not found' });
+  if (bet.mode === 'real') return res.status(400).json({ error: 'Already real' });
+  if (bet.result) return res.status(400).json({ error: 'Bet already resolved — mode cannot change' });
+
+  const { bookmakerId, bookmakerName, actualOdds } = req.body;
+  if (!bookmakerId || !bookmakerName) return res.status(400).json({ error: 'bookmakerId and bookmakerName required' });
+  const odds = parseFloat(actualOdds);
+  if (!(odds > 1)) return res.status(400).json({ error: 'Invalid actualOdds' });
+
+  const settings          = getSettings();
+  const realBr            = getRealBankrollAccount().current;
+  const kellyFrac          = settings.realKellyFraction ?? 0.25;
+  const calibrationFactor = settings.calibrationFactor ?? 1.08;
+  const realKelly = kelly(bet.modelProb * calibrationFactor, odds, kellyFrac, realBr);
+  const stake = roundStake(realKelly.stake);
+
+  bet.mode            = 'real';
+  bet.kellyFraction   = kellyFrac;
+  bet.bankrollAtLock  = realBr;
+  bet.bookmakerId     = bookmakerId;
+  bet.bookmakerUsed   = bookmakerName;
+  bet.actualOdds      = odds;
+  bet.actualStake     = stake;
+  bet.displayStake    = stake;
+  bet.placementStatus = 'placed';
+  bet.placementConfirmed = true;
+  bet.placedAt        = new Date().toISOString();
+  saveBets(bets);
+
+  // Update bookmaker stats — same as confirm-placement
+  const books = getBookmakers();
+  const bm    = books.find(b => b.id === bookmakerId);
+  if (bm) {
+    bm.lastUsed      = bet.placedAt;
+    bm.betsThisWeek  = (bm.betsThisWeek  || 0) + 1;
+    bm.betsThisMonth = (bm.betsThisMonth || 0) + 1;
+    bm.totalBets     = (bm.totalBets     || 0) + 1;
+    bm.totalStaked   = parseFloat(((bm.totalStaked || 0) + bet.actualStake).toFixed(2));
+    saveBookmakers(books);
+  }
+
+  res.json({ bet, realBankroll: getRealBankrollAccount() });
+});
+
 // POST skip a locked bet (no value / account not set up / other)
 app.post('/api/bets/:id/skip', (req, res) => {
   const bets = getBets();

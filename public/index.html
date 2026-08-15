@@ -5562,7 +5562,14 @@ function openBetDrawer(b) {
   const betLabel = b.bet === 'Home Win' ? `${home} Win` : b.bet === 'Away Win' ? `${away} Win` : b.bet;
   const settleOdds  = b.actualOdds  ?? b.bookOdds;
   const settleStake = b.actualStake ?? b.suggestedStake;
-  const row = valueRow(betLabel, b.modelProb, settleOdds, b.impliedProb, b.edge, b.ev, b.kellyFraction, settleStake, true, b.successScore);
+  // valueRow's 7th arg is "stake as a fraction of bankroll" (see scoring.js's
+  // fracKelly — that's what "% of bankroll" actually means), NOT the kellyFraction
+  // *setting* (0.5/0.25 multiplier) — those are different numbers that happen to
+  // both be called "kelly" fractions. Passing kellyFraction here directly was the
+  // bug: it showed the settings multiplier (e.g. 50% for half-Kelly) mislabeled as
+  // "% of bankroll" instead of the actual stake/bankroll ratio.
+  const stakeFracOfBankroll = b.bankrollAtLock ? (settleStake / b.bankrollAtLock) : 0;
+  const row = valueRow(betLabel, b.modelProb, settleOdds, b.impliedProb, b.edge, b.ev, stakeFracOfBankroll, settleStake, true, b.successScore);
 
   const resultBadge = b.result
     ? `<div style="margin:8px 0;padding:8px 12px;border-radius:6px;font-size:.8rem;font-weight:700;background:${b.result==='win'?'rgba(0,255,135,.12)':b.result==='loss'?'rgba(255,82,82,.12)':'rgba(180,180,180,.12)'};color:${b.result==='win'?'var(--green)':b.result==='loss'?'var(--red)':'var(--text2)'}">${b.result.toUpperCase()}${b.finalScore ? ` · ${b.finalScore}` : ''} · P&L £${b.pnl >= 0 ? '+' : ''}${b.pnl?.toFixed(2)}</div>`
@@ -5597,6 +5604,7 @@ function openBetDrawer(b) {
     ${routingHTML}
 
     <div class="drawer-actions">
+      ${(b.mode !== 'real' && !b.result) ? `<button class="btn btn-sm" style="background:var(--amber);color:#000;border:none;font-weight:700" onclick="closeDrawer();openBmPanel('${b.id}')">Convert to Real…</button>` : ''}
       <button class="btn btn-ghost btn-sm" onclick="closeDrawer()">Close</button>
     </div>`;
 
@@ -5934,8 +5942,11 @@ async function openBmPanel(betId) {
   const bet = STATE.bets.find(b => b.id === betId);
   if (!bet) return;
 
-  document.getElementById('bmp-title').textContent    = bet.fixture;
-  document.getElementById('bmp-subtitle').textContent = `${bet.bet} · score ${bet.successScore} · book odds ${bet.bookOdds?.toFixed(2)} · Kelly £${(bet.displayStake ?? bet.suggestedStake)?.toFixed(2)}`;
+  const convertingFromPaper = bet.mode !== 'real';
+  document.getElementById('bmp-title').textContent    = convertingFromPaper ? `${bet.fixture} — Convert to Real` : bet.fixture;
+  document.getElementById('bmp-subtitle').textContent = convertingFromPaper
+    ? `${bet.bet} · score ${bet.successScore} · book odds ${bet.bookOdds?.toFixed(2)} · stake will be re-sized with real Kelly against the real bankroll on confirm`
+    : `${bet.bet} · score ${bet.successScore} · book odds ${bet.bookOdds?.toFixed(2)} · Kelly £${(bet.displayStake ?? bet.suggestedStake)?.toFixed(2)}`;
   const pinnRef = document.getElementById('bmp-pinnacle-ref');
   if (bet.pinnacleOddsAtLock) {
     pinnRef.innerHTML = `<span style="color:var(--muted)">Pinnacle:</span> <strong style="color:var(--text1)">${bet.pinnacleOddsAtLock.toFixed(2)}</strong> <span style="color:var(--muted)">— any price below this doesn't clear the "beat Pinnacle" bar</span>`;
@@ -6167,8 +6178,13 @@ function selectBestExchange() {
   const rawOdds = bet ? _bmOddsForOutcome(bm, bet) : null;
   const comm    = bm.commission || 0.02;
   const netOdds = rawOdds ? 1 + (rawOdds - 1) * (1 - comm) : null;
-  const bankroll = bet?.mode === 'real' ? (STATE.realBankroll?.current || 1000) : (STATE.bankroll?.current || 1000);
-  const kellRaw  = bet ? _calcKelly(bet.modelProb, rawOdds, bankroll, bet.kellyFraction || 0.5) : null;
+  // This panel is real-money-only in both of its call sites — placing an already-
+  // real bet, or converting a paper bet to real — so the preview always sizes
+  // against the real bankroll and real Kelly fraction, never the paper ones the
+  // bet may still be carrying from its original lock.
+  const bankroll = STATE.realBankroll?.current || 1000;
+  const realFrac = STATE.settings?.realKellyFraction ?? 0.25;
+  const kellRaw  = bet ? _calcKelly(bet.modelProb, rawOdds, bankroll, realFrac) : null;
   const kellRnd  = kellRaw != null ? Math.max(0.5, Math.round(kellRaw * 2) / 2) : (bet?.displayStake ?? bet?.suggestedStake);
   selectBmRow(bm.id, bm.name, netOdds || rawOdds || bet?.bookOdds, kellRnd);
 }
@@ -6183,8 +6199,34 @@ function closeBmPanel() {
 async function confirmPlacement() {
   if (!_bmPanelBetId || !_bmSelectedId) { toast('Select a bookmaker row first', 'error'); return; }
   const odds  = parseFloat(document.getElementById('bmp-odds').value);
-  const stake = parseFloat(document.getElementById('bmp-stake').value);
   if (!odds || odds <= 1) { toast('Enter valid odds', 'error'); return; }
+
+  const bet = (STATE.bets || []).find(b => b.id === _bmPanelBetId);
+  const convertingFromPaper = bet && bet.mode !== 'real';
+
+  // Converting a paper bet to real: the server is the sole authority on stake —
+  // it re-sizes with the real Kelly fraction against the real bankroll (never
+  // whatever this panel's stake field shows, which was only ever a paper-Kelly
+  // preview). Sending a client-computed stake here would either be ignored or,
+  // worse, silently mislead about what actually got sized.
+  if (convertingFromPaper) {
+    try {
+      const { bet: updated } = await apiFetch(`/api/bets/${_bmPanelBetId}/convert-to-real`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ bookmakerId: _bmSelectedId, bookmakerName: _bmSelectedName, actualOdds: odds }),
+      });
+      closeBmPanel();
+      await loadState();
+      renderScout();
+      toast(`Converted to real — ${_bmSelectedName} @ ${odds}, £${updated.actualStake?.toFixed(2)} (real Kelly)`, 'success');
+    } catch (e) {
+      toast('Convert to real failed: ' + e.message, 'error');
+    }
+    return;
+  }
+
+  const stake = parseFloat(document.getElementById('bmp-stake').value);
   if (!stake || stake <= 0) { toast('Enter a stake', 'error'); return; }
 
   try {
