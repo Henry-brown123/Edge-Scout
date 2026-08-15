@@ -4325,7 +4325,21 @@ app.patch('/api/bets/:id', (req, res) => {
   const bet  = bets.find(b => b.id === req.params.id);
   if (!bet) return res.status(404).json({ error: 'Not found' });
 
-  const { result, actualStake, actualOdds } = req.body;
+  const { result, actualStake, actualOdds, mode, bookmakerId, bookmakerUsed, bankrollAtLock, kellyFraction, displayStake, placementStatus } = req.body;
+
+  // Correction fields for mode/bookmaker — the symmetric undo for convert-to-real
+  // (there's no dedicated revert-to-paper endpoint; this covers it plus any other
+  // one-off correction to these fields without needing a new endpoint each time).
+  if (mode != null) {
+    if (!['paper','real'].includes(mode)) return res.status(400).json({ error: 'Invalid mode' });
+    bet.mode = mode;
+  }
+  if (bookmakerId     !== undefined) bet.bookmakerId     = bookmakerId;
+  if (bookmakerUsed   !== undefined) bet.bookmakerUsed   = bookmakerUsed;
+  if (bankrollAtLock  != null)       bet.bankrollAtLock  = parseFloat(bankrollAtLock);
+  if (kellyFraction   != null)       bet.kellyFraction   = parseFloat(kellyFraction);
+  if (displayStake    != null)       bet.displayStake    = parseFloat(displayStake);
+  if (placementStatus !== undefined) bet.placementStatus = placementStatus;
 
   if (actualStake != null) {
     const v = parseFloat(actualStake);
