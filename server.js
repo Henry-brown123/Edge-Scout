@@ -7809,30 +7809,6 @@ app.get('/api/admin/weekly-retrain-log', (_req, res) => {
   });
 });
 
-// TEMP diagnostic for calibration-rules.md rule 12's cutoff decision — counts
-// League One/Two fixtures kicking off in the gap window between Addendum 19's
-// read (2026-08-11) and TRAINING_CUTOFF, to confirm none of them were already
-// part of that reported population. Remove after use.
-app.get('/api/admin/temp-gap-window-check', (_req, res) => {
-  const hist = readJSON('backfill-historical.json') || {};
-  const records = hist.scoredRecords || [];
-  const gapStart = new Date('2026-08-11T00:00:00Z').getTime();
-  const cutoff = new Date(TRAINING_CUTOFF).getTime();
-  const gap = records.filter(r => {
-    const lid = parseInt(r.leagueId, 10);
-    if (![41, 42].includes(lid)) return false;
-    const t = new Date(r.date).getTime();
-    return t >= gapStart && t < cutoff;
-  });
-  res.json({
-    gapStart: new Date(gapStart).toISOString(),
-    cutoff: TRAINING_CUTOFF,
-    count: gap.length,
-    byLeague: { 41: gap.filter(r => parseInt(r.leagueId,10)===41).length, 42: gap.filter(r => parseInt(r.leagueId,10)===42).length },
-    sample: gap.slice(0, 10).map(r => ({ leagueId: r.leagueId, date: r.date, actualOutcome: r.actualOutcome })),
-  });
-});
-
 app.put('/api/admin/weekly-retrain-pause', (req, res) => {
   const { paused } = req.body || {};
   if (typeof paused !== 'boolean') return res.status(400).json({ error: 'body must include { paused: true|false }' });
