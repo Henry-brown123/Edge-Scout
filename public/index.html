@@ -2332,15 +2332,25 @@ function apiFetchWithTimeout(url, opts = {}, ms = 5000) {
 
 async function loadState() {
   try {
-    const [s, meta, tierPerf, greenFlags] = await Promise.all([
+    const [s, meta, tierPerf, greenFlags, ltm] = await Promise.all([
       apiFetch('/api/state'),
       apiFetch('/api/scan-meta').catch(() => null),
       apiFetch('/api/tier-performance?mode=all').catch(() => null),
       apiFetch('/api/green-flags').catch(() => null),
+      apiFetch('/api/league-tier-matrix').catch(() => null),
     ]);
     STATE = s;
     STATE.greenFlags = greenFlags?.flags || []; // green-flag manual curation (Addendum 21 Part C)
     STATE.tierPerf = tierPerf; // used by Scout-page tier context lines — see tierContextLine()
+    // Urgent fix (2026-08-15): scoutTierBlock's "no historical baseline" check only
+    // knew about STATE.tierPerf's validatedLeagueIds (the 9 formal train/test-split
+    // leagues) — it had no way to see unseen-population real-backtest evidence
+    // (Carabao Cup/League One/League Two, calibration-rules.md rule 10), so those
+    // leagues showed "not yet train/test validated" even with genuine ✓bt evidence
+    // already live on the Performance tab grid. Reusing the same already-correct
+    // /api/league-tier-matrix data the grid itself uses, fetched once here so
+    // scoutTierBlock can stay synchronous.
+    STATE.ltm = ltm;
     renderScout();
     updateBankrollBadge();
     renderBankrollPanel();
@@ -2482,10 +2492,27 @@ function scoutTierBlock(modelProb, leagueId, pickType) {
   const isValidated = perf?.scope?.validatedLeagueIds?.includes(parseInt(leagueId, 10));
   const fmtPct = v => `${v >= 0 ? '+' : ''}${(v*100).toFixed(1)}%`;
 
+  // Second, distinct form of real evidence (2026-08-15 fix): a league can lack a
+  // formal train/test split (isValidated above) but still have genuine unseen-
+  // population real-backtest evidence — Carabao Cup/League One/League Two, per
+  // calibration-rules.md rule 10, same data already shown correctly (✓bt) on the
+  // Performance tab grid. Checked only when the validated-split path finds
+  // nothing, and rendered with distinct wording — this is a different evidence
+  // method (full matched population, no split) and must not be presented as if
+  // it were the train/test-validated figure above.
+  const ltmLid = parseInt(leagueId, 10);
+  const ltmLeague = STATE.ltm?.scope?.leagues?.find(l => l.id === ltmLid);
+  const isUnseenBacktest = ltmLeague?.historicalSource === 'real-backtest';
+  const unseenCell = isUnseenBacktest ? STATE.ltm?.matrix?.[String(ltmLid)]?.cells?.[tier] : null;
+
   let contextHtml;
   let pickTypeHtml = '';
   if (!perf) {
     contextHtml = `<span style="color:var(--muted)">tier reference unavailable</span>`;
+  } else if (!isValidated && unseenCell) {
+    contextHtml = `Historical (unseen-population backtest): <span class="${unseenCell.roi >= 0 ? 'c-green' : 'c-red'}">${fmtPct(unseenCell.roi)}</span> (n=${unseenCell.n}${unseenCell.thin ? ', thin' : ''}) <span style="color:var(--muted)">— full matched population, no train/test split (rule 10)</span>`;
+  } else if (!isValidated && isUnseenBacktest) {
+    contextHtml = `<span style="color:var(--muted)">no historical baseline for this tier (unseen-population backtest has no matched bets here yet)</span>`;
   } else if (!isValidated) {
     contextHtml = `<span style="color:var(--muted)">no historical baseline — league not yet train/test validated</span>`;
   } else {
