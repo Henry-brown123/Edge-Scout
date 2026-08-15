@@ -7371,7 +7371,28 @@ app.get('/api/performance/real', (_req, res) => {
 
 const _serverStartedAt = new Date().toISOString();
 
+// backfill-historical.json (58MB+) and lineups.json (28MB+, and both still
+// growing) used to be re-parsed from disk on every single /api/server-status
+// call. Harmless at small data volumes, but once these files grew this
+// endpoint became expensive enough that routine status polling (e.g. a
+// health-check loop hitting it every few seconds) triggered a real
+// memory-pressure crash-loop — confirmed 2026-08-15. This is a status/health
+// endpoint, not something that needs second-by-second freshness, so a short
+// cache window removes the repeated-reparse cost entirely for normal polling
+// cadences. `server.uptime` is refreshed on every call regardless (cheap,
+// and freezing it for 30s at a time would look like a bug on a status page).
+let _serverStatusCache   = null;
+let _serverStatusCacheAt = 0;
+const SERVER_STATUS_CACHE_MS = 30000;
+
 app.get('/api/server-status', async (_req, res) => {
+  if (_serverStatusCache && (Date.now() - _serverStatusCacheAt) < SERVER_STATUS_CACHE_MS) {
+    return res.json({
+      ..._serverStatusCache,
+      server: { ..._serverStatusCache.server, uptime: Math.floor(process.uptime()) },
+    });
+  }
+
   // Disk writability check
   const testFile = path.join(DATA_DIR, '.write-test');
   let diskWritable = false;
@@ -7388,7 +7409,7 @@ app.get('/api/server-status', async (_req, res) => {
 
   const hist    = readJSON('backfill-historical.json');
   const stats   = readJSON('fixture-stats.json') || {};
-  const lineups = readJSON('lineups.json') || {};
+  const lineups = getLineups(); // already cached in-memory (see getLineups) — no raw re-read needed
   const profiles = require('./teamProfiles').readProfiles();
   const { getWOWYDeltas: _gwd } = require('./teamProfiles');
   let wowyHighConf = 0;
@@ -7420,7 +7441,7 @@ app.get('/api/server-status', async (_req, res) => {
   const retrainPending    = readJSON('retrain-pending.json') || { pending: false };
   const autoRetrainEnabled = (readJSON('settings.json') || {}).autoRetrainEnabled === true;
 
-  res.json({
+  const result = {
     server: { uptime: Math.floor(process.uptime()), startedAt: _serverStartedAt, nodeVersion: process.version, buildMarker: 'odds-fetch-fix-v2' },
     disk:   { dataDir: DATA_DIR, writable: diskWritable, files },
     data:   {
@@ -7460,7 +7481,11 @@ app.get('/api/server-status', async (_req, res) => {
       retrainPendingSince: retrainPending.thresholdCrossedAt ?? null,
     },
     apiQuotaUsedToday,
-  });
+  };
+
+  _serverStatusCache   = result;
+  _serverStatusCacheAt = Date.now();
+  res.json(result);
 });
 
 // Manual, explicit retrain trigger — the only way a real retrain runs while
