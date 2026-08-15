@@ -354,6 +354,20 @@ function getLeagueMode(leagueId) {
   return getLeagueModes()[String(leagueId)] || 'paper';
 }
 
+// Training-data holdout leagues (calibration-rules.md rule 10) — Carabao Cup,
+// League One, League Two, added 2026-08-10. Mirrors EXCLUDED_LEAGUE_IDS in
+// gbdt-train.js / gbdt-train-proxy.js exactly; that filter reads leagueId
+// straight off scoredRecords and has zero dependency on bet mode, stake, or
+// this flag — training-eligibility and staking-eligibility are independent
+// by construction, not just by convention.
+const TRAINING_HOLDOUT_LEAGUE_IDS = new Set([48, 41, 42]);
+// Of those three, League One/Two also had real staking blocked via
+// paperTradeOnly — a second, unrelated concern (funded-account/go-live
+// gating) riding on the same flag as the holdout protection. Decoupled below:
+// real Kelly stakes now size normally for these two. Carabao Cup keeps its
+// existing paperTradeOnly stake-zeroing untouched.
+const STAKE_ZEROING_EXEMPT_LEAGUE_IDS = new Set([41, 42]);
+
 // Sum of funded bookmaker accounts — used only for the canGoLive() "3+ funded accounts"
 // gate and the admin bookmaker-breakdown view. NOT the real-money bankroll used for Kelly
 // sizing or displayed to the user as "real bankroll" — that's getRealBankrollAccount(),
@@ -1379,6 +1393,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   const leagueMode  = getLeagueMode(leagueId);
   const paperTradeOnly = leagueMode === 'paper_only'
     || (settings.paperTradeOnly || []).includes(parseInt(leagueId, 10));
+  const isTrainingHoldout = TRAINING_HOLDOUT_LEAGUE_IDS.has(parseInt(leagueId, 10));
   const betMode = leagueMode === 'real' ? 'real' : 'paper';
 
   const goalsCandidates = scoreGoalsMarkets(
@@ -1393,7 +1408,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     context, competitionPhase, lowConfidence, maxModelBookGap, lowConfidenceReason,
     homeDataConf, awayDataConf, dataConf,
     homeFormCount, awayFormCount, minFormCount, tierThreshold,
-    teamIntel, paperTradeOnly, betMode,
+    teamIntel, paperTradeOnly, isTrainingHoldout, betMode,
     goalsCandidates, modelVersion, domesticBlendFixtures,
   };
 }
@@ -1556,6 +1571,7 @@ async function runMorningScan(leagueIds) {
               teamIntel:        scored.teamIntel,
               weatherCondition: scored.weatherCondition,
               paperTradeOnly:   scored.paperTradeOnly,
+              isTrainingHoldout: scored.isTrainingHoldout,
             });
             console.log(`  [WATCHING] ${scored.homeName} vs ${scored.awayName} — score ${best.successScore}`);
           }
@@ -1751,7 +1767,7 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
     const br    = getBankroll();
     const betId = uuidv4();
     const routingOddsEntry = _lookupOddsEntry(oddsMap, scored.homeName, scored.awayName);
-    const computedStake = scored.paperTradeOnly ? 0
+    const computedStake = (scored.paperTradeOnly && !STAKE_ZEROING_EXEMPT_LEAGUE_IDS.has(parseInt(leagueId, 10))) ? 0
       : isReal ? roundStake(realKelly.stake) : roundStake(best.kelly.stake);
     const bet   = {
       id:           betId,
@@ -1780,6 +1796,7 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
       ev:           best.ev,
       mode:          betMode,
       paperTradeOnly: scored.paperTradeOnly,
+      isTrainingHoldout: scored.isTrainingHoldout,
       kellyFraction: kellyFrac,
       kellStake:     computedStake,
       suggestedStake: computedStake,

@@ -2648,7 +2648,7 @@ function routingHTML(b) {
       <span style="color:var(--green);font-size:14px">✓</span>
       <div>
         <span style="color:var(--green);font-weight:600">Placed</span>
-        <span style="color:var(--muted);margin-left:8px">${b.bookmakerUsed} @ ${b.actualOdds?.toFixed(2)} · £${b.actualStake?.toFixed(2)}</span>
+        <span style="color:var(--muted);margin-left:8px">${b.bookmakerUsed || 'Paper'} @ ${b.actualOdds?.toFixed(2)} · £${b.actualStake?.toFixed(2)}</span>
         ${b.placedAt ? `<span style="color:var(--muted);margin-left:8px;font-size:11px">${new Date(b.placedAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}</span>` : ''}
       </div>
     </div>`;
@@ -2690,20 +2690,31 @@ function recommendedCard(b) {
     ? (b.bet === 'Home Win' ? `${home} Win` : b.bet === 'Away Win' ? `${away} Win` : b.bet)
     : b.bet;
   const isReal      = b.mode === 'real';
-  const isPaperOnly = b.paperTradeOnly;
+  const isTrainingHoldout = !!b.isTrainingHoldout;
+  const stakeIsZeroed = b.paperTradeOnly && (b.displayStake ?? b.suggestedStake) === 0;
+  // "paperTradeOnly" conflates two unrelated things: genuine EV-calibration-negative
+  // leagues (stake stays zeroed, banner below is accurate as-is) vs training-holdout
+  // leagues (Carabao Cup/League One/League Two) — those still carry paperTradeOnly
+  // for Carabao (stake still zeroed there) but League One/Two now size real stakes
+  // normally, so the old blanket "Zero real-money stake" text would be wrong for them.
+  const isGenericPaperOnly = b.paperTradeOnly && !isTrainingHoldout;
   const modeClass   = isReal ? 'real-money' : 'paper-trade';
   const modeBadge   = isReal
     ? `<span class="badge badge-real">REAL £</span>`
-    : isPaperOnly
+    : isGenericPaperOnly
       ? `<span class="badge badge-paper-only" title="EV calibration negative — paper only">PAPER ONLY</span>`
       : `<span class="badge badge-paper">PAPER</span>`;
+  const holdoutBadge = isTrainingHoldout
+    ? `<span class="badge" style="background:rgba(122,162,255,.12);border:1px solid rgba(122,162,255,.3);color:#7aa2ff" title="Results reserved for future model validation — not yet fed into training">HELD-OUT LEAGUE</span>`
+    : '';
   const stakeColor  = isReal ? 'var(--amber)' : 'var(--cyan)';
   const kellyLabel  = isReal
     ? `${kellyFractionLabel(b.kellyFraction)}-Kelly · real`
     : 'Kelly · paper';
   return `
     <div class="fixture-card recommended ${modeClass}" style="flex-direction:column;align-items:stretch;padding-bottom:12px">
-      ${isPaperOnly ? `<div style="background:rgba(255,170,0,0.12);border-bottom:1px solid rgba(255,170,0,0.3);padding:6px 14px;font-size:11px;font-weight:700;color:#ffaa00;border-radius:8px 8px 0 0;margin:-12px -12px 10px">⚠ PAPER ONLY — EV calibration negative. Zero real-money stake.</div>` : ''}
+      ${isGenericPaperOnly ? `<div style="background:rgba(255,170,0,0.12);border-bottom:1px solid rgba(255,170,0,0.3);padding:6px 14px;font-size:11px;font-weight:700;color:#ffaa00;border-radius:8px 8px 0 0;margin:-12px -12px 10px">⚠ PAPER ONLY — EV calibration negative. Zero real-money stake.</div>` : ''}
+      ${isTrainingHoldout ? `<div style="background:rgba(122,162,255,0.1);border-bottom:1px solid rgba(122,162,255,0.28);padding:6px 14px;font-size:11px;font-weight:700;color:#7aa2ff;border-radius:8px 8px 0 0;margin:-12px -12px 10px">Held-out league — results reserved for future model validation. ${stakeIsZeroed ? 'Paper only (zero real-money stake).' : 'Real betting enabled.'}</div>` : ''}
       ${isReal ? `<div style="background:rgba(255,209,102,0.08);border-bottom:1px solid rgba(255,209,102,0.2);padding:5px 14px;font-size:10px;font-weight:700;color:var(--amber);border-radius:8px 8px 0 0;margin:-12px -12px 8px;letter-spacing:.04em">REAL MONEY BET</div>` : ''}
       <div style="display:flex;align-items:flex-start;gap:10px">
         ${scoreBadge(b.successScore)}
@@ -2714,6 +2725,7 @@ function recommendedCard(b) {
             <span>🇬🇧 KO ${kickoff}</span>
             <span class="badge badge-cyan">${betLabel}</span>
             ${modeBadge}
+            ${holdoutBadge}
             <span style="color:var(--cyan)">+${edgePct}% edge</span>
             <span>@${b.bookOdds.toFixed(2)}</span>
             ${b.weather ? `<span title="Weather">🌧 ${b.weather.precipProb}% rain, ${b.weather.windSpeed?.toFixed(0)}km/h</span>` : ''}
@@ -2744,11 +2756,15 @@ function watchingCard(w) {
     ? (w.projectedBet === 'Home Win' ? `${home} Win` : w.projectedBet === 'Away Win' ? `${away} Win` : w.projectedBet)
     : w.projectedBet;
   const wMode = w.betMode || 'paper';
+  const wIsTrainingHoldout = !!w.isTrainingHoldout;
   const wModeTag = wMode === 'real'
     ? `<span class="badge badge-real">REAL £</span>`
-    : w.paperTradeOnly
+    : (w.paperTradeOnly && !wIsTrainingHoldout)
       ? `<span class="badge badge-paper-only" title="EV calibration negative — paper only">PAPER ONLY</span>`
       : `<span class="badge badge-paper">PAPER</span>`;
+  const wHoldoutBadge = wIsTrainingHoldout
+    ? `<span class="badge" style="background:rgba(122,162,255,.12);border:1px solid rgba(122,162,255,.3);color:#7aa2ff" title="Results reserved for future model validation — not yet fed into training">HELD-OUT LEAGUE</span>`
+    : '';
   return `
     <div class="fixture-card watching ${wMode === 'real' ? 'real-money' : 'paper-trade'}" onclick="openDrawerById('${w.id}')">
       ${scoreBadge(w.projectedScore)}
@@ -2765,6 +2781,7 @@ function watchingCard(w) {
       <div class="fixture-right">
         <span class="stage-tag tag-watching">WATCHING</span>
         ${wModeTag}
+        ${wHoldoutBadge}
         ${contextBadge(w.context)}
         ${weatherBadge(w.weatherCondition)}
         ${w.lowConfidence ? '<span class="badge badge-red" title="Model diverges from bookmaker beyond data-confidence threshold — will not auto-lock">LOW CONF</span>' : ''}
