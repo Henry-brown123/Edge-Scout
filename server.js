@@ -4314,27 +4314,67 @@ app.get('/api/team-profile/:teamId', (req, res) => {
 });
 
 // PATCH bet result (manual override)
+// PATCH a bet — manually set its result, and/or correct actualStake/actualOdds.
+// Setting `result` on an already-resolved bet is rejected (use POST .../revert
+// first) so edits to a settled bet's stake/odds can't accidentally masquerade
+// as a fresh resolution. Resolving before kickoff is rejected outright — there
+// is no legitimate scenario where a match is won/lost before it's been played
+// (see the accidental Crawley Town vs Crewe resolution this guard exists for).
 app.patch('/api/bets/:id', (req, res) => {
   const bets = getBets();
   const bet  = bets.find(b => b.id === req.params.id);
   if (!bet) return res.status(404).json({ error: 'Not found' });
 
-  const { result } = req.body;
-  if (!['win','loss','void'].includes(result)) return res.status(400).json({ error: 'Invalid result' });
+  const { result, actualStake, actualOdds } = req.body;
 
-  if (bet.result) return res.status(400).json({ error: 'Already resolved' });
+  if (actualStake != null) {
+    const v = parseFloat(actualStake);
+    if (!(v >= 0)) return res.status(400).json({ error: 'Invalid actualStake' });
+    bet.actualStake = v;
+  }
+  if (actualOdds != null) {
+    const v = parseFloat(actualOdds);
+    if (!(v > 1)) return res.status(400).json({ error: 'Invalid actualOdds' });
+    bet.actualOdds = v;
+  }
 
-  // Settle off the actually-placed odds/stake, not the lock-time suggestion — see the
-  // matching comment in the automated resolve loop above.
-  const settleOdds  = bet.actualOdds  ?? bet.bookOdds;
-  const settleStake = bet.actualStake ?? bet.suggestedStake;
-  const pnl = result === 'win'  ? parseFloat(((settleOdds - 1) * settleStake).toFixed(2))
-            : result === 'loss' ? -settleStake : 0;
+  if (result !== undefined) {
+    if (!['win','loss','void'].includes(result)) return res.status(400).json({ error: 'Invalid result' });
+    if (bet.result) return res.status(400).json({ error: 'Already resolved — use /api/bets/:id/revert first to change it' });
+    if (bet.kickoff && new Date() < new Date(bet.kickoff)) {
+      return res.status(400).json({ error: 'Cannot resolve before kickoff — the match has not started yet' });
+    }
+    bet.result     = result;
+    bet.stage      = 'RESOLVED';
+    bet.resolvedAt = new Date().toISOString();
+  }
 
-  bet.result     = result;
-  bet.pnl        = pnl;
-  bet.stage      = 'RESOLVED';
-  bet.resolvedAt = new Date().toISOString();
+  // Recompute pnl whenever the bet is resolved, so a stake/odds correction on
+  // an already-settled bet keeps P&L consistent with the edited values.
+  if (bet.result) {
+    const settleOdds  = bet.actualOdds  ?? bet.bookOdds;
+    const settleStake = bet.actualStake ?? bet.suggestedStake;
+    bet.pnl = bet.result === 'win'  ? parseFloat(((settleOdds - 1) * settleStake).toFixed(2))
+            : bet.result === 'loss' ? -settleStake : 0;
+  }
+
+  saveBets(bets);
+  const bankroll = bet.mode === 'real' ? getRealBankrollAccount() : getBankroll();
+  res.json({ bet, bankroll });
+});
+
+// POST revert a resolved bet back to pending — undoes an accidental W/L click.
+app.post('/api/bets/:id/revert', (req, res) => {
+  const bets = getBets();
+  const bet  = bets.find(b => b.id === req.params.id);
+  if (!bet) return res.status(404).json({ error: 'Not found' });
+  if (!bet.result) return res.status(400).json({ error: 'Not resolved' });
+
+  bet.result     = null;
+  bet.pnl        = null;
+  bet.stage      = 'RECOMMENDED';
+  bet.resolvedAt = null;
+  bet.finalScore = null;
 
   saveBets(bets);
   const bankroll = bet.mode === 'real' ? getRealBankrollAccount() : getBankroll();

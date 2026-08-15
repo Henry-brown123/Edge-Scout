@@ -2738,9 +2738,12 @@ function recommendedCard(b) {
             <div class="stake-label">${kellyLabel}</div>
           </div>
           <span class="stage-tag tag-recommended" style="background:${(b.placementStatus||'pending_placement')==='placed'?'rgba(0,255,135,.15)':'rgba(245,166,35,.15)'};color:${(b.placementStatus||'pending_placement')==='placed'?'var(--green)':'#f5a623'}">${(b.placementStatus||'pending_placement')==='placed'?'Placed':'Locked'}</span>
-          ${(b.placementStatus||'pending_placement')==='placed' ? `
-          <button class="btn btn-ghost btn-sm" onclick="manualResolve('${b.id}','win')" title="Mark Win" style="color:var(--green);border-color:var(--green)">W</button>
-          <button class="btn btn-ghost btn-sm" onclick="manualResolve('${b.id}','loss')" title="Mark Loss" style="color:var(--red);border-color:var(--red)">L</button>` : ''}
+          ${(b.placementStatus||'pending_placement')==='placed' ? (
+            kickoffPassed(b.kickoff)
+              ? `<button class="btn btn-ghost btn-sm" onclick="manualResolve('${b.id}','win')" title="Mark Win" style="color:var(--green);border-color:var(--green)">W</button>
+          <button class="btn btn-ghost btn-sm" onclick="manualResolve('${b.id}','loss')" title="Mark Loss" style="color:var(--red);border-color:var(--red)">L</button>`
+              : `<span title="Can't resolve before kickoff" style="font-size:10px;color:var(--muted)">Awaiting KO</span>`
+          ) : ''}
         </div>
       </div>
       ${routingHTML(b)}
@@ -2908,14 +2911,25 @@ async function confirmLock() {
   await forcePreMatch(_lmpWatchId, mode);
 }
 
+// Kickoff-time guard, mirrored client-side: hides the W/L buttons entirely
+// until the match has actually started. The server enforces this too (the
+// authoritative check) — this just stops the accidental click from being
+// possible in the first place.
+function kickoffPassed(kickoffIso) {
+  return !kickoffIso || new Date() >= new Date(kickoffIso);
+}
+
 async function manualResolve(id, result) {
+  const bet = (STATE.bets || []).find(b => b.id === id);
+  const label = bet ? `${bet.fixture} (£${(bet.actualStake ?? bet.suggestedStake ?? 0).toFixed(2)} @ ${(bet.actualOdds ?? bet.bookOdds ?? 0).toFixed(2)})` : 'this bet';
+  if (!confirm(`Mark ${label} as a ${result.toUpperCase()}?`)) return;
   try {
-    const { bet, bankroll } = await apiFetch(`/api/bets/${id}`, {
+    const { bet: updated, bankroll } = await apiFetch(`/api/bets/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ result }),
     });
-    toast(`${bet.fixture}: ${result.toUpperCase()} — P&L £${bet.pnl >= 0 ? '+' : ''}${bet.pnl?.toFixed(2)}`, result === 'win' ? 'success' : 'info');
+    toast(`${updated.fixture}: ${result.toUpperCase()} — P&L £${updated.pnl >= 0 ? '+' : ''}${updated.pnl?.toFixed(2)}`, result === 'win' ? 'success' : 'info');
     await loadState();
   } catch(e) { toast(e.message, 'error'); }
 }
