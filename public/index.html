@@ -5797,12 +5797,27 @@ async function openBmPanel(betId) {
   document.getElementById('bmp-exchange-summary').textContent = 'Calculating best exchange…';
   document.getElementById('bm-panel').style.display = 'flex';
 
+  // One silent retry before giving up — a fetch landing mid-deploy/restart 502s,
+  // and that's transient, not "you have zero bookmakers configured."
+  let books = null;
   try {
-    _bmPanelBooks = await apiFetch('/api/bookmakers');
+    books = await apiFetch('/api/bookmakers');
   } catch {
-    _bmPanelBooks = [];
+    await new Promise(r => setTimeout(r, 800));
+    try { books = await apiFetch('/api/bookmakers'); } catch { books = null; }
   }
 
+  if (books === null) {
+    // Fetch genuinely failed twice — show a distinct, retryable error state rather
+    // than silently reusing the "no bookmakers configured" empty-state text, which
+    // reads as "you have none set up" instead of "the request failed."
+    document.getElementById('bmp-table-body').innerHTML =
+      `<tr><td colspan="9" style="padding:20px;color:var(--red);text-align:center">Failed to load bookmakers — <a href="#" onclick="event.preventDefault();openBmPanel('${betId}')" style="color:var(--red);text-decoration:underline">click to retry</a></td></tr>`;
+    document.getElementById('bmp-exchange-summary').textContent = 'Could not load exchange odds — retry above';
+    return;
+  }
+
+  _bmPanelBooks = books;
   _renderBmTable(bet, _bmPanelBooks);
 }
 
