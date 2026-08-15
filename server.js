@@ -5265,6 +5265,19 @@ app.get('/api/_diag/season-coverage', (_req, res) => {
   res.json({ rows });
 });
 
+// TEMP DIAGNOSTIC — probe why /fixtures/statistics isn't landing on 2025-season
+// fixtures despite repeated runs. Remove once diagnosed.
+app.get('/api/_diag/stats-probe', async (req, res) => {
+  const fixtureId = req.query.fixture;
+  if (!fixtureId) return res.status(400).json({ error: 'fixture query param required' });
+  try {
+    const { data } = await apiSports.get('/fixtures/statistics', { params: { fixture: fixtureId } });
+    res.json({ fixtureId, responseLength: data?.response?.length ?? null, errors: data?.errors ?? null, raw: data });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // StatsBomb xG import — runs scripts/import-statsbomb.js server-side
 let _xgImportRunning = false;
 app.post('/api/backfill/xg', async (req, res) => {
