@@ -1908,8 +1908,17 @@ async function checkAndResolve() {
         // lock time, so this is a no-op for them.
         const settleOdds  = canonical.actualOdds  ?? canonical.bookOdds;
         const settleStake = canonical.actualStake ?? canonical.suggestedStake;
+        // Exchange bets (Betfair/Smarkets/Matchbook/BETDAQ) owe commission on net winnings
+        // only — losses are unaffected. bookmakerId also gets set on paper bets (for
+        // routing-accuracy analytics, not real settlement), so this must gate on
+        // mode === 'real', not just bookmakerId presence, or paper P&L would silently
+        // start including a commission that was never actually charged.
+        const commissionRate = (canonical.mode === 'real' && canonical.bookmakerId)
+          ? (getBookmakers().find(bm => bm.id === canonical.bookmakerId)?.commission || 0)
+          : 0;
+        const grossWin = (settleOdds - 1) * settleStake;
         const pnl = won
-          ? parseFloat(((settleOdds - 1) * settleStake).toFixed(2))
+          ? parseFloat((grossWin * (1 - commissionRate)).toFixed(2))
           : -settleStake;
         matchingBets.forEach(b => {
           b.result     = won ? 'win' : 'loss';
