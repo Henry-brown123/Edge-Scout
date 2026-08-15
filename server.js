@@ -1870,6 +1870,135 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
   }
 }
 
+// ─── HOURLY RE-SCAN ─────────────────────────────────────────────────────────
+// Between the 07:00 UTC morning scan and the T-60 pre-match lock, a watched
+// fixture could previously go 5+ hours (an afternoon kickoff) with no scoring
+// refresh at all — the Scout page kept showing the 07:00 numbers with nothing
+// re-fetched. This runs on the hour, every hour, for every currently-watched
+// fixture NOT already inside its T-60 window (that cron is the final,
+// most-authoritative pre-decision pass and always gets the last word — this
+// never races it). Updates the WATCHING entry in place; never locks or drops
+// a fixture — those decisions stay exclusively with the T-60/manual-lock path.
+// Deliberately duplicates runPreMatchScan's fetch-and-score construction
+// (same pattern already duplicated between runMorningScan and
+// runPreMatchScan) rather than refactoring that lock-critical path to be
+// reused here — this is a genuinely separate, lower-stakes concern and
+// shouldn't risk a regression in the code that creates real bets.
+async function runHourlyRescan() {
+  const watching = getWatching();
+  if (!watching.length) return { refreshed: 0 };
+
+  const now = Date.now();
+  // Skip anything already inside the T-60 (±15min) window — let that cron own it.
+  const toRefresh = watching.filter(w => (new Date(w.kickoff).getTime() - now) / 60000 > 65);
+  if (!toRefresh.length) return { refreshed: 0 };
+
+  const settings = getSettings();
+  const backfillData = readJSON('backfill-historical.json') || { fixtures: [] };
+  const backfillFixtures = (backfillData.fixtures || []).filter(f => f.fixture?.status?.short === 'FT');
+  const fixtureStatsDb = getFixtureStats();
+
+  console.log(`[Cron:HourlyRescan] Refreshing ${toRefresh.length} watching fixture(s)`);
+
+  // Group by league so standings/odds are fetched once per league, not once per fixture.
+  const byLeague = {};
+  toRefresh.forEach(w => { (byLeague[w.leagueId] = byLeague[w.leagueId] || []).push(w); });
+
+  let refreshed = 0;
+  for (const [leagueId, entries] of Object.entries(byLeague)) {
+    const meta = LEAGUES[leagueId];
+    if (!meta) continue;
+    try {
+      const formSeasons = [meta.season, meta.season - 1];
+      const formResults = await Promise.all(
+        formSeasons.map(s => apiSports.get('/fixtures', { params: { league: leagueId, season: s, last: 60 } }).catch(() => ({ data: { response: [] } })))
+      );
+      const formFixtures = formResults.flatMap(r => r.data?.response || [])
+        .filter(f => f.fixture?.status?.short === 'FT')
+        .sort((a, b) => new Date(b.fixture?.date) - new Date(a.fixture?.date));
+      const leagueBackfill = backfillFixtures.filter(f => String(f.league?.id) === String(leagueId));
+      const enrichedFormFixtures = [...formFixtures, ...leagueBackfill]
+        .filter((f, i, arr) => arr.findIndex(x => x.fixture?.id === f.fixture?.id) === i)
+        .sort((a, b) => new Date(b.fixture?.date) - new Date(a.fixture?.date));
+
+      const statsCache = {};
+      for (const f of formFixtures) {
+        const s = fixtureStatsDb[String(f.fixture?.id)];
+        if (s) statsCache[f.fixture.id] = s;
+      }
+
+      const { data: sd } = await apiSports.get('/standings', { params: { league: leagueId, season: meta.season } });
+      const standings = sd?.response?.[0]?.league?.standings || [];
+      const { oddsMap, totalsMap } = await fetchOddsForLeague(meta.sport || 'soccer_epl');
+
+      for (const w of entries) {
+        try {
+          const { data: fd } = await apiSports.get('/fixtures', { params: { id: w.fixtureId } });
+          const fix = fd?.response?.[0];
+          if (!fix) continue;
+
+          // Confirmed lineups + injuries — same enrichment the lock-time rescore uses.
+          // Cheap, and harmless when not yet available this far out (returns empty).
+          try {
+            const { data: lu } = await apiSports.get('/fixtures/lineups', { params: { fixture: fix.fixture.id } });
+            if (lu?.response?.length >= 2) {
+              const lineups = getLineups();
+              lineups[String(fix.fixture.id)] = {
+                home: parseApiLineup(lu.response[0]), away: parseApiLineup(lu.response[1]),
+                fetchedAt: new Date().toISOString(),
+              };
+              saveLineups(lineups);
+            }
+          } catch {}
+          try {
+            const { data: injData } = await apiSports.get('/injuries', { params: { fixture: fix.fixture.id } });
+            if (injData?.response?.length) fix._injuries = injData.response;
+          } catch {}
+
+          const scored = await scoreOneFixture(fix, enrichedFormFixtures, standings, statsCache, oddsMap, settings, totalsMap);
+          const best   = scored.results.reduce((a, b) => a.successScore > b.successScore ? a : b);
+          persistOddsSnapshot(fix, scored, meta.sport || 'soccer_epl', 'hourly_rescan', leagueId, meta.name, settings);
+
+          Object.assign(w, {
+            projectedScore:   best.successScore,
+            projectedBet:     best.bet,
+            modelProb:        best.modelProb,
+            bookOdds:         best.bookOdds,
+            impliedProb:      best.impliedProb,
+            edge:             best.edge,
+            ev:               best.ev,
+            kelly:            best.kelly,
+            allCandidates:    [...scored.results, ...(scored.goalsCandidates || [])],
+            weather:          scored.weather,
+            homeF:            scored.homeF,
+            awayF:            scored.awayF,
+            scoredAt:         new Date().toISOString(),
+            lowConfidence:    scored.lowConfidence,
+            maxModelBookGap:  scored.maxModelBookGap,
+            lowConfidenceReason: scored.lowConfidenceReason,
+            context:          scored.context,
+            competitionPhase: scored.competitionPhase,
+            homeDataConf:     scored.homeDataConf,
+            awayDataConf:     scored.awayDataConf,
+            teamIntel:        scored.teamIntel,
+            weatherCondition: scored.weatherCondition,
+            paperTradeOnly:   scored.paperTradeOnly,
+            isTrainingHoldout: scored.isTrainingHoldout,
+          });
+          refreshed++;
+        } catch (e) {
+          console.error(`[Cron:HourlyRescan] fixture ${w.fixtureId} error: ${e.message}`);
+        }
+      }
+    } catch (e) {
+      console.error(`[Cron:HourlyRescan] league ${leagueId} error: ${e.message}`);
+    }
+  }
+  saveWatching(watching, { allowEmpty: true });
+  console.log(`[Cron:HourlyRescan] Complete — refreshed ${refreshed}/${toRefresh.length} fixture(s)`);
+  return { refreshed, skipped: watching.length - toRefresh.length };
+}
+
 // ─── AUTO-RESOLUTION ────────────────────────────────────────────────────────
 
 async function checkAndResolve() {
@@ -2076,8 +2205,8 @@ async function fetchClosingOddsForBet(bet) {
   }
 }
 
-const _cronRunning = { backfill: false, morningScan: false, preMatch: false, resolve: false, clv: false };
-const _cronLastRan = { backfill: null,  morningScan: null,  resolve: null };
+const _cronRunning = { backfill: false, morningScan: false, preMatch: false, resolve: false, clv: false, hourlyRescan: false };
+const _cronLastRan = { backfill: null,  morningScan: null,  resolve: null, hourlyRescan: null };
 
 function setupScheduler() {
   // 1. 00:05 UTC — nightly backfill chain
@@ -2114,6 +2243,27 @@ function setupScheduler() {
     } finally {
       _cronRunning.morningScan = false;
       _cronLastRan.morningScan = new Date().toISOString();
+    }
+  }, { timezone: 'UTC' });
+
+  // 2c. On the hour, every hour — watching-fixture rescan. Fills the gap between the
+  // 07:00 morning scan and T-60 (up to 5+ hours of no refresh for an afternoon
+  // kickoff) with a fixed, predictable cadence — never races the T-60/lock path,
+  // which stays the final, most-authoritative pre-decision refresh (see
+  // runHourlyRescan's own comment for the T-60 handoff logic).
+  cron.schedule('0 * * * *', async () => {
+    if (isRateLimited()) { console.log('[Cron:HourlyRescan] Skipped — rate limited'); return; }
+    if (_cronRunning.hourlyRescan) { console.log('[Cron:HourlyRescan] Skipped — already running'); return; }
+    _cronRunning.hourlyRescan = true;
+    const t0 = Date.now();
+    try {
+      const result = await runHourlyRescan();
+      console.log(`[Cron:HourlyRescan] Complete in ${Math.round((Date.now() - t0) / 1000)}s — ${JSON.stringify(result)}`);
+    } catch (e) {
+      console.error(`[Cron:HourlyRescan] Error: ${e.message}`);
+    } finally {
+      _cronRunning.hourlyRescan = false;
+      _cronLastRan.hourlyRescan = new Date().toISOString();
     }
   }, { timezone: 'UTC' });
 
@@ -4407,6 +4557,23 @@ app.post('/api/scan/morning', async (req, res) => {
   const leagues = req.body.leagues || getSettings().activeLeagues;
   res.json({ started: true, leagues });
   runMorningScan(leagues).catch(e => console.error('[ManualMorningScan]', e.message));
+});
+
+// Manual trigger for the hourly watching-fixture rescan (also runs automatically
+// on the hour — see setupScheduler). Returns synchronously since a single pass
+// over the current watching list is quick, unlike the full morning scan above.
+app.post('/api/scan/hourly-rescan', async (_req, res) => {
+  if (_cronRunning.hourlyRescan) return res.json({ started: false, message: 'Already running' });
+  _cronRunning.hourlyRescan = true;
+  try {
+    const result = await runHourlyRescan();
+    res.json({ started: true, ...result });
+  } catch (e) {
+    res.status(500).json({ started: false, error: e.message });
+  } finally {
+    _cronRunning.hourlyRescan = false;
+    _cronLastRan.hourlyRescan = new Date().toISOString();
+  }
 });
 
 // Historical profile backfill — fetches 3 seasons of data per league and rebuilds all profiles
@@ -7536,7 +7703,7 @@ app.get('/api/server-status', async (_req, res) => {
     },
     rateLimit:          getRateLimitState(),
     backfill:           { phase: _startupStatus.phase, startedAt: _startupStatus.startedAt, completedAt: _startupStatus.completedAt, lastRan: _cronLastRan.backfill },
-    crons:              { backfill: { lastRan: _cronLastRan.backfill, schedule: '00:05 UTC daily' }, morningScan: { lastRan: _cronLastRan.morningScan, schedule: '07:00 UTC daily' } },
+    crons:              { backfill: { lastRan: _cronLastRan.backfill, schedule: '00:05 UTC daily' }, morningScan: { lastRan: _cronLastRan.morningScan, schedule: '07:00 UTC daily' }, hourlyRescan: { lastRan: _cronLastRan.hourlyRescan, schedule: 'On the hour, every hour (UTC)' } },
     model: {
       type:          gbdtMeta ? 'gbdt' : 'linear',
       trainedAt:     gbdtMeta?.trainedAt ?? null,
