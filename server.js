@@ -5215,6 +5215,30 @@ app.get('/api/backfill/lineups/status', (_req, res) => {
   res.json({ running: _lineupsBackfillRunning, count: Object.keys(lineupsDb).length });
 });
 
+// TEMP DIAGNOSTIC — before/after verification for the 2025/2026 LINEUP_SEASONS/
+// STATS_SEASONS fix. Remove once the season-addition ingestion is verified.
+app.get('/api/_diag/season-coverage', (_req, res) => {
+  const historical = readJSON('backfill-historical.json');
+  const lineupsDb  = getLineups();
+  const statsDb    = getFixtureStats();
+  const rows = [];
+  for (const lid of LINEUP_LEAGUES) {
+    for (const season of [2025, 2026]) {
+      const fixtures = (historical?.fixtures || []).filter(f => f.league?.id === lid && f.league?.season === season);
+      const withLineup = fixtures.filter(f => lineupsDb[String(f.fixture?.id)]).length;
+      const withStats  = fixtures.filter(f => statsDb[String(f.fixture?.id)]).length;
+      const sample = fixtures[0];
+      rows.push({
+        league: lid, season, fixtureCount: fixtures.length, withLineup, withStats,
+        sampleFixtureId: sample?.fixture?.id || null,
+        sampleHasLineup: sample ? !!lineupsDb[String(sample.fixture?.id)] : null,
+        sampleTeams: sample ? `${sample.teams?.home?.name} vs ${sample.teams?.away?.name}` : null,
+      });
+    }
+  }
+  res.json({ rows });
+});
+
 // StatsBomb xG import — runs scripts/import-statsbomb.js server-side
 let _xgImportRunning = false;
 app.post('/api/backfill/xg', async (req, res) => {
