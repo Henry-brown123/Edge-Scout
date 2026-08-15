@@ -2734,7 +2734,7 @@ function recommendedCard(b) {
         </div>
         <div class="fixture-right" style="flex-shrink:0">
           <div class="stake-box">
-            <div class="stake-amount" style="color:${stakeColor}">£${(b.displayStake ?? b.suggestedStake).toFixed(2)}</div>
+            <div class="stake-amount" style="color:${stakeColor}">£${(b.actualStake ?? b.displayStake ?? b.suggestedStake).toFixed(2)}</div>
             <div class="stake-label">${kellyLabel}</div>
           </div>
           <span class="stage-tag tag-recommended" style="background:${(b.placementStatus||'pending_placement')==='placed'?'rgba(0,255,135,.15)':'rgba(245,166,35,.15)'};color:${(b.placementStatus||'pending_placement')==='placed'?'var(--green)':'#f5a623'}">${(b.placementStatus||'pending_placement')==='placed'?'Placed':'Locked'}</span>
@@ -3034,7 +3034,14 @@ async function renderPerfMode(mode) {
   // same fixtureId once under paper and once under real — both are legitimate rows).
   const modeBets = bets.filter(b => mode === 'paper' ? (!b.mode || b.mode === 'paper') : mode === 'real' ? b.mode === 'real' : true);
   const seen = new Set();
-  const allPlaced = modeBets.filter(b => b.suggestedStake > 0 && (b.result || b.stage === 'RECOMMENDED'))
+  // Was `b.suggestedStake > 0` only — excluded any bet whose auto-computed
+  // suggestion happened to be zero (e.g. locked in a paperTradeOnly-zeroed
+  // league) even if it was later genuinely staked for real via a manual
+  // bookmaker-confirmed actualStake (confirmed: this is exactly what hid
+  // Cambridge United vs Wigan — suggestedStake 0, actualStake £129.25 real).
+  // actualStake is the authoritative "what actually happened" figure once a
+  // bet is placed, same precedence used for settlement/pnl elsewhere.
+  const allPlaced = modeBets.filter(b => (b.actualStake ?? b.suggestedStake) > 0 && (b.result || b.stage === 'RECOMMENDED'))
     .filter(b => { const k = `${b.fixtureId}_${b.mode || 'paper'}`; if (seen.has(k)) return false; seen.add(k); return true; });
 
   // Apply period filter

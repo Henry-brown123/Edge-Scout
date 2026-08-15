@@ -4495,6 +4495,14 @@ app.patch('/api/bets/:id', (req, res) => {
     const v = parseFloat(actualStake);
     if (!(v >= 0)) return res.status(400).json({ error: 'Invalid actualStake' });
     bet.actualStake = v;
+    // displayStake is what the Scout-tab card actually renders (recommendedCard
+    // reads displayStake, not actualStake) — keep it in lockstep here rather than
+    // relying on every caller to remember to also pass displayStake explicitly.
+    // A stake correction via this endpoint previously left the card showing the
+    // old figure even though the authoritative actualStake was already fixed
+    // (confirmed: the Crawley Town vs Crewe £45→£90 correction did exactly this).
+    // An explicit displayStake in the same request body still wins if provided.
+    if (displayStake == null) bet.displayStake = v;
   }
   if (actualOdds != null) {
     const v = parseFloat(actualOdds);
