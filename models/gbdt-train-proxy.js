@@ -49,13 +49,31 @@ const WF_ENABLE_NARROW_AWAY_PLATT = process.env.WF_ENABLE_NARROW_AWAY_PLATT === 
 const NARROW_AWAY_BAND = { min: 0.45, max: 0.70 };
 const NARROW_AWAY_MIN_FIT_N = 30; // below this, the inner-test subset is too thin for a stable 2-parameter fit — skip correction for this block rather than force one
 
-// Carabao Cup / League One / League Two — same held-aside population gbdt-train.js
-// excludes (docs/tier-calibration-analysis.md Addenda 16-19, calibration-rules.md
-// rule 10). This script never had the exclusion before Addendum 21 — it was only
-// ever used for a single-holdout diagnostic over the original 9 leagues, so the gap
-// was latent, not yet consequential, until walk-forward mode needed a real
-// leagues-included/excluded guarantee. Applied in both modes now for consistency.
-const EXCLUDED_LEAGUE_IDS = new Set([48, 41, 42]);
+// Carabao Cup — same held-aside population gbdt-train.js excludes
+// (docs/tier-calibration-analysis.md Addenda 16-19, calibration-rules.md rule
+// 10). Paper-only, no real-money pressure to fold it in, so it stays under
+// rule 10's original permanent, whole-population exclusion.
+const FULLY_EXCLUDED_LEAGUE_IDS = new Set([48]);
+
+// League One / League Two — date-split, mirrors gbdt-train.js exactly
+// (calibration-rules.md rule 12, applied 2026-08-15). See gbdt-train.js's
+// own comment for the full reasoning; kept in sync here rather than shared
+// via a common module, matching this codebase's existing convention for
+// these training-exclusion mirrors (explicit "mirrors X" comments rather
+// than a shared abstraction — see server.js's TRAINING_HOLDOUT_LEAGUE_IDS /
+// WEEKLY_RETRAIN_EXCLUDED_LEAGUE_IDS for the same pattern).
+const DATE_SPLIT_LEAGUE_IDS = new Set([41, 42]);
+const TRAINING_CUTOFF = '2026-08-11T09:00:00Z';
+
+function isTrainingExcluded(leagueId, date) {
+  const lid = parseInt(leagueId, 10);
+  if (FULLY_EXCLUDED_LEAGUE_IDS.has(lid)) return true;
+  if (DATE_SPLIT_LEAGUE_IDS.has(lid)) {
+    if (!date) return true;
+    return new Date(date).getTime() < new Date(TRAINING_CUTOFF).getTime();
+  }
+  return false;
+}
 
 // In-sample leagues walk-forward reports results for individually (Addendum 21).
 // Conference League (848) is deliberately included in TRAINING (it's part of the
@@ -82,7 +100,7 @@ function loadData() {
   const records = raw.scoredRecords || [];
   return records
     .filter(r => r.homeFactors && r.awayFactors && r.actualOutcome && r.context && r.date)
-    .filter(r => !EXCLUDED_LEAGUE_IDS.has(parseInt(r.leagueId, 10)))
+    .filter(r => !isTrainingExcluded(r.leagueId, r.date))
     .map(r => ({
       x:        buildFeatures(r.homeFactors, r.awayFactors, r.context),
       y:        r.actualOutcome,

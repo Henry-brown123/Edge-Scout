@@ -29,25 +29,53 @@ const L2_LAMBDA = 1.0;  // L2 regularisation on leaf values (Newton step)
 // local data/ dir only when DATA_DIR truly isn't set (e.g. run standalone in dev).
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../data');
 
-// Carabao Cup / League One / League Two — deliberately held-aside, never-yet-
-// calibrated population (docs/tier-calibration-analysis.md Addenda 16-19,
-// calibration-rules.md rule 10). gbdt-train.js has never had an exclusion
-// mechanism before this — it always drew its training pool from the entirety
-// of whatever backfill-historical.json it was pointed at (see "train/test
-// merge decision" in docs/model-versioning.md) — so without this filter, the
-// weekly retrain cycle would silently absorb this population into training
-// the very first time it ran. Folding it in is meant to be its own explicit,
-// deliberate future decision (Addendum 19), not something this recurring job
-// does on its own. Remove/adjust this set only as that deliberate step, with
-// its own documented reasoning — not as an incidental edit to this script.
-const EXCLUDED_LEAGUE_IDS = new Set([48, 41, 42]);
+// Carabao Cup — deliberately held-aside, never-yet-calibrated population
+// (docs/tier-calibration-analysis.md Addenda 16-19, calibration-rules.md rule
+// 10). Paper-only, no real-money pressure to fold it in, so it stays under
+// rule 10's original permanent, whole-population exclusion indefinitely.
+const FULLY_EXCLUDED_LEAGUE_IDS = new Set([48]);
+
+// League One / League Two — split by fixture kickoff date, not by league
+// (calibration-rules.md rule 12, applied 2026-08-15). Real money is staked on
+// these leagues and new fixtures resolve weekly with no way to improve the
+// model, but Addendum 19's backtest (the basis for the currently green-flagged
+// real-money cells) was computed against the full pre-cutoff population and
+// must never be contaminated. Anything with a kickoff strictly before
+// TRAINING_CUTOFF stays excluded from training forever, preserving exactly
+// the population that read was computed against. Anything at or after the
+// cutoff is training-eligible once it resolves, same as every other league on
+// the weekly retrain cycle. This is a training-pool-only decision — it does
+// NOT authorize touching avgHomeWinRate/homeAdvBaseWeight/etc. (rule 10) for
+// either league, and it must never be inferred from UNSEEN_POPULATION_LEAGUES
+// / historicalSource in server.js, which stay decoupled and permanently
+// 'real-backtest' regardless of what this filter does (rule 12).
+const DATE_SPLIT_LEAGUE_IDS = new Set([41, 42]);
+// Set to the commit timestamp of the temp diagnostic endpoint that produced
+// Addendum 19's matched-population read (2c0ed15, 2026-08-11T08:13:41+01:00 =
+// 07:13:41 UTC), rounded up to a clean, conservative margin past the latest
+// plausible query time that same morning — so no fixture that could have
+// contributed to the already-published +/-ROI figures is ever folded into
+// training later.
+const TRAINING_CUTOFF = '2026-08-11T09:00:00Z';
+
+function isTrainingExcluded(leagueId, date) {
+  const lid = parseInt(leagueId, 10);
+  if (FULLY_EXCLUDED_LEAGUE_IDS.has(lid)) return true;
+  if (DATE_SPLIT_LEAGUE_IDS.has(lid)) {
+    // No date on record → fail safe toward exclusion rather than risk folding
+    // in a fixture that can't be verified as post-cutoff.
+    if (!date) return true;
+    return new Date(date).getTime() < new Date(TRAINING_CUTOFF).getTime();
+  }
+  return false;
+}
 
 function loadData() {
   const raw = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'backfill-historical.json'), 'utf8'));
   const records = raw.scoredRecords || [];
   return records
     .filter(r => r.homeFactors && r.awayFactors && r.actualOutcome && r.context)
-    .filter(r => !EXCLUDED_LEAGUE_IDS.has(parseInt(r.leagueId, 10)))
+    .filter(r => !isTrainingExcluded(r.leagueId, r.date))
     .map(r => ({
       x:        buildFeatures(r.homeFactors, r.awayFactors, r.context),
       y:        r.actualOutcome,   // 'home' | 'draw' | 'away'

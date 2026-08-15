@@ -354,18 +354,39 @@ function getLeagueMode(leagueId) {
   return getLeagueModes()[String(leagueId)] || 'paper';
 }
 
-// Training-data holdout leagues (calibration-rules.md rule 10) — Carabao Cup,
-// League One, League Two, added 2026-08-10. Mirrors EXCLUDED_LEAGUE_IDS in
+// Training-data holdout leagues (calibration-rules.md rule 10) — Carabao Cup
+// added 2026-08-10, permanently held out. Mirrors FULLY_EXCLUDED_LEAGUE_IDS in
 // gbdt-train.js / gbdt-train-proxy.js exactly; that filter reads leagueId
 // straight off scoredRecords and has zero dependency on bet mode, stake, or
 // this flag — training-eligibility and staking-eligibility are independent
 // by construction, not just by convention.
-const TRAINING_HOLDOUT_LEAGUE_IDS = new Set([48, 41, 42]);
-// Of those three, League One/Two also had real staking blocked via
+const TRAINING_HOLDOUT_LEAGUE_IDS = new Set([48]);
+// League One / League Two — date-split holdout (calibration-rules.md rule 12,
+// applied 2026-08-15). Mirrors gbdt-train.js's DATE_SPLIT_LEAGUE_IDS /
+// TRAINING_CUTOFF exactly. A fixture's isTrainingHoldout is computed fresh at
+// scoreOneFixture() (bet-lock) time from its own kickoff vs this cutoff — it
+// is stamped once, permanently, onto the bet record, so already-locked bets
+// (e.g. Crawley Town vs Crewe, Cambridge United vs Wigan) keep whatever value
+// they were given at lock time regardless of any later change here.
+const DATE_SPLIT_HOLDOUT_LEAGUE_IDS = new Set([41, 42]);
+const TRAINING_CUTOFF = '2026-08-11T09:00:00Z'; // see calibration-rules.md rule 12
+
+function isFixtureTrainingHoldout(leagueId, kickoffIso) {
+  const lid = parseInt(leagueId, 10);
+  if (TRAINING_HOLDOUT_LEAGUE_IDS.has(lid)) return true;
+  if (DATE_SPLIT_HOLDOUT_LEAGUE_IDS.has(lid)) {
+    if (!kickoffIso) return true;
+    return new Date(kickoffIso).getTime() < new Date(TRAINING_CUTOFF).getTime();
+  }
+  return false;
+}
+
+// Of those three (48/41/42), League One/Two also had real staking blocked via
 // paperTradeOnly — a second, unrelated concern (funded-account/go-live
 // gating) riding on the same flag as the holdout protection. Decoupled below:
 // real Kelly stakes now size normally for these two. Carabao Cup keeps its
-// existing paperTradeOnly stake-zeroing untouched.
+// existing paperTradeOnly stake-zeroing untouched. Independent of, and
+// unaffected by, the rule-12 date split above.
 const STAKE_ZEROING_EXEMPT_LEAGUE_IDS = new Set([41, 42]);
 
 // Sum of funded bookmaker accounts — used only for the canGoLive() "3+ funded accounts"
@@ -1319,7 +1340,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
 
     const entry = {
       market: 'match_outcome',
-      bet: c.label, modelProb: c.prob, bookOdds: displayOdds, impliedProb: impliedP,
+      bet: c.label, modelProb: c.prob, calibratedProb: calProb, bookOdds: displayOdds, impliedProb: impliedP,
       edge, successScore: finalScore, kelly: k,
       ev: calProb * (displayOdds - 1) - (1 - calProb),
       pinnacleAvailable: !!pinnStripped,
@@ -1393,7 +1414,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   const leagueMode  = getLeagueMode(leagueId);
   const paperTradeOnly = leagueMode === 'paper_only'
     || (settings.paperTradeOnly || []).includes(parseInt(leagueId, 10));
-  const isTrainingHoldout = TRAINING_HOLDOUT_LEAGUE_IDS.has(parseInt(leagueId, 10));
+  const isTrainingHoldout = isFixtureTrainingHoldout(leagueId, fix.fixture?.date);
   const betMode = leagueMode === 'real' ? 'real' : 'paper';
 
   const goalsCandidates = scoreGoalsMarkets(
@@ -1551,6 +1572,7 @@ async function runMorningScan(leagueIds) {
               projectedScore:  best.successScore,
               projectedBet:    best.bet,
               modelProb:       best.modelProb,
+              calibratedProb:  best.calibratedProb,
               bookOdds:        best.bookOdds,
               impliedProb:     best.impliedProb,
               edge:            best.edge,
@@ -1784,6 +1806,7 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
       pickType:     best.bet === 'Home Win' ? 'home' : best.bet === 'Away Win' ? 'away' : 'draw',
       successScore: best.successScore,
       modelProb:    best.modelProb,
+      calibratedProb: best.calibratedProb,
       modelVersion: scored.modelVersion,
       bookOdds:     best.bookOdds,
       // Raw Pinnacle price at lock time, separate from bookOdds (which is a generic
@@ -1963,6 +1986,7 @@ async function runHourlyRescan() {
             projectedScore:   best.successScore,
             projectedBet:     best.bet,
             modelProb:        best.modelProb,
+            calibratedProb:   best.calibratedProb,
             bookOdds:         best.bookOdds,
             impliedProb:      best.impliedProb,
             edge:             best.edge,
@@ -3122,19 +3146,34 @@ function runWalkForwardBlock(blockLabel, trainBefore, testEnd, onComplete, extra
 // whatever fixtures resolved since the last cycle, folds them into training via
 // the normal runGbdtRetrain() path, and logs what changed.
 //
-// Mirrors gbdt-train.js's own EXCLUDED_LEAGUE_IDS filter for the audit-log
+// Mirrors gbdt-train.js's own training-exclusion filter for the audit-log
 // breakdown only — the actual training-data exclusion is enforced inside
 // gbdt-train.js itself (the source of truth), this is just so the "new
 // fixtures folded in, by competition" log entry doesn't count fixtures that
-// were never actually eligible to be folded in.
-const WEEKLY_RETRAIN_EXCLUDED_LEAGUE_IDS = new Set([48, 41, 42]);
+// were never actually eligible to be folded in. Carabao Cup stays fully
+// excluded; League One/Two follow the same date-split cutoff as
+// gbdt-train.js's DATE_SPLIT_LEAGUE_IDS/TRAINING_CUTOFF (calibration-rules.md
+// rule 12) so this log doesn't silently misreport once the cutoff is live.
+const WEEKLY_RETRAIN_FULLY_EXCLUDED_LEAGUE_IDS = new Set([48]);
+const WEEKLY_RETRAIN_DATE_SPLIT_LEAGUE_IDS = new Set([41, 42]);
+const WEEKLY_RETRAIN_TRAINING_CUTOFF = '2026-08-11T09:00:00Z';
+
+function isWeeklyRetrainExcluded(leagueId, date) {
+  const lid = parseInt(leagueId, 10);
+  if (WEEKLY_RETRAIN_FULLY_EXCLUDED_LEAGUE_IDS.has(lid)) return true;
+  if (WEEKLY_RETRAIN_DATE_SPLIT_LEAGUE_IDS.has(lid)) {
+    if (!date) return true;
+    return new Date(date).getTime() < new Date(WEEKLY_RETRAIN_TRAINING_CUTOFF).getTime();
+  }
+  return false;
+}
 
 function getEligibleTrainingSnapshot() {
   const hist = readJSON('backfill-historical.json') || {};
   const records = hist.scoredRecords || [];
   const eligible = records.filter(r =>
     r.homeFactors && r.awayFactors && r.actualOutcome && r.context &&
-    !WEEKLY_RETRAIN_EXCLUDED_LEAGUE_IDS.has(parseInt(r.leagueId, 10))
+    !isWeeklyRetrainExcluded(r.leagueId, r.date)
   );
   const byLeague = {};
   for (const r of eligible) {
@@ -7019,8 +7058,8 @@ const CALIBRATION_AUDIT = {
   // not equivalence to a split. See CALIBRATION_AUDIT vs LEAGUE_TIER_MATRIX's comment
   // for the same distinction applied to the historical matrix.
   48:  { reliable: true, status: 'unseen_population', note: 'Single deliberate look completed 2026-08-11 against the full matched-odds population (n=330, posEdgeN=168) — no train/test split, none of this data has ever been used for tuning. ROI +18.5%, CI (-8.5%, +45.6%) spans zero and posEdgeN is well below the rule-6 decision-grade floor — a tempting number on a small, genuinely unseen sample, not a confirmed edge. Structural gap found: Carabao Cup Round 1 fixtures (smaller-club pairings, e.g. Sutton Utd, Newport County, Accrington Stanley) show near-zero Pinnacle odds-market coverage historically — a real, confirmed data-availability limit, not a team-name-matching bug (verified via debug mode: 100% of misses were zero-event API responses, not failed name matches).' },
-  41:  { reliable: true, status: 'unseen_population', note: 'Single deliberate look completed 2026-08-11 against the full matched-odds population (n=3,344, posEdgeN=1,580) — no train/test split, none of this data has ever been used for tuning. ROI -3.6%, CI (-9.8%, +2.5%) spans zero — decision-grade sample (posEdgeN clears the rule-6 floor), no confirmed edge. One cell excludes zero: the 50-55% tier (n=230) shows CI (-30.1%, -0.9%), a genuinely negative reading worth watching, though a single cell at this population size is not yet a leaguewide finding.' },
-  42:  { reliable: true, status: 'unseen_population', note: 'Single deliberate look completed 2026-08-11 against the full matched-odds population (n=3,338, posEdgeN=1,746) — no train/test split, none of this data has ever been used for tuning. ROI +4.2%, CI (-2.7%, +11.0%) spans zero — decision-grade sample (posEdgeN clears the rule-6 floor), no confirmed edge. Home picks specifically (n=2,518, posEdgeN=1,304) show ROI +8.0% with CI (-0.1%, +16.1%) — the closest any cut of this population comes to excluding zero, worth a closer look in any future dedicated cycle, not yet a confirmed finding on its own.' },
+  41:  { reliable: true, status: 'unseen_population', note: 'Single deliberate look completed 2026-08-11 against the full matched-odds population (n=3,344, posEdgeN=1,580) — no train/test split, none of this data has ever been used for tuning. ROI -3.6%, CI (-9.8%, +2.5%) spans zero — decision-grade sample (posEdgeN clears the rule-6 floor), no confirmed edge. One cell excludes zero: the 50-55% tier (n=230) shows CI (-30.1%, -0.9%), a genuinely negative reading worth watching, though a single cell at this population size is not yet a leaguewide finding. As of 2026-08-15 (rule 12): training exclusion is now date-split at kickoff cutoff 2026-08-11T09:00:00Z, not whole-league — this backtest population (all pre-cutoff) stays permanently protected and this reading never changes; fixtures kicking off at/after the cutoff feed the weekly retrain and accumulate as a separate, normal Live reading instead.' },
+  42:  { reliable: true, status: 'unseen_population', note: 'Single deliberate look completed 2026-08-11 against the full matched-odds population (n=3,338, posEdgeN=1,746) — no train/test split, none of this data has ever been used for tuning. ROI +4.2%, CI (-2.7%, +11.0%) spans zero — decision-grade sample (posEdgeN clears the rule-6 floor), no confirmed edge. Home picks specifically (n=2,518, posEdgeN=1,304) show ROI +8.0% with CI (-0.1%, +16.1%) — the closest any cut of this population comes to excluding zero, worth a closer look in any future dedicated cycle, not yet a confirmed finding on its own. As of 2026-08-15 (rule 12): training exclusion is now date-split at kickoff cutoff 2026-08-11T09:00:00Z, not whole-league — this backtest population (all pre-cutoff) stays permanently protected and this reading never changes; fixtures kicking off at/after the cutoff feed the weekly retrain and accumulate as a separate, normal Live reading instead.' },
 };
 
 // Leagues with a genuine, documented train/test split (docs/calibration-rules.md
@@ -7767,6 +7806,30 @@ app.get('/api/admin/weekly-retrain-log', (_req, res) => {
     paused: settings.weeklyRetrainPaused === true,
     nextScheduled: 'Mondays 05:15 UTC',
     entries: log,
+  });
+});
+
+// TEMP diagnostic for calibration-rules.md rule 12's cutoff decision — counts
+// League One/Two fixtures kicking off in the gap window between Addendum 19's
+// read (2026-08-11) and TRAINING_CUTOFF, to confirm none of them were already
+// part of that reported population. Remove after use.
+app.get('/api/admin/temp-gap-window-check', (_req, res) => {
+  const hist = readJSON('backfill-historical.json') || {};
+  const records = hist.scoredRecords || [];
+  const gapStart = new Date('2026-08-11T00:00:00Z').getTime();
+  const cutoff = new Date(TRAINING_CUTOFF).getTime();
+  const gap = records.filter(r => {
+    const lid = parseInt(r.leagueId, 10);
+    if (![41, 42].includes(lid)) return false;
+    const t = new Date(r.date).getTime();
+    return t >= gapStart && t < cutoff;
+  });
+  res.json({
+    gapStart: new Date(gapStart).toISOString(),
+    cutoff: TRAINING_CUTOFF,
+    count: gap.length,
+    byLeague: { 41: gap.filter(r => parseInt(r.leagueId,10)===41).length, 42: gap.filter(r => parseInt(r.leagueId,10)===42).length },
+    sample: gap.slice(0, 10).map(r => ({ leagueId: r.leagueId, date: r.date, actualOutcome: r.actualOutcome })),
   });
 });
 

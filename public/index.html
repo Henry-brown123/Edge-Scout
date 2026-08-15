@@ -2704,8 +2704,17 @@ function recommendedCard(b) {
     : isGenericPaperOnly
       ? `<span class="badge badge-paper-only" title="EV calibration negative — paper only">PAPER ONLY</span>`
       : `<span class="badge badge-paper">PAPER</span>`;
+  // Carabao Cup (48) is permanently, wholly training-excluded; League One/Two (41/42)
+  // are date-split (calibration-rules.md rule 12) — isTrainingHoldout is per-fixture
+  // there (true only for fixtures that kicked off before the cutoff), so the copy
+  // below distinguishes "this fixture" from "this league" rather than implying a
+  // blanket, still-pending league-wide exclusion either way.
+  const isDateSplitLeague = [41, 42].includes(parseInt(b.leagueId, 10));
+  const holdoutTooltip = isDateSplitLeague
+    ? 'This fixture kicked off before the training cutoff, so its result stays permanently out of the model — a deliberate, standing design choice to keep a clean backtest population, not a pending state. Fixtures from this league at/after the cutoff do feed the weekly retrain.'
+    : "This league's results are kept permanently out of training by design — a clean, standing backtest population, not a pending or temporary state.";
   const holdoutBadge = isTrainingHoldout
-    ? `<span class="badge" style="background:rgba(122,162,255,.12);border:1px solid rgba(122,162,255,.3);color:#7aa2ff" title="Results reserved for future model validation — not yet fed into training">HELD-OUT LEAGUE</span>`
+    ? `<span class="badge" style="background:rgba(122,162,255,.12);border:1px solid rgba(122,162,255,.3);color:#7aa2ff" title="${holdoutTooltip}">TRAINING-EXCLUDED</span>`
     : '';
   const stakeColor  = isReal ? 'var(--amber)' : 'var(--cyan)';
   const kellyLabel  = isReal
@@ -2714,7 +2723,7 @@ function recommendedCard(b) {
   return `
     <div class="fixture-card recommended ${modeClass}" style="flex-direction:column;align-items:stretch;padding-bottom:12px;cursor:pointer" onclick="openBetDrawerById('${b.id}')">
       ${isGenericPaperOnly ? `<div style="background:rgba(255,170,0,0.12);border-bottom:1px solid rgba(255,170,0,0.3);padding:6px 14px;font-size:11px;font-weight:700;color:#ffaa00;border-radius:8px 8px 0 0;margin:-12px -12px 10px">⚠ PAPER ONLY — EV calibration negative. Zero real-money stake.</div>` : ''}
-      ${isTrainingHoldout ? `<div style="background:rgba(122,162,255,0.1);border-bottom:1px solid rgba(122,162,255,0.28);padding:6px 14px;font-size:11px;font-weight:700;color:#7aa2ff;border-radius:8px 8px 0 0;margin:-12px -12px 10px">Held-out league — results reserved for future model validation. ${stakeIsZeroed ? 'Paper only (zero real-money stake).' : 'Real betting enabled.'}</div>` : ''}
+      ${isTrainingHoldout ? `<div style="background:rgba(122,162,255,0.1);border-bottom:1px solid rgba(122,162,255,0.28);padding:6px 14px;font-size:11px;font-weight:700;color:#7aa2ff;border-radius:8px 8px 0 0;margin:-12px -12px 10px">${isDateSplitLeague ? 'Training-excluded fixture — kicked off before the cutoff, so this result stays permanently out of the model by design (not pending).' : 'Training-excluded league — results kept permanently clean for backtesting by design (not pending).'} ${stakeIsZeroed ? 'Paper only (zero real-money stake).' : 'Real betting fully enabled.'}</div>` : ''}
       ${isReal ? `<div style="background:rgba(255,209,102,0.08);border-bottom:1px solid rgba(255,209,102,0.2);padding:5px 14px;font-size:10px;font-weight:700;color:var(--amber);border-radius:8px 8px 0 0;margin:-12px -12px 8px;letter-spacing:.04em">REAL MONEY BET</div>` : ''}
       <div style="display:flex;align-items:flex-start;gap:10px">
         ${scoreBadge(b.successScore)}
@@ -2775,8 +2784,12 @@ function watchingCard(w) {
     : (w.paperTradeOnly && !wIsTrainingHoldout)
       ? `<span class="badge badge-paper-only" title="EV calibration negative — paper only">PAPER ONLY</span>`
       : `<span class="badge badge-paper">PAPER</span>`;
+  const wIsDateSplitLeague = [41, 42].includes(parseInt(w.leagueId, 10));
+  const wHoldoutTooltip = wIsDateSplitLeague
+    ? 'This fixture kicked off before the training cutoff, so its result stays permanently out of the model — a deliberate, standing design choice, not a pending state. Fixtures from this league at/after the cutoff do feed the weekly retrain.'
+    : "This league's results are kept permanently out of training by design — a clean, standing backtest population, not a pending or temporary state.";
   const wHoldoutBadge = wIsTrainingHoldout
-    ? `<span class="badge" style="background:rgba(122,162,255,.12);border:1px solid rgba(122,162,255,.3);color:#7aa2ff" title="Results reserved for future model validation — not yet fed into training">HELD-OUT LEAGUE</span>`
+    ? `<span class="badge" style="background:rgba(122,162,255,.12);border:1px solid rgba(122,162,255,.3);color:#7aa2ff" title="${wHoldoutTooltip}">TRAINING-EXCLUDED</span>`
     : '';
   return `
     <div class="fixture-card watching ${wMode === 'real' ? 'real-money' : 'paper-trade'}" onclick="openDrawerById('${w.id}')">
@@ -5352,7 +5365,7 @@ function teamIntelSection(w) {
     </div>`;
 }
 
-function valueRow(label, modelP, odds, impliedProb, edge, ev, kelly, stake, isProjected, successScore) {
+function valueRow(label, modelP, odds, impliedProb, edge, ev, kelly, stake, isProjected, successScore, calibratedP) {
   const edgeCol = edge > 0 ? 'var(--green)' : 'var(--red)';
   const scoreCol = successScore >= 60 ? 'var(--green)' : successScore >= 40 ? 'var(--amber)' : 'var(--text2)';
   const tag = isProjected ? `<span style="font-size:.6rem;background:var(--amber);color:#000;border-radius:3px;padding:1px 5px;margin-left:6px;vertical-align:middle">BEST</span>` : '';
@@ -5372,6 +5385,7 @@ function valueRow(label, modelP, odds, impliedProb, edge, ev, kelly, stake, isPr
         <div>
           <div style="font-size:1rem;font-weight:700;color:var(--cyan)">${(modelP*100).toFixed(1)}%</div>
           <div style="font-size:.6rem;color:var(--text2);text-transform:uppercase">Model</div>
+          ${calibratedP != null ? `<div style="font-size:.62rem;color:var(--amber);margin-top:2px" title="modelProb × calibrationFactor — the actual figure Kelly stake sizing uses">→ ${(calibratedP*100).toFixed(1)}% cal.</div>` : ''}
         </div>
         <div>
           <div style="font-size:1rem;font-weight:700">${impliedProb != null ? (impliedProb*100).toFixed(1)+'%' : '—'}</div>
@@ -5482,7 +5496,8 @@ function openDrawer(w) {
       c.modelProb, c.bookOdds, c.impliedProb, c.edge,
       c.ev, c.kelly?.fracKelly, c.kelly?.stake,
       c.bet === w.projectedBet,
-      c.successScore ?? null
+      c.successScore ?? null,
+      c.calibratedProb
     )
   ).join('');
 
@@ -5619,7 +5634,7 @@ function openBetDrawer(b) {
   // bug: it showed the settings multiplier (e.g. 50% for half-Kelly) mislabeled as
   // "% of bankroll" instead of the actual stake/bankroll ratio.
   const stakeFracOfBankroll = b.bankrollAtLock ? (settleStake / b.bankrollAtLock) : 0;
-  const row = valueRow(betLabel, b.modelProb, settleOdds, b.impliedProb, b.edge, b.ev, stakeFracOfBankroll, settleStake, true, b.successScore);
+  const row = valueRow(betLabel, b.modelProb, settleOdds, b.impliedProb, b.edge, b.ev, stakeFracOfBankroll, settleStake, true, b.successScore, b.calibratedProb);
 
   const resultBadge = b.result
     ? `<div style="margin:8px 0;padding:8px 12px;border-radius:6px;font-size:.8rem;font-weight:700;background:${b.result==='win'?'rgba(0,255,135,.12)':b.result==='loss'?'rgba(255,82,82,.12)':'rgba(180,180,180,.12)'};color:${b.result==='win'?'var(--green)':b.result==='loss'?'var(--red)':'var(--text2)'}">${b.result.toUpperCase()}${b.finalScore ? ` · ${b.finalScore}` : ''} · P&L £${b.pnl >= 0 ? '+' : ''}${b.pnl?.toFixed(2)}</div>`
