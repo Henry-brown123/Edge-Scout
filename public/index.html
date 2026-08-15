@@ -2675,7 +2675,7 @@ function routingHTML(b) {
         <div style="font-size:11px;font-weight:700;color:#f5a623;margin-bottom:2px;text-transform:uppercase;letter-spacing:.06em">Awaiting placement</div>
         ${recLine}
       </div>
-      <button class="btn btn-sm" style="background:#f5a623;color:#000;border:none;font-weight:700;min-height:40px;padding:0 18px;flex-shrink:0" onclick="openBmPanel('${b.id}')">Select Bookmaker</button>
+      <button class="btn btn-sm" style="background:#f5a623;color:#000;border:none;font-weight:700;min-height:40px;padding:0 18px;flex-shrink:0" onclick="event.stopPropagation();openBmPanel('${b.id}')">Select Bookmaker</button>
     </div>`;
 }
 
@@ -2712,7 +2712,7 @@ function recommendedCard(b) {
     ? `${kellyFractionLabel(b.kellyFraction)}-Kelly · real`
     : 'Kelly · paper';
   return `
-    <div class="fixture-card recommended ${modeClass}" style="flex-direction:column;align-items:stretch;padding-bottom:12px">
+    <div class="fixture-card recommended ${modeClass}" style="flex-direction:column;align-items:stretch;padding-bottom:12px;cursor:pointer" onclick="openBetDrawerById('${b.id}')">
       ${isGenericPaperOnly ? `<div style="background:rgba(255,170,0,0.12);border-bottom:1px solid rgba(255,170,0,0.3);padding:6px 14px;font-size:11px;font-weight:700;color:#ffaa00;border-radius:8px 8px 0 0;margin:-12px -12px 10px">⚠ PAPER ONLY — EV calibration negative. Zero real-money stake.</div>` : ''}
       ${isTrainingHoldout ? `<div style="background:rgba(122,162,255,0.1);border-bottom:1px solid rgba(122,162,255,0.28);padding:6px 14px;font-size:11px;font-weight:700;color:#7aa2ff;border-radius:8px 8px 0 0;margin:-12px -12px 10px">Held-out league — results reserved for future model validation. ${stakeIsZeroed ? 'Paper only (zero real-money stake).' : 'Real betting enabled.'}</div>` : ''}
       ${isReal ? `<div style="background:rgba(255,209,102,0.08);border-bottom:1px solid rgba(255,209,102,0.2);padding:5px 14px;font-size:10px;font-weight:700;color:var(--amber);border-radius:8px 8px 0 0;margin:-12px -12px 8px;letter-spacing:.04em">REAL MONEY BET</div>` : ''}
@@ -2740,8 +2740,8 @@ function recommendedCard(b) {
           <span class="stage-tag tag-recommended" style="background:${(b.placementStatus||'pending_placement')==='placed'?'rgba(0,255,135,.15)':'rgba(245,166,35,.15)'};color:${(b.placementStatus||'pending_placement')==='placed'?'var(--green)':'#f5a623'}">${(b.placementStatus||'pending_placement')==='placed'?'Placed':'Locked'}</span>
           ${(b.placementStatus||'pending_placement')==='placed' ? (
             kickoffPassed(b.kickoff)
-              ? `<button class="btn btn-ghost btn-sm" onclick="manualResolve('${b.id}','win')" title="Mark Win" style="color:var(--green);border-color:var(--green)">W</button>
-          <button class="btn btn-ghost btn-sm" onclick="manualResolve('${b.id}','loss')" title="Mark Loss" style="color:var(--red);border-color:var(--red)">L</button>`
+              ? `<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();manualResolve('${b.id}','win')" title="Mark Win" style="color:var(--green);border-color:var(--green)">W</button>
+          <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();manualResolve('${b.id}','loss')" title="Mark Loss" style="color:var(--red);border-color:var(--red)">L</button>`
               : `<span title="Can't resolve before kickoff" style="font-size:10px;color:var(--muted)">Awaiting KO</span>`
           ) : ''}
         </div>
@@ -3129,7 +3129,10 @@ async function renderPerfMode(mode) {
       <td class="mono">£${b.suggestedStake?.toFixed(2)}</td>
       <td class="mono ${pnlCls}">${pnlStr}</td>
       <td>${resultBadge}</td>
-      <td><button class="btn btn-ghost btn-sm" onclick="deleteBet('${b.id}')" style="padding:2px 8px;color:var(--muted)">✕</button></td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-ghost btn-sm" onclick="editBet('${b.id}')" title="Edit stake/odds/result" style="padding:2px 8px;color:var(--muted)">✎</button>
+        <button class="btn btn-ghost btn-sm" onclick="deleteBet('${b.id}')" style="padding:2px 8px;color:var(--muted)">✕</button>
+      </td>
     `;
     tbody.appendChild(tr);
   });
@@ -4506,6 +4509,46 @@ async function deleteBet(id) {
   } catch(e) { toast(e.message, 'error'); }
 }
 
+// Inline stake/odds/result correction for a bet-log row. Changing away from an
+// already-resolved result goes through /revert first — PATCH refuses to overwrite
+// an existing result directly (see the guard added after the accidental Crawley
+// Town vs Crewe resolution), so this mirrors that same rule rather than working
+// around it.
+async function editBet(id) {
+  const b = (STATE.bets || []).find(x => x.id === id);
+  if (!b) return;
+
+  const stakeStr = prompt(`Stake for ${b.fixture} (£):`, String(b.actualStake ?? b.suggestedStake ?? ''));
+  if (stakeStr === null) return;
+  const oddsStr = prompt(`Odds for ${b.fixture}:`, String(b.actualOdds ?? b.bookOdds ?? ''));
+  if (oddsStr === null) return;
+  const resultStr = prompt(`Result for ${b.fixture} — pending, win, loss, or void:`, b.result || 'pending');
+  if (resultStr === null) return;
+
+  const newStake  = parseFloat(stakeStr);
+  const newOdds   = parseFloat(oddsStr);
+  const newResult = resultStr.trim().toLowerCase();
+  if (!(newStake >= 0))      { toast('Invalid stake', 'error'); return; }
+  if (!(newOdds > 1))        { toast('Invalid odds — must be greater than 1', 'error'); return; }
+  if (!['pending','win','loss','void'].includes(newResult)) { toast('Result must be pending, win, loss, or void', 'error'); return; }
+
+  try {
+    if (b.result && newResult !== b.result) {
+      await apiFetch(`/api/bets/${id}/revert`, { method: 'POST' });
+    }
+    const body = { actualStake: newStake, actualOdds: newOdds };
+    if (newResult !== 'pending' && newResult !== b.result) body.result = newResult;
+    await apiFetch(`/api/bets/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    toast('Bet updated', 'success');
+    await loadState();
+    _refreshPerfView();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
 function exportCSV(mode = 'paper') {
   const bets = STATE.bets.filter(b => mode === 'paper' ? (!b.mode || b.mode === 'paper') : mode === 'real' ? b.mode === 'real' : true);
   // KellySuggestedStake and ActualStake logged separately (not just one "Stake"
@@ -5482,6 +5525,83 @@ function openDrawer(w) {
 function closeDrawer() {
   document.getElementById('drawer-overlay').classList.remove('open');
   document.getElementById('drawer').classList.remove('open');
+}
+
+// ─── LOCKED-BET DETAIL DRAWER ─────────────────────────────────────────────────
+// Reuses the same drawer element as openDrawer() (the watching-fixture detail
+// view), but built from a locked/placed BET record rather than a watching-stage
+// scout record — bets don't carry allCandidates/goalsCandidates/teamIntel
+// forward from lock time, only the single picked outcome's own numbers, so
+// this shows what's actually available (model prob, edge, EV, Kelly, factor
+// breakdown, weather, bookmaker routing) rather than force-fitting the richer
+// watching-card view and silently rendering blank sections.
+function openBetDrawerById(id) {
+  const b = (STATE.bets || []).find(x => x.id === id);
+  if (b) openBetDrawer(b);
+}
+
+function openBetDrawer(b) {
+  const vsIdx = (b.fixture || '').indexOf(' vs ');
+  const home = vsIdx > -1 ? b.fixture.slice(0, vsIdx) : b.fixture;
+  const away = vsIdx > -1 ? b.fixture.slice(vsIdx + 4) : '';
+  const kickoff = b.kickoff ? new Date(b.kickoff).toLocaleString('en-GB', { weekday:'short', hour:'2-digit', minute:'2-digit' }) : '—';
+
+  const factors = Object.keys(WEIGHTS);
+  const factorRows = factors.map(k => {
+    const hv = b.homeF?.[k] ?? 50;
+    const av = b.awayF?.[k] ?? 50;
+    return `<div class="factor-row">
+      <span class="factor-val home">${hv}</span>
+      <div class="factor-bar-wrap"><div class="factor-bar-home" style="width:${hv}%"></div></div>
+      <span class="factor-label">${FACTOR_LABELS[k]}</span>
+      <div class="factor-bar-wrap rtl"><div class="factor-bar-away" style="width:${av}%"></div></div>
+      <span class="factor-val away">${av}</span>
+    </div>`;
+  }).join('');
+
+  const betLabel = b.bet === 'Home Win' ? `${home} Win` : b.bet === 'Away Win' ? `${away} Win` : b.bet;
+  const settleOdds  = b.actualOdds  ?? b.bookOdds;
+  const settleStake = b.actualStake ?? b.suggestedStake;
+  const row = valueRow(betLabel, b.modelProb, settleOdds, b.impliedProb, b.edge, b.ev, b.kellyFraction, settleStake, true, b.successScore);
+
+  const resultBadge = b.result
+    ? `<div style="margin:8px 0;padding:8px 12px;border-radius:6px;font-size:.8rem;font-weight:700;background:${b.result==='win'?'rgba(0,255,135,.12)':b.result==='loss'?'rgba(255,82,82,.12)':'rgba(180,180,180,.12)'};color:${b.result==='win'?'var(--green)':b.result==='loss'?'var(--red)':'var(--text2)'}">${b.result.toUpperCase()}${b.finalScore ? ` · ${b.finalScore}` : ''} · P&L £${b.pnl >= 0 ? '+' : ''}${b.pnl?.toFixed(2)}</div>`
+    : '';
+
+  const routing = b.routingRecommendation?.recommended;
+  const routingHTML = routing
+    ? `<div class="drawer-section"><h4>Bookmaker Routing</h4><div style="font-size:.8rem;color:var(--text2)">Recommended at lock: <strong style="color:var(--text1)">${routing.name}</strong>${b.bookmakerUsed ? ` · Placed at <strong style="color:var(--text1)">${b.bookmakerUsed}</strong>` : ''}</div></div>`
+    : '';
+
+  document.getElementById('drawer').innerHTML = `
+    <button class="drawer-close" onclick="closeDrawer()">✕</button>
+    <div class="drawer-title">${b.fixture}</div>
+    <div class="drawer-sub">${b.leagueName} · 🇬🇧 KO ${kickoff} · ${b.mode === 'real' ? 'Real money' : 'Paper'}</div>
+    ${resultBadge}
+
+    <div class="drawer-section">
+      <h4>Locked Pick</h4>
+      ${row}
+    </div>
+
+    <div class="drawer-section">
+      <h4>Factor Breakdown <span style="color:var(--cyan);margin-left:8px">▬ ${home}</span> <span style="color:var(--pink);margin-left:8px">▬ ${away}</span></h4>
+      ${factorRows}
+    </div>
+
+    <div class="drawer-section">
+      <h4>Conditions</h4>
+      <div class="weather-strip"><span>${weatherDesc(b.weather)}</span>${weatherBadge(b.weatherCondition)}</div>
+    </div>
+
+    ${routingHTML}
+
+    <div class="drawer-actions">
+      <button class="btn btn-ghost btn-sm" onclick="closeDrawer()">Close</button>
+    </div>`;
+
+  document.getElementById('drawer-overlay').classList.add('open');
+  document.getElementById('drawer').classList.add('open');
 }
 
 // ─── HISTORICAL BACKFILL ──────────────────────────────────────────────────────
