@@ -2489,58 +2489,76 @@ function scoutTierBlock(modelProb, leagueId, pickType) {
   const tier = tierOfProb(modelProb);
   if (!tier) return '';
   const perf = STATE.tierPerf;
-  const isValidated = perf?.scope?.validatedLeagueIds?.includes(parseInt(leagueId, 10));
   const fmtPct = v => `${v >= 0 ? '+' : ''}${(v*100).toFixed(1)}%`;
 
-  // Second, distinct form of real evidence (2026-08-15 fix): a league can lack a
-  // formal train/test split (isValidated above) but still have genuine unseen-
-  // population real-backtest evidence — Carabao Cup/League One/League Two, per
-  // calibration-rules.md rule 10, same data already shown correctly (✓bt) on the
-  // Performance tab grid. Checked only when the validated-split path finds
-  // nothing, and rendered with distinct wording — this is a different evidence
-  // method (full matched population, no split) and must not be presented as if
-  // it were the train/test-validated figure above.
   const ltmLid = parseInt(leagueId, 10);
   const ltmLeague = STATE.ltm?.scope?.leagues?.find(l => l.id === ltmLid);
-  const isUnseenBacktest = ltmLeague?.historicalSource === 'real-backtest';
-  const unseenCell = isUnseenBacktest ? STATE.ltm?.matrix?.[String(ltmLid)]?.cells?.[tier] : null;
+  const isValidated = perf?.scope?.validatedLeagueIds?.includes(ltmLid);
+
+  // Historical always reads the league-specific cell from the tier×league matrix
+  // (STATE.ltm — the same data source the Performance-tab grid uses), for every
+  // league, not just the unseen-population ones. Previously, validated leagues fell
+  // through to perf.rows[].historical — pooled across all 9 validated leagues — and
+  // showed that same pooled figure regardless of which specific league the fixture
+  // was actually in (e.g. a 40-45% PL fixture and a 40-45% Serie A fixture showed
+  // the identical number). historicalSource tells us which evidence type this
+  // specific league actually has (real-backtest vs walkforward-proxy) rather than
+  // assuming one type across the board — and follows a league if it's ever promoted
+  // from proxy to a genuine backtest (Addendum 21's manual handoff), since it's read
+  // fresh from STATE.ltm on every render rather than hardcoded per branch.
+  const histCell = ltmLeague ? STATE.ltm?.matrix?.[String(ltmLid)]?.cells?.[tier] : null;
+  const histSourceLabel = ltmLeague?.historicalSource === 'real-backtest'
+    ? 'unseen-population backtest'
+    : ltmLeague?.historicalSource === 'walkforward-proxy'
+      ? 'walk-forward proxy'
+      : 'backtest';
+  const histSourceNote = ltmLeague?.historicalSource === 'real-backtest'
+    ? ' <span style="color:var(--muted)">— full matched population, no train/test split (rule 10)</span>'
+    : ltmLeague?.historicalSource === 'walkforward-proxy'
+      ? ' <span style="color:var(--muted)">— 4-block walk-forward proxy estimate, not a genuine holdout (Addendum 21)</span>'
+      : '';
 
   let contextHtml;
   let pickTypeHtml = '';
-  if (!perf) {
+  if (!perf || !STATE.ltm) {
     contextHtml = `<span style="color:var(--muted)">tier reference unavailable</span>`;
-  } else if (!isValidated && unseenCell) {
-    contextHtml = `Historical (unseen-population backtest): <span class="${unseenCell.roi >= 0 ? 'c-green' : 'c-red'}">${fmtPct(unseenCell.roi)}</span> (n=${unseenCell.n}${unseenCell.thin ? ', thin' : ''}) <span style="color:var(--muted)">— full matched population, no train/test split (rule 10)</span>`;
-  } else if (!isValidated && isUnseenBacktest) {
-    contextHtml = `<span style="color:var(--muted)">no historical baseline for this tier (unseen-population backtest has no matched bets here yet)</span>`;
-  } else if (!isValidated) {
-    contextHtml = `<span style="color:var(--muted)">no historical baseline — league not yet train/test validated</span>`;
-  } else {
-    const row = (perf.rows || []).find(r => r.tier === tier);
-    if (!row || !row.historical) {
-      contextHtml = `<span style="color:var(--muted)">no historical baseline for this tier (outside the analysed 45-70% range)</span>`;
-    } else {
-      const h = row.historical, l = row.live;
-      const liveStr = l.n > 0
+  } else if (!ltmLeague) {
+    contextHtml = `<span style="color:var(--muted)">no historical baseline — league not yet tracked</span>`;
+  } else if (histCell) {
+    // thin flag comes straight from the same matrix cell the grid uses — a
+    // league-specific thin reading is never presented with pooled-strength confidence.
+    contextHtml = `Historical (${histSourceLabel}): <span class="${histCell.roi >= 0 ? 'c-green' : 'c-red'}">${fmtPct(histCell.roi)}</span> (n=${histCell.n}${histCell.thin ? ', thin' : ''})${histSourceNote}`;
+
+    // Live + pick-type live — only meaningful for the 9 validated leagues, where
+    // perf.rows carries a genuine live-vs-tier breakdown. Left pooled-across-leagues
+    // as before (perf.rows[].live) — out of scope for this fix, which is Historical
+    // only; see the accompanying report for this as a separate, flagged finding.
+    if (isValidated) {
+      const row = (perf.rows || []).find(r => r.tier === tier);
+      const l = row?.live;
+      const liveStr = l && l.n > 0
         ? `Live: <span class="${l.roi >= 0 ? 'c-green' : 'c-red'}">${fmtPct(l.roi)}</span> (n=${l.n}${l.thin ? ', thin' : ''})`
         : `Live: <span style="color:var(--muted)">no resolved bets yet</span>`;
-      contextHtml = `Historical: <span class="${h.roi >= 0 ? 'c-green' : 'c-red'}">${fmtPct(h.roi)}</span> (n=${h.n}${h.thin ? ', thin' : ''}) · ${liveStr}`;
+      contextHtml += ` · ${liveStr}`;
 
-      // Pick-type-specific live line, same row's byPickType (already mode=all pooled)
-      if (pickType && row.byPickType) {
+      if (pickType && row?.byPickType) {
         const pt = row.byPickType.find(p => p.pickType === pickType);
         if (pt && pt.n > 0) {
           contextHtml += ` · Live (${pickType}): <span class="${pt.roi >= 0 ? 'c-green' : 'c-red'}">${fmtPct(pt.roi)}</span> (n=${pt.n}${pt.thin ? ', thin' : ''})`;
         }
       }
+      // Purely informational — never a recommendation or restriction, see
+      // docs/tier-calibration-analysis.md Addendum 14/15 extension 3.
+      const notes = perf.pickTypeBacktestNotes?.[tier];
+      if (notes) {
+        const lines = Object.entries(notes).map(([pt, text]) => `<div>${pt === pickType ? '<strong>→</strong> ' : ''}${text}</div>`);
+        pickTypeHtml = `<div style="margin-top:3px;padding:6px 8px;background:rgba(255,209,102,.06);border:1px solid rgba(255,209,102,.2);border-radius:6px;font-size:9.5px;color:var(--text2);line-height:1.5">${lines.join('')}</div>`;
+      }
     }
-    // Purely informational — never a recommendation or restriction, see
-    // docs/tier-calibration-analysis.md Addendum 14/15 extension 3.
-    const notes = perf.pickTypeBacktestNotes?.[tier];
-    if (notes) {
-      const lines = Object.entries(notes).map(([pt, text]) => `<div>${pt === pickType ? '<strong>→</strong> ' : ''}${text}</div>`);
-      pickTypeHtml = `<div style="margin-top:3px;padding:6px 8px;background:rgba(255,209,102,.06);border:1px solid rgba(255,209,102,.2);border-radius:6px;font-size:9.5px;color:var(--text2);line-height:1.5">${lines.join('')}</div>`;
-    }
+  } else if (ltmLeague.hasHistoricalMatrix === false) {
+    contextHtml = `<span style="color:var(--muted)">no historical baseline for this competition (Historical never computed for it)</span>`;
+  } else {
+    contextHtml = `<span style="color:var(--muted)">no historical baseline for this tier ${isValidated ? '(outside the analysed range)' : '(unseen-population backtest has no matched bets here yet)'}</span>`;
   }
   return `<div style="margin-top:4px;font-size:10.5px;font-family:'DM Mono',monospace;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
     ${tierBadge(modelProb)}${pickTypeBadge(pickType)}${greenFlagBadge(leagueId, modelProb)}<span>${contextHtml}</span>
