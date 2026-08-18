@@ -4289,3 +4289,198 @@ silently the old frozen snapshot, not a second peek at live data.
 `CALIBRATION_AUDIT[41]`/`[42]`/`[48]` updated in place with the corrected
 figures and a pointer to this addendum, rather than left describing numbers
 that were never actually re-derived.
+
+## Addendum 25 — Variable-strength correction layer: design, one-time train/test cycle, and honest verdict (calibration-rules.md rules 13/14)
+
+Full brief: replace `applyLeagueBiasCorrection()`'s fixed 30% blend with a
+variable-strength, football-justified correction, following rules 13/14's
+train/test discipline for the correction layer itself, independent of the
+core GBDT's own evidentiary status.
+
+### Part 0 — Addendum 19 currency and the League One/Two exemption question
+
+Addendum 24 (immediately prior) already answered the currency question: the
+originally-reported Addendum 19 figures (posEdgeN 1,580/1,746, ROI -3.6%/+4.2%)
+were frozen behind the pre-Track-A `computeUnifiedEdge` bug, not genuinely
+recomputed. The corrected figures (posEdgeN 2,231/2,346, ROI -3.9%/+3.1%) were
+verified live against `/api/ev-calibration` at the start of this work and
+match Addendum 24 exactly — no further re-run needed.
+
+**Exemption decision**: League One/Two are NOT exempted from needing their own
+correction-layer-backtest. Rule 13's test is whether *this specific layer's
+own parameters* have touched the data before — not whether some other layer
+(the core model) has. No correction of any kind has ever been fit for League
+One/Two (their `LEAGUE_CONFIG` entries carry no base rates at all, so
+`applyLeagueBiasCorrection()` skips them entirely today — effective strength
+zero). Addendum 19/24's frozen population is therefore genuinely available for
+a *correction-layer* train/test split, even though it's permanently spent for
+the *core model's* backtest — these are different layers with independent
+evidentiary status by rule 13's own design. Used the full pre-cutoff matched
+population (n=3,344/3,338) as the correction layer's own train/test source,
+split chronologically 80/20 within it (see Part 2).
+
+### Part 1 — Design
+
+**Redesign shape**: a scoped correction table (`CORRECTION_LAYER_RULES` in
+scoring.js) — each rule matches a (league set, pick-type, probability-band)
+combination and applies a Platt-style rescale (`sigmoid(A·logit(p)+B)`) to
+just that scope's top-pick probability, renormalising the other two outcomes.
+No rule = no correction (strength zero), replacing "30% everywhere" with
+"correction only where football-justified evidence supports one."
+
+**Original 9 leagues**: per Addendum 23's own explicit recommendation (Part 4,
+item 1) — NOT the broad per-league blend the brief's framing initially implied.
+Addendum 23 itself gates this: item 5 of its recommendation states League
+One/Two's overconfidence "needs its own evidence-gathering before any
+correction design — not folded into this recommendation." Correction scoped
+to **away picks only, 45-70% band** (Addendum 23's primary candidate) — home
+picks are structurally excluded, the same scoping mechanism Addendum 23
+identified as avoiding the broad correction's known failure mode (diluting a
+fine home-pick population with newly-qualified, unprofitable exposure).
+
+**League One/Two**: before designing anything, ran the same pick-type × tier
+breakdown Extension 3 did for the original leagues (train-only). Result,
+unlike the original leagues: **both home and away picks are overconfident**
+at 50%+ (League One home -4.8pp to -6.5pp, away -8.0pp to -11.7pp; League Two
+home -5.5pp to -26.4pp, away -10.2pp to -16.5pp) — there is no clean
+single-pick-type driver the way away picks were for the original leagues'
+underconfidence. Scoped the correction to **both home and away picks, 50%+
+band**, per league (League One and League Two fit separately — their
+miscalibration magnitudes differ meaningfully, especially League Two's home
+70-80% cell).
+
+**Scope boundary respected**: no changes to `avgHomeWinRate`/`avgDrawRate`/
+`avgAwayWinRate`/`avgGoalsPerGame`/`marketEfficiency`/`drawBaseWeight`/
+`homeAdvBaseWeight` anywhere in this work — this redesigns the blend
+mechanism only, per rule 10's continued protection of League One/Two/Carabao
+Cup's base rates specifically.
+
+### Part 2 — Holdout, domestic-blend exclusion, fit, single test look
+
+**Domestic-blend exclusion (approved interim safeguard) — checked, zero
+fixtures affected.** Cross-referenced every team appearing in League One/Two
+before the rule-12 cutoff (2026-08-11T09:00:00Z) against every other
+domestic-blend league's (`DOMESTIC_LEAGUE_IDS_FOR_BLEND`) fixtures at/after
+the cutoff, by team ID, across the full 20,862-fixture matched-odds
+population. **Zero boundary-crossing teams found.** Mechanistically expected
+in hindsight: `DOMESTIC_LEAGUE_IDS_FOR_BLEND` only includes top-flight leagues
+(Premier League, La Liga, Serie A, Bundesliga, Ligue 1, Scottish Premiership,
+Eredivisie, Primeira Liga) plus League One/Two themselves — League One's
+actual promotion/relegation partner (the Championship) isn't in that set at
+all, so no team crosses the specific boundary the safeguard checks for in
+this population. The leakage pathway itself (documented in the prior
+investigation) remains real in principle; it simply has no live instances
+here. No fixtures excluded.
+
+**Holdout**: per-league chronological 80/20 split (last 20% of each league's
+own matched population, by date, as test) — a single fixed calendar cutoff
+was tried first and rejected once it produced zero test fixtures for 8 of 13
+leagues (see recency gap below).
+
+**Real data-recency finding, worth flagging on its own**: the closing-odds-
+matched population for most of the original 9 leagues plus Champions
+League/Europa League/Conference League stops around May 2025 — over a year
+stale relative to today (2026-08-18). Only Eredivisie, Primeira Liga,
+Scottish Premiership, League One/Two, and Carabao Cup have matched data
+extending into 2026. This means "genuinely recent" (calibration-rules.md rule
+12's own phrase) tops out over a year old for 8 of the 11 corrected/reported
+leagues — not fixed here (out of scope for this brief), flagged for a
+separate closing-odds backfill refresh.
+
+**Fit (train only, per-scope)**:
+
+| Scope | n (train) | A | B | Train log-loss (vs. uncorrected) |
+|---|---|---|---|---|
+| Original 9, away, 45-70% | 1,084 | 1.7005 | 0.5998 | 0.633 vs 0.681 |
+| League One, home+away, 50%+ | 1,077 | 0.9610 | -0.2336 | 0.679 vs 0.687 |
+| League Two, home+away, 50%+ | 914 | 0.5540 | -0.2419 | 0.690 vs 0.711 |
+
+All three genuinely improve train log-loss, and all three point the right
+direction relative to the underlying finding (A>1/B>0 pushes up for the
+underconfident original-9 away scope; A<1/B<0 pushes down for both
+overconfident League One/Two scopes, with League Two's stronger compression
+matching its worse measured miscalibration).
+
+**Single test-set look (per rule 3 — looked at once, not iterated)**:
+
+| Scope | test n | before: calibErr / posEdgeN / ROI | after: calibErr / posEdgeN / ROI |
+|---|---|---|---|
+| Original 9, away, 45-70% | 271 | +8.6pp / 59 / +0.6% | -6.2pp / 175 / -0.8% |
+| League One, 50%+ | 250 | -0.4pp / 202 / +9.2% | +5.6pp / 135 / +11.9% |
+| League Two, 50%+ | 246 | -5.5pp / 198 / +10.3% | +3.9pp / 105 / +22.6% |
+
+(calibErr = actual hit rate − mean predicted probability; positive =
+underconfident, negative = overconfident. ROI CIs all span zero at every
+row, before and after.)
+
+**Champions League/Europa League/Conference League — no new correction
+applied (no evidence base for one), reported as pure context per the brief's
+explicit expectation**: test-set posEdgeN 58/48/36 respectively, ROI
++36.0%/+9.5%/+37.8%, CIs enormous (Conference League: -70.4% to +146.1%).
+Exactly the indicative-only reading the brief anticipated — reported plainly,
+not treated as a finding.
+
+### Part 3 — Rule 14 label and wiring
+
+New `historicalSource: 'correction-layer-backtest'` category — distinct
+marker, never reused for/against `real-backtest` or `walkforward-proxy`.
+Wired via `CORRECTION_LAYER_BACKTESTS` (server.js) and
+`GET /api/correction-layer-backtests`, surfaced in a new, amber-accented
+"Correction-Layer Backtests" card on the Performance tab (same visual
+language as the Pre-Retrain Calibration Matrix card — explicit warning
+banner, no green/red styling on any ROI number since none of these clear
+rule 6's decision-grade floor). The card states directly that the core GBDT
+remains in-sample for every league shown; only the correction's own
+parameters were held out.
+
+### Part 4 — Honest verdict
+
+**None of the three scopes clears the bar for deployment, and the evidence
+says so plainly rather than being read as a qualified win:**
+
+1. **All three overshoot on test.** Calibration error flips sign in every
+   scope — the original-9-away correction pushed from +8.6pp underconfident
+   to -6.2pp overconfident; both League One/Two corrections pushed from
+   roughly-accurate-or-mildly-overconfident on test into +5.6pp/+3.9pp
+   underconfident. A correction that overshoots the true target on held-out
+   data is doing something real, but not yet the *right amount* of it — this
+   reads as either train-specific noise the fit picked up, non-stationarity
+   (train and test cover different seasons/conditions), or a genuinely
+   smaller effect than train suggested. No single explanation is confirmed by
+   what's here; flagged as an open question for any follow-up, not resolved.
+2. **Every test population sits below rule 6's ~300-400 posEdge decision-grade
+   floor** — 59-202 posEdge bets per scope, before or after correction. The
+   League Two "+22.6% ROI after correction" figure in particular should not
+   be read as a result: it comes from a shrunk posEdgeN (198→105, since
+   pushing probabilities down means fewer bets clear the 5% edge threshold)
+   and a CI that still spans zero.
+3. **This directly echoes Addendum 2/23's own finding** on fresh data and the
+   current model: a train-set-evidenced, football-justified, correctly-
+   directioned correction still does not automatically produce a confirmed
+   test-set win. The discipline this document has followed throughout —
+   check directly, don't assume evidence transfers — applies to today's own
+   fresh work exactly as it applied to the original 2026-08 cycle.
+
+**Not deployed.** `applyVariableCorrectionLayer()` (scoring.js) is
+implemented and committed but not called from `scoreOneFixture()` or the
+historical scoring path — deployment stays a separate, deliberate decision,
+and on this evidence the honest recommendation is: not yet. A stronger
+validation (Addendum 23's own suggestion — Addendum 21's walk-forward
+infrastructure, multiple genuinely out-of-sample windows instead of one fixed
+holdout) is the natural next step before revisiting deployment, alongside
+closing the closing-odds recency gap flagged in Part 2.
+
+### Compliance
+
+Rules 1-3 (chronological split, train-only tuning, single test look): held for
+all three scopes. Rule 4 (football-justified, not parameter-chasing): each
+scope's direction/magnitude is grounded in measured train miscalibration, not
+an eval-metric sweep — and the honest test-set result is reported even though
+it doesn't confirm a win. Rule 10: League One/Two/Carabao Cup base rates
+untouched. Rule 12: pre-cutoff League One/Two population used only for the
+correction layer's own split, per Part 0's reasoning; Carabao Cup untouched
+entirely, consistent with its continued rule 10 exclusion. Rules 13/14:
+applied as designed — this addendum is itself the first real-world use of
+both. Auto-retrain gate re-verified unaffected (no training-path code
+touched). Temp diagnostic endpoint (`/api/admin/correction-layer-diagnostic`)
+removed after use.
