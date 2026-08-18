@@ -535,8 +535,29 @@ function computeDataConf(homeFormCount, awayFormCount, context) {
 // normalizes so the three implied probabilities sum to 1, removing the
 // bookmaker's built-in margin. Same market benchmark scoreOneFixture uses
 // (pinnStripped) when a full 3-way Pinnacle price is available.
+//
+// Bug fixed 2026-08-18: this read rawOdds.home/.away/.draw, but computeUnifiedEdge's
+// only two callers (computeMatchedEdgeFixtures in server.js) both pass a closing-odds
+// record shaped {homeOdds, drawOdds, awayOdds} — the convention used everywhere else
+// in this codebase (co.homeOdds etc.). The mismatch meant every field read undefined,
+// so stripped came back {home:NaN, away:NaN, draw:NaN} and edge was NaN for every
+// single fixture, silently (JSON serializes NaN as null) since Track A shipped
+// 2026-08-14: computeMatchedEdgeFixtures()'s consumers all filter on `edge >= 0.05`,
+// so every "positive edge" population was empty app-wide the whole time — confirmed
+// via /api/ev-calibration showing positiveEdge:0/roi:null for all 14 leagues, and
+// buildUnseenPopulationMatrix() silently falling back to the frozen pre-Track-A
+// LEAGUE_TIER_MATRIX snapshot for Carabao Cup/League One/League Two (why those cells
+// looked fine — they were never actually the "live-computed replacement" the Track A
+// comment describes, just the old numbers hiding an empty live computation behind
+// them). settings.paperTradeOnly/paperKellyFraction were NOT affected — the
+// auto-management loop in runEvCalibration() already skips `roi === null` leagues, so
+// no real-money gating was mutated by this. marginStrippedImplied has no other
+// callers, so widening its accepted shape here is safe everywhere it's used.
 function marginStrippedImplied(rawOdds) {
-  const rawImplied = { home: 1 / rawOdds.home, away: 1 / rawOdds.away, draw: 1 / rawOdds.draw };
+  const home = rawOdds.home ?? rawOdds.homeOdds;
+  const away = rawOdds.away ?? rawOdds.awayOdds;
+  const draw = rawOdds.draw ?? rawOdds.drawOdds;
+  const rawImplied = { home: 1 / home, away: 1 / away, draw: 1 / draw };
   const sum = rawImplied.home + rawImplied.away + rawImplied.draw;
   return { home: rawImplied.home / sum, away: rawImplied.away / sum, draw: rawImplied.draw / sum };
 }
