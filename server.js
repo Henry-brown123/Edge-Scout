@@ -7799,29 +7799,6 @@ app.post('/api/admin/trigger-weekly-retrain', (_req, res) => {
   res.json({ success: true, started: true, message: 'Weekly retrain cycle started — poll GET /api/admin/retrain-status for the underlying training run, GET /api/admin/weekly-retrain-log for the audit entry once it completes.' });
 });
 
-// TEMP diagnostic — raw API-Sports fixture lookup, to see why a specific bet
-// (SC Braga vs GIL Vicente, fixtureId 1575458, kicked off 2026-08-16) hasn't
-// auto-resolved despite the fixture being long past its expected finish time.
-// Read-only. Remove after use.
-app.get('/api/admin/temp-fixture-check/:fid', async (req, res) => {
-  try {
-    const { data } = await apiSports.get('/fixtures', { params: { id: req.params.fid } });
-    const fix = data?.response?.[0];
-    res.json({
-      found: !!fix,
-      status: fix?.fixture?.status || null,
-      date: fix?.fixture?.date || null,
-      teams: fix?.teams || null,
-      goals: fix?.goals || null,
-      score: fix?.score || null,
-      rawResultsCount: data?.results ?? null,
-      apiErrors: data?.errors ?? null,
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
 app.get('/api/admin/weekly-retrain-log', (_req, res) => {
   const log = getWeeklyRetrainLog();
   const settings = readJSON('settings.json') || {};
