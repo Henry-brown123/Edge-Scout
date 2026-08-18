@@ -3325,22 +3325,61 @@ async function renderCorrectionLayerBacktests() {
 
   const fmtPp = v => `${v >= 0 ? '+' : ''}${v.toFixed(1)}pp`;
   const fmtPct2 = v => `${v >= 0 ? '+' : ''}${(v*100).toFixed(1)}%`;
+  const readingLine = (label, r) => `<span>${label}: calibErr ${fmtPp(r.calibErrPp)}, posEdgeN=${r.posEdgeN}, ROI ${fmtPct2(r.roi)}</span>`;
+  const stabilityStyle = {
+    stable_confirmed: { cls: 'badge-green', label: 'stable — confirmed' },
+    mixed:            { cls: 'badge-amber', label: 'mixed' },
+    unstable_confirmed: { cls: 'badge-red', label: 'unstable — confirmed' },
+  };
 
-  list.innerHTML = data.backtests.map(bt => `
+  list.innerHTML = data.backtests.map(bt => {
+    const isWalkforward = bt.historicalSource === 'correction-layer-backtest-walkforward';
+    const sourceBadge = isWalkforward
+      ? `<span class="badge badge-amber" style="font-size:9px">correction-layer-backtest-walkforward</span>`
+      : `<span class="badge badge-amber" style="font-size:9px;opacity:.6">correction-layer-backtest (single-holdout)</span>`;
+    const stabBadge = isWalkforward && stabilityStyle[bt.stability]
+      ? `<span class="badge ${stabilityStyle[bt.stability].cls}" style="font-size:9px">${stabilityStyle[bt.stability].label}</span>` : '';
+
+    let body;
+    if (isWalkforward) {
+      const blockRows = bt.blocks.map((b, i) => `
+        <div class="mono" style="font-size:9.5px;color:var(--muted);display:flex;gap:12px;flex-wrap:wrap;padding:2px 0">
+          <span style="min-width:150px">block ${i+1} [${b.range}]</span>
+          ${readingLine('before', b.before)}
+          ${readingLine('after', b.after)}
+        </div>`).join('');
+      body = `
+        <div style="font-size:10.5px;color:var(--muted);margin:4px 0">Scope: ${bt.scope}</div>
+        <details style="margin-top:4px">
+          <summary style="font-size:10px;cursor:pointer;color:var(--muted)">4 blocks (expand)</summary>
+          ${blockRows}
+        </details>
+        <div class="mono" style="font-size:10.5px;display:flex;gap:18px;flex-wrap:wrap;margin-top:6px;font-weight:600">
+          <span>pooled n=${bt.pooled.n}</span>
+          ${readingLine('before', bt.pooled.before)}
+          ${readingLine('after', bt.pooled.after)}
+          <span>after ROI CI=[${fmtPct2(bt.pooled.afterCi[0])}, ${fmtPct2(bt.pooled.afterCi[1])}]</span>
+        </div>`;
+    } else {
+      body = `
+        <div style="font-size:10.5px;color:var(--muted);margin:4px 0">Scope: ${bt.scope} · fit A=${bt.fit.A} B=${bt.fit.B} (train n=${bt.fit.trainN}) — ${bt.fit.direction}</div>
+        <div class="mono" style="font-size:10.5px;display:flex;gap:18px;flex-wrap:wrap;margin-top:6px">
+          <span>test n=${bt.testResult.n}</span>
+          ${readingLine('before', bt.testResult.before)}
+          ${readingLine('after', bt.testResult.after)}
+        </div>`;
+    }
+
+    return `
     <div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px">
       <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px">
         <span style="font-weight:600;font-size:12px">${bt.label}</span>
-        <span class="badge badge-amber" style="font-size:9px">correction-layer-backtest</span>
+        <div style="display:flex;gap:6px">${stabBadge}${sourceBadge}</div>
       </div>
-      <div style="font-size:10.5px;color:var(--muted);margin:4px 0">Scope: ${bt.scope} · fit A=${bt.fit.A} B=${bt.fit.B} (train n=${bt.fit.trainN}) — ${bt.fit.direction}</div>
-      <div class="mono" style="font-size:10.5px;display:flex;gap:18px;flex-wrap:wrap;margin-top:6px">
-        <span>test n=${bt.testResult.n}</span>
-        <span>before: calibErr ${fmtPp(bt.testResult.before.calibErrPp)}, posEdgeN=${bt.testResult.before.posEdgeN}, ROI ${fmtPct2(bt.testResult.before.roi)}</span>
-        <span>after: calibErr ${fmtPp(bt.testResult.after.calibErrPp)}, posEdgeN=${bt.testResult.after.posEdgeN}, ROI ${fmtPct2(bt.testResult.after.roi)}</span>
-      </div>
+      ${body}
       <div style="font-size:10.5px;color:var(--amber);margin-top:6px">${bt.verdict}</div>
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
 }
 
 // /api/league-tier-matrix is mode-independent (static backtest snapshot), so it's

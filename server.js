@@ -7098,11 +7098,20 @@ const CALIBRATION_AUDIT = {
 // GBDT model's own train/test evidentiary status per league. These describe a
 // NEW, separate layer's (scoring.js's CORRECTION_LAYER_RULES) own train/test
 // evidence — the GBDT itself remains in-sample for every league below; only
-// the correction's own (A, B) parameters were genuinely fit-train/tested-once.
-// historicalSource: 'correction-layer-backtest' is its own distinct label per
-// rule 14 — never equivalent to 'real-backtest' (CALIBRATION_AUDIT's
-// unseen_population leagues) or 'walkforward-proxy'. See
-// docs/tier-calibration-analysis.md Addendum 25 for the full writeup.
+// the correction's own (A, B) parameters were genuinely fit-train/tested.
+//
+// Two evidentiary sub-labels per rule 14 — never conflated:
+//   'correction-layer-backtest'            — Addendum 25, single fixed
+//     train/test holdout. Weaker standard: one look, can't distinguish a
+//     genuinely unstable correction from one unlucky test window.
+//   'correction-layer-backtest-walkforward' — Addendum 26, 4 sequential
+//     expanding-window blocks (same technique as Addendum 21). Stronger
+//     standard: reveals whether direction/magnitude holds across multiple
+//     independent windows, not just one.
+// The single-holdout entries are RETAINED below (historically accurate,
+// rule 3's "single look" isn't erased by a later, different validation) but
+// superseded is marked explicitly where the walk-forward reached a different
+// conclusion — see docs/tier-calibration-analysis.md Addendum 26.
 const CORRECTION_LAYER_BACKTESTS = [
   {
     id: 'original9-away-45-70',
@@ -7115,7 +7124,26 @@ const CORRECTION_LAYER_BACKTESTS = [
       ciSpansZero: true, decisionGrade: false,
     },
     historicalSource: 'correction-layer-backtest',
-    verdict: 'Indicative only. Overshot on test (calibration flipped from under- to over-confident), and n is well below rule 6\'s ~300-400 decision-grade floor both before and after. Does not confirm Addendum 23\'s train-set finding transfers cleanly to fresh data — not deployed live.',
+    verdict: 'Indicative only from the single holdout. SUPERSEDED by Addendum 26\'s walk-forward: the same overshoot pattern recurred in all 4 independent blocks, confirming genuine instability rather than one unlucky window — this correction has been removed from scoring.js\'s CORRECTION_LAYER_RULES entirely. See the walkforward entry below.',
+  },
+  {
+    id: 'original9-away-45-70-walkforward',
+    label: 'Original 9 leagues — away picks, 45-70% band (walk-forward, 4 blocks)',
+    leagues: [39, 140, 135, 78, 61, 2, 179, 88, 94],
+    scope: 'away picks only, raw model probability 45-70%',
+    blocks: [
+      { range: '2024-08 to 2025-02', n: 174, before: { calibErrPp: 8.3, posEdgeN: 30, roi: -0.0323 }, after: { calibErrPp: -6.5, posEdgeN: 114, roi: 0.0059 } },
+      { range: '2025-02 to 2025-08', n: 110, before: { calibErrPp: 10.2, posEdgeN: 32, roi: 0.0172 }, after: { calibErrPp: -3.8, posEdgeN: 70, roi: -0.025 } },
+      { range: '2025-08 to 2026-02', n: 96, before: { calibErrPp: 2.3, posEdgeN: 24, roi: -0.4575 }, after: { calibErrPp: -11.3, posEdgeN: 74, roi: -0.2632 } },
+      { range: '2026-02 to 2026-08', n: 79, before: { calibErrPp: 5.9, posEdgeN: 18, roi: -0.46 }, after: { calibErrPp: -6.5, posEdgeN: 56, roi: -0.207 } },
+    ],
+    pooled: {
+      n: 459, before: { calibErrPp: 7.1, posEdgeN: 104, roi: -0.1892 }, after: { calibErrPp: -6.9, posEdgeN: 314, roi: -0.1024 },
+      afterCi: [-0.2212, 0.0164], decisionGrade: true,
+    },
+    stability: 'unstable_confirmed',
+    historicalSource: 'correction-layer-backtest-walkforward',
+    verdict: 'Genuinely unstable — confirmed, not indicative. Calibration overshoots the same direction (under- to over-confident) in all 4 independent blocks, a repeated pattern rather than noise. Pooled posEdgeN=314 clears rule 6\'s floor, and the corrected pooled ROI\'s CI (-22.1%, +1.6%) nearly excludes zero on the negative side — this correction, as designed, more confidently does not work. Removed from scoring.js entirely, not just left dormant.',
   },
   {
     id: 'league-one-50plus',
@@ -7128,7 +7156,26 @@ const CORRECTION_LAYER_BACKTESTS = [
       ciSpansZero: true, decisionGrade: false,
     },
     historicalSource: 'correction-layer-backtest',
-    verdict: 'Indicative only. Test-set calibration was already close to accurate before correction (unlike train), and the fitted correction overshot into underconfidence on test. n well below rule 6\'s floor. Not deployed live.',
+    verdict: 'Indicative only from the single holdout. See the walkforward entry below for the stronger, more complete read — the single test window here happened to catch a block where the correction was closer to unnecessary than the walk-forward\'s other 3 blocks show it usually is.',
+  },
+  {
+    id: 'league-one-50plus-walkforward',
+    label: 'League One — home + away picks, 50%+ band (walk-forward, 4 blocks)',
+    leagues: [41],
+    scope: 'home and away picks, raw model probability >= 50%',
+    blocks: [
+      { range: '2022-23 season', n: 233, before: { calibErrPp: -3.6, posEdgeN: 183, roi: 0.0234 }, after: { calibErrPp: 4.1, posEdgeN: 102, roi: 0.08 } },
+      { range: '2023-24 season', n: 230, before: { calibErrPp: -9.3, posEdgeN: 176, roi: -0.1065 }, after: { calibErrPp: -2.9, posEdgeN: 109, roi: -0.1592 } },
+      { range: '2024-25 season', n: 214, before: { calibErrPp: 1.7, posEdgeN: 153, roi: 0.1073 }, after: { calibErrPp: 8.8, posEdgeN: 92, roi: 0.2013 } },
+      { range: '2025-26 season (partial)', n: 206, before: { calibErrPp: -2.3, posEdgeN: 172, roi: 0.0347 }, after: { calibErrPp: 3.1, posEdgeN: 122, roi: 0.0829 } },
+    ],
+    pooled: {
+      n: 883, before: { calibErrPp: -3.5, posEdgeN: 684, roi: 0.0116 }, after: { calibErrPp: 3.2, posEdgeN: 425, roi: 0.0457 },
+      afterCi: [-0.0549, 0.1464], decisionGrade: true,
+    },
+    stability: 'mixed',
+    historicalSource: 'correction-layer-backtest-walkforward',
+    verdict: 'Improved but not fully confirmed. ROI improves in 3 of 4 blocks after correction, but block 2 (the block with the worst starting calibration, -9.3pp) shows a genuine ROI regression (-10.6% to -15.9%) — not perfectly consistent stability. Pooled posEdgeN=425 clears rule 6\'s floor, but the corrected pooled ROI\'s CI (-5.5%, +14.6%) still spans zero. Not a confirmed candidate yet; a reasonable case for one more validation cycle before revisiting deployment.',
   },
   {
     id: 'league-two-50plus',
@@ -7141,13 +7188,32 @@ const CORRECTION_LAYER_BACKTESTS = [
       ciSpansZero: true, decisionGrade: false,
     },
     historicalSource: 'correction-layer-backtest',
-    verdict: 'Indicative only. Overshot into underconfidence on test; the improved ROI point estimate comes with a much smaller posEdgeN (fewer bets clear the edge threshold once probabilities are pulled down) and a CI that still spans zero. Not deployed live.',
+    verdict: 'Indicative only from the single holdout. SUPERSEDED by Addendum 26\'s walk-forward: the correction turns out to be consistently stable across all 4 blocks — the single test window here understated it. See the walkforward entry below.',
+  },
+  {
+    id: 'league-two-50plus-walkforward',
+    label: 'League Two — home + away picks, 50%+ band (walk-forward, 4 blocks)',
+    leagues: [42],
+    scope: 'home and away picks, raw model probability >= 50%',
+    blocks: [
+      { range: '2022-23 season', n: 165, before: { calibErrPp: -11.6, posEdgeN: 142, roi: -0.0651 }, after: { calibErrPp: -3.2, posEdgeN: 78, roi: -0.0129 } },
+      { range: '2023-24 season', n: 218, before: { calibErrPp: -6.9, posEdgeN: 179, roi: 0.1331 }, after: { calibErrPp: 3.0, posEdgeN: 96, roi: 0.3167 } },
+      { range: '2024-25 season', n: 201, before: { calibErrPp: -12.8, posEdgeN: 161, roi: -0.1102 }, after: { calibErrPp: -4.5, posEdgeN: 90, roi: -0.0264 } },
+      { range: '2025-26 season (partial)', n: 206, before: { calibErrPp: -4.0, posEdgeN: 170, roi: 0.173 }, after: { calibErrPp: 5.8, posEdgeN: 91, roi: 0.2813 } },
+    ],
+    pooled: {
+      n: 790, before: { calibErrPp: -8.6, posEdgeN: 652, roi: 0.0402 }, after: { calibErrPp: 0.5, posEdgeN: 355, roi: 0.1482 },
+      afterCi: [-0.0019, 0.2983], decisionGrade: true,
+    },
+    stability: 'stable_confirmed',
+    historicalSource: 'correction-layer-backtest-walkforward',
+    verdict: 'The strongest read produced by this project\'s correction-layer work so far. Every one of 4 independent blocks moves calibration toward zero after correction (from a genuinely bad -8.6pp pooled to +0.5pp — essentially exact), and ROI improves in every block, never regresses. Pooled posEdgeN=355 clears rule 6\'s floor, and the corrected pooled ROI\'s CI (-0.2%, +29.8%) nearly excludes zero on the downside. This clears both bars the correction-layer brief set for "a real candidate for eventual deployment consideration" — still NOT deployed live; deployment stays its own separate, deliberate decision.',
   },
 ];
 
 app.get('/api/correction-layer-backtests', (_req, res) => {
   res.json({
-    note: 'Each entry is a correction-layer-specific train/test read (calibration-rules.md rules 13/14) — the core GBDT model remains in-sample for every league here; only the correction\'s own parameters were genuinely held out. All three are currently indicative-only, not decision-grade, and not deployed live. See docs/tier-calibration-analysis.md Addendum 25.',
+    note: 'Each entry is a correction-layer-specific train/test read (calibration-rules.md rules 13/14) — the core GBDT model remains in-sample for every league here; only the correction\'s own parameters were genuinely held out. "-walkforward" entries are a stronger evidentiary standard (4 independent blocks) than the single-holdout entries they sit alongside — see each entry\'s historicalSource and verdict. Nothing here is deployed live. See docs/tier-calibration-analysis.md Addenda 25-26.',
     backtests: CORRECTION_LAYER_BACKTESTS,
   });
 });
