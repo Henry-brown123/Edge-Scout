@@ -9,6 +9,10 @@ used to report +5.91% ROI, with zero genuine holdout).
 Time-based split (not random shuffle), applied before touching base rates,
 weights, or any parameter. No exceptions, including "just a quick check."
 
+**This governs deliberate, human-triggered tuning — not the core GBDT's ongoing weekly retrain.** Base-rate fits, weight sweeps, and any correction layer (rule 13) are each a deliberate decision, triggered once, evaluated against a held-out slice under rules 1-3. The GBDT model's own weekly retrain is different: since the "train/test merge decision" (`docs/model-versioning.md`), it trains on the entire available population every week by design, with no held-out portion reserved — governed instead by `model-versioning.md`'s own quality gates and improvement gate. Read literally, "no exceptions" above could look like it forbids the weekly retrain; it doesn't — the weekly retrain isn't the kind of tuning this rule is about. Deciding whether a base rate, weight, or correction parameter should change: rules 1-3 apply in full. Deciding whether this week's retrained GBDT weights should replace the deployed ones: that's `model-versioning.md`'s gates, not this rule.
+
+**"For every league" describes two different mechanisms, not one.** The GBDT model's own internal split (`gbdt-train.js`'s `splitData()`) is a single pooled, chronological, cross-league split — every league's fixtures sorted together by date, first 80% train, last 20% test — not done per league. Per-league base-rate fits genuinely are done per league, each with its own documented boundary (rule 9). "For every league" means every league's base-rate/weight/correction tuning gets this discipline individually — not that the core model is retrained separately per league.
+
 ## 2. Tuning only ever touches the train portion.
 Grid searches, base-rate fits, weight sweeps, feature changes — all evaluated
 against train only. The test set does not exist yet as far as the tuning
@@ -28,6 +32,18 @@ positive with no underlying football reason to believe that value is
 correct. If a change can't be explained in football terms ("this corrects
 known home-advantage miscalibration"), be suspicious of it even if it
 improves the number.
+
+A correction that legitimately varies in direction and magnitude across
+leagues or tiers is not, by itself, the kind of unexplained parameter-chasing
+this rule warns against. Addendum 23 found genuine, evidenced,
+opposite-direction miscalibration — the original leagues underconfident in
+the 45-70% band, League One/Two overconfident from 50%+ — so a single fixed
+correction cannot be football-justified for both at once, and a varying one
+can be. This is conditional, not a blanket exemption: each piece of a
+varying correction must still independently clear rule 13's own train/test
+discipline. "It varies by league" is the reason the correction is *allowed*
+to vary — it is not, by itself, justification for skipping proof of any
+individual piece on its own held-out evidence.
 
 ## 5. Every reported ROI figure includes n, posEdgeN, and a 95% CI — never a bare percentage.
 
@@ -69,6 +85,12 @@ calibration exactly as much as fitting one on contaminated data would be.
 (a genuine no-op) until real evidence exists. First applied 2026-08-10 for
 the Carabao Cup, League One, and League Two additions.
 
+Once real-money pressure or a similar practical need arises for a
+permanently-excluded population, rule 12 describes how — and whether — to
+convert whole-population exclusion into a date-split boundary without
+losing the backtest already earned. Read it before assuming the exclusion
+described here is necessarily permanent in every case.
+
 ## 11. If the question is "is the EV threshold itself well-calibrated" (not "is there an edge"), that's Continuous ROI, not Historical/Live.
 Every other ROI reading in this document — Historical, Live, Combined — is
 filtered to `posEdge ≥ 5%`, so none of them can tell you whether that
@@ -90,6 +112,11 @@ comes up again — e.g. during a future model-upgrade assessment, or before
 raising/lowering the live threshold.
 
 ## 12. A permanently-excluded population (rule 10) can convert to a date-split boundary — but only as its own explicit, documented decision, never a default.
+
+This is the natural next lifecycle stage for a rule-10 population, once it
+has produced a genuine backtest and a practical reason exists to stop
+reserving new data. Read rule 10 first if you haven't already — this rule
+assumes that one-time baseline pass has already happened.
 
 Once a held-out population has already produced a genuine backtest read that's
 been published and acted on (e.g. Addendum 19's League One/League Two look,
@@ -144,3 +171,51 @@ margin past the latest plausible query time that same morning. Carabao Cup
 original permanent, whole-population exclusion — it's paper-only, so there's
 no real-money pressure to fold new data in, and no reason to spend any part
 of its own future clean-test opportunity early.
+
+## 13. Any correction or adjustment layer applied on top of the core model gets its own train/test discipline — never inherited from an outer or inner layer's history.
+
+The core GBDT model, per-league base rates (`avgHomeWinRate` etc.), and any
+correction layer built on top of either (e.g., a per-league variable-strength
+adjustment) are distinct tunable parameter sets. Each one's evidentiary
+status is bounded strictly by what *that* layer's own parameters have
+actually been fit against — not by what a different layer has or hasn't
+seen.
+
+Concretely: the core GBDT model has, by design, already trained on nearly
+the entire available population for most leagues (see the amendment to rule
+1 above). That does **not** disqualify a new correction layer built on top
+of it from earning a genuine train/test split of its own — the correction's
+parameters don't exist yet, so no population has been spent on them. Reserve
+a slice, fit the correction on train only, look at test once, record the
+result — rules 1-3, applied fresh to this layer specifically.
+
+The reverse also holds: a population already spent as a genuine backtest for
+the core model, or for base rates (rule 10), does not automatically confer
+that same status on a new correction layer, and vice versa. Every layer's
+claim to being "unseen" must be independently true and independently
+checked, never assumed to transfer from a different layer.
+
+This generalizes beyond whichever correction layer was under discussion when
+this rule was written — it applies to any future layer of this kind.
+
+## 14. Every distinct "what was genuinely held unseen" claim gets its own distinct, visibly-marked label — never reuse a stronger label for a weaker guarantee.
+
+`historicalSource` is not a fixed two-value enum (`real-backtest` /
+`walkforward-proxy`) — it's an open set that grows every time a genuinely
+new evidentiary situation appears, including any new correction layer under
+rule 13. Before reusing an existing label for a new situation, or
+introducing a new one, check:
+
+- What, precisely, was never touched during fitting — the whole pipeline, or
+  only one specific layer sitting on an already-in-sample model?
+- Does an existing label already make that exact claim, or would applying it
+  here overstate what was actually tested?
+- Is the distinction rendered visibly wherever the reading appears — not
+  just in a tooltip, not just in a code comment — the same standard
+  Addendum 21 set for ✓bt vs 🔬?
+
+If the claim is new, the label is new too, with its own marker and its own
+one-line description of exactly what was held out. A reading is only as
+trustworthy as its label is honest about what it tested — conflating a
+partial guarantee with a full one is the same mistake as fitting and testing
+on the same data, just moved from the tuning step into the reporting step.
