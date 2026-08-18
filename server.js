@@ -2046,6 +2046,7 @@ async function checkAndResolve() {
 
   let betsChanged = false;
   let calChanged  = false;
+  const betIdsToRemove = new Set();
 
   for (const fid of fixtureIds) {
     try {
@@ -2053,6 +2054,36 @@ async function checkAndResolve() {
       const fix    = data?.response?.[0];
       if (!fix) continue;
       const status = fix.fixture?.status?.short;
+
+      // Postponed/cancelled fixtures never produce a normal result under this
+      // fixture ID — API-Sports reschedules a postponed match under a new id
+      // rather than updating this one, so polling this id every 5 minutes
+      // forever would never resolve it (confirmed live: SC Braga vs GIL
+      // Vicente, fid 1575458, kicked off 2026-08-16, still PST two days
+      // later). Per explicit preference (2026-08-18): these should stop
+      // showing as "awaiting result" rather than sit stuck indefinitely.
+      // Paper bets carry no real financial consequence, so they're removed
+      // outright. Real bets are NOT deleted — actual money was staked at a
+      // real external bookmaker, and what happens to that stake there isn't
+      // a call this app should make silently — those are flagged
+      // postponed:true instead, hidden from the active Scout-tab list (see
+      // index.html's locked-bets filter) but kept in bets.json for
+      // accounting/audit.
+      if (status === 'PST' || status === 'CANC') {
+        const matchingPending = pendingBets.filter(b => b.fixtureId === fid);
+        if (matchingPending.length) {
+          for (const b of matchingPending) {
+            if (b.mode === 'real') b.postponed = true;
+            else betIdsToRemove.add(b.id);
+          }
+          betsChanged = true;
+          const realN  = matchingPending.filter(b => b.mode === 'real').length;
+          const paperN = matchingPending.length - realN;
+          console.log(`[Resolve] fixture ${fid} (${fix.teams?.home?.name} vs ${fix.teams?.away?.name}) is ${status} — ${paperN} paper bet(s) removed, ${realN} real bet(s) flagged postponed`);
+        }
+        continue;
+      }
+
       if (!['FT', 'AET', 'PEN', 'AWD', 'WO'].includes(status)) continue;
 
       // h2h market settles on 90-minute FT result — use score.fulltime, not goals
@@ -2168,7 +2199,7 @@ async function checkAndResolve() {
     } catch (e) { console.error(`[Resolve] error ${fid}: ${e.message}`); }
   }
 
-  if (betsChanged) saveBets(bets);
+  if (betsChanged) saveBets(betIdsToRemove.size ? bets.filter(b => !betIdsToRemove.has(b.id)) : bets);
   if (calChanged)  saveCalibration(cal);
 
   // Fix 8 — Phase 2 readiness check: 50+ resolved calibration entries with lineup data

@@ -2595,7 +2595,13 @@ function renderScout() {
   updateBankrollBadge();
 
   // Stats
-  const locked   = bets.filter(b => b.stage === 'RECOMMENDED');
+  // Postponed real bets (server.js's checkAndResolve — a fixture that will never
+  // produce a result under this fixture id) are kept in bets.json for accounting
+  // but drop out of the active Scout-tab list here per explicit preference
+  // (2026-08-18): they shouldn't sit showing "awaiting result" forever. Postponed
+  // paper bets are removed server-side entirely, so this filter is really only
+  // ever relevant to real bets in practice.
+  const locked   = bets.filter(b => b.stage === 'RECOMMENDED' && !b.postponed);
   const resolved = bets.filter(b => b.stage === 'RESOLVED');
   const wins     = resolved.filter(b => b.result === 'win').length;
   const losses   = resolved.filter(b => b.result === 'loss').length;
@@ -3154,6 +3160,7 @@ async function renderPerfMode(mode) {
     const pnlCls = b.pnl > 0 ? 'c-green' : b.pnl < 0 ? 'c-red' : '';
     const resultBadge = b.result === 'win' ? '<span class="badge badge-green">WIN</span>'
       : b.result === 'loss' ? '<span class="badge badge-red">LOSS</span>'
+      : b.postponed ? '<span class="badge badge-amber" title="Fixture postponed — stays here for accounting, no longer shown as an active bet on the Scout tab">POSTPONED</span>'
       : '<span class="badge badge-muted">PENDING</span>';
     const modeCell = mode === 'combined'
       ? `<td><span class="badge ${b.mode === 'real' ? 'badge-real' : 'badge-paper'}">${b.mode === 'real' ? 'REAL £' : 'PAPER'}</span></td>`
