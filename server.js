@@ -7057,9 +7057,9 @@ const CALIBRATION_AUDIT = {
   // the reported test portion. `reliable: true` reflects that genuine cleanliness,
   // not equivalence to a split. See CALIBRATION_AUDIT vs LEAGUE_TIER_MATRIX's comment
   // for the same distinction applied to the historical matrix.
-  48:  { reliable: true, status: 'unseen_population', note: 'Single deliberate look completed 2026-08-11 against the full matched-odds population (n=330, posEdgeN=168) — no train/test split, none of this data has ever been used for tuning. ROI +18.5%, CI (-8.5%, +45.6%) spans zero and posEdgeN is well below the rule-6 decision-grade floor — a tempting number on a small, genuinely unseen sample, not a confirmed edge. Structural gap found: Carabao Cup Round 1 fixtures (smaller-club pairings, e.g. Sutton Utd, Newport County, Accrington Stanley) show near-zero Pinnacle odds-market coverage historically — a real, confirmed data-availability limit, not a team-name-matching bug (verified via debug mode: 100% of misses were zero-event API responses, not failed name matches).' },
-  41:  { reliable: true, status: 'unseen_population', note: 'Single deliberate look completed 2026-08-11 against the full matched-odds population (n=3,344, posEdgeN=1,580) — no train/test split, none of this data has ever been used for tuning. ROI -3.6%, CI (-9.8%, +2.5%) spans zero — decision-grade sample (posEdgeN clears the rule-6 floor), no confirmed edge. One cell excludes zero: the 50-55% tier (n=230) shows CI (-30.1%, -0.9%), a genuinely negative reading worth watching, though a single cell at this population size is not yet a leaguewide finding. As of 2026-08-15 (rule 12): training exclusion is now date-split at kickoff cutoff 2026-08-11T09:00:00Z, not whole-league — this backtest population (all pre-cutoff) stays permanently protected and this reading never changes; fixtures kicking off at/after the cutoff feed the weekly retrain and accumulate as a separate, normal Live reading instead.' },
-  42:  { reliable: true, status: 'unseen_population', note: 'Single deliberate look completed 2026-08-11 against the full matched-odds population (n=3,338, posEdgeN=1,746) — no train/test split, none of this data has ever been used for tuning. ROI +4.2%, CI (-2.7%, +11.0%) spans zero — decision-grade sample (posEdgeN clears the rule-6 floor), no confirmed edge. Home picks specifically (n=2,518, posEdgeN=1,304) show ROI +8.0% with CI (-0.1%, +16.1%) — the closest any cut of this population comes to excluding zero, worth a closer look in any future dedicated cycle, not yet a confirmed finding on its own. As of 2026-08-15 (rule 12): training exclusion is now date-split at kickoff cutoff 2026-08-11T09:00:00Z, not whole-league — this backtest population (all pre-cutoff) stays permanently protected and this reading never changes; fixtures kicking off at/after the cutoff feed the weekly retrain and accumulate as a separate, normal Live reading instead.' },
+  48:  { reliable: true, status: 'unseen_population', note: 'Single deliberate look completed 2026-08-11 against the full matched-odds population (n=330) — no train/test split, none of this data has ever been used for tuning. Structural gap found: Carabao Cup Round 1 fixtures (smaller-club pairings, e.g. Sutton Utd, Newport County, Accrington Stanley) show near-zero Pinnacle odds-market coverage historically — a real, confirmed data-availability limit, not a team-name-matching bug (verified via debug mode: 100% of misses were zero-event API responses, not failed name matches). Corrected 2026-08-18 (Addendum 24): a bug in computeUnifiedEdge (marginStrippedImplied read the wrong odds-object field names) silently NaN\'d every edge computation from Track A (2026-08-14) onward, so this reading was frozen at its pre-Track-A figures the whole time, not genuinely recomputed. Corrected: posEdgeN=225 (was 168), ROI +10.5% (was +18.5%), still well below the rule-6 decision-grade floor, not a confirmed edge — same conclusion, corrected number.' },
+  41:  { reliable: true, status: 'unseen_population', note: 'Single deliberate look completed 2026-08-11 against the full matched-odds population (n=3,344) — no train/test split, none of this data has ever been used for tuning. As of 2026-08-15 (rule 12): training exclusion is now date-split at kickoff cutoff 2026-08-11T09:00:00Z, not whole-league — this backtest population (all pre-cutoff) stays permanently protected and this reading never changes; fixtures kicking off at/after the cutoff feed the weekly retrain and accumulate as a separate, normal Live reading instead. Corrected 2026-08-18 (Addendum 24): a bug in computeUnifiedEdge (marginStrippedImplied read the wrong odds-object field names) silently NaN\'d every edge computation from Track A (2026-08-14) onward, so this reading was frozen at its pre-Track-A figures the whole time, not genuinely recomputed — the originally-reported posEdgeN=1,580/ROI -3.6% never actually reflected Track A\'s calFactor/margin-stripping correction. Corrected: posEdgeN=2,231, ROI -3.9% — still no confirmed edge (same conclusion as before), but the per-tier cells shifted; the 50-55% tier (n=322) still shows a CI excluding zero, now (-28.2%, -4.7%). Real-money impact of the bug: none — settings.paperTradeOnly/paperKellyFraction were never mutated by it (runEvCalibration()\'s auto-management explicitly skips roi===null leagues, confirmed via live settings read); this was a reporting-layer bug, not a bet-locking one (scoreOneFixture never calls computeUnifiedEdge).' },
+  42:  { reliable: true, status: 'unseen_population', note: 'Single deliberate look completed 2026-08-11 against the full matched-odds population (n=3,338) — no train/test split, none of this data has ever been used for tuning. As of 2026-08-15 (rule 12): training exclusion is now date-split at kickoff cutoff 2026-08-11T09:00:00Z, not whole-league — this backtest population (all pre-cutoff) stays permanently protected and this reading never changes; fixtures kicking off at/after the cutoff feed the weekly retrain and accumulate as a separate, normal Live reading instead. Corrected 2026-08-18 (Addendum 24): a bug in computeUnifiedEdge (marginStrippedImplied read the wrong odds-object field names) silently NaN\'d every edge computation from Track A (2026-08-14) onward, so this reading was frozen at its pre-Track-A figures the whole time, not genuinely recomputed — the originally-reported posEdgeN=1,746/ROI +4.2% never actually reflected Track A\'s calFactor/margin-stripping correction. Corrected: posEdgeN=2,346, ROI +3.1% — still no confirmed edge (same conclusion as before), per-tier cells shifted; see /api/league-tier-matrix for the current per-cell breakdown. Real-money impact of the bug: none — settings.paperTradeOnly/paperKellyFraction were never mutated by it (runEvCalibration()\'s auto-management explicitly skips roi===null leagues, confirmed via live settings read); this was a reporting-layer bug, not a bet-locking one (scoreOneFixture never calls computeUnifiedEdge).' },
 };
 
 // Leagues with a genuine, documented train/test split (docs/calibration-rules.md
@@ -7806,76 +7806,6 @@ app.get('/api/admin/weekly-retrain-log', (_req, res) => {
     paused: settings.weeklyRetrainPaused === true,
     nextScheduled: 'Mondays 05:15 UTC',
     entries: log,
-  });
-});
-
-// TEMP diagnostic — compares the OLD Addendum-19 edge formula (relative,
-// non-margin-stripped, no calFactor) against Track A's computeUnifiedEdge
-// (absolute, margin-stripped, calFactor-boosted) fixture-by-fixture for
-// Carabao Cup/League One/League Two, to confirm whether the identical pooled
-// n/ROI seen live is because the same fixtures clear the edge>=5% threshold
-// under both formulas, or a real discrepancy. Read-only. Remove after use.
-app.get('/api/admin/temp-track-a-edge-check', async (_req, res) => {
-  const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG, computeUnifiedEdge } = require('./scoring');
-  const historical    = readJSON('backfill-historical.json') || {};
-  const scoredRecords = historical.scoredRecords || [];
-  const optWeights     = historical.optimisedWeights || {};
-  const closingOdds    = readJSON('closing-odds.json') || {};
-  const settings = getSettings();
-  const calFactor = settings.calibrationFactor ?? 1.08;
-  const UNSEEN_IDS = new Set([48, 41, 42]);
-
-  const rows = [];
-  let sinceYield = 0;
-  for (const rec of scoredRecords) {
-    if (!UNSEEN_IDS.has(parseInt(rec.leagueId, 10))) continue;
-    if (++sinceYield >= 50) { sinceYield = 0; await new Promise(r => setImmediate(r)); }
-    const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
-    if (!co || !co.homeOdds || !co.awayOdds || !co.drawOdds) continue;
-    if (!rec.actualOutcome) continue;
-    if (!rec.homeFactors || !rec.awayFactors) continue;
-    const context = rec.context || classifyFixture(rec.leagueId);
-    const weights = optWeights[context] || optWeights.club_domestic;
-    if (!weights) continue;
-
-    const leagueId = parseInt(rec.leagueId, 10);
-    const rawProbs = model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]);
-    const probs    = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
-    let topOutcome, modelProb, pinnacleOdds;
-    if (probs.home >= probs.draw && probs.home >= probs.away) { topOutcome = 'home'; modelProb = probs.home; pinnacleOdds = co.homeOdds; }
-    else if (probs.away >= probs.draw) { topOutcome = 'away'; modelProb = probs.away; pinnacleOdds = co.awayOdds; }
-    else { topOutcome = 'draw'; modelProb = probs.draw; pinnacleOdds = co.drawOdds; }
-    if (!pinnacleOdds || pinnacleOdds <= 1) continue;
-
-    // OLD formula (Addendum 19, 2c0ed15): relative edge, raw implied, raw modelProb
-    const pinnacleImplied = 1 / pinnacleOdds;
-    const oldEdge = (modelProb - pinnacleImplied) / pinnacleImplied;
-
-    // NEW formula (Track A): absolute edge, margin-stripped implied, calFactor-boosted modelProb
-    const { edge: newEdge } = computeUnifiedEdge(modelProb, co, topOutcome, { applyCalFactor: true, calFactor });
-
-    rows.push({ leagueId, fixtureId: rec.fixtureId, oldEdge, newEdge, oldQualifies: oldEdge >= 0.05, newQualifies: newEdge >= 0.05 });
-  }
-
-  const bothQualify   = rows.filter(r => r.oldQualifies && r.newQualifies).length;
-  const onlyOld        = rows.filter(r => r.oldQualifies && !r.newQualifies);
-  const onlyNew        = rows.filter(r => !r.oldQualifies && r.newQualifies);
-  const oldTotal = rows.filter(r => r.oldQualifies).length;
-  const newTotal = rows.filter(r => r.newQualifies).length;
-  const avgAbsDelta = rows.length ? rows.reduce((s, r) => s + Math.abs(r.newEdge - r.oldEdge), 0) / rows.length : null;
-
-  res.json({
-    totalMatched: rows.length,
-    oldQualifyingCount: oldTotal,
-    newQualifyingCount: newTotal,
-    setsIdentical: onlyOld.length === 0 && onlyNew.length === 0 && oldTotal === newTotal,
-    bothQualifyCount: bothQualify,
-    onlyOldQualifiesCount: onlyOld.length,
-    onlyNewQualifiesCount: onlyNew.length,
-    avgAbsEdgeDelta: avgAbsDelta,
-    sampleOnlyOld: onlyOld.slice(0, 5),
-    sampleOnlyNew: onlyNew.slice(0, 5),
-    sampleFirst5: rows.slice(0, 5),
   });
 });
 

@@ -4192,3 +4192,100 @@ retraining — every figure above is quoted from Addendum 2, Addendum
 14's Extension 3, or Addendum 22, or is a plain restatement of already-
 published numbers. Auto-retrain gate re-verified: `autoRetrainEnabled:
 false`, model unchanged (`trainedAt: 2026-08-08`, `trainN: 40,202`).
+
+## Addendum 24 — computeUnifiedEdge bug found and fixed: Addendum 19's figures were frozen behind a silent fallback, not genuinely recomputed post-Track-A; corrected figures
+
+Triggered by a direct question — does Addendum 19's League One/League Two
+backtest reflect the post-Track-A corrected `computeMatchedEdgeFixtures()`
+logic? Investigating it surfaced a real, previously undetected bug, not a
+staleness question with a clean yes/no answer.
+
+### What was found
+
+Track A (`a18886f`, 2026-08-14) replaced `LEAGUE_TIER_MATRIX`'s hand-written
+Carabao Cup/League One/League Two entries with `buildUnseenPopulationMatrix()`
+— a live computation via `computeMatchedEdgeFixtures()` → `computeUnifiedEdge()`
+— described in its own commit comment as reading "the full matched population
+directly... with the corrected edge/dataConf." That intent was never actually
+realized: `computeUnifiedEdge()`'s internal `marginStrippedImplied()` read
+`rawOdds.home`/`.away`/`.draw`, but its only two callers (`computeMatchedEdgeFixtures()`
+and this investigation's own temp diagnostic) both pass a closing-odds record
+shaped `{homeOdds, drawOdds, awayOdds}` — the convention used everywhere else
+in this codebase. Every field read `undefined`, `1/undefined = NaN`, and
+`edge` came back `NaN` for every fixture, silently, from the moment Track A
+deployed.
+
+Every downstream consumer filters on `edge >= 0.05`, so the "positive edge"
+population was empty **app-wide**, not just for these three leagues, for the
+four days between Track A and this fix — confirmed directly via
+`/api/ev-calibration`: `positiveEdge: 0`, `positiveEdgeRoi: null`,
+`kellyRecommendation: 'flag_for_review'`, across all 14 leagues.
+`buildUnseenPopulationMatrix()` has its own documented fallback for exactly
+this case ("falls back to that snapshot only if the live computation finds
+nothing"), so `/api/league-tier-matrix` silently kept serving the frozen
+pre-Track-A Addendum 19 numbers for Carabao Cup/League One/League Two the
+entire time — which is exactly why they read as unchanged and looked entirely
+normal. Nothing about the display suggested a problem; only
+`/api/ev-calibration`'s raw output showed the failure mode plainly.
+
+### Real-money impact: none
+
+`runEvCalibration()`'s `paperTradeOnly`/Kelly-fraction auto-management
+explicitly skips `roi === null` leagues (`if (!lid || l.roi === null)
+continue;`), and `overallKelly === 'flag_for_review'` blocks the paper-Kelly-
+fraction auto-update too. Confirmed via a live `settings.json` read:
+`paperTradeOnly` and `paperKellyFraction` were unchanged by the bug — League
+One's presence in `paperTradeOnly` predates Track A (consistent with its
+already-negative original ROI) and was simply never touched by the broken
+post-Track-A runs, not newly added by them. This was a reporting/analysis-
+layer bug, not a bet-locking one — `scoreOneFixture()` (the actual live
+scoring/lock path) computes its own edge inline and never calls
+`computeUnifiedEdge()`.
+
+### Fix
+
+`marginStrippedImplied()` now accepts both odds-object shapes
+(`rawOdds.home ?? rawOdds.homeOdds`, etc.) — it has no other callers, so
+widening its accepted shape is safe everywhere it's used. Deployed and
+verified: `/api/ev-calibration` now returns real, non-null figures across
+all 14 leagues (`positiveEdge: 10,838` matched fixtures pooled app-wide,
+pooled `positiveEdgeRoi: -0.8%`).
+
+### Corrected figures (posEdge ≥5% subset, same convention as Addendum 19)
+
+| League | n (matched) | posEdgeN | ROI | Addendum 19's original |
+|---|---|---|---|---|
+| League One | 3,344 | 2,231 | −3.9% | posEdgeN 1,580, ROI −3.6% |
+| League Two | 3,338 | 2,346 | +3.1% | posEdgeN 1,746, ROI +4.2% |
+| Carabao Cup | 330 | 225 | +10.5% | posEdgeN 168, ROI +18.5% |
+
+`posEdgeN` rose materially for all three — expected and mechanical, not a new
+finding: Track A's calFactor boost (`modelProb × ~1.11`) pushes more
+fixtures over the 5% threshold than the old no-calFactor formula did.
+Directionally, both leagues stayed in the same small, inconclusive range
+Addendum 19 already reported — this correction does **not** overturn
+Addendum 19's headline conclusion (no confirmed edge either way for League
+One or League Two) — but the exact per-tier cells shifted, including which
+cells clear/miss the rule-6 decision-grade floor. League One's 50-55% tier
+still shows a CI excluding zero, now (−28.2%, −4.7%), n=322 (was n=230,
+CI (−30.1%, −0.9%)) — same cell, same direction, updated numbers. See
+`/api/league-tier-matrix` for the current full per-cell breakdown.
+
+**The six previously green-flagged cells (Addendum 22 Part 3) were curated
+against the frozen pre-fix figures and should be reviewed against the
+corrected numbers** — this addendum does not re-curate them; that stays a
+deliberate, separate human decision per Addendum 21's own green-flag
+discipline.
+
+### Constraints honoured
+
+No change to base rates, weights, or scoring logic beyond the field-name fix
+itself. No new statistical test or tuning decision — this is a bug fix
+restoring Track A's already-approved, already-intended behaviour, not a new
+calibration look. `calibration-rules.md` rule 3 ("single look") is not
+violated: the corrected read is the first time `computeUnifiedEdge()` has
+ever actually executed for this population; every "look" before today was
+silently the old frozen snapshot, not a second peek at live data.
+`CALIBRATION_AUDIT[41]`/`[42]`/`[48]` updated in place with the corrected
+figures and a pointer to this addendum, rather than left describing numbers
+that were never actually re-derived.
