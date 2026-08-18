@@ -7937,6 +7937,51 @@ app.get('/api/admin/walkforward-raw-bets', (_req, res) => {
   res.json({ totalN: bets.length, byBlock: bets.reduce((acc, b) => { acc[b.blockLabel] = (acc[b.blockLabel]||0)+1; return acc; }, {}) });
 });
 
+// TEMP diagnostic — stale matched-odds-data investigation (Addendum 25
+// follow-up). Compares hist.fixtures' own date coverage per league against
+// closing-odds.json's coverage, broken down by season-year, so it's possible
+// to see directly whether fixtures exist that were never matched against
+// closing odds (a backfill re-run gap) vs. fixtures themselves not existing
+// that recently (a fixture-backfill gap). Removed once this investigation
+// concludes.
+app.get('/api/admin/matched-odds-coverage-diagnostic', async (_req, res) => {
+  try {
+    const hist = readJSON('backfill-historical.json') || {};
+    const fixtures = hist.fixtures || [];
+    const closing = readJSON('closing-odds.json') || {};
+    const closingIds = new Set(Object.keys(closing).map(String));
+
+    const byLeague = {};
+    let sinceYield = 0;
+    for (const fix of fixtures) {
+      if (++sinceYield >= 2000) { sinceYield = 0; await new Promise(r => setImmediate(r)); }
+      const lid = String(fix.league?.id);
+      const fid = String(fix.fixture?.id);
+      const date = fix.fixture?.date;
+      const status = fix.fixture?.status?.short;
+      if (!lid || !date) continue;
+      const year = new Date(date).getUTCFullYear();
+      if (!byLeague[lid]) byLeague[lid] = { totalFixtures: 0, minDate: date, maxDate: date, byYear: {}, matchedTotal: 0, matchedMaxDate: null, finalStatusTotal: 0 };
+      const L = byLeague[lid];
+      L.totalFixtures++;
+      if (date < L.minDate) L.minDate = date;
+      if (date > L.maxDate) L.maxDate = date;
+      if (!L.byYear[year]) L.byYear[year] = { total: 0, matched: 0, finalStatus: 0 };
+      L.byYear[year].total++;
+      const isFinal = ['FT', 'AET', 'PEN'].includes(status);
+      if (isFinal) { L.finalStatusTotal++; L.byYear[year].finalStatus++; }
+      if (closingIds.has(fid)) {
+        L.matchedTotal++;
+        L.byYear[year].matched++;
+        if (!L.matchedMaxDate || date > L.matchedMaxDate) L.matchedMaxDate = date;
+      }
+    }
+    res.json({ generatedAt: new Date().toISOString(), byLeague });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Pools all 4 blocks' raw bet outcomes per (league, tier) — n, ROI, 95% CI via
 // normal approximation on per-bet returns (same method used for the Europa
 // League/Conference League splits, Addendum 20). Writes walk-forward-pooled.json,
