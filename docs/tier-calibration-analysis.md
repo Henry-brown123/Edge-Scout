@@ -4484,3 +4484,214 @@ applied as designed — this addendum is itself the first real-world use of
 both. Auto-retrain gate re-verified unaffected (no training-path code
 touched). Temp diagnostic endpoint (`/api/admin/correction-layer-diagnostic`)
 removed after use.
+
+## Addendum 26 — Walk-forward validation of the correction layer, and the stale matched-odds root cause + fix
+
+Overnight, autonomous task. Follow-up to Addendum 25, whose single-holdout
+correction-layer test showed calibration flipping sign between train and
+test for all three fitted corrections — indistinguishable, on one look
+alone, from either "genuinely unstable correction" or "one unlucky test
+window." This addendum resolves that ambiguity via multi-block walk-forward
+validation (Addendum 21's technique), and separately investigates and fixes
+the stale matched-odds-data finding flagged incidentally during Addendum 25.
+
+Sequencing note: Part 2 (staleness fix) was done **before** Part 1
+(walk-forward), reversing the brief's listed order — a deliberate,
+documented deviation. Running the original-9 walk-forward on stale
+(pre-2025) data would have produced a result that needed redoing once the
+staleness was fixed; fixing first meant doing the real work once.
+
+### Part 2 — Stale matched-odds data: root cause and fix
+
+**Scope confirmed**: 8 of the 14 tracked leagues/competitions — the
+original 9 minus Eredivisie/Primeira Liga/Scottish Premiership (Premier
+League, La Liga, Bundesliga, Ligue 1, Serie A, Champions League, Europa
+League, Conference League) — had matched-odds data capping around
+2025-05-2x, over a year stale relative to today (2026-08-18), despite
+`hist.fixtures` itself (the raw fixture population) already extending
+through 2026-08 for every one of them — HIST_SEASONS_2010 already includes
+2025/2026 and was not the problem.
+
+**Root cause, confirmed via a temp diagnostic comparing fixture coverage
+against closing-odds coverage per league/year**: not a stale season/date-
+list config bug (the class of bug this project has hit several times
+before — LINEUP_SEASONS, HIST_SEASONS gaps). `runClosingOddsBackfill()` has
+no date-based exclusion beyond the deliberate, documented `year < 2020`
+floor, and is fully idempotent (skips any fixture already in
+`closing-odds.json`). The gap was simply that the closing-odds backfill
+had never been **re-triggered** for these 8 leagues/competitions since
+partway through the 2024-25 season — a "never re-run," not a "ran and
+failed" or "config wrong" gap. Confirmed by the partial-then-zero pattern
+in the per-year breakdown (e.g. Premier League 2025: 192/378 matched, 2026:
+0/194) — a run that stopped mid-season and was never resumed, not a
+structural or API coverage limit (Eredivisie/Primeira Liga/Scottish
+Premiership/League One/League Two/Carabao Cup all had matched data via the
+same Odds API endpoint extending into 2026 already).
+
+**Secondary finding, narrowed but not fixed**: Champions League showed a
+genuine 0% match rate for its 2025-2026 fixtures specifically (188 attempts,
+0 matches) even after the fix pass — its earlier years (2020-2024) matched
+fine (635 total, historically). This lines up with UEFA's 2024-25 reformat
+from group stage to a 36-team "league phase," a structurally different
+competition format. Root cause not conclusively identified (Odds API
+coverage gap for the new format vs. a team-name/scheduling mismatch specific
+to it) — flagged as a distinct, smaller-scope follow-up, not fixed here (CL
+is a small, already-thin population; not worth further overnight budget on
+a secondary issue when the primary 8-league gap was the actual finding).
+Europa League showed a similar, milder pattern (lower match rate than the
+domestic leagues, plausibly related to the same reformat, though EL still
+matched a meaningful fraction unlike CL's near-total miss).
+
+**Fix applied**: re-triggered `POST /api/backfill/closing-odds`, scoped one
+league at a time after the first two multi-league attempts were interrupted
+mid-run by Render instance restarts (see Compliance section below for the
+full incident). Serie A and Europa League turned out to have materially
+larger real gaps than the 2025-2026 window alone (Serie A was also missing
+2020-2021 entirely; EL was missing most of 2014-2021) — closed as a side
+effect of the same fix, not separately scoped.
+
+**Before/after coverage** (matched-odds population size, most recent
+matched date):
+
+| League | Before | After | matchedMaxDate before → after |
+|---|---|---|---|
+| Premier League | 1,900 | 2,372 | 2025-05-25 → 2026-05-24 |
+| La Liga | 1,897 | 2,387 | 2025-05-25 → 2026-05-24 |
+| Ligue 1 | 1,753 | 2,060 | 2025-05-21 → 2026-05-29 |
+| Bundesliga | 1,533 | 1,884 | 2025-05-26 → 2026-05-21 |
+| Serie A | 1,140 | 2,404 | 2025-05-25 → 2026-05-24 |
+| Champions League | 635 | 635 | 2025-05-31 → 2025-05-31 (unfixed, see above) |
+| Europa League | 423 | 891 | 2025-05-21 → 2026-05-20 |
+| Conference League | 342 | 478 | 2025-05-28 → 2026-05-27 |
+
+7 of 8 now current to May 2026 — the same recency ceiling as every other
+league (football seasons run August-to-May; the 2026-27 season had barely
+started as of this task's run date). Champions League remains the one
+open gap, clearly scoped and documented rather than silently left unstated.
+
+### Part 1 — Walk-forward validation of the correction layer
+
+**Design**: 4 sequential, expanding-window blocks per population — fit on
+all data strictly before each block's start, test on the block, same
+technique as Addendum 21. League One/League Two used season-aligned blocks
+(2022-23 through 2025-26, since English football runs clean August-May
+cycles); the original-9 away-band correction used 6-month blocks over the
+most recent 24 months (2024-08 through 2026-08), consistent with Addendum
+21's own window-selection precedent. Domestic-blend exclusion re-checked
+against the refreshed population — **zero fixtures affected**, same result
+as Addendum 25, confirming the finding is stable.
+
+**League One — home + away picks, 50%+ band**:
+
+| Block | test n | before (calibErr / posEdgeN / ROI) | after |
+|---|---|---|---|
+| 2022-23 | 233 | -3.6pp / 183 / +2.3% | +4.1pp / 102 / +8.0% |
+| 2023-24 | 230 | -9.3pp / 176 / -10.6% | -2.9pp / 109 / -15.9% |
+| 2024-25 | 214 | +1.7pp / 153 / +10.7% | +8.8pp / 92 / +20.1% |
+| 2025-26 (partial) | 206 | -2.3pp / 172 / +3.5% | +3.1pp / 122 / +8.3% |
+| **Pooled** | **883** | **-3.5pp / 684 / +1.2%** | **+3.2pp / 425 / +4.6%, CI (-5.5%, +14.6%)** |
+
+Improved but not fully confirmed — ROI improves in 3 of 4 blocks, but block
+2 (the block with the worst starting calibration) shows a genuine ROI
+regression. Pooled posEdgeN=425 clears rule 6's floor; the CI still spans
+zero.
+
+**League Two — home + away picks, 50%+ band**:
+
+| Block | test n | before | after |
+|---|---|---|---|
+| 2022-23 | 165 | -11.6pp / 142 / -6.5% | -3.2pp / 78 / -1.3% |
+| 2023-24 | 218 | -6.9pp / 179 / +13.3% | +3.0pp / 96 / +31.7% |
+| 2024-25 | 201 | -12.8pp / 161 / -11.0% | -4.5pp / 90 / -2.6% |
+| 2025-26 (partial) | 206 | -4.0pp / 170 / +17.3% | +5.8pp / 91 / +28.1% |
+| **Pooled** | **790** | **-8.6pp / 652 / +4.0%** | **+0.5pp / 355 / +14.8%, CI (-0.2%, +29.8%)** |
+
+**The strongest read this project's correction-layer work has produced.**
+Every block moves calibration toward zero (from a genuinely bad -8.6pp
+pooled to +0.5pp — essentially exact), and ROI improves in every single
+block, never regresses. Pooled posEdgeN=355 clears rule 6's floor. The
+corrected ROI's CI (-0.2%, +29.8%) nearly excludes zero on the downside.
+This clears both bars the correction-layer brief set for "a real candidate
+for eventual deployment consideration" — the walk-forward revealed genuine
+stability that Addendum 25's single holdout, by construction, could not
+distinguish from noise.
+
+**Original 9 leagues — away picks, 45-70% band**:
+
+| Block | test n | before | after |
+|---|---|---|---|
+| 2024-08 to 2025-02 | 174 | +8.3pp / 30 / -3.2% | -6.5pp / 114 / +0.6% |
+| 2025-02 to 2025-08 | 110 | +10.2pp / 32 / +1.7% | -3.8pp / 70 / -2.5% |
+| 2025-08 to 2026-02 | 96 | +2.3pp / 24 / -45.8% | -11.3pp / 74 / -26.3% |
+| 2026-02 to 2026-08 | 79 | +5.9pp / 18 / -46.0% | -6.5pp / 56 / -20.7% |
+| **Pooled** | **459** | **+7.1pp / 104 / -18.9%** | **-6.9pp / 314 / -10.2%, CI (-22.1%, +1.6%)** |
+
+**Genuinely unstable — confirmed, not indicative.** Calibration overshoots
+the exact same direction (under- to over-confident) in all 4 independent
+blocks — a repeated pattern, not noise. Pooled posEdgeN=314 clears rule 6's
+floor even after correction, and the corrected ROI's CI (-22.1%, +1.6%)
+nearly excludes zero on the negative side — more confidently *not*
+profitable than Addendum 25's single look suggested. This directly answers
+the open question from the prior scoping conversation: today's walk-forward
+result is architecture-neutral evidence (a 2-parameter correction overshoots
+consistently; nothing here implicates the single-model design), but it does
+confirm this *specific* correction, as designed, does not work — not "one
+bad test window."
+
+### Disposition
+
+`scoring.js`'s `CORRECTION_LAYER_RULES` updated: the original9-away-45-70
+rule is **removed entirely** (not just left dormant — walk-forward
+positively disconfirmed it). League One/League Two updated to their
+most-recent-block (train-to-2025-08) fit parameters. `historicalSource:
+'correction-layer-backtest-walkforward'` introduced as a distinct rule-14
+label, alongside (not replacing) Addendum 25's `'correction-layer-backtest'`
+single-holdout entries — the single-holdout entries are retained for
+historical accuracy and marked superseded where the walk-forward reached a
+different conclusion. `/api/correction-layer-backtests` and the Performance
+tab's Correction-Layer Backtests card both updated with full per-block
+detail, pooled reads, and a stability badge (stable/mixed/unstable,
+confirmed) per rule 14's visible-distinction requirement.
+
+**Still not deployed live** — including League Two, whose read is the
+strongest evidence produced so far. Deployment remains its own separate,
+deliberate decision, exactly as both this task's brief and Addendum 25
+required.
+
+### Compliance and incident notes
+
+Rules 1-3, 13, 14: held throughout — each population's own train/test
+boundary, train-only fitting, single look per block (not iterated), rule 14
+labels never conflated. Rule 10/12: League One/Two base rates untouched;
+Carabao Cup untouched entirely (not part of either investigation). No
+base-rate parameters changed anywhere in this task (confirmed via `git diff`
+across every commit touching `scoring.js`).
+
+**Operational incident, disclosed in full**: the multi-league closing-odds
+backfill runs were interrupted twice by Render instance restarts — once
+caused directly by a `git push` mid-run (a genuine mistake: deploying while
+a long-running in-memory background job was active), once by a concurrent
+heavy diagnostic request (the raw-probs dump, which runs GBDT inference over
+20,000+ records) colliding with the backfill on a memory-constrained
+instance. Both were caught via the backfill status endpoint resetting to its
+default in-memory state (`startedAt: null`) rather than showing genuine
+completion — the difference between a real "done" and an instance restart
+disguised as one. No data was lost beyond the last unsaved batch (progress
+persists every 200 matched fixtures); both times, the backfill was simply
+re-triggered — idempotent by design, so this cost time and API credits, not
+correctness. Switched to single-league runs with no concurrent heavy
+requests for the remainder of the task, which completed without further
+incident. Worth a standing note for future overnight/background work on
+this instance: **do not deploy code or run heavy diagnostic endpoints while
+a long-running background job (backfill, retrain, walk-forward block) is
+active** — this instance does not have headroom for both.
+
+**API usage**: Odds API credits used this task ≈ 69,420 (4,901,318 →
+4,831,898 remaining; reserve line 1,000,000, never approached). API-Sports
+quota: negligible additional usage (~302 total for the day, consistent with
+routine cron activity — this task made no API-Sports calls directly).
+Auto-retrain gate re-verified `false` throughout; model unchanged
+(`trainedAt: 2026-08-08`, `trainN: 40,202`) — no training-path code touched.
+Both temp diagnostic endpoints (`/api/admin/correction-layer-diagnostic`,
+`/api/admin/matched-odds-coverage-diagnostic`) removed and confirmed 404
+after this addendum's work concluded.
