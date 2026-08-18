@@ -7937,6 +7937,65 @@ app.get('/api/admin/walkforward-raw-bets', (_req, res) => {
   res.json({ totalN: bets.length, byBlock: bets.reduce((acc, b) => { acc[b.blockLabel] = (acc[b.blockLabel]||0)+1; return acc; }, {}) });
 });
 
+// TEMP diagnostic — walk-forward correction-layer validation (Addendum 25
+// follow-up). Same shape as the temp endpoint used for Addendum 25's
+// single-holdout fit (removed after that work concluded) — dumps raw
+// pre-blend GBDT probs + closing odds + team IDs per matched fixture, so
+// multiple sequential walk-forward blocks can be fit/tested entirely offline
+// without a redeploy per block. Removed once this validation concludes.
+app.get('/api/admin/correction-layer-diagnostic', async (_req, res) => {
+  try {
+    const historical    = readJSON('backfill-historical.json') || {};
+    const scoredRecords = historical.scoredRecords || [];
+    const optWeights    = historical.optimisedWeights || {};
+    const closingOdds   = readJSON('closing-odds.json') || {};
+
+    const { classifyFixture, LEAGUE_CONFIG } = require('./scoring');
+
+    const out = [];
+    let sinceYield = 0;
+    for (const rec of scoredRecords) {
+      if (++sinceYield >= 50) { sinceYield = 0; await new Promise(r => setImmediate(r)); }
+      const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
+      if (!co || !co.homeOdds || !co.awayOdds || !co.drawOdds) continue;
+      if (!rec.actualOutcome) continue;
+      if (!rec.homeFactors || !rec.awayFactors) continue;
+
+      const context = rec.context || classifyFixture(rec.leagueId);
+      const weights = optWeights[context] || optWeights.club_domestic;
+      if (!weights) continue;
+
+      const leagueId = parseInt(rec.leagueId, 10);
+      const rawProbs = model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]);
+
+      const config = LEAGUE_CONFIG[leagueId];
+      let targetProbs = null;
+      if (config && config.avgHomeWinRate != null) {
+        const rawHomeTarget = config.avgHomeWinRate * (config.homeAdvBaseWeight || 1.0);
+        const drawTarget = config.avgDrawRate;
+        const awayTarget = config.avgAwayWinRate;
+        const sum = rawHomeTarget + drawTarget + awayTarget;
+        targetProbs = { home: rawHomeTarget / sum, draw: drawTarget / sum, away: awayTarget / sum };
+      }
+
+      out.push({
+        fixtureId: rec.fixtureId,
+        date: rec.date,
+        leagueId: rec.leagueId,
+        homeTeamId: rec.homeTeamId,
+        awayTeamId: rec.awayTeamId,
+        actualOutcome: rec.actualOutcome,
+        rawProbs,
+        targetProbs,
+        odds: { home: co.homeOdds, draw: co.drawOdds, away: co.awayOdds },
+      });
+    }
+    res.json({ n: out.length, generatedAt: new Date().toISOString(), records: out });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // TEMP diagnostic — stale matched-odds-data investigation (Addendum 25
 // follow-up). Compares hist.fixtures' own date coverage per league against
 // closing-odds.json's coverage, broken down by season-year, so it's possible
