@@ -498,6 +498,92 @@ function applyLeagueBiasCorrection(probs, leagueId, leagueConfig) {
   };
 }
 
+// ─── VARIABLE-STRENGTH CORRECTION LAYER (calibration-rules.md rules 13/14) ───
+// Replaces applyLeagueBiasCorrection()'s single fixed 30% blend with a scoped
+// correction table: each rule applies only within its own (league, pick-type,
+// probability-band) scope, with its own direction/strength — "not a fixed 30%
+// blend everywhere" per the correction-layer redesign brief. Each rule was fit
+// as a Platt-style rescale (sigmoid(A*logit(p)+B)) on a genuine, chronologically
+// -anchored TRAIN split, tested exactly once on TEST — see
+// docs/tier-calibration-analysis.md Addendum 25 for the full fit/test writeup,
+// including why every scope here is currently INDICATIVE ONLY (all three
+// overshot on test relative to train, and every test population sits below
+// rule 6's ~300-400 posEdge decision-grade floor).
+//
+// DORMANT: not called from scoreOneFixture() (live) or scoreFixtureFromPool()/
+// computeMatchedEdgeFixtures() (historical) — calibration-rules.md rule 3 (no
+// re-peeking) plus the correction-layer brief's own instruction ("do not
+// deploy the new correction live yet") means this exists for review and future
+// wiring, not active use. Deploying it is its own separate, deliberate
+// decision once the test-set result is judged trustworthy enough to act on.
+const CORRECTION_LAYER_RULES = [
+  {
+    id: 'original9-away-45-70',
+    leagues: [39, 140, 135, 78, 61, 2, 179, 88, 94],
+    pickTypes: ['away'],
+    bandMin: 0.45, bandMax: 0.70,
+    A: 1.7005, B: 0.5998,
+    fitTrainN: 1084, testN: 271, testPosEdgeN: 175,
+    historicalSource: 'correction-layer-backtest',
+  },
+  {
+    id: 'league-one-50plus',
+    leagues: [41],
+    pickTypes: ['home', 'away'],
+    bandMin: 0.50, bandMax: 1.0,
+    A: 0.9610, B: -0.2336,
+    fitTrainN: 1077, testN: 250, testPosEdgeN: 135,
+    historicalSource: 'correction-layer-backtest',
+  },
+  {
+    id: 'league-two-50plus',
+    leagues: [42],
+    pickTypes: ['home', 'away'],
+    bandMin: 0.50, bandMax: 1.0,
+    A: 0.5540, B: -0.2419,
+    fitTrainN: 914, testN: 246, testPosEdgeN: 105,
+    historicalSource: 'correction-layer-backtest',
+  },
+];
+
+function plattTransform(p, A, B) {
+  const clamped = Math.min(Math.max(p, 1e-6), 1 - 1e-6);
+  const logit = Math.log(clamped / (1 - clamped));
+  const z = A * logit + B;
+  if (z < -35) return 1e-15;
+  if (z > 35) return 1 - 1e-15;
+  return 1 / (1 + Math.exp(-z));
+}
+
+// Applies the scoped correction table to a model's raw (pre-blend) probs.
+// Picks the top outcome first (same order live scoring already uses), then
+// rescales only that outcome's probability if a rule matches its (league,
+// pick-type, band) scope, renormalising the other two to keep the sum at 1.
+// Falls through unchanged when no rule matches — most (league, pick, band)
+// combinations have zero evidenced correction, by design (rule 4: no
+// correction without a football-justified, measured reason).
+function applyVariableCorrectionLayer(rawProbs, leagueId, rules = CORRECTION_LAYER_RULES) {
+  const lid = parseInt(leagueId, 10);
+  const topOutcome = rawProbs.home >= rawProbs.draw && rawProbs.home >= rawProbs.away
+    ? 'home' : (rawProbs.away >= rawProbs.draw ? 'away' : 'draw');
+  const p = rawProbs[topOutcome];
+
+  const rule = rules.find(r =>
+    r.leagues.includes(lid) && r.pickTypes.includes(topOutcome) && p >= r.bandMin && p < r.bandMax
+  );
+  if (!rule) return { ...rawProbs };
+
+  const newP = plattTransform(p, rule.A, rule.B);
+  const others = ['home', 'draw', 'away'].filter(o => o !== topOutcome);
+  const otherSum = rawProbs[others[0]] + rawProbs[others[1]];
+  const remaining = Math.max(0, 1 - newP);
+  const out = { [topOutcome]: newP };
+  for (const o of others) {
+    out[o] = otherSum > 0 ? remaining * (rawProbs[o] / otherSum) : remaining / 2;
+  }
+  return out;
+}
+
 // ─── KELLY CRITERION ─────────────────────────────────────────────────────────
 
 function kelly(prob, odds, fraction = 0.5, bankroll = 1000) {
@@ -854,6 +940,7 @@ module.exports = {
   internationalFormScore, internationalQualityScore,
   lookupFIFARank, FIFA_RANK_FALLBACK,
   computeModelProb, applyLeagueBiasCorrection, computeXGProxy, classifyCompetitionPhase,
+  CORRECTION_LAYER_RULES, applyVariableCorrectionLayer,
   kelly, computeSuccessScore,
   computeDataConf, marginStrippedImplied, computeUnifiedEdge,
   historicalWeight, weatherModifier,
