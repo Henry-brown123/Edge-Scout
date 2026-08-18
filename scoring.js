@@ -504,45 +504,45 @@ function applyLeagueBiasCorrection(probs, leagueId, leagueConfig) {
 // probability-band) scope, with its own direction/strength — "not a fixed 30%
 // blend everywhere" per the correction-layer redesign brief. Each rule was fit
 // as a Platt-style rescale (sigmoid(A*logit(p)+B)) on a genuine, chronologically
-// -anchored TRAIN split, tested exactly once on TEST — see
-// docs/tier-calibration-analysis.md Addendum 25 for the full fit/test writeup,
-// including why every scope here is currently INDICATIVE ONLY (all three
-// overshot on test relative to train, and every test population sits below
-// rule 6's ~300-400 posEdge decision-grade floor).
+// -anchored TRAIN split.
+//
+// Superseded 2026-08-19 (Addendum 26 — walk-forward validation): Addendum 25's
+// single-holdout original9-away-45-70 rule is REMOVED here, not just flagged —
+// 4-block walk-forward testing confirmed it is genuinely unstable (calibration
+// overshoots in the same direction every single block, not noise) and its
+// pooled ROI stays negative-leaning even after correction. League One/Two are
+// UPDATED to their most-recent-block (train-to-2025-08) fit — walk-forward
+// confirmed League Two specifically as stable across all 4 blocks and clearing
+// rule 6's floor on the pooled read; League One improved but stayed mixed (one
+// of four blocks showed a real ROI regression). See
+// docs/tier-calibration-analysis.md Addendum 26 for the full per-block writeup.
 //
 // DORMANT: not called from scoreOneFixture() (live) or scoreFixtureFromPool()/
 // computeMatchedEdgeFixtures() (historical) — calibration-rules.md rule 3 (no
 // re-peeking) plus the correction-layer brief's own instruction ("do not
 // deploy the new correction live yet") means this exists for review and future
 // wiring, not active use. Deploying it is its own separate, deliberate
-// decision once the test-set result is judged trustworthy enough to act on.
+// decision once the result is judged trustworthy enough to act on — true even
+// for League Two, whose walk-forward read is the strongest evidence produced
+// so far but still hasn't been deployed.
 const CORRECTION_LAYER_RULES = [
-  {
-    id: 'original9-away-45-70',
-    leagues: [39, 140, 135, 78, 61, 2, 179, 88, 94],
-    pickTypes: ['away'],
-    bandMin: 0.45, bandMax: 0.70,
-    A: 1.7005, B: 0.5998,
-    fitTrainN: 1084, testN: 271, testPosEdgeN: 175,
-    historicalSource: 'correction-layer-backtest',
-  },
   {
     id: 'league-one-50plus',
     leagues: [41],
     pickTypes: ['home', 'away'],
     bandMin: 0.50, bandMax: 1.0,
-    A: 0.9610, B: -0.2336,
-    fitTrainN: 1077, testN: 250, testPosEdgeN: 135,
-    historicalSource: 'correction-layer-backtest',
+    A: 0.9567, B: -0.2086,
+    fitTrainN: 1121,
+    historicalSource: 'correction-layer-backtest-walkforward',
   },
   {
     id: 'league-two-50plus',
     leagues: [42],
     pickTypes: ['home', 'away'],
     bandMin: 0.50, bandMax: 1.0,
-    A: 0.5540, B: -0.2419,
-    fitTrainN: 914, testN: 246, testPosEdgeN: 105,
-    historicalSource: 'correction-layer-backtest',
+    A: 0.5508, B: -0.2488,
+    fitTrainN: 954,
+    historicalSource: 'correction-layer-backtest-walkforward',
   },
 ];
 
