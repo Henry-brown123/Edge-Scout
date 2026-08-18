@@ -7809,6 +7809,76 @@ app.get('/api/admin/weekly-retrain-log', (_req, res) => {
   });
 });
 
+// TEMP diagnostic — compares the OLD Addendum-19 edge formula (relative,
+// non-margin-stripped, no calFactor) against Track A's computeUnifiedEdge
+// (absolute, margin-stripped, calFactor-boosted) fixture-by-fixture for
+// Carabao Cup/League One/League Two, to confirm whether the identical pooled
+// n/ROI seen live is because the same fixtures clear the edge>=5% threshold
+// under both formulas, or a real discrepancy. Read-only. Remove after use.
+app.get('/api/admin/temp-track-a-edge-check', async (_req, res) => {
+  const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG, computeUnifiedEdge } = require('./scoring');
+  const historical    = readJSON('backfill-historical.json') || {};
+  const scoredRecords = historical.scoredRecords || [];
+  const optWeights     = historical.optimisedWeights || {};
+  const closingOdds    = readJSON('closing-odds.json') || {};
+  const settings = getSettings();
+  const calFactor = settings.calibrationFactor ?? 1.08;
+  const UNSEEN_IDS = new Set([48, 41, 42]);
+
+  const rows = [];
+  let sinceYield = 0;
+  for (const rec of scoredRecords) {
+    if (!UNSEEN_IDS.has(parseInt(rec.leagueId, 10))) continue;
+    if (++sinceYield >= 50) { sinceYield = 0; await new Promise(r => setImmediate(r)); }
+    const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
+    if (!co || !co.homeOdds || !co.awayOdds || !co.drawOdds) continue;
+    if (!rec.actualOutcome) continue;
+    if (!rec.homeFactors || !rec.awayFactors) continue;
+    const context = rec.context || classifyFixture(rec.leagueId);
+    const weights = optWeights[context] || optWeights.club_domestic;
+    if (!weights) continue;
+
+    const leagueId = parseInt(rec.leagueId, 10);
+    const rawProbs = model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]);
+    const probs    = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
+    let topOutcome, modelProb, pinnacleOdds;
+    if (probs.home >= probs.draw && probs.home >= probs.away) { topOutcome = 'home'; modelProb = probs.home; pinnacleOdds = co.homeOdds; }
+    else if (probs.away >= probs.draw) { topOutcome = 'away'; modelProb = probs.away; pinnacleOdds = co.awayOdds; }
+    else { topOutcome = 'draw'; modelProb = probs.draw; pinnacleOdds = co.drawOdds; }
+    if (!pinnacleOdds || pinnacleOdds <= 1) continue;
+
+    // OLD formula (Addendum 19, 2c0ed15): relative edge, raw implied, raw modelProb
+    const pinnacleImplied = 1 / pinnacleOdds;
+    const oldEdge = (modelProb - pinnacleImplied) / pinnacleImplied;
+
+    // NEW formula (Track A): absolute edge, margin-stripped implied, calFactor-boosted modelProb
+    const { edge: newEdge } = computeUnifiedEdge(modelProb, co, topOutcome, { applyCalFactor: true, calFactor });
+
+    rows.push({ leagueId, fixtureId: rec.fixtureId, oldEdge, newEdge, oldQualifies: oldEdge >= 0.05, newQualifies: newEdge >= 0.05 });
+  }
+
+  const bothQualify   = rows.filter(r => r.oldQualifies && r.newQualifies).length;
+  const onlyOld        = rows.filter(r => r.oldQualifies && !r.newQualifies);
+  const onlyNew        = rows.filter(r => !r.oldQualifies && r.newQualifies);
+  const oldTotal = rows.filter(r => r.oldQualifies).length;
+  const newTotal = rows.filter(r => r.newQualifies).length;
+  const avgAbsDelta = rows.length ? rows.reduce((s, r) => s + Math.abs(r.newEdge - r.oldEdge), 0) / rows.length : null;
+
+  res.json({
+    totalMatched: rows.length,
+    oldQualifyingCount: oldTotal,
+    newQualifyingCount: newTotal,
+    setsIdentical: onlyOld.length === 0 && onlyNew.length === 0 && oldTotal === newTotal,
+    bothQualifyCount: bothQualify,
+    onlyOldQualifiesCount: onlyOld.length,
+    onlyNewQualifiesCount: onlyNew.length,
+    avgAbsEdgeDelta: avgAbsDelta,
+    sampleOnlyOld: onlyOld.slice(0, 5),
+    sampleOnlyNew: onlyNew.slice(0, 5),
+    sampleFirst5: rows.slice(0, 5),
+  });
+});
+
 app.put('/api/admin/weekly-retrain-pause', (req, res) => {
   const { paused } = req.body || {};
   if (typeof paused !== 'boolean') return res.status(400).json({ error: 'body must include { paused: true|false }' });
