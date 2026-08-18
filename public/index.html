@@ -231,19 +231,6 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
 .bar-cyan  { background: var(--cyan); }
 .bar-green { background: var(--green); }
 
-/* ── World Cup banner ── */
-.wc-banner {
-  background: linear-gradient(135deg, rgba(247,37,133,.1) 0%, rgba(76,201,240,.1) 100%);
-  border: 1px solid rgba(247,37,133,.3);
-  border-radius: 12px; padding: 16px 20px;
-  display: flex; align-items: center; gap: 16px;
-  margin-bottom: 16px;
-}
-.wc-icon { font-size: 32px; flex-shrink: 0; }
-.wc-text h2 { font-family: var(--font-head); font-size: 16px; font-weight: 800; color: var(--pink); margin-bottom: 2px; }
-.wc-text p  { font-size: 12px; color: var(--muted); }
-.wc-badge { margin-left: auto; background: var(--pink); color: #fff; font-family: var(--font-head); font-size: 10px; font-weight: 700; padding: 4px 10px; border-radius: 6px; white-space: nowrap; }
-
 /* ── Scan controls ── */
 .scan-controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 16px; }
 .field { display: flex; flex-direction: column; gap: 4px; }
@@ -409,16 +396,6 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
 
 <!-- ═══════════════════════════ SCOUT ══════════════════════════════ -->
 <div class="tab-panel active" id="tab-scout">
-
-  <!-- World Cup banner -->
-  <div class="wc-banner" id="wc-banner">
-    <div class="wc-icon">🏆</div>
-    <div class="wc-text">
-      <h2>FIFA World Cup 2026 — Live</h2>
-      <p>Paper trading active · £1,000 bankroll · Validation phase Jun 12 – Jul 19</p>
-    </div>
-    <div class="wc-badge" id="wc-bankroll-badge">£1,000.00</div>
-  </div>
 
   <!-- Bankroll & Kelly panel — paper and real, side by side, each independently controlled -->
   <div class="card" id="bankroll-panel" style="margin-bottom:16px">
@@ -2352,7 +2329,6 @@ async function loadState() {
     // scoutTierBlock can stay synchronous.
     STATE.ltm = ltm;
     renderScout();
-    updateBankrollBadge();
     renderBankrollPanel();
     syncRerouteInterval();
     // Keep bankroll input in Morning Scan in sync with actual bankroll
@@ -2591,9 +2567,6 @@ function contextBadge(ctx) {
 function renderScout() {
   const { bankroll, bets, watching } = STATE;
 
-  // Bankroll badge
-  updateBankrollBadge();
-
   // Stats
   // Postponed real bets (server.js's checkAndResolve — a fixture that will never
   // produce a result under this fixture id) are kept in bets.json for accounting
@@ -2651,17 +2624,6 @@ function renderScout() {
   } else {
     watEl.innerHTML = `<div class="empty"><div class="empty-icon">👁</div><p>Run a scan to flag today's fixtures.</p></div>`;
   }
-}
-
-function updateBankrollBadge() {
-  const br  = STATE.bankroll;
-  if (!br) return;
-  const pnl = br.current - br.initial;
-  const el  = document.getElementById('wc-bankroll-badge');
-  if (!el) return;
-  el.textContent = `£${br.current.toFixed(2)}`;
-  el.style.background = pnl >= 0 ? 'var(--green)' : 'var(--red)';
-  el.style.color       = pnl >= 0 ? '#000' : '#fff';
 }
 
 function routingHTML(b) {
