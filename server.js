@@ -7093,6 +7093,65 @@ const CALIBRATION_AUDIT = {
   42:  { reliable: true, status: 'unseen_population', note: 'Single deliberate look completed 2026-08-11 against the full matched-odds population (n=3,338) — no train/test split, none of this data has ever been used for tuning. As of 2026-08-15 (rule 12): training exclusion is now date-split at kickoff cutoff 2026-08-11T09:00:00Z, not whole-league — this backtest population (all pre-cutoff) stays permanently protected and this reading never changes; fixtures kicking off at/after the cutoff feed the weekly retrain and accumulate as a separate, normal Live reading instead. Corrected 2026-08-18 (Addendum 24): a bug in computeUnifiedEdge (marginStrippedImplied read the wrong odds-object field names) silently NaN\'d every edge computation from Track A (2026-08-14) onward, so this reading was frozen at its pre-Track-A figures the whole time, not genuinely recomputed — the originally-reported posEdgeN=1,746/ROI +4.2% never actually reflected Track A\'s calFactor/margin-stripping correction. Corrected: posEdgeN=2,346, ROI +3.1% — still no confirmed edge (same conclusion as before), per-tier cells shifted; see /api/league-tier-matrix for the current per-cell breakdown. Real-money impact of the bug: none — settings.paperTradeOnly/paperKellyFraction were never mutated by it (runEvCalibration()\'s auto-management explicitly skips roi===null leagues, confirmed via live settings read); this was a reporting-layer bug, not a bet-locking one (scoreOneFixture never calls computeUnifiedEdge).' },
 };
 
+// Correction-layer-backtest readings (calibration-rules.md rules 13/14).
+// Distinct from CALIBRATION_AUDIT above: CALIBRATION_AUDIT describes the CORE
+// GBDT model's own train/test evidentiary status per league. These describe a
+// NEW, separate layer's (scoring.js's CORRECTION_LAYER_RULES) own train/test
+// evidence — the GBDT itself remains in-sample for every league below; only
+// the correction's own (A, B) parameters were genuinely fit-train/tested-once.
+// historicalSource: 'correction-layer-backtest' is its own distinct label per
+// rule 14 — never equivalent to 'real-backtest' (CALIBRATION_AUDIT's
+// unseen_population leagues) or 'walkforward-proxy'. See
+// docs/tier-calibration-analysis.md Addendum 25 for the full writeup.
+const CORRECTION_LAYER_BACKTESTS = [
+  {
+    id: 'original9-away-45-70',
+    label: 'Original 9 leagues — away picks, 45-70% band',
+    leagues: [39, 140, 135, 78, 61, 2, 179, 88, 94],
+    scope: 'away picks only, raw model probability 45-70%',
+    fit: { A: 1.7005, B: 0.5998, trainN: 1084, direction: 'push up (corrects underconfidence, Addendum 23)' },
+    testResult: {
+      n: 271, before: { calibErrPp: 8.6, posEdgeN: 59, roi: 0.0058 }, after: { calibErrPp: -6.2, posEdgeN: 175, roi: -0.008 },
+      ciSpansZero: true, decisionGrade: false,
+    },
+    historicalSource: 'correction-layer-backtest',
+    verdict: 'Indicative only. Overshot on test (calibration flipped from under- to over-confident), and n is well below rule 6\'s ~300-400 decision-grade floor both before and after. Does not confirm Addendum 23\'s train-set finding transfers cleanly to fresh data — not deployed live.',
+  },
+  {
+    id: 'league-one-50plus',
+    label: 'League One — home + away picks, 50%+ band',
+    leagues: [41],
+    scope: 'home and away picks, raw model probability >= 50%',
+    fit: { A: 0.9610, B: -0.2336, trainN: 1077, direction: 'push down (corrects overconfidence)' },
+    testResult: {
+      n: 250, before: { calibErrPp: -0.4, posEdgeN: 202, roi: 0.0921 }, after: { calibErrPp: 5.6, posEdgeN: 135, roi: 0.1187 },
+      ciSpansZero: true, decisionGrade: false,
+    },
+    historicalSource: 'correction-layer-backtest',
+    verdict: 'Indicative only. Test-set calibration was already close to accurate before correction (unlike train), and the fitted correction overshot into underconfidence on test. n well below rule 6\'s floor. Not deployed live.',
+  },
+  {
+    id: 'league-two-50plus',
+    label: 'League Two — home + away picks, 50%+ band',
+    leagues: [42],
+    scope: 'home and away picks, raw model probability >= 50%',
+    fit: { A: 0.5540, B: -0.2419, trainN: 914, direction: 'push down (corrects overconfidence)' },
+    testResult: {
+      n: 246, before: { calibErrPp: -5.5, posEdgeN: 198, roi: 0.1030 }, after: { calibErrPp: 3.9, posEdgeN: 105, roi: 0.2259 },
+      ciSpansZero: true, decisionGrade: false,
+    },
+    historicalSource: 'correction-layer-backtest',
+    verdict: 'Indicative only. Overshot into underconfidence on test; the improved ROI point estimate comes with a much smaller posEdgeN (fewer bets clear the edge threshold once probabilities are pulled down) and a CI that still spans zero. Not deployed live.',
+  },
+];
+
+app.get('/api/correction-layer-backtests', (_req, res) => {
+  res.json({
+    note: 'Each entry is a correction-layer-specific train/test read (calibration-rules.md rules 13/14) — the core GBDT model remains in-sample for every league here; only the correction\'s own parameters were genuinely held out. All three are currently indicative-only, not decision-grade, and not deployed live. See docs/tier-calibration-analysis.md Addendum 25.',
+    backtests: CORRECTION_LAYER_BACKTESTS,
+  });
+});
+
 // Leagues with a genuine, documented train/test split (docs/calibration-rules.md
 // rule 9). For these, runEvCalibration() reports the held-out test-set figure only
 // — the fixtures on/after testFrom were never touched during tuning — rather than

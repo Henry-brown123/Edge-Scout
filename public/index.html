@@ -1516,6 +1516,25 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     </div>
   </div>
 
+  <!-- Correction-Layer Backtests — calibration-rules.md rules 13/14. A DIFFERENT
+       evidentiary claim than everything above: the core GBDT stays in-sample for
+       every league here; only a NEW correction layer's own (A,B) parameters were
+       genuinely train/test split. historicalSource: 'correction-layer-backtest'
+       is its own distinct label, never equivalent to real-backtest/walkforward-
+       proxy. Currently indicative-only across the board — see Addendum 25. -->
+  <div class="card" style="margin-bottom:16px;border-left:3px solid var(--amber)">
+    <div class="card-header">
+      <span class="card-title">Correction-Layer Backtests</span>
+      <span class="badge badge-amber" style="letter-spacing:.04em">INDICATIVE ONLY — NOT DEPLOYED LIVE</span>
+    </div>
+    <div style="background:rgba(255,209,102,.08);border:1px solid rgba(255,209,102,.25);border-radius:8px;padding:10px 12px;margin-bottom:10px;font-family:'DM Mono',monospace;font-size:.72rem;color:var(--amber)">
+      ⚠ The core GBDT model remains in-sample here — only a proposed new correction
+      layer's own parameters were genuinely held out and tested once. Not equivalent
+      to a real-backtest (✓bt) reading. See <span class="mono">docs/tier-calibration-analysis.md</span> Addendum 25.
+    </div>
+    <div id="clb-list" style="display:flex;flex-direction:column;gap:10px"></div>
+  </div>
+
 </div>
 
 <!-- ═══════════════════════════ MODEL ═══════════════════════════ -->
@@ -2275,7 +2294,7 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.classList.add('active');
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
     if (btn.dataset.tab === 'model')       renderModel();
-    if (btn.dataset.tab === 'performance') { switchPerfView('paper'); renderPerformance(); renderLeagueTierMatrix(); renderPreRetrainCalibrationMatrix(); checkHandoffCandidates(); }
+    if (btn.dataset.tab === 'performance') { switchPerfView('paper'); renderPerformance(); renderLeagueTierMatrix(); renderPreRetrainCalibrationMatrix(); renderCorrectionLayerBacktests(); checkHandoffCandidates(); }
     if (btn.dataset.tab === 'settings')  { renderSettings(); loadBackfillStatus(); loadOddsHistoryStats(); loadStartupStatus(); loadAccounts(); loadLeagueWeights(); }
   });
 });
@@ -3291,6 +3310,37 @@ async function renderPreRetrainCalibrationMatrix() {
       </div>`
     ).join('');
   }
+}
+
+// Correction-Layer Backtests — calibration-rules.md rules 13/14. Same static-
+// snapshot loading pattern as renderPreRetrainCalibrationMatrix(). Each entry's
+// verdict/decisionGrade is rendered as-is from the backend — deliberately not
+// styled as a "result" (no green/red on the ROI numbers) since none of these
+// have cleared rule 6's decision-grade floor yet.
+async function renderCorrectionLayerBacktests() {
+  let data;
+  try { data = await apiFetch('/api/correction-layer-backtests'); } catch (e) { return; }
+  const list = document.getElementById('clb-list');
+  if (!list || !data.backtests) return;
+
+  const fmtPp = v => `${v >= 0 ? '+' : ''}${v.toFixed(1)}pp`;
+  const fmtPct2 = v => `${v >= 0 ? '+' : ''}${(v*100).toFixed(1)}%`;
+
+  list.innerHTML = data.backtests.map(bt => `
+    <div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px">
+        <span style="font-weight:600;font-size:12px">${bt.label}</span>
+        <span class="badge badge-amber" style="font-size:9px">correction-layer-backtest</span>
+      </div>
+      <div style="font-size:10.5px;color:var(--muted);margin:4px 0">Scope: ${bt.scope} · fit A=${bt.fit.A} B=${bt.fit.B} (train n=${bt.fit.trainN}) — ${bt.fit.direction}</div>
+      <div class="mono" style="font-size:10.5px;display:flex;gap:18px;flex-wrap:wrap;margin-top:6px">
+        <span>test n=${bt.testResult.n}</span>
+        <span>before: calibErr ${fmtPp(bt.testResult.before.calibErrPp)}, posEdgeN=${bt.testResult.before.posEdgeN}, ROI ${fmtPct2(bt.testResult.before.roi)}</span>
+        <span>after: calibErr ${fmtPp(bt.testResult.after.calibErrPp)}, posEdgeN=${bt.testResult.after.posEdgeN}, ROI ${fmtPct2(bt.testResult.after.roi)}</span>
+      </div>
+      <div style="font-size:10.5px;color:var(--amber);margin-top:6px">${bt.verdict}</div>
+    </div>
+  `).join('');
 }
 
 // /api/league-tier-matrix is mode-independent (static backtest snapshot), so it's
