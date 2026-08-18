@@ -3550,21 +3550,30 @@ async function renderTierPerf(mode = 'paper', prefix = '') {
   if (!tbody) return;
   tbody.innerHTML = '';
 
-  // Same row-inclusion rule as before the rebuild: only tiers with either a pooled
-  // historical baseline or some live activity — no point showing empty rows at the
-  // far ends of the probability range.
-  const rows = data.rows.filter(r => r.historical || r.live.n > 0);
-  emptyEl.style.display = rows.length ? 'none' : 'block';
-
   // League columns — data-driven from the matrix endpoint's scope.leagues (config-level
   // competitionType grouping, not a hardcoded list here) so this doesn't drift out of
   // sync with COMPETITION_TYPE server-side; falls back to whatever byLeague carries if
   // that fetch failed, so the grid still renders (just without Historical/Continuous or
-  // the League/Tournament split). Filtered to the active toggle state (tpgViewMode) —
-  // display-only: which columns are shown, not how any of them are calculated.
+  // the League/Tournament split). Computed before the row filter below so that filter
+  // can check every league's own cell, not just the old pooled figure.
   const allLeagues = ltm?.scope?.leagues
-    || (rows[0]?.byLeague || []).map(l => ({ id: l.leagueId, name: l.leagueName, competitionType: 'league' }));
+    || (data.rows[0]?.byLeague || []).map(l => ({ id: l.leagueId, name: l.leagueName, competitionType: 'league' }));
   const leagues = allLeagues.filter(l => (l.competitionType || 'league') === tpgViewMode);
+
+  // Row-inclusion rule. r.historical/r.live are pooled across only the 9 originally-
+  // validated leagues (same stale, narrow figure the Total column fix (2026-08-18)
+  // stopped relying on) — using them alone to decide whether a tier renders at all
+  // hid entire rows whenever only a tournament competition had data there. Confirmed:
+  // 70-75% never rendered in either view despite Carabao Cup alone showing n=20 real
+  // backtest fixtures — nothing to click, which is why green-flagging a tournament
+  // tier could look broken even though the toggle endpoint itself was always fine.
+  // Now also renders a tier if ANY known league (league or tournament type) has a
+  // real Historical or Live reading there.
+  const rows = data.rows.filter(r =>
+    r.historical || r.live.n > 0 ||
+    allLeagues.some(l => (ltm?.matrix?.[l.id]?.cells?.[r.tier]?.n > 0) || (r.byLeague?.find(x => x.leagueId === l.id)?.n > 0))
+  );
+  emptyEl.style.display = rows.length ? 'none' : 'block';
 
   if (headerRow) {
     headerRow.innerHTML = `<th class="tpg-tier-cell">Tier</th>` +
