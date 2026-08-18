@@ -3601,15 +3601,26 @@ async function renderTierPerf(mode = 'paper', prefix = '') {
         ${_tpgFmtSub('X', combined.n, combined.roi, combined.thin, false, isProxy ? srcMark : '', handoffReady)}
       </td>`;
     }).join('');
-    // Total column — pooled across all 9 leagues, sourced directly rather than summed
-    // client-side from the per-league cells (Historical/Live are already pooled reads
-    // elsewhere on this row). No single "source" marker for Total — it blends leagues
-    // on both real-backtest and walk-forward-proxy Historical, so its Combined row is
-    // left unmarked rather than implying one uniform provenance.
-    const totalCombined = _tpgCombine(r.historical, r.live);
+    // Total column — a genuine sum of exactly what's shown in this row for the
+    // currently-visible leagues (respects the League/Tournament toggle), not a
+    // separately-sourced figure. Previously pulled straight from
+    // /api/tier-performance's row.historical/row.live — a frozen, narrow
+    // Addendum-5 test-set-only population pooled across only the 9 originally-
+    // validated leagues. That silently excluded League One/Two/Carabao Cup
+    // entirely (never part of that population) and used a different, much
+    // smaller sample than the walk-forward/real-backtest matrix each league's
+    // own H column actually shows — e.g. 65-70% previously read "Total H n=4"
+    // while League One alone showed n=134. Folded with the same n-weighted
+    // pooling _tpgCombine already uses for a single cell's H+L, just applied
+    // across leagues instead of across H/L. Green-flagging stays the deliberate,
+    // human-reviewed gate on top of every number here — summing the fuller
+    // picture doesn't change what's needed before real money acts on it.
+    const histTotal = leagues.reduce((acc, l) => _tpgCombine(acc, ltm?.matrix?.[l.id]?.cells?.[r.tier]), { n: 0, roi: null, thin: true });
+    const liveTotal = leagues.reduce((acc, l) => _tpgCombine(acc, r.byLeague?.find(x => x.leagueId === l.id)), { n: 0, roi: null, thin: true });
+    const totalCombined = _tpgCombine(histTotal, liveTotal);
     const totalCell = `<td class="tpg-cell tpg-total-cell">
-      ${_tpgFmtSub('H', r.historical?.n, r.historical?.roi, r.historical?.thin)}
-      ${_tpgFmtSub('L', r.live?.n, r.live?.roi, r.live?.thin)}
+      ${_tpgFmtSub('H', histTotal.n, histTotal.roi, histTotal.thin)}
+      ${_tpgFmtSub('L', liveTotal.n, liveTotal.roi, liveTotal.thin)}
       ${_tpgFmtSub('X', totalCombined.n, totalCombined.roi, totalCombined.thin)}
     </td>`;
     tr.innerHTML = `<td class="tpg-tier-cell">${r.tier}</td>${cells}${totalCell}`;
