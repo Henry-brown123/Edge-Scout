@@ -4866,114 +4866,86 @@ app.get('/api/backfill/historical/status', (_req, res) => {
 // machinery (Maps, buildTeamIndex, buildStandingsIndex, buildDomesticTimeline), which
 // has been OOM-crashing the process at the current ~80k-record population size. A
 // single readJSON + filter + count is a fraction of that memory footprint.
-app.get('/api/admin/championship-backfill-check', (_req, res) => {
-  const existing = readJSON('backfill-historical.json');
-  if (!existing) return res.status(500).json({ error: 'backfill-historical.json unreadable' });
-  const fixtures40 = existing.fixtures.filter(f => String(f.league?.id) === '40');
-  const scoredIds40 = new Set(
-    existing.scoredRecords
-      .filter(r => fixtures40.some(f => f.fixture?.id === r.fixtureId))
-      .map(r => r.fixtureId)
-  );
-  const bySeasonFetched = {};
-  fixtures40.forEach(f => {
-    const s = f.league?.season;
-    bySeasonFetched[s] = (bySeasonFetched[s] || 0) + 1;
-  });
-  res.json({
-    totalFixturesAllLeagues: existing.fixtures.length,
-    totalScoredAllLeagues: existing.scoredRecords.length,
-    championship: {
-      fetched: fixtures40.length,
-      scored: scoredIds40.size,
-      unscored: fixtures40.length - scoredIds40.size,
-      bySeasonFetched,
-    },
-  });
-});
+// TEMP diagnostic (2026-08-19, Task D Part 2) — the single, disciplined backtest
+// look for Championship (league 40): genuinely unseen, rule-10-protected population,
+// same methodology as Addendum 19 / buildUnseenPopulationMatrix() (5pp tier bins,
+// posEdge >= 5% filter, unified edge via computeMatchedEdgeFixtures(), 95% CI via
+// normal approximation on per-bet returns) — read-only, does not touch
+// UNSEEN_POPULATION_LEAGUES or CALIBRATION_AUDIT. Also reports a calibration table
+// (predicted modelProb vs actual win rate per tier, all matched fixtures — not just
+// posEdge) since the task asked for calibration separately from ROI.
+app.get('/api/admin/championship-backtest', async (_req, res) => {
+  try {
+    const allMatched = await computeMatchedEdgeFixtures();
+    const matched40 = allMatched.filter(f => parseInt(f.leagueId, 10) === 40);
 
-// TEMP diagnostic (2026-08-19, Task D Part 2) — empirically verify the domestic-blend
-// fix on a real Championship promotion/relegation boundary crossing. Finds a team
-// whose most recent prior-season fixtures were in League One (41) or PL (39), and
-// whose Championship fixture is literally that team's first of a new Championship
-// season (ownSnap gamesPlayed=0 at scoring time, guaranteeing resolveStandingsScore
-// fell through past priority-1's own-table floor to the domestic-blend fallback).
-// Confirms the stored homeFactors.standings/awayFactors.standings is not neutral
-// (50) — i.e. the fix actually pulled in the team's prior-league standing rather
-// than starting blind. Single readJSON + filter, no index rebuild.
-app.get('/api/admin/championship-boundary-check', (_req, res) => {
-  const existing = readJSON('backfill-historical.json');
-  if (!existing) return res.status(500).json({ error: 'backfill-historical.json unreadable' });
+    // Calibration: predicted (avg modelProb) vs actual win rate, per 5pp tier, all
+    // matched fixtures regardless of edge — this is "is the model's probability
+    // itself accurate", separate from "is there a profitable edge".
+    const calibByTier = {};
+    for (const f of matched40) {
+      const tier = tierOfProbShared(f.modelProb);
+      if (!tier) continue;
+      if (!calibByTier[tier]) calibByTier[tier] = { n: 0, probSum: 0, wins: 0 };
+      calibByTier[tier].n++;
+      calibByTier[tier].probSum += f.modelProb;
+      if (f.won) calibByTier[tier].wins++;
+    }
+    const calibration = LEAGUE_TIER_MATRIX_TIER_ORDER
+      .filter(t => calibByTier[t])
+      .map(t => {
+        const c = calibByTier[t];
+        return {
+          tier: t, n: c.n,
+          avgPredicted: +(c.probSum / c.n).toFixed(4),
+          actualWinRate: +(c.wins / c.n).toFixed(4),
+        };
+      });
 
-  const scoredById = new Map(existing.scoredRecords.map(r => [r.fixtureId, r]));
-  const champFixtures = existing.fixtures
-    .filter(f => String(f.league?.id) === '40')
-    .filter(f => scoredById.has(f.fixture?.id));
-
-  // Group Championship fixtures by team+season, find each team's earliest fixture
-  // of each season (by date) — that's the guaranteed-thin-start test case.
-  const earliestByTeamSeason = new Map(); // key: `${teamId}_${season}` -> fixture
-  for (const f of champFixtures) {
-    const season = f.league?.season;
-    for (const side of ['home', 'away']) {
-      const teamId = f.teams?.[side]?.id;
-      if (!teamId) continue;
-      const key = `${teamId}_${season}`;
-      const cur = earliestByTeamSeason.get(key);
-      if (!cur || new Date(f.fixture?.date) < new Date(cur.fixture?.date)) {
-        earliestByTeamSeason.set(key, f);
+    // ROI: posEdge >= 5% only, same as Addendum 19 / buildUnseenPopulationMatrix().
+    const posEdge = matched40.filter(f => f.edge >= 0.05);
+    function roiStats(fixtures) {
+      const n = fixtures.length;
+      if (n === 0) return { n: 0, roi: null, ciLow: null, ciHigh: null };
+      const returns = fixtures.map(f => f.won ? (f.pinnacleOdds - 1) : -1);
+      const mean = returns.reduce((s, v) => s + v, 0) / n;
+      let ciLow = null, ciHigh = null;
+      if (n > 1) {
+        const sampleVariance = returns.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1);
+        const se = Math.sqrt(sampleVariance / n);
+        ciLow = +(mean - 1.96 * se).toFixed(4);
+        ciHigh = +(mean + 1.96 * se).toFixed(4);
       }
+      return { n, roi: +mean.toFixed(4), ciLow, ciHigh, sampleVariance: n > 1 ? returns.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1) : null };
     }
-  }
 
-  // For each such earliest-fixture team, check what league they played in the
-  // immediately preceding season, using the full fixture pool (any league).
-  const teamLeagueBySeasons = new Map(); // teamId -> Map(season -> Set(leagueId))
-  for (const f of existing.fixtures) {
-    const season = f.league?.season;
-    const leagueId = String(f.league?.id);
-    for (const side of ['home', 'away']) {
-      const teamId = f.teams?.[side]?.id;
-      if (!teamId) continue;
-      if (!teamLeagueBySeasons.has(teamId)) teamLeagueBySeasons.set(teamId, new Map());
-      const bySeason = teamLeagueBySeasons.get(teamId);
-      if (!bySeason.has(season)) bySeason.set(season, new Set());
-      bySeason.get(season).add(leagueId);
+    const pooled = roiStats(posEdge);
+    const byTierRaw = {};
+    for (const f of posEdge) {
+      const tier = tierOfProbShared(f.modelProb);
+      if (!tier) continue;
+      if (!byTierRaw[tier]) byTierRaw[tier] = [];
+      byTierRaw[tier].push(f);
     }
-  }
+    const byTier = LEAGUE_TIER_MATRIX_TIER_ORDER
+      .filter(t => byTierRaw[t])
+      .map(t => ({ tier: t, ...roiStats(byTierRaw[t]) }));
 
-  const results = [];
-  for (const [key, fix] of earliestByTeamSeason.entries()) {
-    const [teamIdStr, seasonStr] = key.split('_');
-    const teamId = Number(teamIdStr);
-    const season = Number(seasonStr);
-    const prevSeasonLeagues = teamLeagueBySeasons.get(teamId)?.get(season - 1);
-    if (!prevSeasonLeagues) continue;
-    const wasLeagueOne = prevSeasonLeagues.has('41');
-    const wasPL = prevSeasonLeagues.has('39');
-    if (!wasLeagueOne && !wasPL) continue;
+    // Rule 6 — decision-grade floor is ~300-400 posEdge bets.
+    const RULE_6_FLOOR = 300;
+    const decisionGrade = pooled.n >= RULE_6_FLOOR;
 
-    const record = scoredById.get(fix.fixture?.id);
-    if (!record) continue;
-    const isHome = String(fix.teams?.home?.id) === teamIdStr;
-    const standingsValue = isHome ? record.homeFactors?.standings : record.awayFactors?.standings;
-    const teamName = isHome ? record.homeTeamName : record.awayTeamName;
-
-    results.push({
-      teamId, teamName, championshipSeason: season,
-      priorLeague: wasLeagueOne ? 'League One (41)' : 'PL (39)',
-      firstFixtureDate: fix.fixture?.date,
-      firstFixtureId: fix.fixture?.id,
-      side: isHome ? 'home' : 'away',
-      standingsFactorValue: standingsValue,
-      isNeutral: standingsValue === 50,
+    res.json({
+      matchedWithClosingOdds: matched40.length,
+      calibration,
+      roi: {
+        pooled: { ...pooled, decisionGrade, rule6Floor: RULE_6_FLOOR },
+        byTier,
+      },
     });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
   }
-
-  res.json({
-    totalCrossingExamplesFound: results.length,
-    examples: results.slice(0, 15),
-  });
 });
 
 // Apply optimised weights to settings (so live scoring uses them)
