@@ -4861,6 +4861,37 @@ app.get('/api/backfill/historical/status', (_req, res) => {
   res.json({ running: false, status: meta.error ? 'error' : 'complete', ...meta });
 });
 
+// TEMP diagnostic (2026-08-19, Task D) — lightweight, read-only check of league 40's
+// (Championship) fixture/score counts, without invoking runHistoricalBackfill's full
+// machinery (Maps, buildTeamIndex, buildStandingsIndex, buildDomesticTimeline), which
+// has been OOM-crashing the process at the current ~80k-record population size. A
+// single readJSON + filter + count is a fraction of that memory footprint.
+app.get('/api/admin/championship-backfill-check', (_req, res) => {
+  const existing = readJSON('backfill-historical.json');
+  if (!existing) return res.status(500).json({ error: 'backfill-historical.json unreadable' });
+  const fixtures40 = existing.fixtures.filter(f => String(f.league?.id) === '40');
+  const scoredIds40 = new Set(
+    existing.scoredRecords
+      .filter(r => fixtures40.some(f => f.fixture?.id === r.fixtureId))
+      .map(r => r.fixtureId)
+  );
+  const bySeasonFetched = {};
+  fixtures40.forEach(f => {
+    const s = f.league?.season;
+    bySeasonFetched[s] = (bySeasonFetched[s] || 0) + 1;
+  });
+  res.json({
+    totalFixturesAllLeagues: existing.fixtures.length,
+    totalScoredAllLeagues: existing.scoredRecords.length,
+    championship: {
+      fetched: fixtures40.length,
+      scored: scoredIds40.size,
+      unscored: fixtures40.length - scoredIds40.size,
+      bySeasonFetched,
+    },
+  });
+});
+
 // Apply optimised weights to settings (so live scoring uses them)
 app.post('/api/backfill/historical/apply-weights', (req, res) => {
   const meta = readJSON('backfill-historical-meta.json');
