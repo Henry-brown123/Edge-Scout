@@ -16,6 +16,7 @@ const {
   h2hScore, standingsScore, injuryScore,
   internationalFormScore, internationalQualityScore, lookupFIFARank,
   computeModelProb, applyLeagueBiasCorrection, computeXGProxy, classifyCompetitionPhase,
+  CORRECTION_LAYER_RULES, applyVariableCorrectionLayer,
   kelly, computeSuccessScore, weatherModifier,
   reloadXgStore, getXgStore, lookupXg,
   scoreGoalsMarkets,
@@ -189,6 +190,23 @@ const SETTINGS_DEFAULTS = {
   weeklyRetrainPaused: false,
   activeLeagues: ['1','39','140','78','135','61','2','179','88','94','3','848','48','41','42'], successThreshold: 40,
   calibrationFactor: 1.08,
+  // Correction layer deployment (calibration-rules.md rules 13/14; scoring.js's
+  // CORRECTION_LAYER_RULES, validated in docs/tier-calibration-analysis.md
+  // Addendum 26). deployedCorrectionRuleIds is the live gate — only rule IDs
+  // listed here are actually applied in scoreOneFixture(); every other rule in
+  // CORRECTION_LAYER_RULES (e.g. league-one-50plus) stays a validated-but-
+  // dormant candidate. Rollback: PUT /api/settings {"deployedCorrectionRuleIds":
+  // []} — takes effect on the very next scoring call, no redeploy, since
+  // getSettings() reads settings.json fresh every time. deployedCorrectionVersion
+  // is a fixed identifier stamped on every bet/watching record scored while a
+  // correction was active, mirroring modelVersion's trainedAt-as-version pattern
+  // — lets any future query separate pre- and post-deployment bets cleanly.
+  // First deployed 2026-08-19: League Two only (id 'league-two-50plus') —
+  // walk-forward-confirmed stable across all 4 blocks, the strongest read this
+  // project's correction-layer work has produced. League One intentionally left
+  // out (improved but mixed across blocks, not yet a confirmed candidate).
+  deployedCorrectionRuleIds: ['league-two-50plus'],
+  deployedCorrectionVersion: '2026-08-19T08:44:21.000Z',
   wowyActive: true,
   // Enabled 2026-07-31 after reviewing netQualityDelta across 436 teams and fixing a
   // cup-competition-PIR artefact (Wolfsberger AC: -22.7 -> -9.4). See docs/july-upgrade-notes.md.
@@ -1178,6 +1196,26 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   let probs = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
   const modelVersion = model.getVersion ? model.getVersion() : 'unknown';
 
+  // Correction layer (calibration-rules.md rules 13/14) — applied on top of
+  // applyLeagueBiasCorrection's output (identical to rawProbs for League Two,
+  // which has no base rates to blend toward), same point in the pipeline the
+  // Addendum 25/26 fit/test used. Scoped strictly to settings.deployedCorrectionRuleIds
+  // — applyVariableCorrectionLayer only touches a league if one of the ACTIVE
+  // rules' `leagues` list includes it, so every league without a deployed rule
+  // (League One, Carabao Cup, all others) passes through this line unchanged.
+  const deployedRuleIds = settings.deployedCorrectionRuleIds || [];
+  const activeCorrectionRules = deployedRuleIds.length
+    ? CORRECTION_LAYER_RULES.filter(r => deployedRuleIds.includes(r.id))
+    : [];
+  let correctionVersion = null;
+  if (activeCorrectionRules.length) {
+    const lidNum = parseInt(leagueId, 10);
+    if (activeCorrectionRules.some(r => r.leagues.includes(lidNum))) {
+      probs = applyVariableCorrectionLayer(probs, leagueId, activeCorrectionRules);
+      correctionVersion = settings.deployedCorrectionVersion || null;
+    }
+  }
+
   // FIFA ranking quality adjustment — anchors model when historical data is thin.
   // scale=0 for club_domestic means rankings have no effect there.
   if (cfg.rankScale > 0 && dataConf < 1) {
@@ -1430,7 +1468,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     homeDataConf, awayDataConf, dataConf,
     homeFormCount, awayFormCount, minFormCount, tierThreshold,
     teamIntel, paperTradeOnly, isTrainingHoldout, betMode,
-    goalsCandidates, modelVersion, domesticBlendFixtures,
+    goalsCandidates, modelVersion, correctionVersion, domesticBlendFixtures,
   };
 }
 
@@ -1540,6 +1578,7 @@ async function runMorningScan(leagueIds) {
             scoredAt:     new Date().toISOString(),
             successScore:    best.successScore,
             modelVersion:    scored.modelVersion,
+            correctionVersion: scored.correctionVersion,
             projectedBet:    best.displayLabel || best.bet,
             projectedBetKey: best.bet,
             candidates:      [...scored.results, ...(scored.goalsCandidates || [])],
@@ -1573,6 +1612,7 @@ async function runMorningScan(leagueIds) {
               projectedBet:    best.bet,
               modelProb:       best.modelProb,
               calibratedProb:  best.calibratedProb,
+              correctionVersion: scored.correctionVersion,
               bookOdds:        best.bookOdds,
               impliedProb:     best.impliedProb,
               edge:            best.edge,
@@ -1808,6 +1848,7 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
       modelProb:    best.modelProb,
       calibratedProb: best.calibratedProb,
       modelVersion: scored.modelVersion,
+      correctionVersion: scored.correctionVersion,
       bookOdds:     best.bookOdds,
       // Raw Pinnacle price at lock time, separate from bookOdds (which is a generic
       // "UK book odds" figure used for display/Kelly, not necessarily Pinnacle's own
@@ -4304,6 +4345,7 @@ function tierOfProbShared(p) {
 
 app.get('/api/tier-performance', (req, res) => {
   const mode = req.query.mode || 'paper'; // 'paper' | 'real' | 'all'
+  const settings = getSettings();
   const allResolved = getBets().filter(b => {
     if (mode === 'paper' && b.mode === 'real') return false;
     if (mode === 'real'  && b.mode !== 'real') return false;
@@ -4322,9 +4364,21 @@ app.get('/api/tier-performance', (req, res) => {
   // string not a date) can't be date-compared the same way.
   const currentVersion = model.getVersion();
   const currentTrainedAt = /^\d{4}-\d{2}-\d{2}T/.test(currentVersion) ? currentVersion : null;
+  // Same discipline, extended to the correction layer (calibration-rules.md
+  // rules 13/14; docs/tier-calibration-analysis.md Addendum 26's deployment).
+  // Only leagues with an ACTIVE deployed correction rule get this extra check —
+  // every other league's Live filtering is untouched, byte-for-byte, exactly as
+  // before this deployment. Prevents a league's pre-deployment and post-
+  // deployment bets from being silently pooled into one "Live" figure, the same
+  // conflation rule 13 exists to prevent at the evidentiary-record level.
+  const deployedRuleIds = settings.deployedCorrectionRuleIds || [];
+  const deployedLeagueIds = new Set(
+    CORRECTION_LAYER_RULES.filter(r => deployedRuleIds.includes(r.id)).flatMap(r => r.leagues)
+  );
   const resolved = allResolved.filter(b => {
     if (b.modelVersion !== currentVersion) return false;
     if (currentTrainedAt && b.resolvedAt && new Date(b.resolvedAt) < new Date(currentTrainedAt)) return false;
+    if (deployedLeagueIds.has(parseInt(b.leagueId, 10)) && b.correctionVersion !== settings.deployedCorrectionVersion) return false;
     return true;
   });
 
@@ -4480,9 +4534,17 @@ function computeLiveCalibration() {
   const cal = getCalibration().filter(c => c.resolved && c.candidates?.length);
   const currentVersion   = model.getVersion();
   const currentTrainedAt = /^\d{4}-\d{2}-\d{2}T/.test(currentVersion) ? currentVersion : null;
+  // Same correction-layer extension as /api/tier-performance's Live filter above
+  // — only leagues with an active deployed correction get the extra check.
+  const clSettings = getSettings();
+  const clDeployedRuleIds = clSettings.deployedCorrectionRuleIds || [];
+  const clDeployedLeagueIds = new Set(
+    CORRECTION_LAYER_RULES.filter(r => clDeployedRuleIds.includes(r.id)).flatMap(r => r.leagues)
+  );
   const considered = cal.filter(c => {
     if (c.modelVersion !== currentVersion) return false;
     if (currentTrainedAt && c.resolvedAt && new Date(c.resolvedAt) < new Date(currentTrainedAt)) return false;
+    if (clDeployedLeagueIds.has(parseInt(c.leagueId, 10)) && c.correctionVersion !== clSettings.deployedCorrectionVersion) return false;
     return true;
   });
 
