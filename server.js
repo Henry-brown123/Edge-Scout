@@ -5958,10 +5958,20 @@ function buildWalkForwardMatrix() {
 // rule 10 protects their full history as a single clean look, no expanding-window
 // retraining), so this reads the full matched population directly, same as the
 // original Addendum 19 methodology, just with the corrected edge/dataConf.
+// Championship (40) — added 2026-08-19 after its single disciplined backtest
+// (see CALIBRATION_AUDIT[40]) came back with a pooled posEdge ROI CI spanning
+// zero (no confirmed edge). Included here anyway, distinctly labelled
+// 'real-backtest-no-edge' below (not 'real-backtest'), purely so the real
+// numbers are visible in the tier×league grid for manual green-flag review —
+// the display-only curation feature this was built for (Addendum 21 Part C).
+// This is NOT the same as UNSEEN_POPULATION_LEAGUES membership and does not
+// imply a validated edge.
+const UNSEEN_POPULATION_DISPLAY_IDS = new Set([48, 41, 42, 40]);
+const UNSEEN_POPULATION_CONFIRMED_IDS = new Set([48, 41, 42]);
+
 async function buildUnseenPopulationMatrix() {
   const { empiricalBayesShrink, varianceForRoi } = require('./shrinkage');
-  const UNSEEN_IDS = new Set([48, 41, 42]);
-  const matched = (await computeMatchedEdgeFixtures()).filter(f => UNSEEN_IDS.has(parseInt(f.leagueId, 10)) && f.edge >= 0.05);
+  const matched = (await computeMatchedEdgeFixtures()).filter(f => UNSEEN_POPULATION_DISPLAY_IDS.has(parseInt(f.leagueId, 10)) && f.edge >= 0.05);
 
   const byCell = {};
   for (const f of matched) {
@@ -6028,7 +6038,8 @@ app.get('/api/league-tier-matrix', async (_req, res) => {
   }
   for (const [lid, entry] of Object.entries(unseenPopulationMatrix)) {
     mergedMatrix[lid] = entry;
-    historicalSourceByLeague[lid] = 'real-backtest';
+    historicalSourceByLeague[lid] = UNSEEN_POPULATION_CONFIRMED_IDS.has(parseInt(lid, 10))
+      ? 'real-backtest' : 'real-backtest-no-edge';
   }
   for (const [lid, entry] of Object.entries(walkForwardMatrix)) {
     // Bug fixed alongside the Handoff feature: this loop previously applied the

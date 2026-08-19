@@ -2506,12 +2506,16 @@ function scoutTierBlock(modelProb, leagueId, pickType) {
     ? 'unseen-population backtest'
     : ltmLeague?.historicalSource === 'walkforward-proxy'
       ? 'walk-forward proxy'
-      : 'backtest';
+      : ltmLeague?.historicalSource === 'real-backtest-no-edge'
+        ? 'unseen-population backtest — no confirmed edge'
+        : 'backtest';
   const histSourceNote = ltmLeague?.historicalSource === 'real-backtest'
     ? ' <span style="color:var(--muted)">— full matched population, no train/test split (rule 10)</span>'
     : ltmLeague?.historicalSource === 'walkforward-proxy'
       ? ' <span style="color:var(--muted)">— 4-block walk-forward proxy estimate, not a genuine holdout (Addendum 21)</span>'
-      : '';
+      : ltmLeague?.historicalSource === 'real-backtest-no-edge'
+        ? ' <span style="color:var(--muted)">— full matched population, pooled ROI CI spans zero, not added to the unseen-population set</span>'
+        : '';
 
   let contextHtml;
   let pickTypeHtml = '';
@@ -3679,10 +3683,13 @@ async function renderTierPerf(mode = 'paper', prefix = '') {
       const flagged = isGreenFlagged(l.id, r.tier);
       const combined = _tpgCombine(histCell, liveCell);
       const isProxy = l.historicalSource === 'walkforward-proxy';
+      const isNoEdge = l.historicalSource === 'real-backtest-no-edge';
       const srcMark = histCell?.n
         ? (isProxy
             ? '<span style="color:var(--amber);font-size:8px" title="Historical is a walk-forward proxy estimate (Addendum 21), not a genuine holdout">🔬</span>'
-            : '<span style="color:var(--green);font-size:8px" title="Historical is a genuine real backtest (train/test split or unseen-population read)">✓bt</span>')
+            : isNoEdge
+              ? '<span style="color:var(--muted);font-size:8px" title="Historical is a genuine unseen-population backtest, but the pooled posEdge ROI 95% CI spans zero — no confirmed edge, not in the unseen-population set">bt·∅</span>'
+              : '<span style="color:var(--green);font-size:8px" title="Historical is a genuine real backtest (train/test split or unseen-population read)">✓bt</span>')
         : '';
       const handoffReady = isProxy && liveCell?.n >= TPG_DECISION_FLOOR;
       // Continuous (C) row deliberately removed from this grid — stale (frozen on the
