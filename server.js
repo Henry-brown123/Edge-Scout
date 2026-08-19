@@ -8199,15 +8199,30 @@ app.get('/api/admin/championship-scoping-check', async (_req, res) => {
   try {
     const out = {};
 
-    // 1. API-Sports league search — confirm id, country, current season coverage
-    const { data: leagueSearch } = await apiSports.get('/leagues', { params: { search: 'Championship', country: 'England' } });
-    out.apiSportsLeagueSearch = leagueSearch?.response?.map(r => ({
+    // 1. API-Sports league search — confirm id, country, current season coverage.
+    // Tries a plain search first (no country filter, since a combined
+    // search+country query returned zero results on first attempt), falls back
+    // to a direct id=40 lookup (API-Sports' well-known Championship id) to
+    // confirm/deny rather than guess silently.
+    const { data: leagueSearch } = await apiSports.get('/leagues', { params: { search: 'Championship' } });
+    out.apiSportsLeagueSearchRaw = leagueSearch?.response?.map(r => ({
       id: r.league?.id, name: r.league?.name, type: r.league?.type,
       country: r.country?.name,
       seasons: (r.seasons || []).map(s => ({ year: s.year, current: s.current, start: s.start, end: s.end })),
     }));
 
-    const champId = leagueSearch?.response?.find(r => r.league?.name === 'Championship' && r.country?.name === 'England')?.league?.id;
+    let champId = leagueSearch?.response?.find(r => r.league?.name === 'Championship' && r.country?.name === 'England')?.league?.id;
+
+    if (!champId) {
+      const { data: byId } = await apiSports.get('/leagues', { params: { id: 40 } });
+      out.id40Lookup = byId?.response?.map(r => ({
+        id: r.league?.id, name: r.league?.name, type: r.league?.type,
+        country: r.country?.name,
+        seasons: (r.seasons || []).map(s => ({ year: s.year, current: s.current, start: s.start, end: s.end })),
+      }));
+      const idMatch = byId?.response?.find(r => r.country?.name === 'England');
+      if (idMatch) champId = idMatch.league?.id;
+    }
     out.resolvedLeagueId = champId ?? null;
 
     if (champId) {
