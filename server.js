@@ -8190,6 +8190,83 @@ app.get('/api/admin/proxy-train-status', (_req, res) => {
   res.json(readJSON('proxy-train-status.json') || { status: 'never_run' });
 });
 
+// TEMP diagnostic — EFL Championship scoping check, same discipline as the
+// Carabao Cup/League One/League Two additions: real API-Sports league search +
+// current-season fixtures + historical-depth probe, real Odds API sport/odds
+// check, and real teamsMatch() runs across a live sample. Read-only, no writes,
+// no config changes. Removed once this scoping concludes.
+app.get('/api/admin/championship-scoping-check', async (_req, res) => {
+  try {
+    const out = {};
+
+    // 1. API-Sports league search — confirm id, country, current season coverage
+    const { data: leagueSearch } = await apiSports.get('/leagues', { params: { search: 'Championship', country: 'England' } });
+    out.apiSportsLeagueSearch = leagueSearch?.response?.map(r => ({
+      id: r.league?.id, name: r.league?.name, type: r.league?.type,
+      country: r.country?.name,
+      seasons: (r.seasons || []).map(s => ({ year: s.year, current: s.current, start: s.start, end: s.end })),
+    }));
+
+    const champId = leagueSearch?.response?.find(r => r.league?.name === 'Championship' && r.country?.name === 'England')?.league?.id;
+    out.resolvedLeagueId = champId ?? null;
+
+    if (champId) {
+      // 2. Current-season fixture availability
+      const { data: upcoming } = await apiSports.get('/fixtures', { params: { league: champId, season: 2025, next: 8 } });
+      out.upcomingFixtures = (upcoming?.response || []).map(f => ({
+        id: f.fixture?.id, date: f.fixture?.date, status: f.fixture?.status?.short,
+        home: f.teams?.home?.name, away: f.teams?.away?.name, season: f.league?.season,
+      }));
+
+      // 3. Historical depth probe — same seasons League One/Two were checked against (2011 floor)
+      const depthProbe = [];
+      for (const season of [2011, 2015, 2020, 2024]) {
+        const { data: seasonCheck } = await apiSports.get('/fixtures', { params: { league: champId, season, status: 'FT' } });
+        depthProbe.push({ season, ftFixtureCount: seasonCheck?.results ?? 0 });
+        await new Promise(r => setTimeout(r, 150));
+      }
+      out.historicalDepthProbe = depthProbe;
+
+      // 4. Odds API — real current odds check for soccer_efl_champ
+      try {
+        const { data: oddsEvents } = await oddsApi.get('/sports/soccer_efl_champ/odds', {
+          params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal' },
+        });
+        out.oddsApiEventCount = oddsEvents?.length ?? 0;
+        const bookmakerTitles = new Set();
+        (oddsEvents || []).forEach(ev => (ev.bookmakers || []).forEach(bm => bookmakerTitles.add(bm.title)));
+        out.oddsApiBookmakersSeen = [...bookmakerTitles];
+        out.oddsApiHasPinnacle = bookmakerTitles.has('Pinnacle');
+        out.oddsApiHasMarathonBet = [...bookmakerTitles].some(t => t.toLowerCase().includes('marathon'));
+        out.oddsApiHasMatchbook = [...bookmakerTitles].some(t => t.toLowerCase().includes('matchbook'));
+
+        // 5. Team-name matching — real teamsMatch() runs, API-Sports fixture teams vs Odds API event teams
+        const nameMatchResults = [];
+        for (const fix of out.upcomingFixtures) {
+          const evt = (oddsEvents || []).find(ev => {
+            const dateClose = Math.abs(new Date(ev.commence_time) - new Date(fix.date)) < 6 * 3600000;
+            return dateClose && (teamsMatch(ev.home_team, fix.home) || teamsMatch(ev.away_team, fix.away));
+          });
+          nameMatchResults.push({
+            apiSportsHome: fix.home, apiSportsAway: fix.away,
+            oddsApiHome: evt?.home_team ?? null, oddsApiAway: evt?.away_team ?? null,
+            homeMatched: evt ? teamsMatch(evt.home_team, fix.home) : null,
+            awayMatched: evt ? teamsMatch(evt.away_team, fix.away) : null,
+            eventFound: !!evt,
+          });
+        }
+        out.teamNameMatching = nameMatchResults;
+      } catch (e) {
+        out.oddsApiError = e.message;
+      }
+    }
+
+    res.json(out);
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
 // Cache expensive WOWY count — recompute only when profiles change (startup/backfill)
 let _wowyHighConfCache = null;
 function getWOWYHighConfCount() {
