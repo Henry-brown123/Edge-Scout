@@ -8128,6 +8128,74 @@ app.get('/api/admin/proxy-train-status', (_req, res) => {
   res.json(readJSON('proxy-train-status.json') || { status: 'never_run' });
 });
 
+// TEMP diagnostic — League Two correction-layer deployment live-verification.
+// Fetches the next real, genuinely upcoming League Two fixture (any date, not
+// just today — the regular morning scan only looks at `date: today`, and no
+// League Two fixture fell on the deployment date) and runs it through the
+// exact same scoreOneFixture() the live pipeline uses, read-only — no
+// calEntry/watching/bet writes, so this cannot create spurious records.
+// Removed once this deployment's live-verification concludes.
+app.get('/api/admin/verify-league-two-correction', async (_req, res) => {
+  try {
+    const leagueId = '42';
+    const meta = LEAGUES[leagueId];
+    const settings = getSettings();
+
+    const { data: fd } = await apiSports.get('/fixtures', {
+      params: { league: leagueId, season: meta.season, next: 1, status: 'NS' },
+    });
+    const fix = fd?.response?.[0];
+    if (!fix) return res.json({ error: 'no_upcoming_fixture_found' });
+
+    const formSeasons = [meta.season, meta.season - 1];
+    const formResults = await Promise.all(
+      formSeasons.map(s => apiSports.get('/fixtures', { params: { league: leagueId, season: s, last: 60 } }).catch(() => ({ data: { response: [] } })))
+    );
+    const formFixtures = formResults.flatMap(r => r.data?.response || [])
+      .filter(f => f.fixture?.status?.short === 'FT')
+      .sort((a, b) => new Date(b.fixture?.date) - new Date(a.fixture?.date));
+
+    const backfillData = readJSON('backfill-historical.json') || { fixtures: [] };
+    const leagueBackfill = (backfillData.fixtures || [])
+      .filter(f => f.fixture?.status?.short === 'FT' && String(f.league?.id) === leagueId);
+    const enrichedFormFixtures = [...formFixtures, ...leagueBackfill]
+      .filter((f, i, arr) => arr.findIndex(x => x.fixture?.id === f.fixture?.id) === i)
+      .sort((a, b) => new Date(b.fixture?.date) - new Date(a.fixture?.date));
+
+    const { data: sd } = await apiSports.get('/standings', { params: { league: leagueId, season: meta.season } });
+    const standings = sd?.response?.[0]?.league?.standings || [];
+    const { oddsMap, totalsMap } = await fetchOddsForLeague(meta.sport || 'soccer_epl');
+    const fixtureStatsDb = getFixtureStats();
+    const statsCache = {};
+    for (const f of formFixtures) {
+      const s = fixtureStatsDb[String(f.fixture?.id)];
+      if (s) statsCache[f.fixture.id] = s;
+    }
+
+    // Score once with settings exactly as deployed (correction active).
+    const scoredWithCorrection = await scoreOneFixture(fix, enrichedFormFixtures, standings, statsCache, oddsMap, settings, totalsMap);
+    // Score again with the correction forced off, same fixture/inputs, to show
+    // the actual before/after delta this deployment produces for a real fixture.
+    const settingsNoCorrection = { ...settings, deployedCorrectionRuleIds: [] };
+    const scoredWithoutCorrection = await scoreOneFixture(fix, enrichedFormFixtures, standings, statsCache, oddsMap, settingsNoCorrection, totalsMap);
+
+    res.json({
+      fixture: `${fix.teams?.home?.name} vs ${fix.teams?.away?.name}`,
+      kickoff: fix.fixture?.date,
+      withCorrection: {
+        correctionVersion: scoredWithCorrection.correctionVersion,
+        results: scoredWithCorrection.results.map(r => ({ bet: r.bet, modelProb: r.modelProb, calibratedProb: r.calibratedProb, successScore: r.successScore, kellyStake: r.kelly?.stake })),
+      },
+      withoutCorrection: {
+        correctionVersion: scoredWithoutCorrection.correctionVersion,
+        results: scoredWithoutCorrection.results.map(r => ({ bet: r.bet, modelProb: r.modelProb, calibratedProb: r.calibratedProb, successScore: r.successScore, kellyStake: r.kelly?.stake })),
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Cache expensive WOWY count — recompute only when profiles change (startup/backfill)
 let _wowyHighConfCache = null;
 function getWOWYHighConfCount() {
