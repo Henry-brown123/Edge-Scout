@@ -2621,6 +2621,14 @@ const HISTORICAL_BACKFILL_CONFIG = [
   { leagueId: '48', name: 'Carabao Cup', seasons: [2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013, 2012, 2011] },
   { leagueId: '41', name: 'League One',  seasons: [2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013, 2012, 2011] },
   { leagueId: '42', name: 'League Two',  seasons: [2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013, 2012, 2011] },
+  // Championship — added 2026-08-19 (paper-only, rule-10 protected from day
+  // one, see docs/tier-calibration-analysis.md). Same 2011-2026 depth (16
+  // seasons) already confirmed live during scoping (556-557 FT fixtures/
+  // season). This ingestion is scored and then given a single, genuine
+  // backtest look — unlike 48/41/42's initial ingestion, which stayed
+  // uncalibrated until a later task — because rule-10 protection here exists
+  // specifically to preserve that one clean look, not to defer it.
+  { leagueId: '40', name: 'Championship', seasons: [2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013, 2012, 2011] },
 ];
 
 // ─── LINEUP / STATS BACKFILL CONFIG ────────────────────────────────────────────
