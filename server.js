@@ -4892,6 +4892,90 @@ app.get('/api/admin/championship-backfill-check', (_req, res) => {
   });
 });
 
+// TEMP diagnostic (2026-08-19, Task D Part 2) — empirically verify the domestic-blend
+// fix on a real Championship promotion/relegation boundary crossing. Finds a team
+// whose most recent prior-season fixtures were in League One (41) or PL (39), and
+// whose Championship fixture is literally that team's first of a new Championship
+// season (ownSnap gamesPlayed=0 at scoring time, guaranteeing resolveStandingsScore
+// fell through past priority-1's own-table floor to the domestic-blend fallback).
+// Confirms the stored homeFactors.standings/awayFactors.standings is not neutral
+// (50) — i.e. the fix actually pulled in the team's prior-league standing rather
+// than starting blind. Single readJSON + filter, no index rebuild.
+app.get('/api/admin/championship-boundary-check', (_req, res) => {
+  const existing = readJSON('backfill-historical.json');
+  if (!existing) return res.status(500).json({ error: 'backfill-historical.json unreadable' });
+
+  const scoredById = new Map(existing.scoredRecords.map(r => [r.fixtureId, r]));
+  const champFixtures = existing.fixtures
+    .filter(f => String(f.league?.id) === '40')
+    .filter(f => scoredById.has(f.fixture?.id));
+
+  // Group Championship fixtures by team+season, find each team's earliest fixture
+  // of each season (by date) — that's the guaranteed-thin-start test case.
+  const earliestByTeamSeason = new Map(); // key: `${teamId}_${season}` -> fixture
+  for (const f of champFixtures) {
+    const season = f.league?.season;
+    for (const side of ['home', 'away']) {
+      const teamId = f.teams?.[side]?.id;
+      if (!teamId) continue;
+      const key = `${teamId}_${season}`;
+      const cur = earliestByTeamSeason.get(key);
+      if (!cur || new Date(f.fixture?.date) < new Date(cur.fixture?.date)) {
+        earliestByTeamSeason.set(key, f);
+      }
+    }
+  }
+
+  // For each such earliest-fixture team, check what league they played in the
+  // immediately preceding season, using the full fixture pool (any league).
+  const teamLeagueBySeasons = new Map(); // teamId -> Map(season -> Set(leagueId))
+  for (const f of existing.fixtures) {
+    const season = f.league?.season;
+    const leagueId = String(f.league?.id);
+    for (const side of ['home', 'away']) {
+      const teamId = f.teams?.[side]?.id;
+      if (!teamId) continue;
+      if (!teamLeagueBySeasons.has(teamId)) teamLeagueBySeasons.set(teamId, new Map());
+      const bySeason = teamLeagueBySeasons.get(teamId);
+      if (!bySeason.has(season)) bySeason.set(season, new Set());
+      bySeason.get(season).add(leagueId);
+    }
+  }
+
+  const results = [];
+  for (const [key, fix] of earliestByTeamSeason.entries()) {
+    const [teamIdStr, seasonStr] = key.split('_');
+    const teamId = Number(teamIdStr);
+    const season = Number(seasonStr);
+    const prevSeasonLeagues = teamLeagueBySeasons.get(teamId)?.get(season - 1);
+    if (!prevSeasonLeagues) continue;
+    const wasLeagueOne = prevSeasonLeagues.has('41');
+    const wasPL = prevSeasonLeagues.has('39');
+    if (!wasLeagueOne && !wasPL) continue;
+
+    const record = scoredById.get(fix.fixture?.id);
+    if (!record) continue;
+    const isHome = String(fix.teams?.home?.id) === teamIdStr;
+    const standingsValue = isHome ? record.homeFactors?.standings : record.awayFactors?.standings;
+    const teamName = isHome ? record.homeTeamName : record.awayTeamName;
+
+    results.push({
+      teamId, teamName, championshipSeason: season,
+      priorLeague: wasLeagueOne ? 'League One (41)' : 'PL (39)',
+      firstFixtureDate: fix.fixture?.date,
+      firstFixtureId: fix.fixture?.id,
+      side: isHome ? 'home' : 'away',
+      standingsFactorValue: standingsValue,
+      isNeutral: standingsValue === 50,
+    });
+  }
+
+  res.json({
+    totalCrossingExamplesFound: results.length,
+    examples: results.slice(0, 15),
+  });
+});
+
 // Apply optimised weights to settings (so live scoring uses them)
 app.post('/api/backfill/historical/apply-weights', (req, res) => {
   const meta = readJSON('backfill-historical-meta.json');
