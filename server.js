@@ -8227,7 +8227,7 @@ app.get('/api/admin/championship-scoping-check', async (_req, res) => {
 
     if (champId) {
       // 2. Current-season fixture availability
-      const { data: upcoming } = await apiSports.get('/fixtures', { params: { league: champId, season: 2025, next: 8 } });
+      const { data: upcoming } = await apiSports.get('/fixtures', { params: { league: champId, season: 2026, next: 8 } });
       out.upcomingFixtures = (upcoming?.response || []).map(f => ({
         id: f.fixture?.id, date: f.fixture?.date, status: f.fixture?.status?.short,
         home: f.teams?.home?.name, away: f.teams?.away?.name, season: f.league?.season,
