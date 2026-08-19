@@ -4861,11 +4861,6 @@ app.get('/api/backfill/historical/status', (_req, res) => {
   res.json({ running: false, status: meta.error ? 'error' : 'complete', ...meta });
 });
 
-// TEMP diagnostic (2026-08-19, Task D) — lightweight, read-only check of league 40's
-// (Championship) fixture/score counts, without invoking runHistoricalBackfill's full
-// machinery (Maps, buildTeamIndex, buildStandingsIndex, buildDomesticTimeline), which
-// has been OOM-crashing the process at the current ~80k-record population size. A
-// single readJSON + filter + count is a fraction of that memory footprint.
 // Apply optimised weights to settings (so live scoring uses them)
 app.post('/api/backfill/historical/apply-weights', (req, res) => {
   const meta = readJSON('backfill-historical-meta.json');
