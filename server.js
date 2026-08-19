@@ -8260,7 +8260,12 @@ app.get('/api/admin/championship-scoping-check', async (_req, res) => {
         for (const fix of out.upcomingFixtures) {
           const evt = (oddsEvents || []).find(ev => {
             const dateClose = Math.abs(new Date(ev.commence_time) - new Date(fix.date)) < 6 * 3600000;
-            return dateClose && (teamsMatch(ev.home_team, fix.home) || teamsMatch(ev.away_team, fix.away));
+            // AND, not OR — matches every real production call site (server.js:754,
+            // 2279, 5263). An OR let a same-day, different-kickoff-time fixture with
+            // one spuriously-overlapping surname (e.g. "Stoke City" vs "Bristol City"
+            // sharing the token "city") steal the match — not a real teamsMatch()
+            // failure, a bug in this diagnostic's own looser criterion.
+            return dateClose && teamsMatch(ev.home_team, fix.home) && teamsMatch(ev.away_team, fix.away);
           });
           nameMatchResults.push({
             apiSportsHome: fix.home, apiSportsAway: fix.away,
