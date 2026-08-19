@@ -302,7 +302,7 @@ function getBookmakers()   { return readJSON('bookmakers.json')    || []; }
 function saveBookmakers(list) { writeJSON('bookmakers.json', list); }
 
 const DEFAULT_BOOKMAKERS = [
-  { id: 'betfair_exchange', name: 'Betfair Exchange', tier: 1, commission: 0.02,  parentGroup: 'Flutter Entertainment',       balance: null, status: 'active', statusUpdatedAt: null, statusNotes: '', maxStake: null, maxStakeObserved: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Exchange — lay/back, ~2% commission. No restrictions ever.' },
+  { id: 'betfair_exchange', name: 'Betfair Exchange', tier: 1, commission: 0.05,  parentGroup: 'Flutter Entertainment',       balance: null, status: 'active', statusUpdatedAt: null, statusNotes: '', maxStake: null, maxStakeObserved: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Exchange — lay/back, 5% commission (confirmed against account P&L statement, 2026-08-19).' },
   { id: 'smarkets',         name: 'Smarkets',         tier: 1, commission: 0.02,  parentGroup: 'Smarkets',                    balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Exchange — ~2% commission. No restrictions ever.' },
   { id: 'matchbook',        name: 'Matchbook',         tier: 1, commission: 0.015, parentGroup: 'Matchbook (Exchange)',         balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Peer-to-peer exchange. 1.5% commission.' },
   { id: 'betdaq',           name: 'BETDAQ',            tier: 1, commission: 0.02,  parentGroup: 'BETDAQ',                      balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'UKGC-regulated peer-to-peer exchange. 2% commission. Back/lay markets.' },
@@ -1871,6 +1871,9 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
       result:       null,
       pnl:          null,
       resolvedAt:   null,
+      cashedOut:    false,
+      cashOutPnl:   null,
+      theoreticalPnl: null,
       homeF:               scored.homeF,
       awayF:               scored.awayF,
       weather:             scored.weather,
@@ -4607,7 +4610,7 @@ app.patch('/api/bets/:id', (req, res) => {
   const bet  = bets.find(b => b.id === req.params.id);
   if (!bet) return res.status(404).json({ error: 'Not found' });
 
-  const { result, actualStake, actualOdds, mode, bookmakerId, bookmakerUsed, bankrollAtLock, kellyFraction, displayStake, placementStatus } = req.body;
+  const { result, actualStake, actualOdds, mode, bookmakerId, bookmakerUsed, bankrollAtLock, kellyFraction, displayStake, placementStatus, cashedOut, cashOutPnl } = req.body;
 
   // Correction fields for mode/bookmaker — the symmetric undo for convert-to-real
   // (there's no dedicated revert-to-paper endpoint; this covers it plus any other
@@ -4653,16 +4656,49 @@ app.patch('/api/bets/:id', (req, res) => {
     bet.resolvedAt = new Date().toISOString();
   }
 
+  // Cash Out — selection-correctness (bet.result) is never touched here, only
+  // ever derived from the fixture's real result above/elsewhere; cashing out
+  // just swaps which P&L figure counts toward ROI/bankroll (the real, already-
+  // net-of-commission exchange settlement instead of the theoretical formula).
+  if (cashedOut !== undefined) {
+    if (cashedOut) {
+      if (!bet.result || bet.result === 'void') {
+        return res.status(400).json({ error: 'Cannot cash out before the selection result is known — resolve the bet first' });
+      }
+      const v = parseFloat(cashOutPnl);
+      if (!Number.isFinite(v)) return res.status(400).json({ error: 'Invalid cashOutPnl' });
+      bet.cashedOut  = true;
+      bet.cashOutPnl = v;
+    } else {
+      bet.cashedOut  = false;
+      bet.cashOutPnl = null;
+    }
+  }
+
   // Recompute pnl whenever the bet is resolved, so a stake/odds correction on
   // an already-settled bet keeps P&L consistent with the edited values.
+  // theoreticalPnl is always the plain uncashed formula (stake x (odds-1) if the
+  // selection won, -stake if it lost) — stored alongside, never itself used for
+  // ROI/bankroll once cashed out, so a cash-out and a full-time settlement can be
+  // compared later without one overwriting the other's evidence.
   if (bet.result) {
     const settleOdds  = bet.actualOdds  ?? bet.bookOdds;
     const settleStake = bet.actualStake ?? bet.suggestedStake;
-    bet.pnl = bet.result === 'win'  ? parseFloat(((settleOdds - 1) * settleStake).toFixed(2))
-            : bet.result === 'loss' ? -settleStake : 0;
+    bet.theoreticalPnl = bet.result === 'win'  ? parseFloat(((settleOdds - 1) * settleStake).toFixed(2))
+                        : bet.result === 'loss' ? -settleStake : 0;
+    bet.pnl = bet.cashedOut ? bet.cashOutPnl : bet.theoreticalPnl;
   }
 
   saveBets(bets);
+  // real-bets.json is a write-once mirror created at bet placement (server.js
+  // ~1916) that nothing else keeps in sync — without this, a real bet's mirror
+  // silently drifts from bets.json the moment it's resolved or cash-out-edited.
+  if (bet.mode === 'real') {
+    const realBets = getRealBets();
+    const idx = realBets.findIndex(b => b.id === bet.id);
+    if (idx !== -1) realBets[idx] = bet;
+    saveRealBets(realBets);
+  }
   const bankroll = bet.mode === 'real' ? getRealBankrollAccount() : getBankroll();
   res.json({ bet, bankroll });
 });
@@ -6316,7 +6352,7 @@ app.patch('/api/bookmakers/:id', (req, res) => {
   const books = getBookmakers();
   const bm    = books.find(b => b.id === req.params.id);
   if (!bm) return res.status(404).json({ error: 'Not found' });
-  const allowed = ['balance', 'status', 'maxStake', 'maxStakeObserved', 'notes', 'statusNotes', 'restrictionSignals'];
+  const allowed = ['balance', 'status', 'maxStake', 'maxStakeObserved', 'notes', 'statusNotes', 'restrictionSignals', 'commission'];
   allowed.forEach(k => { if (req.body[k] !== undefined) bm[k] = req.body[k]; });
   if (req.body.status && req.body.status !== (bm._prevStatus)) bm.statusUpdatedAt = new Date().toISOString();
   saveBookmakers(books);

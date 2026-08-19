@@ -3139,10 +3139,28 @@ async function renderPerfMode(mode) {
   visibleBets.forEach(b => {
     const pnlStr = b.pnl != null ? `${b.pnl >= 0 ? '+' : ''}£${b.pnl.toFixed(2)}` : '—';
     const pnlCls = b.pnl > 0 ? 'c-green' : b.pnl < 0 ? 'c-red' : '';
+    // Selection-correctness badge (win/loss/pending/postponed) is always derived from
+    // the fixture's real result — cash-out status never changes it, so it gets its
+    // own separate badge alongside rather than replacing this one.
     const resultBadge = b.result === 'win' ? '<span class="badge badge-green">WIN</span>'
       : b.result === 'loss' ? '<span class="badge badge-red">LOSS</span>'
       : b.postponed ? '<span class="badge badge-amber" title="Fixture postponed — stays here for accounting, no longer shown as an active bet on the Scout tab">POSTPONED</span>'
       : '<span class="badge badge-muted">PENDING</span>';
+    const cashOutBadge = b.cashedOut
+      ? `<span class="badge" style="background:rgba(255,209,102,.16);color:var(--amber);border:1px solid var(--amber);font-weight:800" title="Real, already-net-of-commission cash-out P&L — not the theoretical full-time outcome">💰 CASHED OUT</span>`
+      : '';
+    // Realized return relative to stake — its own figure, shown alongside (not
+    // merged into) the Pinnacle-implied odds reference below.
+    const settleStakeForReturn = b.actualStake ?? b.suggestedStake;
+    const realizedReturnStr = (b.result && b.pnl != null && settleStakeForReturn)
+      ? `${b.pnl >= 0 ? '+' : ''}${((b.pnl / settleStakeForReturn) * 100).toFixed(1)}%` : null;
+    // Pinnacle margin-stripped implied odds at placement — a fixed reference from
+    // lock time (bet.impliedProb), never touched by cash-out status.
+    const pinnOddsStr = (b.impliedProb > 0) ? `${(1 / b.impliedProb).toFixed(2)}` : null;
+    const theoreticalStr = (b.cashedOut && b.theoreticalPnl != null)
+      ? `<div style="font-size:9px;color:var(--muted)" title="What this bet would have paid out running to full-time, uncashed: stake × (odds−1) if won, −stake if lost">uncashed: ${b.theoreticalPnl >= 0 ? '+' : ''}£${b.theoreticalPnl.toFixed(2)}</div>` : '';
+    const cashOutBtn = (b.mode === 'real' && b.result && b.result !== 'void' && !b.cashedOut)
+      ? `<button class="btn btn-ghost btn-sm" onclick="cashOutBet('${b.id}')" title="Log a Betfair cash-out — enter the real, net-of-commission P&L" style="padding:2px 8px;color:var(--amber)">💰</button>` : '';
     const modeCell = mode === 'combined'
       ? `<td><span class="badge ${b.mode === 'real' ? 'badge-real' : 'badge-paper'}">${b.mode === 'real' ? 'REAL £' : 'PAPER'}</span></td>`
       : '';
@@ -3161,13 +3179,21 @@ async function renderPerfMode(mode) {
           </div>
         </div>
       </td>
-      <td class="mono">${b.bookOdds?.toFixed(2)}</td>
+      <td class="mono">
+        ${b.bookOdds?.toFixed(2)}
+        ${pinnOddsStr ? `<div style="font-size:9px;color:var(--muted)" title="Pinnacle margin-stripped implied odds at placement — fixed reference, unaffected by cash-out">Pinn: ${pinnOddsStr}</div>` : ''}
+      </td>
       <td class="mono c-cyan">+${((b.edge||0)*100).toFixed(1)}%</td>
       <td class="mono">£${b.suggestedStake?.toFixed(2)}</td>
-      <td class="mono ${pnlCls}">${pnlStr}</td>
-      <td>${resultBadge}</td>
+      <td class="mono ${pnlCls}">
+        ${pnlStr}
+        ${realizedReturnStr ? `<div style="font-size:9px;color:var(--muted)">return: ${realizedReturnStr}</div>` : ''}
+        ${theoreticalStr}
+      </td>
+      <td>${resultBadge}${cashOutBadge}</td>
       <td style="white-space:nowrap">
         <button class="btn btn-ghost btn-sm" onclick="editBet('${b.id}')" title="Edit stake/odds/result" style="padding:2px 8px;color:var(--muted)">✎</button>
+        ${cashOutBtn}
         <button class="btn btn-ghost btn-sm" onclick="deleteBet('${b.id}')" style="padding:2px 8px;color:var(--muted)">✕</button>
       </td>
     `;
@@ -4706,6 +4732,39 @@ async function editBet(id) {
   } catch(e) { toast(e.message, 'error'); }
 }
 
+// Cash Out — logs a Betfair (or other exchange) cash-out against an already-
+// resolved real bet. Selection-correctness (b.result) is never asked for here
+// and never touched by this flow — it's already derived from the fixture's
+// real result. Only the true, already-net-of-commission P&L from the exchange's
+// own account statement is entered; the server derives the theoretical uncashed
+// outcome automatically from the bet's existing stake/odds/result.
+async function cashOutBet(id) {
+  const b = (STATE.bets || []).find(x => x.id === id);
+  if (!b) return;
+  if (!b.result || b.result === 'void') { toast('Cannot cash out before the selection result is known', 'error'); return; }
+
+  const pnlStr = prompt(
+    `Cash out ${b.fixture} — actual profit/loss (£), already net of commission, from the exchange's own account statement:`,
+    b.cashOutPnl != null ? String(b.cashOutPnl) : ''
+  );
+  if (pnlStr === null) return;
+  const cashOutPnl = parseFloat(pnlStr);
+  if (!Number.isFinite(cashOutPnl)) { toast('Invalid amount', 'error'); return; }
+
+  try {
+    await apiFetch(`/api/bets/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cashedOut: true, cashOutPnl }),
+    });
+    toast('Cash-out logged', 'success');
+    await loadState();
+    renderScout();
+    _refreshPerfView();
+    if (_drawerBetId === id) openBetDrawerById(id);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
 function exportCSV(mode = 'paper') {
   const bets = STATE.bets.filter(b => mode === 'paper' ? (!b.mode || b.mode === 'paper') : mode === 'real' ? b.mode === 'real' : true);
   // KellySuggestedStake and ActualStake logged separately (not just one "Stake"
@@ -5743,8 +5802,25 @@ function openBetDrawer(b) {
   const stakeFracOfBankroll = b.bankrollAtLock ? (settleStake / b.bankrollAtLock) : 0;
   const row = valueRow(betLabel, b.modelProb, settleOdds, b.impliedProb, b.edge, b.ev, stakeFracOfBankroll, settleStake, true, b.successScore, b.calibratedProb, b.correctionVersion);
 
+  // Realized return relative to stake — its own separate figure (Part C item 9),
+  // never merged into the Pinnacle-implied-odds reference below.
+  const settleStakeForReturn = b.actualStake ?? b.suggestedStake;
+  const realizedReturnStr = (b.result && b.pnl != null && settleStakeForReturn)
+    ? `${b.pnl >= 0 ? '+' : ''}${((b.pnl / settleStakeForReturn) * 100).toFixed(1)}%` : null;
+  // Pinnacle margin-stripped implied odds at placement — fixed reference from lock
+  // time (b.impliedProb), same benchmark as Track A's marginStrippedImplied(),
+  // never affected by cash-out status since it reflects the market at placement.
+  const pinnOddsStr = (b.impliedProb > 0) ? `${(1 / b.impliedProb).toFixed(2)}` : null;
   const resultBadge = b.result
-    ? `<div style="margin:8px 0;padding:8px 12px;border-radius:6px;font-size:.8rem;font-weight:700;background:${b.result==='win'?'rgba(0,255,135,.12)':b.result==='loss'?'rgba(255,82,82,.12)':'rgba(180,180,180,.12)'};color:${b.result==='win'?'var(--green)':b.result==='loss'?'var(--red)':'var(--text2)'}">${b.result.toUpperCase()}${b.finalScore ? ` · ${b.finalScore}` : ''} · P&L £${b.pnl >= 0 ? '+' : ''}${b.pnl?.toFixed(2)}</div>`
+    ? `<div style="margin:8px 0;padding:8px 12px;border-radius:6px;font-size:.8rem;font-weight:700;background:${b.result==='win'?'rgba(0,255,135,.12)':b.result==='loss'?'rgba(255,82,82,.12)':'rgba(180,180,180,.12)'};color:${b.result==='win'?'var(--green)':b.result==='loss'?'var(--red)':'var(--text2)'}">
+        ${b.result.toUpperCase()}${b.finalScore ? ` · ${b.finalScore}` : ''} · P&L £${b.pnl >= 0 ? '+' : ''}${b.pnl?.toFixed(2)}
+        ${b.cashedOut ? ` · <span style="color:var(--amber)">💰 CASHED OUT</span>` : ''}
+        <div style="font-size:.7rem;font-weight:400;color:var(--text2);margin-top:4px">
+          ${realizedReturnStr ? `Realized return: ${realizedReturnStr}` : ''}
+          ${pinnOddsStr ? ` · Pinnacle-implied odds at placement: ${pinnOddsStr}` : ''}
+          ${(b.cashedOut && b.theoreticalPnl != null) ? ` · Uncashed (theoretical): £${b.theoreticalPnl >= 0 ? '+' : ''}${b.theoreticalPnl.toFixed(2)}` : ''}
+        </div>
+      </div>`
     : '';
 
   const routing = b.routingRecommendation?.recommended;
@@ -5778,6 +5854,7 @@ function openBetDrawer(b) {
     <div class="drawer-actions">
       ${(b.mode !== 'real' && !b.result) ? `<button class="btn btn-sm" style="background:var(--amber);color:#000;border:none;font-weight:700" onclick="closeDrawer();openBmPanel('${b.id}')">Convert to Real…</button>` : ''}
       ${(b.mode === 'real' && !b.result) ? `<button class="btn btn-ghost btn-sm" style="border-color:var(--amber);color:var(--amber)" onclick="editBet('${b.id}')">Edit stake/odds/bookmaker…</button>` : ''}
+      ${(b.mode === 'real' && b.result && b.result !== 'void' && !b.cashedOut) ? `<button class="btn btn-ghost btn-sm" style="border-color:var(--amber);color:var(--amber)" onclick="cashOutBet('${b.id}')">💰 Log Cash Out…</button>` : ''}
       <button class="btn btn-ghost btn-sm" onclick="closeDrawer()">Close</button>
     </div>`;
 
