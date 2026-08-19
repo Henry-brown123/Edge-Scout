@@ -53,7 +53,9 @@ const NARROW_AWAY_MIN_FIT_N = 30; // below this, the inner-test subset is too th
 // (docs/tier-calibration-analysis.md Addenda 16-19, calibration-rules.md rule
 // 10). Paper-only, no real-money pressure to fold it in, so it stays under
 // rule 10's original permanent, whole-population exclusion.
-const FULLY_EXCLUDED_LEAGUE_IDS = new Set([48]);
+// Championship (40) added 2026-08-19 — same rule-10 protection, mirrors
+// gbdt-train.js exactly.
+const FULLY_EXCLUDED_LEAGUE_IDS = new Set([48, 40]);
 
 // League One / League Two — date-split, mirrors gbdt-train.js exactly
 // (calibration-rules.md rule 12, applied 2026-08-15). See gbdt-train.js's

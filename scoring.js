@@ -66,7 +66,7 @@ const CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND = new Set([48, 2, 3, 848]); // Carabao C
 // other cup competitions (keeps the blend one-directional) and anything outside
 // LEAGUES (an untracked league contributes nothing, same limit the international
 // blend already has for non-backfilled competitions).
-const DOMESTIC_LEAGUE_IDS_FOR_BLEND = new Set([39, 140, 135, 78, 61, 179, 88, 94, 41, 42]);
+const DOMESTIC_LEAGUE_IDS_FOR_BLEND = new Set([39, 140, 135, 78, 61, 179, 88, 94, 41, 42, 40]);
 // UEFA's competition reform (Champions League, Europa League, Conference League all
 // moved from group-of-4 stages to a single 36-team league-phase table) took effect
 // the 2024-25 season — API-Sports' own `season` field uses the year a season starts,
@@ -379,6 +379,11 @@ const LEAGUE_CONFIG = {
   // marketEfficiency/drawBaseWeight/homeAdvBaseWeight only).
   41:  { name: 'League One', marketEfficiency: 1.0, drawBaseWeight: 1.0, homeAdvBaseWeight: 1.0 },
   42:  { name: 'League Two', marketEfficiency: 1.0, drawBaseWeight: 1.0, homeAdvBaseWeight: 1.0 },
+  // Added 2026-08-19, paper-only, zero calibration history — same guard as 48/41/42
+  // above (no avgHomeWinRate/avgDrawRate/avgAwayWinRate/avgGoalsPerGame; neutral
+  // marketEfficiency/drawBaseWeight/homeAdvBaseWeight only). Rule-10 protected
+  // from day one (TRAINING_HOLDOUT_LEAGUE_IDS in server.js).
+  40:  { name: 'Championship', marketEfficiency: 1.0, drawBaseWeight: 1.0, homeAdvBaseWeight: 1.0 },
 };
 
 // ─── XG PROXY ─────────────────────────────────────────────────────────────────

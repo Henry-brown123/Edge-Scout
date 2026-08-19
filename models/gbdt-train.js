@@ -33,7 +33,10 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../data');
 // (docs/tier-calibration-analysis.md Addenda 16-19, calibration-rules.md rule
 // 10). Paper-only, no real-money pressure to fold it in, so it stays under
 // rule 10's original permanent, whole-population exclusion indefinitely.
-const FULLY_EXCLUDED_LEAGUE_IDS = new Set([48]);
+// Championship (40) added 2026-08-19, same rule-10 protection, decided at
+// day-1 addition rather than retrofitted later like League One/Two's rule-12
+// conversion — no real-money pressure yet, so no reason to convert.
+const FULLY_EXCLUDED_LEAGUE_IDS = new Set([48, 40]);
 
 // League One / League Two — split by fixture kickoff date, not by league
 // (calibration-rules.md rule 12, applied 2026-08-15). Real money is staked on

@@ -82,7 +82,7 @@ console.log(`[Data] process.env.DATA_DIR=${process.env.DATA_DIR ?? '(unset)'} �
   const settingsDest = path.join(DATA_DIR, 'settings.json');
   if (!fs.existsSync(settingsDest)) {
     const defaults = { calibrationFactor: 1.11, wowyActive: true,
-      activeLeagues: ['1','39','140','78','135','61','2','179','88','94','3','848','48','41','42'], successThreshold: 40,
+      activeLeagues: ['1','39','140','78','135','61','2','179','88','94','3','848','48','41','42','40'], successThreshold: 40,
       decay: 0.05, formWindow: 6, h2hWindow: 5, kellyFraction: 0.5,
       weights: { form:18, homeAdv:12, xg:16, h2h:10, defense:14, momentum:10, injuries:8, standings:12 } };
     const settingsTmp = settingsDest + '.tmp';
@@ -188,7 +188,7 @@ const SETTINGS_DEFAULTS = {
   // to skip cycles deliberately (e.g. a review in progress, or a week's data
   // looking anomalous) without touching the cron schedule itself.
   weeklyRetrainPaused: false,
-  activeLeagues: ['1','39','140','78','135','61','2','179','88','94','3','848','48','41','42'], successThreshold: 40,
+  activeLeagues: ['1','39','140','78','135','61','2','179','88','94','3','848','48','41','42','40'], successThreshold: 40,
   calibrationFactor: 1.08,
   // Correction layer deployment (calibration-rules.md rules 13/14; scoring.js's
   // CORRECTION_LAYER_RULES, validated in docs/tier-calibration-analysis.md
@@ -224,6 +224,7 @@ const SETTINGS_DEFAULTS = {
     '48': 'paper_only',
     '41': 'paper_only',
     '42': 'paper_only',
+    '40': 'paper_only',
   },
 };
 
@@ -378,7 +379,14 @@ function getLeagueMode(leagueId) {
 // straight off scoredRecords and has zero dependency on bet mode, stake, or
 // this flag — training-eligibility and staking-eligibility are independent
 // by construction, not just by convention.
-const TRAINING_HOLDOUT_LEAGUE_IDS = new Set([48]);
+// Championship (40) added 2026-08-19 — rule-10 protected from day one, not
+// retrofitted later like League One/Two's rule-12 date-split conversion had
+// to be (that gap-window complexity is exactly what rule 12 exists to paper
+// over; deciding this up front avoids needing that mechanism at all here).
+// Deliberately whole-population (Carabao Cup's simpler precedent), not
+// date-split (League One/Two's) — see docs/tier-calibration-analysis.md for
+// the full reasoning: no real-money pressure yet, so no reason to convert.
+const TRAINING_HOLDOUT_LEAGUE_IDS = new Set([48, 40]);
 // League One / League Two — date-split holdout (calibration-rules.md rule 12,
 // applied 2026-08-15). Mirrors gbdt-train.js's DATE_SPLIT_LEAGUE_IDS /
 // TRAINING_CUTOFF exactly. A fixture's isTrainingHoldout is computed fresh at
@@ -555,6 +563,18 @@ const LEAGUES = {
   // fixtures for both API-Sports and the Odds API before adding.
   '41':  { name: 'League One',            season: 2026, sport: 'soccer_england_league1' },
   '42':  { name: 'League Two',            season: 2026, sport: 'soccer_england_league2' },
+  // Added 2026-08-19, paper-only, rule-10 protected from day one (see
+  // TRAINING_HOLDOUT_LEAGUE_IDS below and LEAGUE_CONFIG[40] in scoring.js).
+  // API-Sports id 40, name "Championship", country England — confirmed via
+  // /leagues?search=Championship (a combined search+country=England query
+  // returned zero results; plain search then filtered by country worked),
+  // 2011-2026 historical depth confirmed (556-557 FT fixtures/season,
+  // consistent full-season counts). Odds API key soccer_efl_champ confirmed
+  // via /sports?all=true, live odds checked with Pinnacle/Marathon Bet/
+  // Matchbook all present. teamsMatch() ran clean (8/8) against a live
+  // fixture sample, including a genuine nickname resolution (Preston ->
+  // Preston North End, Wolves -> Wolverhampton Wanderers).
+  '40':  { name: 'Championship',          season: 2026, sport: 'soccer_efl_champ' },
 };
 
 // ─── BACKFILL CONFIG ──────────────────────────────────────────────────────────
@@ -3245,7 +3265,7 @@ function runWalkForwardBlock(blockLabel, trainBefore, testEnd, onComplete, extra
 // excluded; League One/Two follow the same date-split cutoff as
 // gbdt-train.js's DATE_SPLIT_LEAGUE_IDS/TRAINING_CUTOFF (calibration-rules.md
 // rule 12) so this log doesn't silently misreport once the cutoff is live.
-const WEEKLY_RETRAIN_FULLY_EXCLUDED_LEAGUE_IDS = new Set([48]);
+const WEEKLY_RETRAIN_FULLY_EXCLUDED_LEAGUE_IDS = new Set([48, 40]);
 const WEEKLY_RETRAIN_DATE_SPLIT_LEAGUE_IDS = new Set([41, 42]);
 const WEEKLY_RETRAIN_TRAINING_CUTOFF = '2026-08-11T09:00:00Z';
 
@@ -4318,7 +4338,7 @@ const HISTORICAL_TIER_BASELINE = {
 // below and the grid's column list automatically — no UI-side list to touch.
 const COMPETITION_TYPE = {
   39: 'league', 140: 'league', 135: 'league', 78: 'league', 61: 'league',
-  179: 'league', 88: 'league', 94: 'league', 41: 'league', 42: 'league',
+  179: 'league', 88: 'league', 94: 'league', 41: 'league', 42: 'league', 40: 'league',
   2: 'tournament', 3: 'tournament', 848: 'tournament', 48: 'tournament',
 };
 // Every league with a genuine train/test split as of 2026-08-07 — the original
@@ -5076,6 +5096,11 @@ const CLOSING_ODDS_SPORT_MAP = {
   '48':  'soccer_england_efl_cup',
   '41':  'soccer_england_league1',
   '42':  'soccer_england_league2',
+  // Added 2026-08-19 for the future Championship closing-odds backfill —
+  // confirmed live against /sports?all=true (active:true), not yet used since
+  // no historical backfill has run for this league yet (rule-10 protected,
+  // paper-only addition — see LEAGUES['40'] above).
+  '40':  'soccer_efl_champ',
 };
 
 let _closingOddsStatus = {
@@ -7205,6 +7230,7 @@ const CALIBRATION_AUDIT = {
   48:  { reliable: true, status: 'unseen_population', note: 'Single deliberate look completed 2026-08-11 against the full matched-odds population (n=330) — no train/test split, none of this data has ever been used for tuning. Structural gap found: Carabao Cup Round 1 fixtures (smaller-club pairings, e.g. Sutton Utd, Newport County, Accrington Stanley) show near-zero Pinnacle odds-market coverage historically — a real, confirmed data-availability limit, not a team-name-matching bug (verified via debug mode: 100% of misses were zero-event API responses, not failed name matches). Corrected 2026-08-18 (Addendum 24): a bug in computeUnifiedEdge (marginStrippedImplied read the wrong odds-object field names) silently NaN\'d every edge computation from Track A (2026-08-14) onward, so this reading was frozen at its pre-Track-A figures the whole time, not genuinely recomputed. Corrected: posEdgeN=225 (was 168), ROI +10.5% (was +18.5%), still well below the rule-6 decision-grade floor, not a confirmed edge — same conclusion, corrected number.' },
   41:  { reliable: true, status: 'unseen_population', note: 'Single deliberate look completed 2026-08-11 against the full matched-odds population (n=3,344) — no train/test split, none of this data has ever been used for tuning. As of 2026-08-15 (rule 12): training exclusion is now date-split at kickoff cutoff 2026-08-11T09:00:00Z, not whole-league — this backtest population (all pre-cutoff) stays permanently protected and this reading never changes; fixtures kicking off at/after the cutoff feed the weekly retrain and accumulate as a separate, normal Live reading instead. Corrected 2026-08-18 (Addendum 24): a bug in computeUnifiedEdge (marginStrippedImplied read the wrong odds-object field names) silently NaN\'d every edge computation from Track A (2026-08-14) onward, so this reading was frozen at its pre-Track-A figures the whole time, not genuinely recomputed — the originally-reported posEdgeN=1,580/ROI -3.6% never actually reflected Track A\'s calFactor/margin-stripping correction. Corrected: posEdgeN=2,231, ROI -3.9% — still no confirmed edge (same conclusion as before), but the per-tier cells shifted; the 50-55% tier (n=322) still shows a CI excluding zero, now (-28.2%, -4.7%). Real-money impact of the bug: none — settings.paperTradeOnly/paperKellyFraction were never mutated by it (runEvCalibration()\'s auto-management explicitly skips roi===null leagues, confirmed via live settings read); this was a reporting-layer bug, not a bet-locking one (scoreOneFixture never calls computeUnifiedEdge).' },
   42:  { reliable: true, status: 'unseen_population', note: 'Single deliberate look completed 2026-08-11 against the full matched-odds population (n=3,338) — no train/test split, none of this data has ever been used for tuning. As of 2026-08-15 (rule 12): training exclusion is now date-split at kickoff cutoff 2026-08-11T09:00:00Z, not whole-league — this backtest population (all pre-cutoff) stays permanently protected and this reading never changes; fixtures kicking off at/after the cutoff feed the weekly retrain and accumulate as a separate, normal Live reading instead. Corrected 2026-08-18 (Addendum 24): a bug in computeUnifiedEdge (marginStrippedImplied read the wrong odds-object field names) silently NaN\'d every edge computation from Track A (2026-08-14) onward, so this reading was frozen at its pre-Track-A figures the whole time, not genuinely recomputed — the originally-reported posEdgeN=1,746/ROI +4.2% never actually reflected Track A\'s calFactor/margin-stripping correction. Corrected: posEdgeN=2,346, ROI +3.1% — still no confirmed edge (same conclusion as before), per-tier cells shifted; see /api/league-tier-matrix for the current per-cell breakdown. Real-money impact of the bug: none — settings.paperTradeOnly/paperKellyFraction were never mutated by it (runEvCalibration()\'s auto-management explicitly skips roi===null leagues, confirmed via live settings read); this was a reporting-layer bug, not a bet-locking one (scoreOneFixture never calls computeUnifiedEdge).' },
+  40:  { reliable: false, status: 'untested', note: 'Added 2026-08-19, paper-only, rule-10 protected from day one (TRAINING_HOLDOUT_LEAGUE_IDS) — zero scored data exists yet, no historical backfill has run. Deliberately NOT added to UNSEEN_POPULATION_LEAGUES yet, unlike League One/Two/Carabao Cup, whose addition to that set was itself a separate follow-up commit made only once a genuine backtest (Addendum 19) actually existed — adding it now would misleadingly imply real-backtest evidence that does not exist. Coverage confirmed: API-Sports league 40, Odds API soccer_efl_champ (Pinnacle/Marathon Bet/Matchbook all present), teamsMatch() 8/8 clean against a live sample.' },
 };
 
 // Correction-layer-backtest readings (calibration-rules.md rules 13/14).
@@ -7799,7 +7825,7 @@ const LEAGUE_NAMES_MAP = {
   '39': 'Premier League', '140': 'La Liga', '135': 'Serie A', '78': 'Bundesliga',
   '61': 'Ligue 1', '2': 'Champions League', '1': 'World Cup', '179': 'Scottish Premiership',
   '88': 'Eredivisie', '94': 'Primeira Liga', '3': 'Europa League', '848': 'Conference League',
-  '48': 'Carabao Cup', '41': 'League One', '42': 'League Two',
+  '48': 'Carabao Cup', '41': 'League One', '42': 'League Two', '40': 'Championship',
 };
 
 function getLivePaperRecord(leagueId) {
@@ -8189,104 +8215,6 @@ app.post('/api/admin/trigger-proxy-train', (_req, res) => {
 app.get('/api/admin/proxy-train-status', (_req, res) => {
   res.json(readJSON('proxy-train-status.json') || { status: 'never_run' });
 });
-
-// TEMP diagnostic — EFL Championship scoping check, same discipline as the
-// Carabao Cup/League One/League Two additions: real API-Sports league search +
-// current-season fixtures + historical-depth probe, real Odds API sport/odds
-// check, and real teamsMatch() runs across a live sample. Read-only, no writes,
-// no config changes. Removed once this scoping concludes.
-app.get('/api/admin/championship-scoping-check', async (_req, res) => {
-  try {
-    const out = {};
-
-    // 1. API-Sports league search — confirm id, country, current season coverage.
-    // Tries a plain search first (no country filter, since a combined
-    // search+country query returned zero results on first attempt), falls back
-    // to a direct id=40 lookup (API-Sports' well-known Championship id) to
-    // confirm/deny rather than guess silently.
-    const { data: leagueSearch } = await apiSports.get('/leagues', { params: { search: 'Championship' } });
-    out.apiSportsLeagueSearchRaw = leagueSearch?.response?.map(r => ({
-      id: r.league?.id, name: r.league?.name, type: r.league?.type,
-      country: r.country?.name,
-      seasons: (r.seasons || []).map(s => ({ year: s.year, current: s.current, start: s.start, end: s.end })),
-    }));
-
-    let champId = leagueSearch?.response?.find(r => r.league?.name === 'Championship' && r.country?.name === 'England')?.league?.id;
-
-    if (!champId) {
-      const { data: byId } = await apiSports.get('/leagues', { params: { id: 40 } });
-      out.id40Lookup = byId?.response?.map(r => ({
-        id: r.league?.id, name: r.league?.name, type: r.league?.type,
-        country: r.country?.name,
-        seasons: (r.seasons || []).map(s => ({ year: s.year, current: s.current, start: s.start, end: s.end })),
-      }));
-      const idMatch = byId?.response?.find(r => r.country?.name === 'England');
-      if (idMatch) champId = idMatch.league?.id;
-    }
-    out.resolvedLeagueId = champId ?? null;
-
-    if (champId) {
-      // 2. Current-season fixture availability
-      const { data: upcoming } = await apiSports.get('/fixtures', { params: { league: champId, season: 2026, next: 8 } });
-      out.upcomingFixtures = (upcoming?.response || []).map(f => ({
-        id: f.fixture?.id, date: f.fixture?.date, status: f.fixture?.status?.short,
-        home: f.teams?.home?.name, away: f.teams?.away?.name, season: f.league?.season,
-      }));
-
-      // 3. Historical depth probe — same seasons League One/Two were checked against (2011 floor)
-      const depthProbe = [];
-      for (const season of [2011, 2015, 2020, 2024]) {
-        const { data: seasonCheck } = await apiSports.get('/fixtures', { params: { league: champId, season, status: 'FT' } });
-        depthProbe.push({ season, ftFixtureCount: seasonCheck?.results ?? 0 });
-        await new Promise(r => setTimeout(r, 150));
-      }
-      out.historicalDepthProbe = depthProbe;
-
-      // 4. Odds API — real current odds check for soccer_efl_champ
-      try {
-        const { data: oddsEvents } = await oddsApi.get('/sports/soccer_efl_champ/odds', {
-          params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal' },
-        });
-        out.oddsApiEventCount = oddsEvents?.length ?? 0;
-        const bookmakerTitles = new Set();
-        (oddsEvents || []).forEach(ev => (ev.bookmakers || []).forEach(bm => bookmakerTitles.add(bm.title)));
-        out.oddsApiBookmakersSeen = [...bookmakerTitles];
-        out.oddsApiHasPinnacle = bookmakerTitles.has('Pinnacle');
-        out.oddsApiHasMarathonBet = [...bookmakerTitles].some(t => t.toLowerCase().includes('marathon'));
-        out.oddsApiHasMatchbook = [...bookmakerTitles].some(t => t.toLowerCase().includes('matchbook'));
-
-        // 5. Team-name matching — real teamsMatch() runs, API-Sports fixture teams vs Odds API event teams
-        const nameMatchResults = [];
-        for (const fix of out.upcomingFixtures) {
-          const evt = (oddsEvents || []).find(ev => {
-            const dateClose = Math.abs(new Date(ev.commence_time) - new Date(fix.date)) < 6 * 3600000;
-            // AND, not OR — matches every real production call site (server.js:754,
-            // 2279, 5263). An OR let a same-day, different-kickoff-time fixture with
-            // one spuriously-overlapping surname (e.g. "Stoke City" vs "Bristol City"
-            // sharing the token "city") steal the match — not a real teamsMatch()
-            // failure, a bug in this diagnostic's own looser criterion.
-            return dateClose && teamsMatch(ev.home_team, fix.home) && teamsMatch(ev.away_team, fix.away);
-          });
-          nameMatchResults.push({
-            apiSportsHome: fix.home, apiSportsAway: fix.away,
-            oddsApiHome: evt?.home_team ?? null, oddsApiAway: evt?.away_team ?? null,
-            homeMatched: evt ? teamsMatch(evt.home_team, fix.home) : null,
-            awayMatched: evt ? teamsMatch(evt.away_team, fix.away) : null,
-            eventFound: !!evt,
-          });
-        }
-        out.teamNameMatching = nameMatchResults;
-      } catch (e) {
-        out.oddsApiError = e.message;
-      }
-    }
-
-    res.json(out);
-  } catch (e) {
-    res.status(500).json({ error: e.message, stack: e.stack });
-  }
-});
-
 // Cache expensive WOWY count — recompute only when profiles change (startup/backfill)
 let _wowyHighConfCache = null;
 function getWOWYHighConfCount() {
