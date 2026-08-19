@@ -7269,6 +7269,16 @@ const CORRECTION_LAYER_BACKTESTS = [
     },
     stability: 'stable_confirmed',
     historicalSource: 'correction-layer-backtest-walkforward',
+    // Deployment status — added on top of the frozen validation record below,
+    // never altering it. The blocks/pooled figures and the verdict text are
+    // exactly as Addendum 26 published them; deploymentStatus is a separate,
+    // later fact layered on, the same "don't rewrite the record, add a status"
+    // discipline this project used for Addendum 25's superseded entries.
+    deploymentStatus: {
+      deployed: true,
+      deployedAt: '2026-08-19T08:44:21.000Z',
+      note: 'Deployed to live scoring 2026-08-19 — see scoring.js CORRECTION_LAYER_RULES and settings.deployedCorrectionRuleIds. The verdict text below predates deployment and is left exactly as published; this field is the current status.',
+    },
     verdict: 'The strongest read produced by this project\'s correction-layer work so far. Every one of 4 independent blocks moves calibration toward zero after correction (from a genuinely bad -8.6pp pooled to +0.5pp — essentially exact), and ROI improves in every block, never regresses. Pooled posEdgeN=355 clears rule 6\'s floor, and the corrected pooled ROI\'s CI (-0.2%, +29.8%) nearly excludes zero on the downside. This clears both bars the correction-layer brief set for "a real candidate for eventual deployment consideration" — still NOT deployed live; deployment stays its own separate, deliberate decision.',
   },
 ];

@@ -3339,6 +3339,8 @@ async function renderCorrectionLayerBacktests() {
       : `<span class="badge badge-amber" style="font-size:9px;opacity:.6">correction-layer-backtest (single-holdout)</span>`;
     const stabBadge = isWalkforward && stabilityStyle[bt.stability]
       ? `<span class="badge ${stabilityStyle[bt.stability].cls}" style="font-size:9px">${stabilityStyle[bt.stability].label}</span>` : '';
+    const deployedBadge = bt.deploymentStatus?.deployed
+      ? `<span class="badge badge-green" style="font-size:9px" title="${bt.deploymentStatus.note || ''}">DEPLOYED ${bt.deploymentStatus.deployedAt ? bt.deploymentStatus.deployedAt.slice(0,10) : ''}</span>` : '';
 
     let body;
     if (isWalkforward) {
@@ -3374,10 +3376,11 @@ async function renderCorrectionLayerBacktests() {
     <div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px">
       <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px">
         <span style="font-weight:600;font-size:12px">${bt.label}</span>
-        <div style="display:flex;gap:6px">${stabBadge}${sourceBadge}</div>
+        <div style="display:flex;gap:6px">${deployedBadge}${stabBadge}${sourceBadge}</div>
       </div>
       ${body}
       <div style="font-size:10.5px;color:var(--amber);margin-top:6px">${bt.verdict}</div>
+      ${bt.deploymentStatus?.deployed ? `<div style="font-size:10.5px;color:var(--green);margin-top:4px;font-weight:600">${bt.deploymentStatus.note}</div>` : ''}
     </div>`;
   }).join('');
 }
@@ -5461,14 +5464,21 @@ function teamIntelSection(w) {
     </div>`;
 }
 
-function valueRow(label, modelP, odds, impliedProb, edge, ev, kelly, stake, isProjected, successScore, calibratedP) {
+function valueRow(label, modelP, odds, impliedProb, edge, ev, kelly, stake, isProjected, successScore, calibratedP, correctionVersion) {
   const edgeCol = edge > 0 ? 'var(--green)' : 'var(--red)';
   const scoreCol = successScore >= 60 ? 'var(--green)' : successScore >= 40 ? 'var(--amber)' : 'var(--text2)';
   const tag = isProjected ? `<span style="font-size:.6rem;background:var(--amber);color:#000;border-radius:3px;padding:1px 5px;margin-left:6px;vertical-align:middle">BEST</span>` : '';
+  // Correction-layer deployment marker (calibration-rules.md rules 13/14,
+  // docs/tier-calibration-analysis.md Addendum 26) — only set when this
+  // specific fixture's league had a deployed correction active at scoring
+  // time, so it's visibly distinct from leagues without one rather than a
+  // silent behind-the-scenes probability change.
+  const corrTag = correctionVersion
+    ? `<span style="font-size:.55rem;background:var(--green);color:#000;border-radius:3px;padding:1px 5px;margin-left:6px;vertical-align:middle" title="Corrected probability — scored under the deployed League Two correction layer (${correctionVersion})">CORRECTED</span>` : '';
   return `
     <div style="background:var(--surface2);border-radius:10px;padding:12px 14px;margin-bottom:8px;${isProjected ? 'border:1px solid rgba(247,37,133,.35)' : ''}">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-        <span style="font-family:'Syne',sans-serif;font-weight:700;font-size:.9rem">${label}${tag}</span>
+        <span style="font-family:'Syne',sans-serif;font-weight:700;font-size:.9rem">${label}${tag}${corrTag}</span>
         <div style="display:flex;align-items:center;gap:10px">
           ${odds ? `<span style="font-family:'DM Mono',monospace;font-size:.85rem;color:var(--text2)">@ ${odds.toFixed(2)}</span>` : ''}
           ${successScore != null ? `<div style="background:var(--surface);border:1px solid ${scoreCol};border-radius:6px;padding:2px 8px;text-align:center">
@@ -5593,7 +5603,8 @@ function openDrawer(w) {
       c.ev, c.kelly?.fracKelly, c.kelly?.stake,
       c.bet === w.projectedBet,
       c.successScore ?? null,
-      c.calibratedProb
+      c.calibratedProb,
+      w.correctionVersion
     )
   ).join('');
 
@@ -5730,7 +5741,7 @@ function openBetDrawer(b) {
   // bug: it showed the settings multiplier (e.g. 50% for half-Kelly) mislabeled as
   // "% of bankroll" instead of the actual stake/bankroll ratio.
   const stakeFracOfBankroll = b.bankrollAtLock ? (settleStake / b.bankrollAtLock) : 0;
-  const row = valueRow(betLabel, b.modelProb, settleOdds, b.impliedProb, b.edge, b.ev, stakeFracOfBankroll, settleStake, true, b.successScore, b.calibratedProb);
+  const row = valueRow(betLabel, b.modelProb, settleOdds, b.impliedProb, b.edge, b.ev, stakeFracOfBankroll, settleStake, true, b.successScore, b.calibratedProb, b.correctionVersion);
 
   const resultBadge = b.result
     ? `<div style="margin:8px 0;padding:8px 12px;border-radius:6px;font-size:.8rem;font-weight:700;background:${b.result==='win'?'rgba(0,255,135,.12)':b.result==='loss'?'rgba(255,82,82,.12)':'rgba(180,180,180,.12)'};color:${b.result==='win'?'var(--green)':b.result==='loss'?'var(--red)':'var(--text2)'}">${b.result.toUpperCase()}${b.finalScore ? ` · ${b.finalScore}` : ''} · P&L £${b.pnl >= 0 ? '+' : ''}${b.pnl?.toFixed(2)}</div>`
