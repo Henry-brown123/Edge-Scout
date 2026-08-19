@@ -8202,6 +8202,123 @@ app.get('/api/admin/proxy-train-status', (_req, res) => {
 // using the exact same buildProfileFromFixtures()/applyTeamProfileModifiers() the
 // live path uses (not a reimplementation), just fed a point-in-time-filtered
 // fixture history. Read-only, no writes, no team-profiles.json mutation.
+// TEMP diagnostic — draw-specific calibration, genuinely never tested at any data
+// freshness (Extension 3 found draws essentially never top-pick in the 45-70%
+// band). First pass discovers the real band where draw actually becomes the
+// model's argmax (rather than assuming ~30-40%), second pass runs Addendum 23's
+// exact methodology (mean predicted vs hit rate) within it. Diagnostic only — no
+// correction fit. Read-only, reuses computeMatchedEdgeFixtures()'s exact
+// model.predict()+applyLeagueBiasCorrection() pipeline, just tracks draw-argmax
+// rows instead of discarding them.
+app.get('/api/admin/draw-calibration-diagnostic', async (_req, res) => {
+  try {
+    const matched = await computeMatchedEdgeFixtures();
+    const drawRows = matched.filter(f => f.topOutcome === 'draw');
+
+    // Discovery: full distribution of draw-argmax modelProb, all leagues, all data
+    // (descriptive only, not a tuning decision — same reasoning Phase 1 used for
+    // not restricting its own descriptive calibration read to test-only).
+    const HIST_BINS = [];
+    for (let lo = 25; lo < 55; lo += 2.5) HIST_BINS.push({ lo: lo / 100, hi: (lo + 2.5) / 100, label: `${lo}-${lo + 2.5}%` });
+    const histogram = HIST_BINS.map(b => ({ band: b.label, n: drawRows.filter(f => f.modelProb >= b.lo && f.modelProb < b.hi).length }));
+
+    // Calibration read: original 9 leagues, test-only (VALIDATED_SPLITS), same
+    // rule-1 discipline as Addendum 2/23, restricted to whichever 5pp bands
+    // actually hold real draw-argmax volume per the histogram above.
+    const ORIGINAL_9 = new Set([135, 39, 61, 2, 179, 78, 140, 88, 94]);
+    function testOnly(f) {
+      const split = VALIDATED_SPLITS[parseInt(f.leagueId, 10)];
+      if (!split) return false;
+      return new Date(f.date) >= new Date(split.testFrom);
+    }
+    const testDrawRows = drawRows.filter(f => ORIGINAL_9.has(parseInt(f.leagueId, 10)) && testOnly(f));
+
+    function calibStats(rows) {
+      const n = rows.length;
+      if (!n) return { n: 0 };
+      const meanPred = rows.reduce((s, f) => s + f.modelProb, 0) / n;
+      const hitRate  = rows.filter(f => f.won).length / n;
+      const calibErrPp = parseFloat(((hitRate - meanPred) * 100).toFixed(1));
+      const posEdge = rows.filter(f => f.edge >= 0.05);
+      const posEdgeN = posEdge.length;
+      let roi = null, ci = null;
+      if (posEdgeN > 0) {
+        const returns = posEdge.map(f => f.won ? (f.pinnacleOdds - 1) : -1);
+        const mean = returns.reduce((s, v) => s + v, 0) / posEdgeN;
+        const variance = returns.reduce((s, v) => s + (v - mean) ** 2, 0) / posEdgeN;
+        const se = Math.sqrt(variance / posEdgeN);
+        roi = parseFloat((mean * 100).toFixed(1));
+        ci = [parseFloat(((mean - 1.96 * se) * 100).toFixed(1)), parseFloat(((mean + 1.96 * se) * 100).toFixed(1))];
+      }
+      return { n, meanPred: parseFloat((meanPred * 100).toFixed(1)), hitRate: parseFloat((hitRate * 100).toFixed(1)), calibErrPp, posEdgeN, roi, roiCi: ci };
+    }
+
+    const bandReads = HIST_BINS.map(b => ({
+      band: b.label,
+      ...calibStats(testDrawRows.filter(f => f.modelProb >= b.lo && f.modelProb < b.hi)),
+    }));
+    const pooled3040 = calibStats(testDrawRows.filter(f => f.modelProb >= 0.30 && f.modelProb < 0.40));
+
+    res.json({
+      discoveryScope: 'ALL matched fixtures, all 14 leagues, no date restriction — purely descriptive band discovery',
+      histogram,
+      calibrationScope: 'original 9 leagues, test-only (per VALIDATED_SPLITS testFrom) — same methodology as Addendum 2/23',
+      testDrawTotalN: testDrawRows.length,
+      bandReads,
+      pooled3040,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
+// TEMP diagnostic — Part 4 materiality check. Extends Addendum 25/26's
+// boundary-crossing verification (which found zero instances, but only checked
+// one specific correction-layer holdout population) to the FULL historical
+// fixture pool, to determine whether a full rescore would actually change
+// anything before deciding whether to run one. Read-only.
+app.get('/api/admin/domestic-blend-boundary-crossing-check', async (_req, res) => {
+  try {
+    const historical  = readJSON('backfill-historical.json') || {};
+    const allFixtures = historical.fixtures || [];
+    const DATE_SPLIT_LEAGUES = new Set([41, 42]);
+
+    const preCutoffTeams = new Set(); // teams with a League One/Two fixture strictly before TRAINING_CUTOFF
+    const postCutoffOtherLeagueTeams = new Map(); // teamId -> [{leagueId, date}] for non-41/42 blend leagues at/after cutoff
+
+    for (const f of allFixtures) {
+      const lid = f.league?.id;
+      if (!DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(lid)) continue;
+      const date = f.fixture?.date;
+      const hid = f.teams?.home?.id, aid = f.teams?.away?.id;
+      if (DATE_SPLIT_LEAGUES.has(lid) && isFixtureTrainingHoldout(lid, date)) {
+        if (hid) preCutoffTeams.add(hid);
+        if (aid) preCutoffTeams.add(aid);
+      } else if (!DATE_SPLIT_LEAGUES.has(lid)) {
+        // post-cutoff is moot for non-date-split leagues — they have no cutoff;
+        // record every appearance so we can check overlap against preCutoffTeams.
+        if (hid) { if (!postCutoffOtherLeagueTeams.has(hid)) postCutoffOtherLeagueTeams.set(hid, []); postCutoffOtherLeagueTeams.get(hid).push({ leagueId: lid, date }); }
+        if (aid) { if (!postCutoffOtherLeagueTeams.has(aid)) postCutoffOtherLeagueTeams.set(aid, []); postCutoffOtherLeagueTeams.get(aid).push({ leagueId: lid, date }); }
+      }
+    }
+
+    const crossingTeams = [];
+    for (const tid of preCutoffTeams) {
+      const appearances = postCutoffOtherLeagueTeams.get(tid);
+      if (appearances?.length) crossingTeams.push({ teamId: tid, otherLeagueAppearances: appearances.length, leagues: [...new Set(appearances.map(a => a.leagueId))] });
+    }
+
+    res.json({
+      scope: 'FULL historical fixture pool (all seasons), all DOMESTIC_LEAGUE_IDS_FOR_BLEND leagues — not scoped to any single test/holdout population',
+      preCutoffLeagueOneTwoTeamCount: preCutoffTeams.size,
+      crossingTeamCount: crossingTeams.length,
+      crossingTeams: crossingTeams.slice(0, 50),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
 app.get('/api/admin/team-profile-modifier-isolation-test', async (_req, res) => {
   try {
     const { buildProfileFromFixtures, applyTeamProfileModifiers } = require('./teamProfiles');
