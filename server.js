@@ -8259,6 +8259,46 @@ app.get('/api/admin/draw-calibration-diagnostic', async (_req, res) => {
     }));
     const pooled3040 = calibStats(testDrawRows.filter(f => f.modelProb >= 0.30 && f.modelProb < 0.40));
 
+    // Supplementary: since draw is never the argmax anywhere in the population
+    // (histogram above is all-zero), the originally-envisioned "draw top-pick
+    // band" doesn't exist — falls back to the natural next question: is the
+    // model's draw PROBABILITY itself well-calibrated on its own terms,
+    // regardless of pick status? Bins every fixture (not just draw-argmax ones)
+    // by predicted draw probability and checks the actual draw rate within it —
+    // same tier/methodology shape as Addendum 23, applied to draw specifically.
+    const historical2   = readJSON('backfill-historical.json') || {};
+    const scoredRecords = historical2.scoredRecords || [];
+    const optWeights2   = historical2.optimisedWeights || {};
+    const closingOdds2  = readJSON('closing-odds.json') || {};
+    const { classifyFixture: classifyFixture2, applyLeagueBiasCorrection: applyLeagueBiasCorrection2, LEAGUE_CONFIG: LEAGUE_CONFIG2 } = require('./scoring');
+
+    const drawProbRows = [];
+    let sinceYield2 = 0;
+    for (const rec of scoredRecords) {
+      if (++sinceYield2 >= 200) { sinceYield2 = 0; await new Promise(r => setImmediate(r)); }
+      if (!ORIGINAL_9.has(parseInt(rec.leagueId, 10)) || !testOnly(rec)) continue;
+      const co = closingOdds2[rec.fixtureId] || closingOdds2[String(rec.fixtureId)];
+      if (!co || !co.drawOdds || !rec.homeFactors || !rec.awayFactors || !rec.actualOutcome) continue;
+      const context = rec.context || classifyFixture2(rec.leagueId);
+      const weights = optWeights2[context] || optWeights2.club_domestic;
+      if (!weights) continue;
+      const leagueId = parseInt(rec.leagueId, 10);
+      const rawProbs = model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG2[leagueId]);
+      const probs = applyLeagueBiasCorrection2(rawProbs, leagueId, LEAGUE_CONFIG2);
+      drawProbRows.push({ modelProb: probs.draw, pinnacleOdds: co.drawOdds, edge: null, won: rec.actualOutcome === 'draw' });
+    }
+    // edge for draw specifically (calFactor-boosted draw prob vs Pinnacle's draw-implied)
+    for (const r of drawProbRows) {
+      const stripped = 1 / r.pinnacleOdds; // raw implied only (no 3-way renormalisation needed for this diagnostic read)
+      r.edge = Math.min(0.97, r.modelProb * 1.08) - stripped;
+    }
+    const DRAW_PROB_BINS = [];
+    for (let lo = 15; lo < 35; lo += 5) DRAW_PROB_BINS.push({ lo: lo / 100, hi: (lo + 5) / 100, label: `${lo}-${lo + 5}%` });
+    const drawProbCalibration = DRAW_PROB_BINS.map(b => ({
+      band: b.label,
+      ...calibStats(drawProbRows.filter(r => r.modelProb >= b.lo && r.modelProb < b.hi)),
+    }));
+
     res.json({
       discoveryScope: 'ALL matched fixtures, all 14 leagues, no date restriction — purely descriptive band discovery',
       histogram,
@@ -8266,6 +8306,11 @@ app.get('/api/admin/draw-calibration-diagnostic', async (_req, res) => {
       testDrawTotalN: testDrawRows.length,
       bandReads,
       pooled3040,
+      drawProbabilityCalibration: {
+        note: 'Supplementary — draw is never top-pick anywhere in the population (histogram above), so this bins EVERY fixture by predicted draw probability regardless of pick status, checking whether the draw probability itself is well-calibrated on its own terms.',
+        totalRows: drawProbRows.length,
+        bandReads: drawProbCalibration,
+      },
     });
   } catch (e) {
     res.status(500).json({ error: e.message, stack: e.stack });
