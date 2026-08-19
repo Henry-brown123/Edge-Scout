@@ -8174,6 +8174,151 @@ app.get('/api/admin/proxy-train-status', (_req, res) => {
   res.json(readJSON('proxy-train-status.json') || { status: 'never_run' });
 });
 
+// TEMP diagnostic — isolate-test the three live team-profile modifiers (home/away
+// strength multiplier, H2H anomaly, fixture congestion) against real outcomes for
+// the first time ever. Neither this modifier logic nor its calibration status has
+// ever appeared in any calibration diagnostic this project has run — scoredRecords
+// only stores raw homeFactors/awayFactors, and computeMatchedEdgeFixtures() never
+// calls applyTeamProfileModifiers() (confirmed by code read). team-profiles.json is
+// a rolling present-day snapshot with no historical/point-in-time variant, so using
+// it directly against old fixtures would be a genuine look-ahead leak — instead this
+// rebuilds each team's profile PURELY from fixtures strictly before the match date,
+// using the exact same buildProfileFromFixtures()/applyTeamProfileModifiers() the
+// live path uses (not a reimplementation), just fed a point-in-time-filtered
+// fixture history. Read-only, no writes, no team-profiles.json mutation.
+app.get('/api/admin/team-profile-modifier-isolation-test', async (_req, res) => {
+  try {
+    const { buildProfileFromFixtures, applyTeamProfileModifiers } = require('./teamProfiles');
+    const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG, computeUnifiedEdge } = require('./scoring');
+    const historical    = readJSON('backfill-historical.json') || {};
+    const scoredRecords = historical.scoredRecords || [];
+    const allFixtures   = historical.fixtures || [];
+    const optWeights    = historical.optimisedWeights || {};
+    const closingOdds   = readJSON('closing-odds.json') || {};
+
+    const ORIGINAL_9 = new Set([135, 39, 61, 2, 179, 78, 140, 88, 94]);
+    const CAP = 6000; // safety valve — profile rebuilds are far more expensive than a plain edge pass
+
+    const fixtureById = {};
+    for (const f of allFixtures) if (f.fixture?.id) fixtureById[f.fixture.id] = f;
+
+    const byTeam = {};
+    for (const f of allFixtures) {
+      const hid = f.teams?.home?.id, aid = f.teams?.away?.id;
+      if (hid) (byTeam[hid] ??= []).push(f);
+      if (aid) (byTeam[aid] ??= []).push(f);
+    }
+    for (const tid in byTeam) byTeam[tid].sort((a, b) => new Date(a.fixture.date) - new Date(b.fixture.date));
+
+    function testOnly(rec) {
+      const split = VALIDATED_SPLITS[parseInt(rec.leagueId, 10)];
+      if (!split) return false;
+      return new Date(rec.date) >= new Date(split.testFrom);
+    }
+
+    let pool = scoredRecords.filter(rec =>
+      ORIGINAL_9.has(parseInt(rec.leagueId, 10)) && testOnly(rec) &&
+      rec.homeFactors && rec.awayFactors && rec.actualOutcome && fixtureById[rec.fixtureId]
+    );
+    const droppedForCap = Math.max(0, pool.length - CAP);
+    if (pool.length > CAP) pool = pool.slice(0, CAP);
+
+    // Neutralizes every modifier except the one named in `keep`, so each variant's
+    // pick/edge can only move because of that one modifier's own logic.
+    function isolate(profile, keep) {
+      if (!profile) return profile;
+      const p = { ...profile };
+      if (keep !== 'multiplier') { p.homeWinRateMultiplier = 1; p.awayWinRateMultiplier = 1; }
+      if (keep !== 'h2h')        p.oppositionAnomalies = [];
+      if (keep !== 'congestion') p.congestionSensitivity = null;
+      return p;
+    }
+
+    const variants = ['raw', 'multiplier', 'h2h', 'congestion', 'full'];
+    const buckets = Object.fromEntries(variants.map(v => [v, []]));
+
+    let sinceYield = 0;
+    for (const rec of pool) {
+      if (++sinceYield >= 25) { sinceYield = 0; await new Promise(r => setImmediate(r)); }
+
+      const fix = fixtureById[rec.fixtureId];
+      const homeId = fix.teams?.home?.id, awayId = fix.teams?.away?.id;
+      if (!homeId || !awayId) continue;
+      const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
+      if (!co || !co.homeOdds || !co.awayOdds || !co.drawOdds) continue;
+
+      const context = rec.context || classifyFixture(rec.leagueId);
+      const weights = optWeights[context] || optWeights.club_domestic;
+      if (!weights) continue;
+
+      const leagueId  = parseInt(rec.leagueId, 10);
+      const rawProbs  = model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]);
+      const baseProbs = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
+
+      const matchDate = new Date(fix.fixture.date);
+      const homeHist = (byTeam[homeId] || []).filter(f => new Date(f.fixture.date) < matchDate);
+      const awayHist = (byTeam[awayId] || []).filter(f => new Date(f.fixture.date) < matchDate);
+      const homeProfileFull = buildProfileFromFixtures(homeId, fix.teams.home.name, homeHist);
+      const awayProfileFull = buildProfileFromFixtures(awayId, fix.teams.away.name, awayHist);
+      const homeDays = daysSinceLastMatch(homeHist, homeId, matchDate);
+      const awayDays = daysSinceLastMatch(awayHist, awayId, matchDate);
+
+      for (const variant of variants) {
+        let probs;
+        if (variant === 'raw' || !homeProfileFull || !awayProfileFull) {
+          probs = baseProbs;
+        } else {
+          const hp = variant === 'full' ? homeProfileFull : isolate(homeProfileFull, variant);
+          const ap = variant === 'full' ? awayProfileFull : isolate(awayProfileFull, variant);
+          const out = applyTeamProfileModifiers(baseProbs, hp, ap, context, 0.5, homeDays, awayDays, null,
+            { wowyActive: false, competitionPhase: null, transferModifierActive: false });
+          probs = out.probs;
+        }
+
+        let topOutcome, modelProb;
+        if (probs.home >= probs.draw && probs.home >= probs.away) { topOutcome = 'home'; modelProb = probs.home; }
+        else if (probs.away >= probs.draw)                        { topOutcome = 'away'; modelProb = probs.away; }
+        else                                                       { topOutcome = 'draw'; modelProb = probs.draw; }
+        const pinnacleOdds = topOutcome === 'home' ? co.homeOdds : topOutcome === 'away' ? co.awayOdds : co.drawOdds;
+        if (!pinnacleOdds || pinnacleOdds <= 1) continue;
+
+        const { edge } = computeUnifiedEdge(modelProb, co, topOutcome, { applyCalFactor: true, calFactor: 1.08 });
+        const won = rec.actualOutcome === topOutcome;
+        buckets[variant].push({ modelProb, pinnacleOdds, edge, won });
+      }
+    }
+
+    function summarize(rows) {
+      const n = rows.length;
+      if (!n) return { n: 0 };
+      const meanPred = rows.reduce((s, r) => s + r.modelProb, 0) / n;
+      const hitRate  = rows.filter(r => r.won).length / n;
+      const calibErrPp = parseFloat(((hitRate - meanPred) * 100).toFixed(1));
+      const posEdge = rows.filter(r => r.edge >= 0.05);
+      const posEdgeN = posEdge.length;
+      let roi = null, ci = null;
+      if (posEdgeN > 0) {
+        const returns = posEdge.map(r => r.won ? (r.pinnacleOdds - 1) : -1);
+        const mean = returns.reduce((s, v) => s + v, 0) / posEdgeN;
+        const variance = returns.reduce((s, v) => s + (v - mean) ** 2, 0) / posEdgeN;
+        const se = Math.sqrt(variance / posEdgeN);
+        roi = parseFloat((mean * 100).toFixed(1));
+        ci = [parseFloat(((mean - 1.96 * se) * 100).toFixed(1)), parseFloat(((mean + 1.96 * se) * 100).toFixed(1))];
+      }
+      return { n, meanPred: parseFloat((meanPred * 100).toFixed(1)), hitRate: parseFloat((hitRate * 100).toFixed(1)), calibErrPp, posEdgeN, roi, roiCi: ci };
+    }
+
+    res.json({
+      scope: 'original 9 leagues, test-only (per each league\'s own VALIDATED_SPLITS testFrom), full probability range — point-in-time team profiles rebuilt from fixtures strictly before each match date',
+      poolSize: pool.length,
+      droppedForCap,
+      variants: Object.fromEntries(variants.map(v => [v, summarize(buckets[v])])),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
 // Cache expensive WOWY count — recompute only when profiles change (startup/backfill)
 let _wowyHighConfCache = null;
 function getWOWYHighConfCount() {
