@@ -8284,7 +8284,15 @@ app.get('/api/admin/team-profile-modifier-isolation-test', async (_req, res) => 
 
         const { edge } = computeUnifiedEdge(modelProb, co, topOutcome, { applyCalFactor: true, calFactor: 1.08 });
         const won = rec.actualOutcome === topOutcome;
-        buckets[variant].push({ modelProb, pinnacleOdds, edge, won });
+        // fired: did this variant's probs actually differ from raw (i.e. did the
+        // modifier do anything for this fixture)? Needed to honestly characterize
+        // how thin a modifier's real footprint is, not just its full-population effect.
+        const fired = variant !== 'raw' && (
+          Math.abs(probs.home - baseProbs.home) > 1e-6 ||
+          Math.abs(probs.away - baseProbs.away) > 1e-6 ||
+          Math.abs(probs.draw - baseProbs.draw) > 1e-6
+        );
+        buckets[variant].push({ modelProb, pinnacleOdds, edge, won, fired });
       }
     }
 
@@ -8308,11 +8316,24 @@ app.get('/api/admin/team-profile-modifier-isolation-test', async (_req, res) => 
       return { n, meanPred: parseFloat((meanPred * 100).toFixed(1)), hitRate: parseFloat((hitRate * 100).toFixed(1)), calibErrPp, posEdgeN, roi, roiCi: ci };
     }
 
+    function summarizeVariant(rows) {
+      const firedRows = rows.filter(r => r.fired);
+      return {
+        firedN: firedRows.length,
+        firedShare: rows.length ? parseFloat((firedRows.length / rows.length * 100).toFixed(1)) : 0,
+        allFixtures: summarize(rows),
+        // Restricted to only the fixtures where the modifier actually changed the
+        // pick/probability — the honest read on the modifier's own effect, not
+        // diluted by the (likely large) share of fixtures it never touches.
+        firedOnly: summarize(firedRows),
+      };
+    }
+
     res.json({
       scope: 'original 9 leagues, test-only (per each league\'s own VALIDATED_SPLITS testFrom), full probability range — point-in-time team profiles rebuilt from fixtures strictly before each match date',
       poolSize: pool.length,
       droppedForCap,
-      variants: Object.fromEntries(variants.map(v => [v, summarize(buckets[v])])),
+      variants: Object.fromEntries(variants.map(v => [v, v === 'raw' ? { allFixtures: summarize(buckets[v]) } : summarizeVariant(buckets[v])])),
     });
   } catch (e) {
     res.status(500).json({ error: e.message, stack: e.stack });
