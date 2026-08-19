@@ -2820,7 +2820,23 @@ async function runHistoricalBackfill({ rescore = false, skipOptimise = false, on
       // Addendum 24 Part A/C — built once per run, reused for every fixture below,
       // same cost profile as teamIndex/standingsIndex above (one pass over
       // allFixtures, not per-fixture work).
-      const domesticTimeline = buildDomesticTimeline(allFixtures);
+      // Fix (2026-08-19, Option A): a team's first 1-2 fixtures after crossing the
+      // League One/Two <-> other-domestic-league boundary previously fell back to
+      // resolveStandingsScore()'s cross-league domesticTimeline, which flattens a
+      // team's history across every DOMESTIC_LEAGUE_IDS_FOR_BLEND league with zero
+      // awareness of rule 12's date-split cutoff — a pre-cutoff League One/Two
+      // standing (permanently protected, per rule 12 "excluded from training
+      // forever") could leak into a training-eligible fixture via that fallback.
+      // buildStandingsIndex (used for each fixture's OWN-competition snapshot) is
+      // not affected — it silos strictly by leagueId_season and never mixes
+      // leagues, so it still gets the unfiltered allFixtures. Only the cross-league
+      // timeline needs the cutoff-aware pool: pre-cutoff League One/Two fixtures
+      // are excluded from it entirely, exactly mirroring isFixtureTrainingHoldout's
+      // existing rule-12 check used everywhere else this cutoff already applies.
+      const domesticTimelineFixtures = allFixtures.filter(f =>
+        !isFixtureTrainingHoldout(f.league?.id, f.fixture?.date)
+      );
+      const domesticTimeline = buildDomesticTimeline(domesticTimelineFixtures);
       let   scored         = 0;
       const checkpointEvery = isLargeRun ? LARGE_RUN_PERSIST_EVERY : OPTIMISE_EVERY;
       let   nextCheckpointAt = Math.ceil(scoredMap.size / checkpointEvery) * checkpointEvery;
