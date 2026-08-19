@@ -4866,88 +4866,6 @@ app.get('/api/backfill/historical/status', (_req, res) => {
 // machinery (Maps, buildTeamIndex, buildStandingsIndex, buildDomesticTimeline), which
 // has been OOM-crashing the process at the current ~80k-record population size. A
 // single readJSON + filter + count is a fraction of that memory footprint.
-// TEMP diagnostic (2026-08-19, Task D Part 2) — the single, disciplined backtest
-// look for Championship (league 40): genuinely unseen, rule-10-protected population,
-// same methodology as Addendum 19 / buildUnseenPopulationMatrix() (5pp tier bins,
-// posEdge >= 5% filter, unified edge via computeMatchedEdgeFixtures(), 95% CI via
-// normal approximation on per-bet returns) — read-only, does not touch
-// UNSEEN_POPULATION_LEAGUES or CALIBRATION_AUDIT. Also reports a calibration table
-// (predicted modelProb vs actual win rate per tier, all matched fixtures — not just
-// posEdge) since the task asked for calibration separately from ROI.
-app.get('/api/admin/championship-backtest', async (_req, res) => {
-  try {
-    const allMatched = await computeMatchedEdgeFixtures();
-    const matched40 = allMatched.filter(f => parseInt(f.leagueId, 10) === 40);
-
-    // Calibration: predicted (avg modelProb) vs actual win rate, per 5pp tier, all
-    // matched fixtures regardless of edge — this is "is the model's probability
-    // itself accurate", separate from "is there a profitable edge".
-    const calibByTier = {};
-    for (const f of matched40) {
-      const tier = tierOfProbShared(f.modelProb);
-      if (!tier) continue;
-      if (!calibByTier[tier]) calibByTier[tier] = { n: 0, probSum: 0, wins: 0 };
-      calibByTier[tier].n++;
-      calibByTier[tier].probSum += f.modelProb;
-      if (f.won) calibByTier[tier].wins++;
-    }
-    const calibration = LEAGUE_TIER_MATRIX_TIER_ORDER
-      .filter(t => calibByTier[t])
-      .map(t => {
-        const c = calibByTier[t];
-        return {
-          tier: t, n: c.n,
-          avgPredicted: +(c.probSum / c.n).toFixed(4),
-          actualWinRate: +(c.wins / c.n).toFixed(4),
-        };
-      });
-
-    // ROI: posEdge >= 5% only, same as Addendum 19 / buildUnseenPopulationMatrix().
-    const posEdge = matched40.filter(f => f.edge >= 0.05);
-    function roiStats(fixtures) {
-      const n = fixtures.length;
-      if (n === 0) return { n: 0, roi: null, ciLow: null, ciHigh: null };
-      const returns = fixtures.map(f => f.won ? (f.pinnacleOdds - 1) : -1);
-      const mean = returns.reduce((s, v) => s + v, 0) / n;
-      let ciLow = null, ciHigh = null;
-      if (n > 1) {
-        const sampleVariance = returns.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1);
-        const se = Math.sqrt(sampleVariance / n);
-        ciLow = +(mean - 1.96 * se).toFixed(4);
-        ciHigh = +(mean + 1.96 * se).toFixed(4);
-      }
-      return { n, roi: +mean.toFixed(4), ciLow, ciHigh, sampleVariance: n > 1 ? returns.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1) : null };
-    }
-
-    const pooled = roiStats(posEdge);
-    const byTierRaw = {};
-    for (const f of posEdge) {
-      const tier = tierOfProbShared(f.modelProb);
-      if (!tier) continue;
-      if (!byTierRaw[tier]) byTierRaw[tier] = [];
-      byTierRaw[tier].push(f);
-    }
-    const byTier = LEAGUE_TIER_MATRIX_TIER_ORDER
-      .filter(t => byTierRaw[t])
-      .map(t => ({ tier: t, ...roiStats(byTierRaw[t]) }));
-
-    // Rule 6 — decision-grade floor is ~300-400 posEdge bets.
-    const RULE_6_FLOOR = 300;
-    const decisionGrade = pooled.n >= RULE_6_FLOOR;
-
-    res.json({
-      matchedWithClosingOdds: matched40.length,
-      calibration,
-      roi: {
-        pooled: { ...pooled, decisionGrade, rule6Floor: RULE_6_FLOOR },
-        byTier,
-      },
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message, stack: e.stack });
-  }
-});
-
 // Apply optimised weights to settings (so live scoring uses them)
 app.post('/api/backfill/historical/apply-weights', (req, res) => {
   const meta = readJSON('backfill-historical-meta.json');
@@ -7325,7 +7243,7 @@ const CALIBRATION_AUDIT = {
   48:  { reliable: true, status: 'unseen_population', note: 'Single deliberate look completed 2026-08-11 against the full matched-odds population (n=330) — no train/test split, none of this data has ever been used for tuning. Structural gap found: Carabao Cup Round 1 fixtures (smaller-club pairings, e.g. Sutton Utd, Newport County, Accrington Stanley) show near-zero Pinnacle odds-market coverage historically — a real, confirmed data-availability limit, not a team-name-matching bug (verified via debug mode: 100% of misses were zero-event API responses, not failed name matches). Corrected 2026-08-18 (Addendum 24): a bug in computeUnifiedEdge (marginStrippedImplied read the wrong odds-object field names) silently NaN\'d every edge computation from Track A (2026-08-14) onward, so this reading was frozen at its pre-Track-A figures the whole time, not genuinely recomputed. Corrected: posEdgeN=225 (was 168), ROI +10.5% (was +18.5%), still well below the rule-6 decision-grade floor, not a confirmed edge — same conclusion, corrected number.' },
   41:  { reliable: true, status: 'unseen_population', note: 'Single deliberate look completed 2026-08-11 against the full matched-odds population (n=3,344) — no train/test split, none of this data has ever been used for tuning. As of 2026-08-15 (rule 12): training exclusion is now date-split at kickoff cutoff 2026-08-11T09:00:00Z, not whole-league — this backtest population (all pre-cutoff) stays permanently protected and this reading never changes; fixtures kicking off at/after the cutoff feed the weekly retrain and accumulate as a separate, normal Live reading instead. Corrected 2026-08-18 (Addendum 24): a bug in computeUnifiedEdge (marginStrippedImplied read the wrong odds-object field names) silently NaN\'d every edge computation from Track A (2026-08-14) onward, so this reading was frozen at its pre-Track-A figures the whole time, not genuinely recomputed — the originally-reported posEdgeN=1,580/ROI -3.6% never actually reflected Track A\'s calFactor/margin-stripping correction. Corrected: posEdgeN=2,231, ROI -3.9% — still no confirmed edge (same conclusion as before), but the per-tier cells shifted; the 50-55% tier (n=322) still shows a CI excluding zero, now (-28.2%, -4.7%). Real-money impact of the bug: none — settings.paperTradeOnly/paperKellyFraction were never mutated by it (runEvCalibration()\'s auto-management explicitly skips roi===null leagues, confirmed via live settings read); this was a reporting-layer bug, not a bet-locking one (scoreOneFixture never calls computeUnifiedEdge).' },
   42:  { reliable: true, status: 'unseen_population', note: 'Single deliberate look completed 2026-08-11 against the full matched-odds population (n=3,338) — no train/test split, none of this data has ever been used for tuning. As of 2026-08-15 (rule 12): training exclusion is now date-split at kickoff cutoff 2026-08-11T09:00:00Z, not whole-league — this backtest population (all pre-cutoff) stays permanently protected and this reading never changes; fixtures kicking off at/after the cutoff feed the weekly retrain and accumulate as a separate, normal Live reading instead. Corrected 2026-08-18 (Addendum 24): a bug in computeUnifiedEdge (marginStrippedImplied read the wrong odds-object field names) silently NaN\'d every edge computation from Track A (2026-08-14) onward, so this reading was frozen at its pre-Track-A figures the whole time, not genuinely recomputed — the originally-reported posEdgeN=1,746/ROI +4.2% never actually reflected Track A\'s calFactor/margin-stripping correction. Corrected: posEdgeN=2,346, ROI +3.1% — still no confirmed edge (same conclusion as before), per-tier cells shifted; see /api/league-tier-matrix for the current per-cell breakdown. Real-money impact of the bug: none — settings.paperTradeOnly/paperKellyFraction were never mutated by it (runEvCalibration()\'s auto-management explicitly skips roi===null leagues, confirmed via live settings read); this was a reporting-layer bug, not a bet-locking one (scoreOneFixture never calls computeUnifiedEdge).' },
-  40:  { reliable: false, status: 'untested', note: 'Added 2026-08-19, paper-only, rule-10 protected from day one (TRAINING_HOLDOUT_LEAGUE_IDS) — zero scored data exists yet, no historical backfill has run. Deliberately NOT added to UNSEEN_POPULATION_LEAGUES yet, unlike League One/Two/Carabao Cup, whose addition to that set was itself a separate follow-up commit made only once a genuine backtest (Addendum 19) actually existed — adding it now would misleadingly imply real-backtest evidence that does not exist. Coverage confirmed: API-Sports league 40, Odds API soccer_efl_champ (Pinnacle/Marathon Bet/Matchbook all present), teamsMatch() 8/8 clean against a live sample.' },
+  40:  { reliable: false, status: 'backtested_no_edge', note: 'Single disciplined backtest completed 2026-08-19 on the full rule-10-protected, genuinely-unseen population (16 seasons, 8357 fixtures scored, 3460 matched with closing odds — 147 misses all no_event_match, pre-dating Odds API coverage). Calibration broadly overconfident in mid-high tiers (e.g. 60-65%: predicted 62.4% vs actual 50.7%; 70-75%: predicted 72.0% vs actual 56.9%). Pooled ROI on posEdge>=5% bets: n=2321 (clears rule-6 decision-grade floor), ROI -0.67%, 95% CI [-5.74%, +4.4%] — spans zero, no confirmed edge. Individual tier CIs are noisier (a couple non-zero-crossing, e.g. 35-40% and 65-70% positive) but none clear the ~300-400 floor on their own and some "significant" results are expected by chance across 10 tiers tested — not treated as decision-grade. Per calibration-rules rule 3 (single look, no re-testing) and the task brief, NOT added to UNSEEN_POPULATION_LEAGUES/historicalSource:"real-backtest" since the result does not confirm a genuine edge. Domestic-blend fix (2026-08-19) empirically verified correct on 93 real promotion/relegation boundary crossings before this backtest ran. Coverage: API-Sports league 40, Odds API soccer_efl_champ, teamsMatch() clean.' },
 };
 
 // Correction-layer-backtest readings (calibration-rules.md rules 13/14).
