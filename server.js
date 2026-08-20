@@ -8,6 +8,7 @@ const fs       = require('fs');
 const cron     = require('node-cron');
 const { v4: uuidv4 } = require('uuid');
 const session  = require('express-session');
+const FileStore = require('session-file-store')(session);
 const crypto   = require('crypto');
 
 const {
@@ -3536,7 +3537,14 @@ app.use(express.urlencoded({ extended: true }));
 // the forwarded HTTPS and only marks the cookie Secure when actually in production.
 app.set('trust proxy', 1);
 
+// File-backed instead of express-session's default MemoryStore — sessions written
+// under DATA_DIR (the same persistent disk every other JSON file already lives on)
+// so a server restart (crash, redeploy) no longer silently logs everyone out. This
+// was confirmed live as the cause of repeated mid-session 401s during 2026-08-19's
+// backfill work — every restart wiped MemoryStore's in-process session map, even
+// though nothing about the session itself had actually expired.
 app.use(session({
+  store: new FileStore({ path: path.join(DATA_DIR, 'sessions'), retries: 1, logFn: () => {} }),
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
