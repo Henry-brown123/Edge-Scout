@@ -2315,6 +2315,12 @@ const API_BASE = (window.location.hostname === 'localhost' || window.location.ho
 
 async function apiFetch(url, opts = {}) {
   const r = await fetch(API_BASE + url, opts);
+  // A 401 mid-session (server restarted and wiped the in-memory session store —
+  // see connect.session() MemoryStore) previously just threw like any other error,
+  // surfacing as an easy-to-miss toast while the page kept showing stale data behind
+  // it. Reloading goes straight back to the login gate instead of leaving someone
+  // staring at a half-broken page not realizing they need to log back in.
+  if (r.status === 401) { location.reload(); throw new Error('Session expired — reloading'); }
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
 }
@@ -5404,6 +5410,12 @@ document.addEventListener('DOMContentLoaded', () => {
   loadState();
   checkApiStatus();
   setInterval(checkApiStatus, 300000);
+  // Auto-refresh — previously loadState() only ran once, on initial page load, so a
+  // tab left open for hours kept showing whatever was current at load time even as
+  // watching-card scores changed underneath (morning scan, hourly rescan, T-60 lock
+  // re-score). Skips the fetch while the tab isn't visible, so a background tab
+  // doesn't keep polling a server that's already had a rough night.
+  setInterval(() => { if (document.visibilityState === 'visible') loadState(); }, 120000);
 });
 
 // ─── DETAIL DRAWER ────────────────────────────────────────────────────────────
