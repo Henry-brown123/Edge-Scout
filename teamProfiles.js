@@ -137,6 +137,37 @@ function deriveContext(fixtures) {
   return best ? best[0] : 'club_domestic';
 }
 
+// ─── DORMANT (2026-08-21, overnight Part 4) ────────────────────────────────────
+// Not called from applyTeamProfileModifiers or anywhere else yet. Proposed
+// replacement for the flat `anomalyScore * 0.5` weight used when applying an H2H
+// anomaly (see applyTeamProfileModifiers, "2. Opposition anomaly"). That flat
+// weight is applied identically to every anomaly that clears the matches
+// threshold (4 or 6, depending on competition type) — a pair with exactly 6
+// meetings and a pair with 20+ meetings both get the same 50% confidence, even
+// though the 20-meeting sample is genuinely more reliable (binomial variance
+// shrinks with n). A recent isolate-test found this modifier fires often enough
+// to read (n=1,945, "indicative not thin" per the 2026-08-19/20 overnight
+// report) but hasn't yet been confirmed as a real edge — this is a concrete,
+// testable hypothesis for why: the flat weight either over-trusts thin samples
+// or under-trusts thick ones, diluting whatever real signal exists.
+//
+// computeH2HAnomalyWeight(matches, k) implements the same James-Stein /
+// empirical-Bayes shrinkage principle already used elsewhere in this codebase
+// (see shrinkage.js) — weight -> 1 as matches grows large (trust the raw
+// anomaly), weight -> 0 as matches shrinks toward the threshold floor (regress
+// toward "no anomaly"). k=6 is a BACKWARD-COMPATIBLE default only (weight(6, 6)
+// = 0.5, matching the current flat value exactly at the more common 6-meeting
+// threshold) — NOT a fitted value. Rule 13 applies: before this replaces the
+// flat weight, k should be fit on a train-only split of the n=1,945 population
+// via the same method-of-moments approach shrinkage.js uses (k = within-pair
+// binomial variance / between-pair variance of anomalyScore, estimated across
+// all significant anomalies in the train split), then tested once on a
+// held-out split — a single disciplined look, not this hand-picked default.
+function computeH2HAnomalyWeight(matches, k = 6) {
+  if (!matches || matches <= 0) return 0;
+  return matches / (matches + k);
+}
+
 // ─── FULL PROFILE BUILD ───────────────────────────────────────────────────────
 // Computes all metrics from scratch from a complete fixture history.
 // Called during morning scan with all loaded formFixtures.
@@ -863,4 +894,5 @@ module.exports = {
   LEAGUE_AVG_AWAY_WIN_RATE,
   CONTEXT_THRESHOLDS,
   THRESHOLDS,
+  computeH2HAnomalyWeight,
 };
