@@ -1868,6 +1868,19 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
       successScore: best.successScore,
       modelProb:    best.modelProb,
       calibratedProb: best.calibratedProb,
+      // Lock-time snapshot capture (2026-08-21, overnight Part 5) — the watching
+      // card's own reading right before this fresh re-score overwrote it, so a
+      // large swing (e.g. the Cambridge United case) is visible on the bet record
+      // itself afterwards, not just in the moment. Purely additive audit data —
+      // doesn't feed Kelly/edge/stake or any scoring path, just captured from the
+      // watchingEntry object passed into this function before it's discarded
+      // (the watching-list entry gets removed once this call succeeds). Absent
+      // (null) for bets that didn't originate from the watching-card flow, e.g.
+      // the automated cron path passes no watchingEntry.projectedScore of its own
+      // beyond what's already here, so this degrades gracefully either way.
+      watchingStageScore:     watchingEntry?.projectedScore ?? null,
+      watchingStageModelProb: watchingEntry?.modelProb ?? null,
+      watchingStageScoredAt:  watchingEntry?.scoredAt ?? null,
       modelVersion: scored.modelVersion,
       correctionVersion: scored.correctionVersion,
       bookOdds:     best.bookOdds,
