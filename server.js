@@ -5178,6 +5178,28 @@ const TEAM_NICKNAME_ALIASES = {
   // miss it too. Found proactively by cross-checking every Round of 128 +
   // Preliminary Round fixture before go-live, not by tripping over it live.
   'qpr': 'queens park rangers',
+  // Confirmed 2026-08-21 — Champions League: api-football's "FK Crvena Zvezda"
+  // (the club's official/native name) vs the Odds API's "Red Star Belgrade" (the
+  // name essentially every English-language book uses). No shared substring or
+  // 4+ char token at all, unlike the aliases above — completely different words.
+  // Traced from a real closing-odds backfill run (2026-08-21) that also
+  // surfaced a Man City vs FK Crvena Zvezda 2023-09-19 fixture failing to match
+  // against a confirmed-present 14-event response for that exact date/sport —
+  // ruling out "no market exists" as the explanation. This was investigated as
+  // part of the flagged-but-unchecked "Champions League 0%-match" hypothesis
+  // (originally suspected to be a UEFA 2024-25 reformat data-shape issue) — the
+  // reformat hypothesis was NOT confirmed; the bulk of the observed 0% rate in
+  // the sample checked was genuinely-uncovered qualifying-round fixtures
+  // (expected, not a bug — minor clubs with no real betting market), with this
+  // alias gap as the one concrete, fixable contributor found among the
+  // main-tournament fixtures actually checked. teamsMatch() is used in both live
+  // (fetchOddsForLeague-adjacent) and backfill paths — this fix is narrow and
+  // mechanical (a name mapping, not a scoring/methodology change) and follows
+  // the exact established pattern of every other entry in this table, but it
+  // does touch a live-odds-matching path, so flagged for review rather than
+  // assumed automatically in-scope for the "infrastructure/investigation only"
+  // constraint — see the 2026-08-20/21 overnight report.
+  'crvena zvezda': 'red star belgrade',
 };
 function resolveTeamAlias(normalised) {
   return TEAM_NICKNAME_ALIASES[normalised] || normalised;
