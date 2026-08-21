@@ -8000,6 +8000,28 @@ let _serverStatusCache   = null;
 let _serverStatusCacheAt = 0;
 const SERVER_STATUS_CACHE_MS = 30000;
 
+// mtime-aware cache for backfill-historical.json specifically (2026-08-20, overnight
+// Part 1) — the 30s full-response cache above already re-parses this ~64MB+ file on
+// every expiry regardless of whether it actually changed. That file is only ever
+// written by an actual backfill/optimisation run (rare — not on a fixed cadence), so
+// caching on its mtime instead means steady-state polling of this endpoint pays the
+// full parse cost only when the population genuinely changed, not every 30s under any
+// sustained polling traffic. Confirmed live as a real, if secondary, contributor to
+// last night's OOM crash-looping (readJSON has no caching of its own — every call is
+// a fresh full deserialize) — the primary cause remains the Starter-tier 512MB ceiling
+// itself, see the overnight report for the full breakdown. Read-only, diagnostic-only,
+// no scoring/betting code path touches this.
+let _histFileCache = { mtimeMs: null, data: null };
+function readHistoricalCached() {
+  const p = path.join(DATA_DIR, 'backfill-historical.json');
+  let mtimeMs;
+  try { mtimeMs = fs.statSync(p).mtimeMs; } catch { return null; }
+  if (_histFileCache.data && _histFileCache.mtimeMs === mtimeMs) return _histFileCache.data;
+  const data = readJSON('backfill-historical.json');
+  _histFileCache = { mtimeMs, data };
+  return data;
+}
+
 app.get('/api/server-status', async (_req, res) => {
   if (_serverStatusCache && (Date.now() - _serverStatusCacheAt) < SERVER_STATUS_CACHE_MS) {
     return res.json({
@@ -8022,7 +8044,7 @@ app.get('/api/server-status', async (_req, res) => {
     } catch {}
   }
 
-  const hist    = readJSON('backfill-historical.json');
+  const hist    = readHistoricalCached();
   const stats   = readJSON('fixture-stats.json') || {};
   const lineups = getLineups(); // already cached in-memory (see getLineups) — no raw re-read needed
   const profiles = require('./teamProfiles').readProfiles();
