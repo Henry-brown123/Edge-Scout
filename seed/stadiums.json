@@ -1,96 +1,1086 @@
 {
   "venues": {
-    "SoFi Stadium":                    { "lat": 33.9535,  "lon": -118.3392 },
-    "MetLife Stadium":                 { "lat": 40.8135,  "lon": -74.0745  },
-    "AT&T Stadium":                    { "lat": 32.7480,  "lon": -97.0929  },
-    "NRG Stadium":                     { "lat": 29.6847,  "lon": -95.4107  },
-    "Levi's Stadium":                  { "lat": 37.4032,  "lon": -121.9698 },
-    "Lincoln Financial Field":         { "lat": 39.9008,  "lon": -75.1675  },
-    "Arrowhead Stadium":               { "lat": 39.0489,  "lon": -94.4839  },
-    "Lumen Field":                     { "lat": 47.5952,  "lon": -122.3316 },
-    "Hard Rock Stadium":               { "lat": 25.9580,  "lon": -80.2389  },
-    "Gillette Stadium":                { "lat": 42.0909,  "lon": -71.2643  },
-    "BC Place":                        { "lat": 49.2767,  "lon": -123.1118 },
-    "BMO Field":                       { "lat": 43.6332,  "lon": -79.4187  },
-    "Estadio Azteca":                  { "lat": 19.3030,  "lon": -99.1503  },
-    "Estadio BBVA":                    { "lat": 25.6694,  "lon": -100.2452 },
-    "Estadio Akron":                   { "lat": 20.7067,  "lon": -103.4601 },
-    "Anfield":                         { "lat": 53.4308,  "lon": -2.9608   },
-    "Old Trafford":                    { "lat": 53.4631,  "lon": -2.2913   },
-    "Stamford Bridge":                 { "lat": 51.4816,  "lon": -0.1910   },
-    "Emirates Stadium":                { "lat": 51.5549,  "lon": -0.1084   },
-    "Etihad Stadium":                  { "lat": 53.4831,  "lon": -2.2004   },
-    "Tottenham Hotspur Stadium":       { "lat": 51.6044,  "lon": -0.0665   },
-    "Villa Park":                      { "lat": 52.5090,  "lon": -1.8847   },
-    "St. James' Park":                 { "lat": 54.9756,  "lon": -1.6218   },
-    "Goodison Park":                   { "lat": 53.4388,  "lon": -2.9662   },
-    "Molineux Stadium":                { "lat": 52.5902,  "lon": -2.1302   },
-    "London Stadium":                  { "lat": 51.5386,  "lon": -0.0169   },
-    "Selhurst Park":                   { "lat": 51.3983,  "lon": -0.0853   },
-    "King Power Stadium":              { "lat": 52.6204,  "lon": -1.1421   },
-    "Vitality Stadium":                { "lat": 50.7354,  "lon": -1.8380   },
-    "Gtech Community Stadium":         { "lat": 51.4882,  "lon": -0.3088   },
-    "Elland Road":                     { "lat": 53.7774,  "lon": -1.5721   },
-    "Bramall Lane":                    { "lat": 53.3703,  "lon": -1.4705   },
-    "St. Mary's Stadium":              { "lat": 50.9058,  "lon": -1.3914   },
-    "Santiago Bernabeu":               { "lat": 40.4531,  "lon": -3.6883   },
-    "Spotify Camp Nou":                { "lat": 41.3809,  "lon": 2.1228    },
-    "Camp Nou":                        { "lat": 41.3809,  "lon": 2.1228    },
-    "Civitas Metropolitano":           { "lat": 40.4361,  "lon": -3.5994   },
-    "Estadio Metropolitano":           { "lat": 40.4361,  "lon": -3.5994   },
-    "Mestalla":                        { "lat": 39.4750,  "lon": -0.3583   },
-    "San Mames":                       { "lat": 43.2640,  "lon": -2.9494   },
-    "Estadio de la Ceramica":          { "lat": 39.9441,  "lon": -0.1036   },
-    "Ramon Sanchez-Pizjuan":           { "lat": 37.3842,  "lon": -5.9705   },
-    "Estadio Benito Villamarin":       { "lat": 37.3567,  "lon": -5.9811   },
-    "Allianz Arena":                   { "lat": 48.2188,  "lon": 11.6248   },
-    "Signal Iduna Park":               { "lat": 51.4926,  "lon": 7.4518    },
-    "Red Bull Arena":                  { "lat": 51.3457,  "lon": 12.3483   },
-    "Deutsche Bank Park":              { "lat": 50.0683,  "lon": 8.6455    },
-    "MHPArena":                        { "lat": 48.7924,  "lon": 9.2322    },
-    "San Siro":                        { "lat": 45.4781,  "lon": 9.1239    },
-    "Giuseppe Meazza":                 { "lat": 45.4781,  "lon": 9.1239    },
-    "Juventus Stadium":                { "lat": 45.1096,  "lon": 7.6412    },
-    "Allianz Stadium":                 { "lat": 45.1096,  "lon": 7.6412    },
-    "Stadio Olimpico":                 { "lat": 41.9341,  "lon": 12.4547   },
-    "Stadio Diego Armando Maradona":   { "lat": 40.8279,  "lon": 14.1933   },
-    "Parc des Princes":                { "lat": 48.8414,  "lon": 2.2530    },
-    "Stade Velodrome":                 { "lat": 43.2697,  "lon": 5.3957    },
-    "Groupama Stadium":                { "lat": 45.7654,  "lon": 4.9820    },
-    "Stade Pierre-Mauroy":             { "lat": 50.6124,  "lon": 3.1301    }
+    "SoFi Stadium": {
+      "lat": 33.9535,
+      "lon": -118.3392
+    },
+    "MetLife Stadium": {
+      "lat": 40.8135,
+      "lon": -74.0745
+    },
+    "AT&T Stadium": {
+      "lat": 32.748,
+      "lon": -97.0929
+    },
+    "NRG Stadium": {
+      "lat": 29.6847,
+      "lon": -95.4107
+    },
+    "Levi's Stadium": {
+      "lat": 37.4032,
+      "lon": -121.9698
+    },
+    "Lincoln Financial Field": {
+      "lat": 39.9008,
+      "lon": -75.1675
+    },
+    "Arrowhead Stadium": {
+      "lat": 39.0489,
+      "lon": -94.4839
+    },
+    "Lumen Field": {
+      "lat": 47.5952,
+      "lon": -122.3316
+    },
+    "Hard Rock Stadium": {
+      "lat": 25.958,
+      "lon": -80.2389
+    },
+    "Gillette Stadium": {
+      "lat": 42.0909,
+      "lon": -71.2643
+    },
+    "BC Place": {
+      "lat": 49.2767,
+      "lon": -123.1118
+    },
+    "BMO Field": {
+      "lat": 43.6332,
+      "lon": -79.4187
+    },
+    "Estadio Azteca": {
+      "lat": 19.303,
+      "lon": -99.1503
+    },
+    "Estadio BBVA": {
+      "lat": 25.6694,
+      "lon": -100.2452
+    },
+    "Estadio Akron": {
+      "lat": 20.7067,
+      "lon": -103.4601
+    },
+    "Anfield": {
+      "lat": 53.4308,
+      "lon": -2.9608
+    },
+    "Old Trafford": {
+      "lat": 53.4631,
+      "lon": -2.2913
+    },
+    "Stamford Bridge": {
+      "lat": 51.4816,
+      "lon": -0.191
+    },
+    "Emirates Stadium": {
+      "lat": 51.5549,
+      "lon": -0.1084
+    },
+    "Etihad Stadium": {
+      "lat": 53.4831,
+      "lon": -2.2004
+    },
+    "Tottenham Hotspur Stadium": {
+      "lat": 51.6044,
+      "lon": -0.0665
+    },
+    "Villa Park": {
+      "lat": 52.509,
+      "lon": -1.8847
+    },
+    "St. James' Park": {
+      "lat": 54.9756,
+      "lon": -1.6218
+    },
+    "Goodison Park": {
+      "lat": 53.4388,
+      "lon": -2.9662
+    },
+    "Molineux Stadium": {
+      "lat": 52.5902,
+      "lon": -2.1302
+    },
+    "London Stadium": {
+      "lat": 51.5386,
+      "lon": -0.0169
+    },
+    "Selhurst Park": {
+      "lat": 51.3983,
+      "lon": -0.0853
+    },
+    "King Power Stadium": {
+      "lat": 52.6204,
+      "lon": -1.1421
+    },
+    "Vitality Stadium": {
+      "lat": 50.7354,
+      "lon": -1.838
+    },
+    "Gtech Community Stadium": {
+      "lat": 51.4882,
+      "lon": -0.3088
+    },
+    "Elland Road": {
+      "lat": 53.7774,
+      "lon": -1.5721
+    },
+    "Bramall Lane": {
+      "lat": 53.3703,
+      "lon": -1.4705
+    },
+    "St. Mary's Stadium": {
+      "lat": 50.9058,
+      "lon": -1.3914
+    },
+    "Santiago Bernabeu": {
+      "lat": 40.4531,
+      "lon": -3.6883
+    },
+    "Spotify Camp Nou": {
+      "lat": 41.3809,
+      "lon": 2.1228
+    },
+    "Camp Nou": {
+      "lat": 41.3809,
+      "lon": 2.1228
+    },
+    "Civitas Metropolitano": {
+      "lat": 40.4361,
+      "lon": -3.5994
+    },
+    "Estadio Metropolitano": {
+      "lat": 40.4361,
+      "lon": -3.5994
+    },
+    "Mestalla": {
+      "lat": 39.475,
+      "lon": -0.3583
+    },
+    "San Mames": {
+      "lat": 43.264,
+      "lon": -2.9494
+    },
+    "Estadio de la Ceramica": {
+      "lat": 39.9441,
+      "lon": -0.1036
+    },
+    "Ramon Sanchez-Pizjuan": {
+      "lat": 37.3842,
+      "lon": -5.9705
+    },
+    "Estadio Benito Villamarin": {
+      "lat": 37.3567,
+      "lon": -5.9811
+    },
+    "Allianz Arena": {
+      "lat": 48.2188,
+      "lon": 11.6248
+    },
+    "Signal Iduna Park": {
+      "lat": 51.4926,
+      "lon": 7.4518
+    },
+    "Red Bull Arena": {
+      "lat": 51.3457,
+      "lon": 12.3483
+    },
+    "Deutsche Bank Park": {
+      "lat": 50.0683,
+      "lon": 8.6455
+    },
+    "MHPArena": {
+      "lat": 48.7924,
+      "lon": 9.2322
+    },
+    "San Siro": {
+      "lat": 45.4781,
+      "lon": 9.1239
+    },
+    "Giuseppe Meazza": {
+      "lat": 45.4781,
+      "lon": 9.1239
+    },
+    "Juventus Stadium": {
+      "lat": 45.1096,
+      "lon": 7.6412
+    },
+    "Allianz Stadium": {
+      "lat": 45.1096,
+      "lon": 7.6412
+    },
+    "Stadio Olimpico": {
+      "lat": 41.9341,
+      "lon": 12.4547
+    },
+    "Stadio Diego Armando Maradona": {
+      "lat": 40.8279,
+      "lon": 14.1933
+    },
+    "Parc des Princes": {
+      "lat": 48.8414,
+      "lon": 2.253
+    },
+    "Stade Velodrome": {
+      "lat": 43.2697,
+      "lon": 5.3957
+    },
+    "Groupama Stadium": {
+      "lat": 45.7654,
+      "lon": 4.982
+    },
+    "Stade Pierre-Mauroy": {
+      "lat": 50.6124,
+      "lon": 3.1301
+    },
+    "Amex Stadium": {
+      "lat": 50.8617,
+      "lon": -0.0837
+    },
+    "Turf Moor": {
+      "lat": 53.789,
+      "lon": -2.2308
+    },
+    "Hill Dickinson Stadium": {
+      "lat": 53.4251,
+      "lon": -3.0028
+    },
+    "Craven Cottage": {
+      "lat": 51.4749,
+      "lon": -0.2216
+    },
+    "Portman Road": {
+      "lat": 52.0552,
+      "lon": 1.145
+    },
+    "City Ground": {
+      "lat": 52.9399,
+      "lon": -1.1327
+    },
+    "St Andrew's": {
+      "lat": 52.4758,
+      "lon": -1.8683
+    },
+    "Ewood Park": {
+      "lat": 53.7285,
+      "lon": -2.4894
+    },
+    "University of Bolton Stadium": {
+      "lat": 53.5786,
+      "lon": -2.5357
+    },
+    "Ashton Gate": {
+      "lat": 51.44,
+      "lon": -2.6203
+    },
+    "Cardiff City Stadium": {
+      "lat": 51.4726,
+      "lon": -3.2033
+    },
+    "The Valley": {
+      "lat": 51.4861,
+      "lon": 0.0364
+    },
+    "Pride Park": {
+      "lat": 52.9151,
+      "lon": -1.4477
+    },
+    "Deepdale": {
+      "lat": 53.7729,
+      "lon": -2.6883
+    },
+    "The Den": {
+      "lat": 51.486,
+      "lon": -0.0503
+    },
+    "Riverside Stadium": {
+      "lat": 54.5786,
+      "lon": -1.2169
+    },
+    "Carrow Road": {
+      "lat": 52.6222,
+      "lon": 1.3089
+    },
+    "Loftus Road": {
+      "lat": 51.509,
+      "lon": -0.232
+    },
+    "Fratton Park": {
+      "lat": 50.7961,
+      "lon": -1.0639
+    },
+    "New York Stadium": {
+      "lat": 53.4302,
+      "lon": -1.3646
+    },
+    "Hillsborough": {
+      "lat": 53.4111,
+      "lon": -1.4988
+    },
+    "Stadium of Light": {
+      "lat": 54.9144,
+      "lon": -1.3883
+    },
+    "Vicarage Road": {
+      "lat": 51.6497,
+      "lon": -0.4014
+    },
+    "The Hawthorns": {
+      "lat": 52.5091,
+      "lon": -1.9639
+    },
+    "Racecourse Ground": {
+      "lat": 53.0466,
+      "lon": -3.0021
+    },
+    "Oakwell": {
+      "lat": 53.5527,
+      "lon": -1.4658
+    },
+    "Gigg Lane": {
+      "lat": 53.5931,
+      "lon": -2.3305
+    },
+    "Kenilworth Road": {
+      "lat": 51.8844,
+      "lon": -0.4317
+    },
+    "Weston Homes Stadium": {
+      "lat": 52.6339,
+      "lon": -1.1319
+    },
+    "Home Park": {
+      "lat": 50.3883,
+      "lon": -4.1517
+    },
+    "Sincil Bank": {
+      "lat": 53.2222,
+      "lon": -0.5361
+    },
+    "Meadow Lane": {
+      "lat": 52.9497,
+      "lon": -1.1272
+    },
+    "London Road": {
+      "lat": 52.5764,
+      "lon": -0.241
+    },
+    "Adams Park": {
+      "lat": 51.6304,
+      "lon": -0.8006
+    },
+    "Priestfield Stadium": {
+      "lat": 51.3883,
+      "lon": 0.5439
+    },
+    "One Call Stadium": {
+      "lat": 53.1497,
+      "lon": -1.1975
+    },
+    "Vale Park": {
+      "lat": 53.0575,
+      "lon": -2.1997
+    },
+    "Gresty Road": {
+      "lat": 53.0836,
+      "lon": -2.4531
+    },
+    "Edgeley Park": {
+      "lat": 53.4008,
+      "lon": -2.1567
+    },
+    "Prenton Park": {
+      "lat": 53.3728,
+      "lon": -3.0164
+    },
+    "Boundary Park": {
+      "lat": 53.5556,
+      "lon": -2.1289
+    },
+    "Blundell Park": {
+      "lat": 53.5747,
+      "lon": -0.0972
+    },
+    "Roots Hall": {
+      "lat": 51.5636,
+      "lon": 0.7069
+    },
+    "Brunton Park": {
+      "lat": 54.8992,
+      "lon": -2.9503
+    },
+    "Bootham Crescent": {
+      "lat": 53.9667,
+      "lon": -1.0833
+    },
+    "Broadfield Stadium": {
+      "lat": 51.1197,
+      "lon": -0.1725
+    },
+    "St James Park Exeter": {
+      "lat": 50.7256,
+      "lon": -3.5147
+    },
+    "Glanford Park": {
+      "lat": 53.5808,
+      "lon": -0.6394
+    },
+    "Victoria Road Dagenham": {
+      "lat": 51.5497,
+      "lon": 0.1547
+    },
+    "Whaddon Road": {
+      "lat": 51.9083,
+      "lon": -2.0653
+    },
+    "New Lawn": {
+      "lat": 51.6944,
+      "lon": -2.2372
+    },
+    "Highbury Stadium Fleetwood": {
+      "lat": 53.9219,
+      "lon": -3.0044
+    },
+    "Spotland Stadium": {
+      "lat": 53.6178,
+      "lon": -2.1494
+    },
+    "Bescot Stadium": {
+      "lat": 52.5883,
+      "lon": -1.9908
+    },
+    "Pirelli Stadium": {
+      "lat": 52.8225,
+      "lon": -1.6272
+    },
+    "New Meadow": {
+      "lat": 52.7156,
+      "lon": -2.7669
+    },
+    "Sixfields Stadium": {
+      "lat": 52.2358,
+      "lon": -0.9391
+    },
+    "Colchester Community Stadium": {
+      "lat": 51.9086,
+      "lon": 0.9264
+    },
+    "Wham Stadium": {
+      "lat": 53.7511,
+      "lon": -2.3739
+    },
+    "Select Security Stadium": {
+      "lat": 53.7511,
+      "lon": -2.4894
+    },
+    "Brisbane Road": {
+      "lat": 51.5619,
+      "lon": -0.0086
+    },
+    "Reale Arena": {
+      "lat": 43.3017,
+      "lon": -1.9756
+    },
+    "Balaidos": {
+      "lat": 42.2119,
+      "lon": -8.7394
+    },
+    "Estadio de Vallecas": {
+      "lat": 40.3917,
+      "lon": -3.6608
+    },
+    "Estadio de Mendizorroza": {
+      "lat": 42.8419,
+      "lon": -2.6883
+    },
+    "El Sadar": {
+      "lat": 42.7967,
+      "lon": -1.6367
+    },
+    "Estadio Municipal de Butarque": {
+      "lat": 40.3308,
+      "lon": -3.7719
+    },
+    "Estadio Municipal de Ipurua": {
+      "lat": 43.1867,
+      "lon": -2.4917
+    },
+    "Nuevo Los Carmenes": {
+      "lat": 37.1469,
+      "lon": -3.5992
+    },
+    "Estadi Mallorca Son Moix": {
+      "lat": 39.5911,
+      "lon": 2.6317
+    },
+    "Estadio de Gran Canaria": {
+      "lat": 28.0997,
+      "lon": -15.4586
+    },
+    "Coliseum Alfonso Perez": {
+      "lat": 40.3253,
+      "lon": -3.6069
+    },
+    "Nuevo Arcangel": {
+      "lat": 37.8756,
+      "lon": -4.7847
+    },
+    "Estadio Nuevo Colombino": {
+      "lat": 37.2622,
+      "lon": -6.935
+    },
+    "Riazor": {
+      "lat": 43.3692,
+      "lon": -8.4189
+    },
+    "Estadio Municipal de Anduva": {
+      "lat": 42.6144,
+      "lon": -2.4467
+    },
+    "Heliodoro Rodriguez Lopez": {
+      "lat": 28.4664,
+      "lon": -16.2528
+    },
+    "Stadio Artemio Franchi": {
+      "lat": 43.7808,
+      "lon": 11.2822
+    },
+    "Gewiss Stadium": {
+      "lat": 45.7092,
+      "lon": 9.6803
+    },
+    "Stadio Renato Dall'Ara": {
+      "lat": 44.4925,
+      "lon": 11.3092
+    },
+    "Stadio Luigi Ferraris": {
+      "lat": 44.4164,
+      "lon": 8.9528
+    },
+    "Stadio Bentegodi": {
+      "lat": 45.4353,
+      "lon": 10.9686
+    },
+    "Stadio Via del Mare": {
+      "lat": 40.3556,
+      "lon": 18.1739
+    },
+    "Stadio Olimpico Grande Torino": {
+      "lat": 45.0419,
+      "lon": 7.6497
+    },
+    "Unipol Domus": {
+      "lat": 39.2039,
+      "lon": 9.1361
+    },
+    "Stadio Arechi": {
+      "lat": 40.6547,
+      "lon": 14.7897
+    },
+    "Stadio Carlo Castellani": {
+      "lat": 43.5511,
+      "lon": 10.5478
+    },
+    "Stadio Ennio Tardini": {
+      "lat": 44.7994,
+      "lon": 10.3467
+    },
+    "Dacia Arena": {
+      "lat": 46.0808,
+      "lon": 13.2038
+    },
+    "Stadio Marc'Antonio Bentegodi": {
+      "lat": 45.4353,
+      "lon": 10.9686
+    },
+    "Stadio Comunale Monigo": {
+      "lat": 45.6597,
+      "lon": 12.2492
+    },
+    "Stadio Adriatico": {
+      "lat": 42.4544,
+      "lon": 14.2136
+    },
+    "Stadio San Nicola": {
+      "lat": 41.0783,
+      "lon": 16.8078
+    },
+    "Stadio Ceravolo": {
+      "lat": 38.9114,
+      "lon": 16.5847
+    },
+    "Stadio Barbera": {
+      "lat": 38.1758,
+      "lon": 13.3081
+    },
+    "Stadio Braglia": {
+      "lat": 44.6497,
+      "lon": 10.9256
+    },
+    "Stadio Zini": {
+      "lat": 45.1381,
+      "lon": 9.9911
+    },
+    "BayArena": {
+      "lat": 51.0381,
+      "lon": 7.0025
+    },
+    "Volkswagen Arena": {
+      "lat": 52.4328,
+      "lon": 10.8039
+    },
+    "Veltins-Arena": {
+      "lat": 51.5547,
+      "lon": 7.0678
+    },
+    "Borussia-Park": {
+      "lat": 51.1747,
+      "lon": 6.3853
+    },
+    "Weserstadion": {
+      "lat": 53.0664,
+      "lon": 8.8378
+    },
+    "Rhein-Neckar-Arena": {
+      "lat": 49.2381,
+      "lon": 8.8878
+    },
+    "Vonovia Ruhrstadion": {
+      "lat": 51.4867,
+      "lon": 7.2286
+    },
+    "Mewa Arena": {
+      "lat": 49.9836,
+      "lon": 8.2242
+    },
+    "Europa-Park Stadion": {
+      "lat": 47.9825,
+      "lon": 7.5964
+    },
+    "Volksparkstadion": {
+      "lat": 53.5872,
+      "lon": 9.8986
+    },
+    "Merkur Spiel-Arena": {
+      "lat": 51.2611,
+      "lon": 6.7331
+    },
+    "Stadion An der Alten Forsterei": {
+      "lat": 52.4572,
+      "lon": 13.5678
+    },
+    "Max-Morlock-Stadion": {
+      "lat": 49.4258,
+      "lon": 11.1247
+    },
+    "Wildparkstadion": {
+      "lat": 49.0247,
+      "lon": 8.4297
+    },
+    "Millerntor-Stadion": {
+      "lat": 53.5544,
+      "lon": 9.9678
+    },
+    "Holstein-Stadion": {
+      "lat": 54.3369,
+      "lon": 10.1425
+    },
+    "Allianz Riviera": {
+      "lat": 43.7053,
+      "lon": 7.1928
+    },
+    "Stade Louis II": {
+      "lat": 43.7276,
+      "lon": 7.4153
+    },
+    "Roazhon Park": {
+      "lat": 48.1075,
+      "lon": -1.7128
+    },
+    "Stade de la Beaujoire": {
+      "lat": 47.2558,
+      "lon": -1.5253
+    },
+    "Stade Geoffroy-Guichard": {
+      "lat": 45.4608,
+      "lon": 4.39
+    },
+    "Stade de la Mosson": {
+      "lat": 43.6225,
+      "lon": 3.8125
+    },
+    "Matmut Atlantique": {
+      "lat": 44.8978,
+      "lon": -0.5619
+    },
+    "Stade Bollaert-Delelis": {
+      "lat": 50.4322,
+      "lon": 2.7736
+    },
+    "Stade Francis-Le Ble": {
+      "lat": 48.4025,
+      "lon": -4.4514
+    },
+    "Stade de Reims": {
+      "lat": 49.2544,
+      "lon": 4.0347
+    },
+    "Stade Raymond Kopa": {
+      "lat": 49.0658,
+      "lon": 1.1042
+    },
+    "Stadium de Toulouse": {
+      "lat": 43.5828,
+      "lon": 1.4342
+    },
+    "Stade de l'Aube": {
+      "lat": 48.3025,
+      "lon": 4.0967
+    },
+    "Stade Marcel-Picot": {
+      "lat": 48.6764,
+      "lon": 6.1786
+    },
+    "MMArena": {
+      "lat": 47.9581,
+      "lon": 0.1928
+    },
+    "Stade Gaston Gerard": {
+      "lat": 47.3122,
+      "lon": 5.0364
+    },
+    "Stade Auguste-Bonal": {
+      "lat": 47.5931,
+      "lon": 6.8319
+    },
+    "Stade de l'Abbe-Deschamps": {
+      "lat": 47.7986,
+      "lon": 3.5983
+    },
+    "Stade Michel d'Ornano": {
+      "lat": 49.1783,
+      "lon": -0.3839
+    },
+    "Stade Jean-Bouin": {
+      "lat": 47.4736,
+      "lon": -0.5397
+    },
+    "Johan Cruijff Arena": {
+      "lat": 52.3143,
+      "lon": 4.9419
+    },
+    "De Kuip": {
+      "lat": 51.8936,
+      "lon": 4.5231
+    },
+    "Philips Stadion": {
+      "lat": 51.4417,
+      "lon": 5.4675
+    },
+    "Az Stadion": {
+      "lat": 52.6122,
+      "lon": 4.7461
+    },
+    "Grolsch Veste": {
+      "lat": 52.2364,
+      "lon": 6.8639
+    },
+    "Euroborg": {
+      "lat": 53.2119,
+      "lon": 6.5808
+    },
+    "GelreDome": {
+      "lat": 51.9878,
+      "lon": 5.8994
+    },
+    "Stadion Galgenwaard": {
+      "lat": 52.0778,
+      "lon": 5.1372
+    },
+    "MAC3PARK Stadion": {
+      "lat": 52.5044,
+      "lon": 6.0839
+    },
+    "Cars Jeans Stadion": {
+      "lat": 52.0808,
+      "lon": 4.33
+    },
+    "Kras Stadion": {
+      "lat": 52.0908,
+      "lon": 5.1214
+    },
+    "De Vijverberg": {
+      "lat": 51.9789,
+      "lon": 6.1058
+    },
+    "Fortuna Sittard Stadion": {
+      "lat": 50.9986,
+      "lon": 5.8578
+    },
+    "De Goffert": {
+      "lat": 51.8286,
+      "lon": 5.8664
+    },
+    "Abe Lenstra Stadion": {
+      "lat": 52.9603,
+      "lon": 5.95
+    },
+    "Kuip Sparta": {
+      "lat": 51.9192,
+      "lon": 4.4506
+    },
+    "Yanmar Stadion": {
+      "lat": 51.4386,
+      "lon": 6.1631
+    },
+    "Frans Heesen Stadion": {
+      "lat": 51.5697,
+      "lon": 5.0864
+    },
+    "Estadio da Luz": {
+      "lat": 38.7527,
+      "lon": -9.1847
+    },
+    "Estadio Jose Alvalade": {
+      "lat": 38.7614,
+      "lon": -9.1608
+    },
+    "Estadio do Dragao": {
+      "lat": 41.1617,
+      "lon": -8.5836
+    },
+    "Estadio Municipal de Braga": {
+      "lat": 41.5631,
+      "lon": -8.4025
+    },
+    "Estadio D. Afonso Henriques": {
+      "lat": 41.4547,
+      "lon": -8.2939
+    },
+    "Estadio Municipal de Aveiro": {
+      "lat": 40.635,
+      "lon": -8.6414
+    },
+    "Estadio Algarve": {
+      "lat": 37.1494,
+      "lon": -8.25
+    },
+    "Estadio do Bessa Seculo XXI": {
+      "lat": 41.1553,
+      "lon": -8.6403
+    },
+    "Estadio Cidade de Coimbra": {
+      "lat": 40.2181,
+      "lon": -8.4344
+    },
+    "Estadio Municipal de Chaves": {
+      "lat": 41.7381,
+      "lon": -7.47
+    },
+    "Estadio Antonio Coimbra da Mota": {
+      "lat": 38.5372,
+      "lon": -8.8931
+    },
+    "Estadio Jose Gomes": {
+      "lat": 38.7681,
+      "lon": -9.3083
+    },
+    "Estadio Municipal de Arouca": {
+      "lat": 40.9308,
+      "lon": -8.2497
+    },
+    "Pavilhao Municipal de Gil Vicente": {
+      "lat": 41.5311,
+      "lon": -8.7794
+    },
+    "Estadio Municipal de Rio Ave": {
+      "lat": 41.3475,
+      "lon": -8.7375
+    },
+    "Celtic Park": {
+      "lat": 55.8497,
+      "lon": -4.2058
+    },
+    "Ibrox Stadium": {
+      "lat": 55.8531,
+      "lon": -4.3092
+    },
+    "Pittodrie Stadium": {
+      "lat": 57.1597,
+      "lon": -2.0864
+    },
+    "Tynecastle Park": {
+      "lat": 55.9414,
+      "lon": -3.2319
+    },
+    "Easter Road": {
+      "lat": 55.9611,
+      "lon": -3.1656
+    },
+    "Fir Park": {
+      "lat": 55.7794,
+      "lon": -3.9939
+    },
+    "Rugby Park": {
+      "lat": 55.6136,
+      "lon": -4.5122
+    },
+    "Dens Park": {
+      "lat": 56.4772,
+      "lon": -2.9686
+    },
+    "Tannadice Park": {
+      "lat": 56.4778,
+      "lon": -2.9692
+    },
+    "McDiarmid Park": {
+      "lat": 56.4136,
+      "lon": -3.49
+    },
+    "Falkirk Stadium": {
+      "lat": 56.0028,
+      "lon": -3.7828
+    },
+    "Global Energy Stadium": {
+      "lat": 57.5942,
+      "lon": -4.4278
+    },
+    "Cappielow Park": {
+      "lat": 55.9319,
+      "lon": -4.7647
+    },
+    "Estadio Municipal de Famalicao": {
+      "lat": 41.4014,
+      "lon": -8.5225
+    }
   },
   "cities": {
-    "Los Angeles":   { "lat": 34.0522,  "lon": -118.2437 },
-    "New York":      { "lat": 40.7128,  "lon": -74.0060  },
-    "Dallas":        { "lat": 32.7767,  "lon": -96.7970  },
-    "Houston":       { "lat": 29.7604,  "lon": -95.3698  },
-    "San Francisco": { "lat": 37.7749,  "lon": -122.4194 },
-    "Philadelphia":  { "lat": 39.9526,  "lon": -75.1652  },
-    "Kansas City":   { "lat": 39.0997,  "lon": -94.5786  },
-    "Seattle":       { "lat": 47.6062,  "lon": -122.3321 },
-    "Miami":         { "lat": 25.7617,  "lon": -80.1918  },
-    "Boston":        { "lat": 42.3601,  "lon": -71.0589  },
-    "Vancouver":     { "lat": 49.2827,  "lon": -123.1207 },
-    "Toronto":       { "lat": 43.6532,  "lon": -79.3832  },
-    "Mexico City":   { "lat": 19.4326,  "lon": -99.1332  },
-    "Monterrey":     { "lat": 25.6866,  "lon": -100.3161 },
-    "Guadalajara":   { "lat": 20.6597,  "lon": -103.3496 },
-    "Liverpool":     { "lat": 53.4084,  "lon": -2.9916   },
-    "Manchester":    { "lat": 53.4808,  "lon": -2.2426   },
-    "London":        { "lat": 51.5074,  "lon": -0.1278   },
-    "Birmingham":    { "lat": 52.4862,  "lon": -1.8904   },
-    "Newcastle":     { "lat": 54.9783,  "lon": -1.6178   },
-    "Madrid":        { "lat": 40.4168,  "lon": -3.7038   },
-    "Barcelona":     { "lat": 41.3851,  "lon": 2.1734    },
-    "Seville":       { "lat": 37.3891,  "lon": -5.9845   },
-    "Munich":        { "lat": 48.1351,  "lon": 11.5820   },
-    "Dortmund":      { "lat": 51.5136,  "lon": 7.4653    },
-    "Milan":         { "lat": 45.4654,  "lon": 9.1866    },
-    "Turin":         { "lat": 45.0703,  "lon": 7.6869    },
-    "Rome":          { "lat": 41.9028,  "lon": 12.4964   },
-    "Naples":        { "lat": 40.8518,  "lon": 14.2681   },
-    "Paris":         { "lat": 48.8566,  "lon": 2.3522    },
-    "Marseille":     { "lat": 43.2965,  "lon": 5.3698    },
-    "Lyon":          { "lat": 45.7640,  "lon": 4.8357    }
+    "Los Angeles": {
+      "lat": 34.0522,
+      "lon": -118.2437
+    },
+    "New York": {
+      "lat": 40.7128,
+      "lon": -74.006
+    },
+    "Dallas": {
+      "lat": 32.7767,
+      "lon": -96.797
+    },
+    "Houston": {
+      "lat": 29.7604,
+      "lon": -95.3698
+    },
+    "San Francisco": {
+      "lat": 37.7749,
+      "lon": -122.4194
+    },
+    "Philadelphia": {
+      "lat": 39.9526,
+      "lon": -75.1652
+    },
+    "Kansas City": {
+      "lat": 39.0997,
+      "lon": -94.5786
+    },
+    "Seattle": {
+      "lat": 47.6062,
+      "lon": -122.3321
+    },
+    "Miami": {
+      "lat": 25.7617,
+      "lon": -80.1918
+    },
+    "Boston": {
+      "lat": 42.3601,
+      "lon": -71.0589
+    },
+    "Vancouver": {
+      "lat": 49.2827,
+      "lon": -123.1207
+    },
+    "Toronto": {
+      "lat": 43.6532,
+      "lon": -79.3832
+    },
+    "Mexico City": {
+      "lat": 19.4326,
+      "lon": -99.1332
+    },
+    "Monterrey": {
+      "lat": 25.6866,
+      "lon": -100.3161
+    },
+    "Guadalajara": {
+      "lat": 20.6597,
+      "lon": -103.3496
+    },
+    "Liverpool": {
+      "lat": 53.4084,
+      "lon": -2.9916
+    },
+    "Manchester": {
+      "lat": 53.4808,
+      "lon": -2.2426
+    },
+    "London": {
+      "lat": 51.5074,
+      "lon": -0.1278
+    },
+    "Birmingham": {
+      "lat": 52.4862,
+      "lon": -1.8904
+    },
+    "Newcastle": {
+      "lat": 54.9783,
+      "lon": -1.6178
+    },
+    "Madrid": {
+      "lat": 40.4168,
+      "lon": -3.7038
+    },
+    "Barcelona": {
+      "lat": 41.3851,
+      "lon": 2.1734
+    },
+    "Seville": {
+      "lat": 37.3891,
+      "lon": -5.9845
+    },
+    "Munich": {
+      "lat": 48.1351,
+      "lon": 11.582
+    },
+    "Dortmund": {
+      "lat": 51.5136,
+      "lon": 7.4653
+    },
+    "Milan": {
+      "lat": 45.4654,
+      "lon": 9.1866
+    },
+    "Turin": {
+      "lat": 45.0703,
+      "lon": 7.6869
+    },
+    "Rome": {
+      "lat": 41.9028,
+      "lon": 12.4964
+    },
+    "Naples": {
+      "lat": 40.8518,
+      "lon": 14.2681
+    },
+    "Paris": {
+      "lat": 48.8566,
+      "lon": 2.3522
+    },
+    "Marseille": {
+      "lat": 43.2965,
+      "lon": 5.3698
+    },
+    "Lyon": {
+      "lat": 45.764,
+      "lon": 4.8357
+    }
   }
 }
