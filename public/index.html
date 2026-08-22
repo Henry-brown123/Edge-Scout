@@ -2761,6 +2761,7 @@ function recommendedCard(b) {
             <div class="stake-amount" style="color:${stakeColor}">£${(b.actualStake ?? b.displayStake ?? b.suggestedStake).toFixed(2)}</div>
             <div class="stake-label">${kellyLabel}</div>
           </div>
+          ${(!isReal && !b.result) ? `<button class="btn btn-ghost btn-sm" title="Preview only — does not convert or commit anything" onclick="event.stopPropagation();previewRealStake('${b.fixture.replace(/'/g, "\\'")}', ${b.modelProb ?? 'null'}, ${b.bookOdds ?? 'null'})" style="color:var(--amber);border-color:var(--amber);font-size:10px;padding:2px 8px">Real: £?</button>` : ''}
           <span class="stage-tag tag-recommended" style="background:${(b.placementStatus||'pending_placement')==='placed'?'rgba(0,255,135,.15)':'rgba(245,166,35,.15)'};color:${(b.placementStatus||'pending_placement')==='placed'?'var(--green)':'#f5a623'}">${(b.placementStatus||'pending_placement')==='placed'?'Placed':'Locked'}</span>
           ${(b.placementStatus||'pending_placement')==='placed' ? (
             kickoffPassed(b.kickoff)
