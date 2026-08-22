@@ -2827,6 +2827,7 @@ function watchingCard(w) {
         ${contextBadge(w.context)}
         ${weatherBadge(w.weatherCondition)}
         ${w.lowConfidence ? '<span class="badge badge-red" title="Model diverges from bookmaker beyond data-confidence threshold — will not auto-lock">LOW CONF</span>' : ''}
+        <button class="btn btn-ghost btn-sm" title="Preview only — does not lock or commit anything" onclick="event.stopPropagation();previewRealStake('${w.fixture.replace(/'/g, "\\'")}', ${w.modelProb ?? 'null'}, ${w.bookOdds ?? 'null'}, 'based on the current watching-card reading — the actual lock re-scores fresh and may differ')">Preview real stake</button>
         <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openLockModal('${w.id}')">Lock now</button>
       </div>
     </div>`;
@@ -3202,6 +3203,7 @@ async function renderPerfMode(mode) {
       </td>
       <td>${resultBadge}${cashOutBadge}</td>
       <td style="white-space:nowrap">
+        ${(b.mode !== 'real' && !b.result) ? `<button class="btn btn-ghost btn-sm" title="Preview only — does not convert or commit anything" onclick="previewRealStake('${b.fixture.replace(/'/g, "\\'")}', ${b.modelProb ?? 'null'}, ${b.bookOdds ?? 'null'})" style="padding:2px 8px;color:var(--amber)">£?</button>` : ''}
         <button class="btn btn-ghost btn-sm" onclick="editBet('${b.id}')" title="Edit stake/odds/result" style="padding:2px 8px;color:var(--muted)">✎</button>
         ${cashOutBtn}
         <button class="btn btn-ghost btn-sm" onclick="deleteBet('${b.id}')" style="padding:2px 8px;color:var(--muted)">✕</button>
@@ -6277,6 +6279,35 @@ function _bmOddsForOutcome(bm, bet) {
   if (bet.bet === 'Home Win') return entry.homeOdds;
   if (bet.bet === 'Away Win') return entry.awayOdds;
   return entry.drawOdds;
+}
+
+// Real-stake preview — a pure, non-committing calculation for a watching or
+// already-locked (paper) fixture, so "what would the real Kelly stake be" is
+// answerable without going through the full lock/convert-to-real flow, which
+// both require a bookmaker+odds commitment before showing any figure at all.
+// Mirrors the server's actual committed-stake formula exactly (modelProb x
+// calibrationFactor, real Kelly fraction, real bankroll) — not _calcKelly()
+// below, which the bookmaker panel already uses for its own per-row preview
+// but omits calibrationFactor, so the two can legitimately show slightly
+// different numbers for the same fixture; this one is the accurate one since
+// it's meant to answer "what would I actually get".
+function previewRealStake(label, modelProb, bookOdds, caveat) {
+  if (!modelProb || !bookOdds || bookOdds <= 1) {
+    toast(`${label}: not enough data yet to preview a real stake`, 'error');
+    return;
+  }
+  const calFactor  = STATE.settings?.calibrationFactor ?? 1.08;
+  const realFrac   = STATE.settings?.realKellyFraction ?? 0.25;
+  const realBr     = STATE.realBankroll?.current ?? 0;
+  const calProb    = modelProb * calFactor;
+  const b          = bookOdds - 1;
+  const fullKelly  = (b * calProb - (1 - calProb)) / b;
+  const fracKelly  = Math.max(0, fullKelly * realFrac);
+  const stake      = Math.round(fracKelly * realBr * 100) / 100;
+  const msg = stake > 0
+    ? `${label} — real stake preview: £${stake.toFixed(2)} (odds ${bookOdds.toFixed(2)}, ¼-Kelly, real bankroll £${realBr.toFixed(2)})${caveat ? ' — ' + caveat : ''}`
+    : `${label} — no positive edge at current real odds/settings, real stake would be £0${caveat ? ' — ' + caveat : ''}`;
+  toast(msg, stake > 0 ? 'info' : 'error');
 }
 
 function _calcKelly(modelProb, odds, bankroll, fraction) {
