@@ -3190,7 +3190,7 @@ async function renderPerfMode(mode) {
         </div>
       </td>
       <td class="mono">
-        ${b.bookOdds?.toFixed(2)}
+        ${(b.actualOdds ?? b.bookOdds)?.toFixed(2)}${b.actualOdds != null && b.actualOdds !== b.bookOdds ? `<span style="color:var(--muted);font-size:9px"> (quoted ${b.bookOdds?.toFixed(2)})</span>` : ''}
         ${pinnOddsStr ? `<div style="font-size:9px;color:var(--muted)" title="Pinnacle margin-stripped implied odds at placement — fixed reference, unaffected by cash-out">Pinn: ${pinnOddsStr}</div>` : ''}
       </td>
       <td class="mono c-cyan">+${((b.edge||0)*100).toFixed(1)}%</td>
@@ -4728,7 +4728,19 @@ async function editBet(id) {
       await apiFetch(`/api/bets/${id}/revert`, { method: 'POST' });
     }
     const body = { actualStake: newStake, actualOdds: newOdds };
-    if (newBookmakerId) { body.bookmakerId = newBookmakerId; body.bookmakerUsed = newBookmakerName; }
+    if (newBookmakerId) {
+      body.bookmakerId = newBookmakerId; body.bookmakerUsed = newBookmakerName;
+      // Naming a bookmaker here means "this is where I actually placed it" — the
+      // same meaning as the dedicated Select Bookmaker confirm flow, which is only
+      // reachable before a bet resolves. Without this, a bet edited after the fact
+      // (e.g. one that resolved before ever going through that flow) saved
+      // actualOdds/bookmakerUsed correctly but stayed 'pending_placement' forever —
+      // silently excluded from Bookmaker Performance and every other view gated on
+      // placementStatus==='placed'||placementConfirmed, with no way back in short
+      // of a manual server-side correction. Confirmed live 2026-08-22 on the
+      // Sheffield Wednesday vs Bradford bet.
+      if (b.placementStatus !== 'placed' && !b.placementConfirmed) body.placementStatus = 'placed';
+    }
     if (newResult !== 'pending' && newResult !== b.result) body.result = newResult;
     await apiFetch(`/api/bets/${id}`, {
       method: 'PATCH',
