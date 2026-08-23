@@ -1689,9 +1689,24 @@ async function runMorningScan(leagueIds) {
     await updateTeamProfiles([...allFormFixtures.values()]);
   }
 
-  saveWatching(watching);
-  writeJSON('scan-meta.json', { date: today, startedAt: scanStart, completedAt: new Date().toISOString(), count: watching.length });
-  console.log(`[MorningScan] Done. ${watching.length} fixtures watching.`);
+  // 2026-08-23: was an unconditional saveWatching(watching) — a straight overwrite
+  // of the entire watchlist with only this run's results. Fine for the automatic
+  // cron (always passes every active league), but a real hazard for any partial-
+  // league run (a manual scan with only some leagues selected in the Scout-tab
+  // dropdown, or any future deliberate subset scan): a currently-watching fixture
+  // from a league NOT in this run's leagueIds would be silently deleted, with no
+  // relation to its actual model score — it was never re-evaluated, just erased.
+  // Confirmed live: a Championship fixture (West Brom vs Burnley, score 42 from
+  // the 07:00 UTC scan) vanished from the watchlist after a manual scan whose
+  // league-select happened to exclude Championship. Now preserves any existing
+  // watching entry whose league wasn't part of this run instead of dropping it.
+  const existingWatching = getWatching();
+  const scannedLeagueIds = new Set(leagueIds.map(String));
+  const preserved = existingWatching.filter(w => !scannedLeagueIds.has(String(w.leagueId)));
+  const merged = [...preserved, ...watching];
+  saveWatching(merged);
+  writeJSON('scan-meta.json', { date: today, startedAt: scanStart, completedAt: new Date().toISOString(), count: merged.length });
+  console.log(`[MorningScan] Done. ${watching.length} fixture(s) (re)scanned, ${preserved.length} preserved from unscanned leagues, ${merged.length} total watching.`);
   return watching;
 }
 

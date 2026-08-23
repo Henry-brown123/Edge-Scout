@@ -500,6 +500,17 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       <div class="field">
         <label>Leagues</label>
         <select id="league-select" multiple size="4" style="min-width:160px">
+          <!-- 2026-08-23: this list only ever had the original 7 leagues and was never
+               extended as new leagues were added to LEAGUES/activeLeagues over time —
+               a manual "Run Scan Now" silently only covered whatever's selected here,
+               which meant Championship/Carabao Cup/League One/League Two/Scottish
+               Premiership/Eredivisie/Primeira Liga/Europa League/Conference League were
+               never included. Combined with runMorningScan's watching.json overwrite
+               (see server.js), this wiped a real, currently-watching Championship
+               fixture the model had never actually re-rejected — it just wasn't
+               scanned. Now lists every league in LEAGUES, all selected by default, so
+               "Run Scan Now" with no changes behaves the same as the full automatic
+               scan (see server.js). -->
           <option value="1"   selected>🏆 World Cup 2026</option>
           <option value="39"  selected>🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League</option>
           <option value="140" selected>🇪🇸 La Liga</option>
@@ -507,6 +518,15 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
           <option value="135" selected>🇮🇹 Serie A</option>
           <option value="61"  selected>🇫🇷 Ligue 1</option>
           <option value="2"   selected>⭐ Champions League</option>
+          <option value="179" selected>🏴󠁧󠁢󠁳󠁣󠁴󠁿 Scottish Premiership</option>
+          <option value="88"  selected>🇳🇱 Eredivisie</option>
+          <option value="94"  selected>🇵🇹 Primeira Liga</option>
+          <option value="3"   selected>🌍 Europa League</option>
+          <option value="848" selected>🌍 Conference League</option>
+          <option value="48"  selected>🏴󠁧󠁢󠁥󠁮󠁧󠁿 Carabao Cup</option>
+          <option value="41"  selected>🏴󠁧󠁢󠁥󠁮󠁧󠁿 League One</option>
+          <option value="42"  selected>🏴󠁧󠁢󠁥󠁮󠁧󠁿 League Two</option>
+          <option value="40"  selected>🏴󠁧󠁢󠁥󠁮󠁧󠁿 Championship</option>
         </select>
       </div>
       <div class="field">
