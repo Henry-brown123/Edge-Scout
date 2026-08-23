@@ -2773,6 +2773,7 @@ function recommendedCard(b) {
             <span style="color:var(--cyan)">+${edgePct}% edge</span>
             <span>@${b.bookOdds.toFixed(2)}</span>
             ${b.weather ? `<span title="Weather">🌧 ${b.weather.precipProb}% rain, ${b.weather.windSpeed?.toFixed(0)}km/h</span>` : ''}
+            ${(b.watchingStageScore != null && Math.abs(b.watchingStageScore - b.successScore) >= 15) ? `<span class="badge badge-amber" title="This fixture's watching-stage read (${b.watchingStageScoredAt ? new Date(b.watchingStageScoredAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) : 'earlier'}) was ${b.watchingStageScore} — the T-60 lock always re-scores fresh with confirmed lineups/latest odds/injuries, which is deliberately more informed than the watching-stage estimate, but a swing this size is worth knowing about before staking.">⚠ was ${b.watchingStageScore} at watching</span>` : ''}
           </div>
           ${scoutTierBlock(b.modelProb, b.leagueId, b.pickType || pickTypeOfBetKey(b.bet))}
         </div>
