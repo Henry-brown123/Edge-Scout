@@ -2879,15 +2879,38 @@ async function triggerMorningScan() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ leagues }),
     });
-    scanLog('Scan started server-side. Refreshing in 15s…', 'found');
-    setTimeout(async () => {
-      await loadState();
-      const today = new Date().toISOString().split('T')[0];
-      const todayWatching = (STATE.watching || []).filter(w => w.kickoff?.startsWith(today)).length;
-      scanLog(`Done. ${todayWatching} fixtures watching today, ${STATE.bets.filter(b=>b.stage==='RECOMMENDED').length} locked.`, 'found');
-      btn.disabled = false;
-      btn.textContent = 'Run Scan Now';
-    }, 15000);
+    scanLog('Scan started server-side. Waiting for it to finish…', 'found');
+    // 2026-08-23: was a fixed 15s setTimeout before refreshing — worked while the
+    // dropdown only covered 7 leagues, but scanning all 16 now genuinely takes
+    // longer (18s+ observed), so the auto-refresh was firing before the scan had
+    // actually finished writing watching.json. Confirmed live: a real Championship
+    // fixture (score 40) was sitting in watching.json the whole time, just not
+    // visible yet because loadState() ran too early and never ran again. Poll
+    // scan-meta.json's completedAt (already written by the backend) instead of
+    // guessing a duration.
+    const requestedAt = new Date().toISOString();
+    const deadline = Date.now() + 90000; // safety cap — don't poll forever
+    const poll = async () => {
+      let meta = {};
+      try { meta = await apiFetch('/api/scan-meta'); } catch { /* transient — keep polling */ }
+      if (meta?.completedAt && meta.completedAt > requestedAt) {
+        await loadState();
+        const today = new Date().toISOString().split('T')[0];
+        const todayWatching = (STATE.watching || []).filter(w => w.kickoff?.startsWith(today)).length;
+        scanLog(`Done. ${todayWatching} fixtures watching today, ${STATE.bets.filter(b=>b.stage==='RECOMMENDED').length} locked.`, 'found');
+        btn.disabled = false;
+        btn.textContent = 'Run Scan Now';
+        return;
+      }
+      if (Date.now() > deadline) {
+        scanLog('Still running server-side — hit Refresh in a moment to check.', 'info');
+        btn.disabled = false;
+        btn.textContent = 'Run Scan Now';
+        return;
+      }
+      setTimeout(poll, 2000);
+    };
+    setTimeout(poll, 2000);
   } catch(e) {
     scanLog('Error: ' + e.message, 'error');
     btn.disabled = false;
