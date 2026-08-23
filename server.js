@@ -8483,9 +8483,14 @@ app.listen(PORT, () => {
     console.log(`[Startup] Today's scan already completed at ${scanMeta.completedAt} (${scanMeta.count} watching)`);
   }
 
-  // 7. Summary
-  const hist = readJSON('backfill-historical.json');
-  const lin  = readJSON('lineups.json') || {};
+  // 7. Summary — reuse the existing mtime-aware/in-memory caches instead of forcing
+  // a fresh full re-parse of backfill-historical.json (80k+ fixtures) and lineups.json
+  // (~28MB) purely for a log line. This was racing the concurrent morning scan's own
+  // reads of the same data at startup and tipping the Starter-tier 512MB container into
+  // an OOM crash loop (see 2026-08-23 07:01 crash log — heap limit reached ~18s after
+  // this exact step ran alongside runMorningScan). Read-only, no scoring/betting impact.
+  const hist = readHistoricalCached();
+  const lin  = getLineups();
   const st   = readJSON('fixture-stats.json') || {};
   console.log(`[Startup] Data counts — fixtures: ${hist?.fixtures?.length ?? 0}, lineups: ${Object.keys(lin).length}, stats: ${Object.keys(st).length}`);
   console.log(`[Startup] Next scheduled: backfill@00:05UTC · scan@07:00UTC`);
