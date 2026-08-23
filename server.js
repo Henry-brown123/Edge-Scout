@@ -540,19 +540,39 @@ apiSports.interceptors.response.use(
 
 // ─── LEAGUE METADATA ─────────────────────────────────────────────────────────
 
+// 2026-08-23: fourth confirmed instance of the season-list staleness class
+// (see SEASON_LIST_CONFIGS below) — PL/La Liga/Bundesliga/Serie A/Ligue1/CL/
+// EL/Conf League were stuck on season 2024 while every other LEAGUES entry
+// had already rolled to 2026. This directly broke live scanning for all 8:
+// meta.season feeds `date: today` queries (runMorningScan etc.), and
+// API-Sports scopes fixtures by season+date together, so a fixture dated
+// 2026-08-23 simply isn't returned under season 2024 — confirmed against
+// today's actual production log, where the 07:00 UTC morning scan surfaced
+// 7 WATCHING fixtures across Eredivisie/Primeira Liga/Championship (all
+// correctly on 2026) and zero across any of these 8 leagues. 2026 is the
+// correct current season for all of them — cross-checked against
+// HIST_SEASONS_2010 (covers PL/La Liga/Bundesliga/Serie A/Ligue1/CL, max
+// 2026), HIST_SEASONS_EUROPA_2014 (EL, max 2026), and Conference League's
+// own HISTORICAL_BACKFILL_CONFIG entry (max 2026) — all three already
+// registered in SEASON_LIST_CONFIGS and not currently flagging as stale,
+// i.e. already independently verified as fetching real 2026 data.
+// Found because this was flagged (not fixed) in the 2026-08-22 overnight
+// report and never registered in SEASON_LIST_CONFIGS as a follow-up —
+// a real gap in the safeguard's coverage, not a bug in the check itself
+// (LEAGUES didn't exist as a registry entry at all). Closed below.
 const LEAGUES = {
   '1':   { name: 'FIFA World Cup',      season: 2026, sport: 'soccer_fifa_world_cup' },
-  '39':  { name: 'Premier League',      season: 2024, sport: 'soccer_epl' },
-  '140': { name: 'La Liga',             season: 2024, sport: 'soccer_spain_la_liga' },
-  '78':  { name: 'Bundesliga',          season: 2024, sport: 'soccer_germany_bundesliga' },
-  '135': { name: 'Serie A',             season: 2024, sport: 'soccer_italy_serie_a' },
-  '61':  { name: 'Ligue 1',             season: 2024, sport: 'soccer_france_ligue_one' },
-  '2':   { name: 'Champions League',      season: 2024, sport: 'soccer_uefa_champs_league' },
+  '39':  { name: 'Premier League',      season: 2026, sport: 'soccer_epl' },
+  '140': { name: 'La Liga',             season: 2026, sport: 'soccer_spain_la_liga' },
+  '78':  { name: 'Bundesliga',          season: 2026, sport: 'soccer_germany_bundesliga' },
+  '135': { name: 'Serie A',             season: 2026, sport: 'soccer_italy_serie_a' },
+  '61':  { name: 'Ligue 1',             season: 2026, sport: 'soccer_france_ligue_one' },
+  '2':   { name: 'Champions League',      season: 2026, sport: 'soccer_uefa_champs_league' },
   '179': { name: 'Scottish Premiership',  season: 2026, sport: 'soccer_spl' },
   '88':  { name: 'Eredivisie',            season: 2026, sport: 'soccer_netherlands_eredivisie' },
   '94':  { name: 'Primeira Liga',         season: 2026, sport: 'soccer_portugal_primeira_liga' },
-  '3':   { name: 'Europa League',         season: 2024, sport: 'soccer_uefa_europa_league' },
-  '848': { name: 'Conference League',     season: 2024, sport: 'soccer_uefa_europa_conference_league' },
+  '3':   { name: 'Europa League',         season: 2026, sport: 'soccer_uefa_europa_league' },
+  '848': { name: 'Conference League',     season: 2026, sport: 'soccer_uefa_europa_conference_league' },
   // Added 2026-08-10, paper-only — see LEAGUE_CONFIG[48] in scoring.js for why no
   // base-rate calibration is set. API-Sports id 48 ("League Cup", England) is the
   // Carabao Cup's official league name in that API; confirmed via /leagues?search=
@@ -2666,6 +2686,21 @@ const STATS_SEASONS  = LINEUP_SEASONS;
 // above), each previously found only by a manual deep-dive after live data was
 // already visibly missing. Registry-driven so adding a new season-list config
 // later means adding one entry here, not writing a new check from scratch.
+//
+// LEAGUES (below) is the fourth instance, and was a real gap in this registry's
+// *coverage*, not a bug in the check logic itself: LEAGUES didn't exist yet
+// when this registry was first built (2026-08-15), and when its staleness was
+// separately found in the 2026-08-22 overnight investigation, it was flagged
+// in that session's report but never registered here as a follow-up — so the
+// safeguard had nothing to check and correctly stayed silent.
+// LEAGUES also doesn't fit the existing shape: every other entry here is a
+// *list* of seasons (an ever-growing backfill window, where staleness means
+// "the list's upper bound wasn't extended" — Math.max is the right probe).
+// LEAGUES is a dict of per-league *single* current-season pointers, where
+// staleness means "at least one league's pointer wasn't rolled forward" —
+// the worst (Math.min) entry is what matters, not the best. Leaving the
+// field name mostRecentSeason as-is for interface consistency with every
+// other entry; see the comment on the entry itself for why it's Math.min.
 const SEASON_LIST_CONFIGS = [
   { name: 'HIST_SEASONS_2010',          mostRecentSeason: () => Math.max(...HIST_SEASONS_2010) },
   { name: 'HIST_SEASONS_EUROPA_2014',   mostRecentSeason: () => Math.max(...HIST_SEASONS_EUROPA_2014) },
@@ -2673,6 +2708,23 @@ const SEASON_LIST_CONFIGS = [
   { name: 'BACKFILL_CONFIG (team-profile)', mostRecentSeason: () => Math.max(...BACKFILL_CONFIG.flatMap(e => e.seasons)) },
   { name: 'LINEUP_SEASONS',             mostRecentSeason: () => Math.max(...LINEUP_SEASONS) },
   { name: 'STATS_SEASONS',              mostRecentSeason: () => Math.max(...STATS_SEASONS) },
+  {
+    name: 'LEAGUES (per-league season)',
+    // Excludes '1' (FIFA World Cup): a quadrennial competition legitimately
+    // keeps the same season value for years between tournaments, which would
+    // otherwise trip the "more than one season behind" threshold as a false
+    // positive well before the next real World Cup rolls the value forward.
+    // Every other entry is an annual domestic league/cup or UEFA club
+    // competition, so the calendar-year convention applies to all of them.
+    mostRecentSeason: () => Math.min(...Object.entries(LEAGUES).filter(([id]) => id !== '1').map(([, l]) => l.season)),
+    // Generic single-number warning can't say *which* of 14 leagues is stale
+    // the way it can for a season-list config (there, staleness is one global
+    // property of the list; here it's per-entry) — surface the offenders too.
+    offenders: () => Object.entries(LEAGUES)
+      .filter(([id]) => id !== '1')
+      .filter(([, l]) => l.season < new Date().getFullYear() - 1)
+      .map(([id, l]) => `${l.name} (${id}): ${l.season}`),
+  },
 ];
 
 function checkSeasonListStaleness() {
@@ -2683,7 +2735,8 @@ function checkSeasonListStaleness() {
   for (const cfg of SEASON_LIST_CONFIGS) {
     const mostRecent = cfg.mostRecentSeason();
     if (mostRecent < currentSeason - 1) {
-      console.warn(`[ConfigStaleness] ${cfg.name}'s most recent season is ${mostRecent}, more than one season behind ${currentSeason} — likely stale, check for a missed update.`);
+      const detail = cfg.offenders ? ` — offenders: ${cfg.offenders().join(', ')}` : '';
+      console.warn(`[ConfigStaleness] ${cfg.name}'s most recent season is ${mostRecent}, more than one season behind ${currentSeason} — likely stale, check for a missed update.${detail}`);
     }
   }
 }
