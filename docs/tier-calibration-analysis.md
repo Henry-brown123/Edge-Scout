@@ -4925,10 +4925,23 @@ so this only affects going-forward live scoring — no historical population
 to retroactively rewrite, no other caller depending on the old
 unconditional behavior.
 
-Live-verification requested against a real current WATCHING-stage
-fixture's Scout-tab drawer `modifierNotes` list (should show no congestion
-line, should still show a home/away multiplier line where applicable) —
-this addendum will be updated with the result once confirmed.
+**Live-verified** against a real current WATCHING-stage fixture (Fulham vs
+Chelsea, Premier League) via the Scout-tab drawer's Team Intelligence
+panel: `Home multiplier ×0.94 (44% vs 46% avg, 345 home matches)` and
+`Away multiplier ×1.64 (48% vs 29% avg, 393 away matches)` both fire
+exactly as expected — home/away formalization confirmed working. No
+congestion line appears anywhere in the notes (only home/away multiplier,
+two transfer modifiers, and one H2H anomaly) — consistent with
+deactivation. Caveat, for honesty: both teams showed 92 days rest in this
+particular fixture — solidly "rested," not the more dramatic
+short-rest/"congested" case — so this single fixture isn't the most
+demonstrative possible test of the congestion removal specifically. The
+code-level guarantee doesn't depend on this fixture either way: the entire
+congestion block is now behind one unconditional `if
+(opts.congestionModifierActive === true)` gate, defaulted `false`, with no
+remaining code path that could fire regardless of rest category — this
+check confirmed the deploy took effect cleanly and nothing else broke, not
+that the flag mechanically works (that's already guaranteed by the code).
 
 See `docs/model-versioning.md`'s new "Live-scoring modifier toggles"
 section for the standing governance table and the process for any future
