@@ -4852,3 +4852,84 @@ on any of the four training-holdout constants touched by this addendum.
 Rescore" button remain in place pending final cleanup, per established
 convention, since they were still in active use verifying this addendum's
 own figures.
+
+## Addendum 28 — Home/away strength multiplier formalized, fixture congestion deactivated (isolate-tested days earlier, decided and deployed here)
+
+Both modifiers live in `teamProfiles.js`'s `applyTeamProfileModifiers()`,
+called only from live scoring (`scoreOneFixture`) — the historical backfill
+population every other addendum's calibration/ROI figures come from does
+not include this layer at all, and never has. Both had been running
+**unconditionally, with no settings gate**, since before either was
+isolate-tested — unlike the transfer-quality modifier a few lines below
+them in the same function, which has carried an explicit
+`transferModifierActive` toggle since 2026-07-31.
+
+**Isolate-test findings** (run days prior to this addendum, held back from
+autonomous deployment pending a deliberate decision):
+
+- **Home/away strength multiplier**: calibration error moved from +2.5pp to
+  −0.1pp with the multiplier active; ROI's confidence interval moved from
+  confidently-negative to inconclusive. A real, substantial improvement —
+  not a marginal nudge.
+- **Fixture congestion modifier**: fires on 76% of all fixtures (via
+  `homeDaysRest`/`awayDaysRest` thresholds), but calibration error moved
+  the *wrong* direction with it active (2.6pp → 3.0pp) — read as noise, not
+  signal.
+
+**Decision**: keep and formalize the home/away multiplier; deactivate
+fixture congestion. Reasoning, since "isolate-tested days ago, held back"
+is not itself a reason to act either way:
+
+- **No re-test needed for home/away.** Mechanistically independent of
+  everything Addendum 27 touched — the multiplier reads
+  `homeProfile.homeRecord`/`awayProfile.awayRecord` (`teamProfiles.js`'s
+  own win/loss aggregation from `updateTeamProfiles()`, entirely separate
+  data built from raw match results), never `buildDomesticTimeline`/
+  `resolveStandingsScore` (what Addendum 27's fix and the League One
+  correction actually changed). Confirmed via code inspection: no shared
+  computation, no shared data structure. Given that, and that the affected
+  Addendum 27 population (44 League One fixtures, a repaired Carabao Cup
+  slice) is a couple of percent of a handful of leagues — nowhere near
+  enough to explain a 2.6pp swing even under the false assumption of full
+  overlap — re-running the isolate-test would be re-peeking without cause,
+  not diligence. (The original isolate-test's own write-up wasn't located
+  in committed docs to check its literal population directly; the
+  mechanism-level check above is a stronger guarantee regardless, since it
+  rules out contamination for any fixture, not just the ones that could be
+  enumerated.)
+- **76% prevalence argues against keeping congestion, not for it.** The
+  "might matter in an untested tail" defense is weak precisely because a
+  modifier firing on three-quarters of all fixtures has already been
+  tested against the general case, not a narrow slice of it. Combined with
+  the wrong-direction calibration result, this fails the same standard
+  already applied everywhere else in this project (`scoring.js`'s
+  `CORRECTION_LAYER_RULES` comment: "no correction without a
+  football-justified, measured reason").
+- **Sequencing**: congestion off first (lower-risk — pure removal, no new
+  logic to trust), home/away's toggle formalized second, as two
+  independent, separately-verified changes rather than one bundled deploy.
+  Mechanically the two don't interact — the home/away multiplier applies
+  multiplicatively before congestion's additive adjustment in the same
+  function, so removing congestion doesn't change what home/away already
+  contributes.
+
+**Implementation**: two new `settings.json` flags, same pattern as
+`transferModifierActive` — `homeAwayMultiplierActive` (default `true`,
+formalizing already-proven behavior) and `congestionModifierActive`
+(default `false`, formalizing the deactivation). Both wrap their respective
+blocks in `applyTeamProfileModifiers()`; `teamIntel.congestionCategory`
+(the display-only "3d rest / congested" label) is untouched — only the
+probability adjustment itself is gated. Scope confirmed via code search:
+`applyTeamProfileModifiers` has exactly one call site (`scoreOneFixture`),
+so this only affects going-forward live scoring — no historical population
+to retroactively rewrite, no other caller depending on the old
+unconditional behavior.
+
+Live-verification requested against a real current WATCHING-stage
+fixture's Scout-tab drawer `modifierNotes` list (should show no congestion
+line, should still show a home/away multiplier line where applicable) —
+this addendum will be updated with the result once confirmed.
+
+See `docs/model-versioning.md`'s new "Live-scoring modifier toggles"
+section for the standing governance table and the process for any future
+modifier toggle.

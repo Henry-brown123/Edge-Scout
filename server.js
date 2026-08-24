@@ -219,6 +219,22 @@ const SETTINGS_DEFAULTS = {
   // Enabled 2026-07-31 after reviewing netQualityDelta across 436 teams and fixing a
   // cup-competition-PIR artefact (Wolfsberger AC: -22.7 -> -9.4). See docs/july-upgrade-notes.md.
   transferModifierActive: true,
+  // Home/away strength multiplier (teamProfiles.js applyTeamProfileModifiers) had been
+  // running unconditionally, ungoverned, since before this toggle existed. Formalized
+  // 2026-08-24 after an isolate-test showed calibration error +2.5pp -> -0.1pp and ROI's
+  // CI moving from confidently-negative to inconclusive with it active — real, evidenced
+  // signal, not a guess. Default true: this is the already-proven, already-running
+  // behavior; the toggle exists so it can be independently rolled back if a future look
+  // ever contradicts this one, not because there's any reason to doubt it today. See
+  // docs/tier-calibration-analysis.md Addendum 28.
+  homeAwayMultiplierActive: true,
+  // Fixture congestion modifier (teamProfiles.js applyTeamProfileModifiers) had also been
+  // running unconditionally, ungoverned, since before this toggle existed. Deactivated
+  // 2026-08-24: isolate-test showed calibration error moving the wrong direction (2.6pp ->
+  // 3.0pp) while firing on 76% of all fixtures — no evidenced benefit, broad reach, exactly
+  // what rule 4's "no correction without a football-justified, measured reason" standard
+  // exists to catch. Default false. See docs/tier-calibration-analysis.md Addendum 28.
+  congestionModifierActive: false,
   preferExchange: true,
   preferExchangeBuffer: 5,
   leagueModes: {
@@ -1415,7 +1431,9 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   const { probs: adjustedProbs, teamIntel } = applyTeamProfileModifiers(
     probs, homeProfile, awayProfile, context, dataConf, homeDays, awayDays, weatherForModifier,
     { wowyActive, competitionPhase, homeMatchday, awayMatchday, season: currentSeason,
-      transferModifierActive: settings.transferModifierActive === true }
+      transferModifierActive: settings.transferModifierActive === true,
+      homeAwayMultiplierActive: settings.homeAwayMultiplierActive === true,
+      congestionModifierActive: settings.congestionModifierActive === true }
   );
   probs = adjustedProbs;
 

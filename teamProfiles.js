@@ -600,7 +600,12 @@ function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dat
   // 1. Home advantage multiplier — skipped at neutral WC venues (group_stage / knockout).
   //    At neutral venues the 0.34/0.34 symmetric base already removes home advantage;
   //    applying a team's home win rate multiplier on top would incorrectly re-introduce it.
-  if (!neutralVenue && homeProfile.homeRecord?.played >= thresholds.homeMultiplier) {
+  //    Gated behind opts.homeAwayMultiplierActive (settings.homeAwayMultiplierActive,
+  //    default true) since 2026-08-24 — formalized after an isolate-test showed real,
+  //    evidenced calibration improvement (+2.5pp -> -0.1pp). Ran unconditionally, ungated,
+  //    before that; see docs/tier-calibration-analysis.md Addendum 28.
+  const homeAwayMultiplierActive = opts.homeAwayMultiplierActive ?? true;
+  if (homeAwayMultiplierActive && !neutralVenue && homeProfile.homeRecord?.played >= thresholds.homeMultiplier) {
     const mult     = homeProfile.homeWinRateMultiplier || 1.0;
     const profConf = Math.max(homeProfile.homeConfidence, dataConf); // use whichever is higher
     const blended  = profConf * mult + (1 - profConf);
@@ -616,7 +621,9 @@ function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dat
   //     Without this, an away team's historical strength (e.g. a strong side that wins
   //     well on the road) has no influence on the model beyond what shows up in
   //     form/xG/H2H — skipped at neutral venues for the same reason as the home version.
-  if (!neutralVenue && awayProfile.awayRecord?.played >= thresholds.awayModifier) {
+  //     Same gate as the home multiplier above (opts.homeAwayMultiplierActive) — the two
+  //     are evaluated and deployed as one unit, not independently toggleable.
+  if (homeAwayMultiplierActive && !neutralVenue && awayProfile.awayRecord?.played >= thresholds.awayModifier) {
     const mult     = awayProfile.awayWinRateMultiplier || 1.0;
     const profConf = Math.max(awayProfile.awayConfidence, dataConf);
     const blended  = profConf * mult + (1 - profConf);
@@ -667,28 +674,36 @@ function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dat
     notes.push(`H2H anomaly: ${adj >= 0 ? '+' : ''}${(adj * 100).toFixed(1)}pp vs ${anomaly.opponentName} (${anomaly.matches} meetings, actual ${(anomaly.actualWinRate * 100).toFixed(0)}% vs ${(anomaly.expectedWinRate * 100).toFixed(0)}% expected)`);
   }
 
-  // 3. Fixture congestion
-  function congAdj(profile, daysRest) {
-    const cs = profile.congestionSensitivity;
-    if (!cs?.normalWinRate || daysRest == null) return 0;
-    const cat = daysRest <= 3 ? cs.congestedWinRate
-              : daysRest <= 6 ? cs.normalWinRate
-              :                 cs.restedWinRate;
-    return cat != null ? (cat - cs.normalWinRate) * 0.5 : 0;
-  }
+  // 3. Fixture congestion. Gated behind opts.congestionModifierActive
+  // (settings.congestionModifierActive, default false) since 2026-08-24 — deactivated
+  // after an isolate-test found calibration error moving the wrong direction (2.6pp ->
+  // 3.0pp) while firing on 76% of all fixtures, no evidenced benefit for a modifier that
+  // broad. Ran unconditionally, ungated, before that. congestionCategory in teamIntel
+  // above is unaffected — that's a display-only field, not this adjustment.
+  // See docs/tier-calibration-analysis.md Addendum 28.
+  if (opts.congestionModifierActive === true) {
+    const congAdj = (profile, daysRest) => {
+      const cs = profile.congestionSensitivity;
+      if (!cs?.normalWinRate || daysRest == null) return 0;
+      const cat = daysRest <= 3 ? cs.congestedWinRate
+                : daysRest <= 6 ? cs.normalWinRate
+                :                 cs.restedWinRate;
+      return cat != null ? (cat - cs.normalWinRate) * 0.5 : 0;
+    };
 
-  const hAdj = congAdj(homeProfile, homeDaysRest);
-  const aAdj = congAdj(awayProfile, awayDaysRest);
+    const hAdj = congAdj(homeProfile, homeDaysRest);
+    const aAdj = congAdj(awayProfile, awayDaysRest);
 
-  const hAdjFinal = hAdj * intlSparsityDamp(homeProfile);
-  const aAdjFinal = aAdj * intlSparsityDamp(awayProfile);
-  if (Math.abs(hAdjFinal) > 0.005) {
-    home += hAdjFinal;
-    notes.push(`Home congestion ${hAdjFinal >= 0 ? '+' : ''}${(hAdjFinal * 100).toFixed(1)}pp (${homeDaysRest}d rest)`);
-  }
-  if (Math.abs(aAdjFinal) > 0.005) {
-    away += aAdjFinal;
-    notes.push(`Away congestion ${aAdjFinal >= 0 ? '+' : ''}${(aAdjFinal * 100).toFixed(1)}pp (${awayDaysRest}d rest)`);
+    const hAdjFinal = hAdj * intlSparsityDamp(homeProfile);
+    const aAdjFinal = aAdj * intlSparsityDamp(awayProfile);
+    if (Math.abs(hAdjFinal) > 0.005) {
+      home += hAdjFinal;
+      notes.push(`Home congestion ${hAdjFinal >= 0 ? '+' : ''}${(hAdjFinal * 100).toFixed(1)}pp (${homeDaysRest}d rest)`);
+    }
+    if (Math.abs(aAdjFinal) > 0.005) {
+      away += aAdjFinal;
+      notes.push(`Away congestion ${aAdjFinal >= 0 ? '+' : ''}${(aAdjFinal * 100).toFixed(1)}pp (${awayDaysRest}d rest)`);
+    }
   }
 
   // 4. Weather sensitivity modifier

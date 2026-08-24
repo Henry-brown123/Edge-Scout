@@ -378,3 +378,45 @@ single test-set look) and update `WALKFORWARD_HISTORICAL_LEAGUE_IDS` in
 retrain deliberately holds a competition's data out again (making it
 genuinely out-of-sample once more) — that's also a manual decision to make,
 not an automatic consequence of a retrain completing.
+
+## Live-scoring modifier toggles (settings-gated, rollback-capable)
+
+`applyTeamProfileModifiers()` (teamProfiles.js) applies several secondary
+adjustments on top of the core pool-based model — home/away strength,
+fixture congestion, H2H anomaly, weather sensitivity, a transfer-quality
+modifier, each gated behind minimum-sample-size thresholds. This layer only
+runs in live scoring (`scoreOneFixture`); the historical backfill population
+used for every Historical/backtest reading in `docs/tier-calibration-analysis.md`
+does not include it — those readings are directionally comparable to live,
+not a perfect match, and always have been.
+
+Each modifier that has actually been evaluated against evidence gets an
+explicit `settings.json` toggle, so it can be independently rolled back
+without a code change if a future look ever contradicts the evidence that
+justified it — the same governance discipline `calibration-rules.md` rule 13
+requires for the scoring-adjustment correction layer, applied here too:
+
+| Toggle | Default | Evidence | Status |
+|---|---|---|---|
+| `transferModifierActive` | `true` | Reviewed 2026-07-31 (docs/july-upgrade-notes.md) | Active |
+| `homeAwayMultiplierActive` | `true` | Isolate-test: calibration +2.5pp → −0.1pp, ROI CI confidently-negative → inconclusive (Addendum 28) | Active |
+| `congestionModifierActive` | `false` | Isolate-test: calibration 2.6pp → 3.0pp (wrong direction), fires on 76% of fixtures, no evidenced benefit (Addendum 28) | Deactivated |
+
+A modifier with **no** toggle here (H2H anomaly, weather sensitivity) is
+still running unconditionally, ungoverned — exactly the state home/away
+strength and fixture congestion were in before Addendum 28. That's not an
+oversight to fix reflexively; it's a backlog item for whenever each gets its
+own isolate-test evidence to act on, the same way these two did. Do not add
+a toggle without evidence one way or the other — an ungoverned modifier with
+no evidence is a known gap, not an urgent one.
+
+**Adding or flipping a toggle**: follow the same sequence used for the
+correction-layer deployment (`deployedCorrectionRuleIds` above) — verify
+scope (does anything else depend on the current unconditional behavior?),
+live-verify against a real current fixture (the Scout-tab drawer's
+`modifierNotes` list is the direct surface for this — a deactivated
+modifier's note should simply stop appearing, an activated one's note
+should appear exactly as before), confirm no retroactive rewrite (this
+layer only ever ran in live scoring, so there is no historical population
+to worry about contaminating), then document the change in
+`docs/tier-calibration-analysis.md`.
