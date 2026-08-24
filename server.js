@@ -8254,8 +8254,15 @@ app.get('/api/_diag/venue-coverage', (_req, res) => {
   }
   unresolved.sort((a, b) => b.fixtures - a.fixtures);
 
+  // Raw shape sample -- added after distinctVenuesInPopulation came back 0 against
+  // 80,145 FT fixtures, which means f.fixture?.venue is empty for literally every
+  // historical fixture rather than genuinely 0 distinct venues. Dumps the actual
+  // top-level and fixture-level keys of a few completed fixtures so the real
+  // schema can be seen directly instead of guessed at.
+  const ftSample = allFixtures.filter(f => ['FT', 'AET', 'PEN'].includes(f.fixture?.status?.short)).slice(0, 3);
+
   res.json({
-    note: 'venueTableSize = current data/stadiums.json venues+cities entry count on THIS server. distinctVenuesInPopulation = distinct venue/city keys seen across all FT/AET/PEN historical fixtures. resolvedViaTable = how many of those distinct venues venueCoords() can already resolve. unresolvedTop20 = the highest-fixture-count venues still missing coordinates, in priority order for the Archive API fetch.',
+    note: 'venueTableSize = current data/stadiums.json venues+cities entry count on THIS server. distinctVenuesInPopulation = distinct venue/city keys seen across all FT/AET/PEN historical fixtures. resolvedViaTable = how many of those distinct venues venueCoords() can already resolve. unresolvedTop20 = the highest-fixture-count venues still missing coordinates, in priority order for the Archive API fetch. sampleFixtureShape added because distinctVenuesInPopulation came back 0 -- shows the real object shape to confirm whether venue data exists at all in this population.',
     venueTableSize: { venues: Object.keys(VENUE_COORDS).length, cities: Object.keys(CITY_COORDS).length },
     distinctVenuesInPopulation: Object.keys(venueMap).length,
     resolvedViaTable: resolvedCount,
@@ -8263,6 +8270,13 @@ app.get('/api/_diag/venue-coverage', (_req, res) => {
     unresolvedFixtureCount: unresolvedFixtures,
     totalFTFixtures: allFixtures.filter(f => ['FT', 'AET', 'PEN'].includes(f.fixture?.status?.short)).length,
     unresolvedTop20: unresolved.slice(0, 20),
+    sampleFixtureShape: ftSample.map(f => ({
+      topLevelKeys: Object.keys(f),
+      fixtureSubKeys: f.fixture ? Object.keys(f.fixture) : null,
+      fixtureVenue: f.fixture?.venue ?? 'MISSING',
+      leagueId: f.league?.id,
+      date: f.fixture?.date,
+    })),
   });
 });
 
