@@ -243,9 +243,10 @@ intermediate "stays permanently held" state to linger in; rule 10 and rule
 12 are now understood as one continuous lifecycle, not two independent
 choices. First applied 2026-08-24 to Championship (cutoff
 2026-08-19T22:00:00Z, its backtest's own compute date — CALIBRATION_AUDIT[40])
-and to Carabao Cup (cutoff anchored to its corrected re-score's compute
-date, following the domestic-blend over-broad-filter fix documented in
-`docs/tier-calibration-analysis.md` — CALIBRATION_AUDIT[48]).
+and to Carabao Cup (cutoff 2026-08-24T16:00:00Z, anchored to its corrected
+re-score's own compute date, following the domestic-blend over-broad-filter
+fix documented in `docs/tier-calibration-analysis.md` Addendum 27 —
+CALIBRATION_AUDIT[48]).
 
 **A new rule-10 holdout going forward states its own eventual conversion up
 front**, in the same commit that creates it — not as a future decision to
@@ -266,3 +267,39 @@ bearing on whether a correction layer already built on top of it still has
 its own genuinely-unspent test slice; each layer's evidentiary status
 remains independently checked per rule 13, regardless of what this rule
 does to the layer beneath it.
+
+**A banked reading can still be legitimately corrected for a genuine,
+bounded data-quality bug — this is not the same thing as re-peeking because
+a result was disappointing, and rule 3's discipline is not weakened by
+allowing it.** Discovered 2026-08-24 (Addendum 27): League One's own banked
+Addendum 19/24 figures moved (posEdgeN 2,231→2,227, ROI -3.9%→-2.36%) as an
+incidental side effect of the Carabao Cup domestic-blend fix — not because
+anyone went looking for a better number. A separate, unrelated change
+(Championship joining `DOMESTIC_LEAGUE_IDS_FOR_BLEND` on 2026-08-19) meant
+44 of 2,231 fixtures, all involving Championship-mainstay clubs, had been
+silently resolving their own standings input off a multi-year-stale
+fallback snapshot instead of Championship's current form — the same
+underlying defect the Carabao Cup fix addressed, just affecting a 0.5%
+corner of a different league's already-banked reading. The bar for
+accepting a correction like this, rather than treating the original figure
+as permanently frozen warts-and-all, is:
+
+1. **A fixture-level trace**, not an aggregate before/after diff — name the
+   specific fixtures affected and show their inputs changing for a
+   documented reason (Cardiff's standing snapshot dated 2019-05-12 became
+   2025-05-03, Birmingham's 2011-05-22 became 2024-05-04, etc.).
+2. **A clear, external mechanism** — a specific commit, a specific league
+   joining a specific pool, not "the numbers looked different so something
+   must have happened."
+3. **A bounded scope** — a small, identifiable subset of the population,
+   not the whole reading moving in a direction that happens to look better
+   (or worse) than before.
+
+All three must hold together. A correction that only clears bar 1 without a
+traceable mechanism, or that touches the whole population rather than a
+named subset, does not qualify — that is ordinary re-peeking wearing a
+correction's clothing, and rule 3 still forbids it. When a correction does
+clear the bar, it is documented exactly like a bug fix (because it is one):
+the original figure, the corrected figure, and the reason, all left
+side by side in `CALIBRATION_AUDIT`'s note and in the addendum log — never
+a silent overwrite.

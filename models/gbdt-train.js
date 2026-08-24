@@ -32,13 +32,11 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../data');
 // 2026-08-24 (calibration-rules.md rule 15): no rule-10 holdout stays fully/
 // permanently excluded any more -- it exists only long enough to bank one
 // genuine backtest, then converts immediately to a date-split cutoff (rule
-// 12's mechanism), same end-state League One/Two reached. Carabao Cup (48)
-// is the one league still here, pending its own corrected rescore (the
-// domestic-blend over-broad-filter fix, same date) producing a clean banked
-// read to anchor its cutoff to. Championship (40) converted below the moment
-// this rule was adopted, since its one backtest ('backtested_no_edge',
-// CALIBRATION_AUDIT[40]) was already banked with nothing further to protect.
-const FULLY_EXCLUDED_LEAGUE_IDS = new Set([48]);
+// 12's mechanism), same end-state League One/Two reached. Championship (40)
+// and Carabao Cup (48) have both converted below -- Carabao Cup once its
+// corrected rescore (the domestic-blend over-broad-filter fix) produced its
+// own clean, banked read (CALIBRATION_AUDIT[48]: posEdgeN=192, ROI +8.04%).
+const FULLY_EXCLUDED_LEAGUE_IDS = new Set([]);
 
 // Per-league date-split cutoff (calibration-rules.md rules 12/15). Real money
 // is staked on League One/Two and new fixtures resolve weekly with no way to
@@ -66,8 +64,12 @@ const DATE_SPLIT_CUTOFFS = new Map([
   // 20:42:33 UTC), rounded up past the later display-wiring commit
   // (66e2870, 20:50:18 UTC) the same evening.
   [40, '2026-08-19T22:00:00Z'],
-  // Carabao Cup (48) added once its corrected rescore produces its own
-  // banked read and cutoff.
+  // Carabao Cup — converted 2026-08-24 per rule 15, immediately after its
+  // corrected backtest (Addendum 27, CALIBRATION_AUDIT[48]). Cutoff =
+  // commit timestamp of the last diagnostic used to verify that read
+  // (dcefd7d, 2026-08-24T16:47:37+01:00 = 15:47:37 UTC), rounded up past it
+  // the same evening.
+  [48, '2026-08-24T16:00:00Z'],
 ]);
 
 function isTrainingExcluded(leagueId, date) {

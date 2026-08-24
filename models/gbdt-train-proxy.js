@@ -52,19 +52,19 @@ const NARROW_AWAY_MIN_FIT_N = 30; // below this, the inner-test subset is too th
 // 2026-08-24 (calibration-rules.md rule 15): mirrors gbdt-train.js exactly —
 // no rule-10 holdout stays fully/permanently excluded any more, each
 // converts to a date-split cutoff immediately once its one backtest is
-// banked. Carabao Cup (48) is the one league still here, pending its
-// corrected rescore's own banked read. Championship (40) converted the
-// moment this rule was adopted. Kept in sync here rather than shared via a
-// common module, matching this codebase's existing convention for these
-// training-exclusion mirrors (explicit "mirrors X" comments rather than a
-// shared abstraction — see server.js's DATE_SPLIT_HOLDOUT_CUTOFFS /
-// WEEKLY_RETRAIN_DATE_SPLIT_CUTOFFS for the same pattern).
-const FULLY_EXCLUDED_LEAGUE_IDS = new Set([48]);
+// banked. Championship (40) and Carabao Cup (48) have both converted below.
+// Kept in sync here rather than shared via a common module, matching this
+// codebase's existing convention for these training-exclusion mirrors
+// (explicit "mirrors X" comments rather than a shared abstraction — see
+// server.js's DATE_SPLIT_HOLDOUT_CUTOFFS / WEEKLY_RETRAIN_DATE_SPLIT_CUTOFFS
+// for the same pattern).
+const FULLY_EXCLUDED_LEAGUE_IDS = new Set([]);
 
 const DATE_SPLIT_CUTOFFS = new Map([
   [41, '2026-08-11T09:00:00Z'],
   [42, '2026-08-11T09:00:00Z'],
   [40, '2026-08-19T22:00:00Z'],
+  [48, '2026-08-24T16:00:00Z'],
 ]);
 
 function isTrainingExcluded(leagueId, date) {

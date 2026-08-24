@@ -4695,3 +4695,160 @@ Auto-retrain gate re-verified `false` throughout; model unchanged
 Both temp diagnostic endpoints (`/api/admin/correction-layer-diagnostic`,
 `/api/admin/matched-odds-coverage-diagnostic`) removed and confirmed 404
 after this addendum's work concluded.
+
+## Addendum 27 — Fixing an over-broad domestic-blend holdout filter, banking Carabao Cup's corrected backtest, and retiring "permanent" holdouts (calibration-rules.md rule 15)
+
+### Part A — The over-broad filter, and why it degraded Carabao Cup
+
+The 9c49e45 domestic-blend leakage fix (2026-08-19) closed a real gap —
+`buildDomesticTimeline()` was being built from the full historical fixture
+pool, meaning a training-eligible fixture's own standings input could be
+computed using data from fixtures dated *after* it, a genuine leak into
+training. The fix, as shipped, filtered every fixture in the pool down to
+just the training-eligible ones before building the timeline — one filtered
+pool, applied uniformly regardless of a fixture's own status.
+
+That uniform application was over-broad. A fixture that is *itself* a
+training holdout (Carabao Cup, 100% of League One/Two/Championship's
+frozen backtest windows) never trains anything no matter what data computed
+its own score — the leakage concern the fix existed to close simply does
+not apply when scoring a holdout fixture's own record. But the shipped fix
+gave holdout fixtures the same training-eligible-only filtered pool anyway,
+which for Carabao Cup meant most fixtures lost access to genuine, recent
+cross-league standings and fell back to nulls or multi-year-stale snapshots
+instead. Traced via `/api/_diag/domestic-blend-trace`: **928 of 1,101
+(84.3%)** of Carabao Cup's scored fixtures changed between the pre-fix
+("old", fully unfiltered) and post-fix ("buggy", uniformly filtered) states
+— a scale far beyond what the original leakage concern justified.
+
+**Fix**: choose the domestic-blend timeline per fixture, not once per
+batch. A fixture that is itself a training holdout gets the full,
+unfiltered timeline (byte-identical treatment to the pre-9c49e45 state,
+since its own score never trains anything). A training-eligible fixture
+keeps the filtered pool exactly as before — zero regression to the
+original leakage protection, since that population's filter is unchanged.
+
+**Verification, re-run after the corrected rescore**: 0 of 1,101 (0%)
+Carabao Cup fixtures now differ from the fully-unfiltered ground truth —
+the degradation is fully reversed, not merely reduced. League One/Two's
+own training-eligible (post-cutoff) population is filtered exactly as
+before; the filter logic itself did not change for them.
+
+### Part B — An incidental discovery: League One's own frozen reading had drifted too, for a different, smaller reason
+
+Comparing the corrected rescore's `/api/league-tier-matrix` output against
+a baseline captured immediately before Part A's fix, League One's own
+reported figures had moved (n 2,231→2,227, several tiers redistributed by
+double digits) while League Two's were byte-for-byte unchanged. Per rule
+15's evidentiary bar (a fixture-level trace, a clear mechanism, a bounded
+scope — see calibration-rules.md), this was investigated rather than
+assumed:
+
+- **Mechanism**: Championship (league 40) joined
+  `DOMESTIC_LEAGUE_IDS_FOR_BLEND` on 2026-08-19 (commit `fdab315`, part of
+  Championship's own onboarding), but Championship's historical backfill
+  ran with `rescore=false` — it added Championship's own fixtures without
+  recomputing anyone else's scoring. Today's rescore (needed to fix
+  Carabao Cup) was the first one to actually touch League One's own
+  scoredRecords since Championship joined the blend pool.
+- **Scope**: a targeted trace (extending `/api/_diag/domestic-blend-trace`)
+  compared each League One/Two fixture's own domestic-blend standings
+  input against a pool that excludes Championship entirely. League One:
+  **44 of 8,219 (0.5%)** fixtures changed. League Two: **0 of 8,244 (0%)**
+  — consistent with League One being Championship's actual
+  promotion/relegation partner and League Two not being one.
+- **Nature of the change**: not contamination — the same known defect Part
+  A fixed, just a small pre-existing corner of it. Every one of the 44
+  fixtures involves a Championship-mainstay club (Cardiff, Birmingham,
+  Reading, Blackpool, Wigan, Derby, Rotherham, Huddersfield, Peterborough,
+  Plymouth, Luton) whose most-recent blend-eligible standing, before
+  Championship was in the pool, was falling back to a snapshot from years
+  before Championship even existed in this system. Concrete examples from
+  the fixture-level trace: Cardiff's standing snapshot moved from
+  **2019-05-12 → 2025-05-03**; Birmingham from **2011-05-22 → 2024-05-04**;
+  Reading from **2013-05-19 → 2023-05-08**; Derby had no usable snapshot at
+  all before Championship joined the pool (`null → 2023-05-07`).
+
+This clears rule 15's three-part bar for a legitimate correction (traced,
+mechanistic, bounded) rather than a re-peek: it was discovered as a side
+effect of unrelated work, not sought out; the mechanism is a specific,
+dateable code change; and the scope is 44 of 2,231 fixtures (2%), not the
+whole population moving in a favorable direction.
+
+**Corrected figures, per calibration-rules.md rule 15's decision (accept
+and re-document, matching Addendum 24's own precedent for a different bug)**:
+
+| League | Metric | Original (Addendum 24) | Corrected (this addendum) |
+|---|---|---|---|
+| League One (41) | posEdgeN | 2,231 | 2,227 |
+| League One (41) | ROI | -3.9% | -2.36% |
+| League Two (42) | posEdgeN | 2,346 | 2,346 (unchanged) |
+| League Two (42) | ROI | +3.1% | +3.07% (rounding-level, unchanged) |
+
+League One's conclusion is unaffected: still comfortably negative, still no
+confirmed edge — the 2% correction moves the number closer to breakeven but
+nowhere near flipping the substantive read. `CALIBRATION_AUDIT[41]`'s note
+documents the correction in the same "corrected: X (was Y)" style already
+used for the Addendum 24 `computeUnifiedEdge` fix. `CALIBRATION_AUDIT[42]`
+now records the explicit re-verification that it was checked and found
+untouched.
+
+Figures were pulled via a purpose-built read-only diagnostic
+(`/api/_diag/rebanked-posedge-figures`), not the live `/api/ev-calibration`
+endpoint — that endpoint auto-writes `settings.paperTradeOnly`/
+`paperKellyFraction` based on whatever it computes, and hitting it purely
+to read numbers risked auto-removing League One from `paperTradeOnly`
+(going live with real money) as a side effect of a documentation fetch, had
+its ROI happened to cross zero. It didn't, but the risk was real enough to
+build around rather than accept.
+
+### Part C — Carabao Cup's corrected backtest, banked, and converted to training-eligible
+
+With Part A's fix verified clean, Carabao Cup's corrected reading is now
+the final, banked figure:
+
+| Metric | Original (Addendum 24) | Corrected & banked (this addendum) |
+|---|---|---|
+| n (matched population) | 330 | 330 (unchanged) |
+| posEdgeN | 225 | 192 |
+| ROI | +10.5% | +8.04% |
+
+Still well below the rule-6 decision-grade floor — no confirmed edge, same
+conclusion as every prior Carabao Cup reading. `CALIBRATION_AUDIT[48]`
+updated with the full correction history (original → Addendum-24-corrected
+→ this addendum's banked figure) in the same transparent style as the
+other two leagues.
+
+Per rule 15 (see calibration-rules.md): with a clean, banked backtest now
+in hand and no further test in progress, Carabao Cup converts immediately
+from rule 10's whole-population exclusion to rule 12's date-split
+mechanism, at cutoff **2026-08-24T16:00:00Z** (anchored to this backtest's
+own compute date). Converted across all four holdout-check locations
+(`server.js`'s `isFixtureTrainingHoldout`/`isWeeklyRetrainExcluded`,
+`models/gbdt-train.js`, `models/gbdt-train-proxy.js`) — the same end-state
+League One/Two and Championship each reached after their own rule-12/15
+conversions. `UNSEEN_POPULATION_DISPLAY_IDS`/`CONFIRMED_IDS`/`LEAGUES` are
+untouched, per rule 12's explicit decoupling requirement — this is a
+training-pool-only decision.
+
+### Part D — Championship, and the standing policy change
+
+Championship's backtest (`backtested_no_edge`, already banked, no further
+test in progress) was converted the same day, for the same reason: a
+permanent whole-population holdout was never buying anything further once
+its one deliberate look was taken. Calibration-rules.md now carries this as
+a standing rule (rule 15): any future rule-10 holdout is understood from
+its own creation commit as temporary — held only long enough to produce one
+genuine backtest, then released into training the moment that result is
+banked. No new holdout should be framed as open-ended or permanent going
+forward. Rule 15 explicitly carves out rule 13's own independent
+correction-layer discipline (the currently-active League Two multiplier /
+League One walk-forward work, and H2H-shrinkage k-fitting) — confirmed
+unaffected, since `CORRECTION_LAYER_RULES` in scoring.js has no dependency
+on any of the four training-holdout constants touched by this addendum.
+
+**Temp endpoints from this task** (`/api/_diag/domestic-blend-trace`,
+`/api/_diag/rebanked-posedge-figures`) and the Settings-tab "⚠ Full
+Rescore" button remain in place pending final cleanup, per established
+convention, since they were still in active use verifying this addendum's
+own figures.
