@@ -3124,7 +3124,13 @@ async function renderPerfMode(mode) {
   const resolved = placedBets.filter(b => b.stage === 'RESOLVED');
   const wins     = resolved.filter(b => b.result === 'win').length;
   const losses   = resolved.filter(b => b.result === 'loss').length;
-  const staked   = resolved.reduce((s, b) => s + b.suggestedStake, 0);
+  // Was b.suggestedStake only — same class of bug as the Bet Log's stake column
+  // (2026-08-24): once a bet's stake is edited/bookmaker-confirmed away from the
+  // model's original suggestion, this silently kept using the stale suggested
+  // figure as the ROI denominator instead of what was actually risked. actualStake
+  // is already the established precedence everywhere else a stake is settled
+  // (see allPlaced filter just above, settleStakeForReturn elsewhere).
+  const staked   = resolved.reduce((s, b) => s + (b.actualStake ?? b.suggestedStake), 0);
 
   const allResolved = allPlaced.filter(b => b.stage === 'RESOLVED');
   const totalPnl     = allResolved.reduce((s, b) => s + (b.pnl || 0), 0);
@@ -3240,7 +3246,9 @@ async function renderPerfMode(mode) {
         ${pinnOddsStr ? `<div style="font-size:9px;color:var(--muted)" title="Pinnacle margin-stripped implied odds at placement — fixed reference, unaffected by cash-out">Pinn: ${pinnOddsStr}</div>` : ''}
       </td>
       <td class="mono c-cyan">+${((b.edge||0)*100).toFixed(1)}%</td>
-      <td class="mono">£${b.suggestedStake?.toFixed(2)}</td>
+      <td class="mono">
+        £${(b.actualStake ?? b.suggestedStake)?.toFixed(2)}${b.actualStake != null && b.actualStake !== b.suggestedStake ? `<span style="color:var(--muted);font-size:9px"> (model: £${b.suggestedStake?.toFixed(2)})</span>` : ''}
+      </td>
       <td class="mono ${pnlCls}">
         ${pnlStr}
         ${realizedReturnStr ? `<div style="font-size:9px;color:var(--muted)">return: ${realizedReturnStr}</div>` : ''}
