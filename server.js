@@ -8314,6 +8314,41 @@ app.get('/api/_diag/venue-coverage', (_req, res) => {
       leagueId: f.league?.id,
       date: f.fixture?.date,
     })),
+    // Added after the real recovered venue data came back showing 2,332 distinct
+    // venues -- ~10x the "~238 venues" the original plan assumed, well beyond a
+    // one-Open-Meteo-call-per-venue budget if pursued exhaustively. venueCoords()
+    // already falls back to CITY_COORDS when the exact venue name doesn't match,
+    // so before concluding 2,175 individual stadiums need geocoding, checks
+    // whether adding CITY-level coordinates for a much smaller number of cities
+    // would close most of the gap instead -- cheaper (city coords are looser to
+    // source and far fewer of them) and Open-Meteo calls would then be one per
+    // city, not one per stadium. Groups unresolved fixtures by city, reports
+    // cumulative fixture-coverage curves for both a per-venue and a per-city
+    // resolution strategy so the actual tradeoff is visible before choosing scope.
+    cityLevelAnalysis: (() => {
+      const cityMap = {};
+      for (const { name, city, fixtures } of unresolved) {
+        const key = city || name;
+        if (!key) continue;
+        if (!cityMap[key]) cityMap[key] = 0;
+        cityMap[key] += fixtures;
+      }
+      const cityRanked = Object.entries(cityMap).sort((a, b) => b[1] - a[1]);
+      const cumulativeCoverage = (ranked, totalUnresolved, checkpoints) => {
+        let running = 0;
+        return checkpoints.map(n => {
+          running = ranked.slice(0, n).reduce((s, [, count]) => s + count, 0);
+          return { topN: n, fixturesCovered: running, pctOfUnresolved: totalUnresolved ? +((running / totalUnresolved) * 100).toFixed(1) : 0 };
+        });
+      };
+      const checkpoints = [10, 25, 50, 100, 150, 200, 250];
+      return {
+        distinctUnresolvedCities: cityRanked.length,
+        topCitiesByFixtureCount: cityRanked.slice(0, 20).map(([city, count]) => ({ city, fixtures: count })),
+        cumulativeCoverageByCity: cumulativeCoverage(cityRanked, unresolvedFixtures, checkpoints),
+        cumulativeCoverageByVenue: cumulativeCoverage(unresolved.map(u => [u.key, u.fixtures]), unresolvedFixtures, checkpoints),
+      };
+    })(),
   });
 });
 
