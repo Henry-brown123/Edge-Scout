@@ -8371,6 +8371,41 @@ app.get('/api/_diag/domestic-blend-trace', (_req, res) => {
   });
 });
 
+// Read-only twin of the posEdgeN/roi figure /api/ev-calibration reports per
+// league, scoped to just 41/42/48 -- built specifically so this could be
+// re-checked after today's rescore WITHOUT going anywhere near
+// runEvCalibration()'s live side effects (it auto-writes settings.json's
+// paperTradeOnly/paperKellyFraction based on whatever it computes). Hitting
+// the real endpoint here would risk auto-removing League One from
+// paperTradeOnly (going live with real money) as an incidental side effect
+// of a documentation fetch, if its ROI happened to cross zero -- exactly the
+// kind of accidental re-peek-driven consequence rule 3 exists to prevent.
+// Temp, remove once Carabao Cup's figure is banked and League One/Two's
+// CALIBRATION_AUDIT entries are re-documented.
+app.get('/api/_diag/rebanked-posedge-figures', async (_req, res) => {
+  try {
+    const matched = await computeMatchedEdgeFixtures();
+    const { LEAGUE_CONFIG } = require('./scoring');
+    const figureFor = (leagueId) => {
+      const fxs = matched.filter(f => parseInt(f.leagueId, 10) === leagueId);
+      const posE = fxs.filter(f => f.edge >= 0.05);
+      let roi = null;
+      if (posE.length > 0) {
+        roi = parseFloat((posE.reduce((s, f) => s + (f.won ? (f.pinnacleOdds - 1) : -1), 0) / posE.length).toFixed(4));
+      }
+      return { leagueId, name: LEAGUE_CONFIG[leagueId]?.name, n: fxs.length, posEdgeN: posE.length, roi };
+    };
+    res.json({
+      note: 'Same posEdgeN/roi math as runEvCalibration() (edge>=5% threshold, Pinnacle-matched), computed read-only -- does NOT call runEvCalibration() itself, so settings.json (paperTradeOnly/paperKellyFraction) is never touched by hitting this.',
+      leagueOne: figureFor(41),
+      leagueTwo: figureFor(42),
+      carabaoCup: figureFor(48),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0, 5) });
+  }
+});
+
 app.get('/api/server-status', async (_req, res) => {
   if (_serverStatusCache && (Date.now() - _serverStatusCacheAt) < SERVER_STATUS_CACHE_MS) {
     return res.json({
