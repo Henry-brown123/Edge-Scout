@@ -1893,6 +1893,12 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       <div style="display:flex;gap:8px;align-items:center">
         <span id="bf-status-pill" style="font-size:10px;font-family:var(--font-head);font-weight:700;padding:3px 10px;border-radius:20px;background:var(--surface3);color:var(--muted)">NOT RUN</span>
         <button class="btn btn-cyan btn-sm" id="bf-run-btn" onclick="runHistoricalBackfill()">Run Backfill</button>
+        <!-- TEMP — Part 1 domestic-blend rescore, remove once the rescore decision is made.
+             Deliberately separate from the routine Run Backfill button and gated behind a
+             confirm() dialog: rescore=true is a full-population re-score, not a routine
+             incremental run, and the last two attempts at this were deferred for memory
+             risk — this button exists so it only fires on a genuine, deliberate click. -->
+        <button class="btn btn-ghost btn-sm" id="bf-rescore-btn" onclick="runFullRescore()" style="color:var(--amber);border-color:var(--amber)" title="Part 1 domestic-blend leakage fix — full re-score, not routine">⚠ Full Rescore</button>
         <button class="btn btn-ghost btn-sm" onclick="loadBackfillStatus()">Refresh</button>
       </div>
     </div>
@@ -6059,6 +6065,39 @@ async function loadBackfillStatus() {
     const d = await apiFetch('/api/backfill/historical/status');
     renderBackfillStatus(d);
   } catch {}
+}
+
+// TEMP — Part 1 domestic-blend rescore trigger. Separate function from
+// runHistoricalBackfill() above (routine, non-destructive incremental run)
+// since rescore=true clears all scored records and re-scores the full
+// population — a deliberate, rare, one-time operation. Remove alongside the
+// button once the rescore decision has been made.
+async function runFullRescore() {
+  if (!confirm('This clears ALL scored records and re-scores the full historical population from scratch (80k+ fixtures). This is the Part 1 domestic-blend leakage fix rescore, deferred twice before for memory risk — confirmed safe on the current Standard instance (heap headroom checked). This is NOT the routine "Run Backfill" — only proceed if you mean to do this now.')) return;
+  document.getElementById('bf-rescore-btn').disabled = true;
+  document.getElementById('bf-log').style.display = 'block';
+  document.getElementById('bf-log').innerHTML = '<span class="log-info">Starting full rescore (rescore=true)…</span><br>';
+  setBfPill('RUNNING', '255,209,102');
+  document.getElementById('bf-progress-wrap').style.display = 'block';
+  document.getElementById('bf-progress-fill').style.width = '0%';
+  try {
+    await apiFetch('/api/backfill/historical?rescore=true', { method: 'POST' });
+  } catch (e) {
+    toast('Rescore start failed: ' + e.message, 'error');
+    document.getElementById('bf-rescore-btn').disabled = false;
+    return;
+  }
+  _bfPollInterval = setInterval(async () => {
+    try {
+      const d = await apiFetch('/api/backfill/historical/status');
+      renderBackfillStatus(d);
+      if (!d.running) {
+        clearInterval(_bfPollInterval);
+        document.getElementById('bf-rescore-btn').disabled = false;
+        toast('Full rescore complete — check /api/league-tier-matrix against your pre-rescore capture', 'success');
+      }
+    } catch {}
+  }, 3000);
 }
 
 async function runHistoricalBackfill() {
