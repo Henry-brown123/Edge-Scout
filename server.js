@@ -8564,30 +8564,51 @@ function classifyArchivedWeather(precipitationMm, windSpeedKmh) {
 let _weatherArchiveRunning = false;
 let _weatherArchiveStatus  = null;
 
+// Groups every FT/AET/PEN fixture whose venue DOES resolve via venueCoords() by
+// physical location (lat,lon), not by raw venue/city string -- several different
+// strings (e.g. "Genova" and "Stadio Comunale Luigi Ferraris (Genova)") resolve to
+// the exact same place, and calling the Archive API once per distinct STRING
+// instead of once per distinct LOCATION would waste calls re-fetching identical
+// weather data. This is the mirror image of getTopUnresolvedCities (which finds
+// the gap); this finds what's actually usable right now.
+function getResolvedLocationsForWeather() {
+  const hist = readHistoricalCached() || {};
+  const allFixtures = (hist.fixtures || []).filter(f => ['FT', 'AET', 'PEN'].includes(f.fixture?.status?.short));
+  const locMap = new Map(); // "lat,lon" -> { lat, lon, fixtures: [{fixtureId, date}] }
+  for (const f of allFixtures) {
+    const name = f.fixture?.venue?.name, city = f.fixture?.venue?.city;
+    const coords = venueCoords(name, city);
+    if (!coords) continue;
+    const key = `${coords.lat},${coords.lon}`;
+    if (!locMap.has(key)) locMap.set(key, { lat: coords.lat, lon: coords.lon, fixtures: [] });
+    locMap.get(key).fixtures.push({ fixtureId: f.fixture.id, date: f.fixture.date });
+  }
+  return [...locMap.values()].sort((a, b) => b.fixtures.length - a.fixtures.length);
+}
+
 // TEMP ADMIN — weather integration Part 1, Archive weather fetch (2026-08-24). For
-// each of the top-N unresolved cities that geocode-top-cities successfully
-// resolved, fetches ONE Open-Meteo Archive API call covering that city's own
-// fixture date range (min to max, not the full 2010-2026 span every city doesn't
-// need), then immediately reduces the (potentially huge, multi-year hourly)
-// response down to just the specific hours matching that city's actual fixtures
-// -- the full hourly array is never retained past that one city's processing, so
-// steady-state memory stays bounded regardless of date-range length, same
-// discipline as every other heavy backfill in this codebase. Persists results to
-// weather-history.json keyed by fixtureId: {condition, precipitationMm, windSpeedKmh}.
+// every distinct resolved LOCATION (not raw venue/city string -- see
+// getResolvedLocationsForWeather above), fetches ONE Open-Meteo Archive API call
+// covering that location's own fixture date range (min to max, not the full
+// 2010-2026 span every location doesn't need), then immediately reduces the
+// (potentially huge, multi-year hourly) response down to just the specific hours
+// matching that location's actual fixtures -- the full hourly array is never
+// retained past that one location's processing, so steady-state memory stays
+// bounded regardless of date-range length, same discipline as every other heavy
+// backfill in this codebase. Persists results to weather-history.json keyed by
+// fixtureId: {condition, precipitationMm, windSpeedKmh}.
 app.get('/api/_diag/fetch-weather-archive', (req, res) => {
   if (_weatherArchiveRunning) return res.status(409).json({ error: 'Weather archive fetch already running', status: _weatherArchiveStatus });
-  const limit = parseInt(req.query.limit, 10) || 200;
-  const targets = getTopUnresolvedCities(limit).filter(({ city }) => CITY_COORDS[city]);
-  const skippedUngeocoded = getTopUnresolvedCities(limit).length - targets.length;
+  const limit = parseInt(req.query.limit, 10) || 1000;
+  const targets = getResolvedLocationsForWeather().slice(0, limit);
   _weatherArchiveRunning = true;
-  _weatherArchiveStatus = { phase: 'running', total: targets.length, done: 0, fixturesMatched: 0, failed: 0, skippedUngeocoded, startedAt: new Date().toISOString() };
-  res.json({ started: true, targetCities: targets.length, skippedUngeocoded, note: 'Poll GET /api/_diag/weather-archive-status for progress.' });
+  _weatherArchiveStatus = { phase: 'running', total: targets.length, done: 0, fixturesMatched: 0, failed: 0, startedAt: new Date().toISOString() };
+  res.json({ started: true, targetLocations: targets.length, note: 'Poll GET /api/_diag/weather-archive-status for progress.' });
 
   (async () => {
     const weatherHistory = readJSON('weather-history.json') || {};
-    for (const { city, fixtures } of targets) {
+    for (const { lat, lon, fixtures } of targets) {
       try {
-        const { lat, lon } = CITY_COORDS[city];
         const dates = fixtures.map(f => new Date(f.date).getTime());
         const startDate = new Date(Math.min(...dates)).toISOString().slice(0, 10);
         const endDate   = new Date(Math.max(...dates)).toISOString().slice(0, 10);
