@@ -101,6 +101,13 @@ const MIN_VALID_BYTES = 100;
 function structuralCheck(file, parsed) {
   if (parsed == null) return false;
   if (file === 'bankroll.json')     return typeof parsed.initial === 'number';
+  // real-bankroll.json (Part 5 of today's brief) — identical {initial,lastUpdated}
+  // shape to bankroll.json above (see computeBankrollAccount, shared by both
+  // getBankroll()/getRealBankrollAccount()), but never registered here when the
+  // real-money ledger was added — same "possibly corrupt, treating as missing"
+  // false positive on every read as a healthy small file, confirmed live at 66
+  // bytes. Same fix, same reasoning as bankroll.json.
+  if (file === 'real-bankroll.json') return typeof parsed.initial === 'number';
   if (file === 'watching.json')     return Array.isArray(parsed);
   if (file === 'transactions.json') return Array.isArray(parsed);
   // green-flags.json (Addendum 21 Part C) — a real bug found live-testing this
