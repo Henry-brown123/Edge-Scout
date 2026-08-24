@@ -219,3 +219,50 @@ one-line description of exactly what was held out. A reading is only as
 trustworthy as its label is honest about what it tested — conflating a
 partial guarantee with a full one is the same mistake as fitting and testing
 on the same data, just moved from the tuning step into the reporting step.
+
+## 15. A rule-10 holdout is temporary by design — it exists only long enough to bank one genuine backtest, then converts immediately to a rule-12 date-split boundary. No new holdout is ever framed as open-ended or permanent.
+
+Rule 10's original framing ("indefinitely," "permanent... exclusion")
+described Carabao Cup and Championship more strongly than the underlying
+reasoning actually supports. On reflection, a whole-population exclusion
+only ever earns its keep for the time it takes to produce the one clean,
+unspent read rule 10 exists to protect. Once that read is taken and banked,
+continuing to withhold real, resolved fixtures from training has an ongoing
+cost (a permanently slightly-duller model on that league, since the weekly
+retrain can never see its new results) with no further benefit — the banked
+backtest is immutable regardless of what trains afterward, and any future
+testing need (a new correction layer, a model upgrade) is better served by
+that league's fresh, ordinary, ongoing Live reading than by a standing
+reserve nobody is still spending down.
+
+**Practical consequence**: the moment a rule-10 holdout's one deliberate
+look is computed and recorded, it converts immediately to rule 12's
+date-split mechanism — cutoff anchored to that backtest's own compute date,
+never to the date the conversion decision happens to be made. There is no
+intermediate "stays permanently held" state to linger in; rule 10 and rule
+12 are now understood as one continuous lifecycle, not two independent
+choices. First applied 2026-08-24 to Championship (cutoff
+2026-08-19T22:00:00Z, its backtest's own compute date — CALIBRATION_AUDIT[40])
+and to Carabao Cup (cutoff anchored to its corrected re-score's compute
+date, following the domestic-blend over-broad-filter fix documented in
+`docs/tier-calibration-analysis.md` — CALIBRATION_AUDIT[48]).
+
+**A new rule-10 holdout going forward states its own eventual conversion up
+front**, in the same commit that creates it — not as a future decision to
+revisit, but as the expected, default lifecycle from day one. "Permanent"
+or open-ended language should not appear in a new holdout's own
+documentation; if a genuine reason exists to hold a specific population
+longer than one backtest (real-money pressure absent, as with Carabao Cup
+originally), say so as a scheduling reason, not a standing exemption from
+this rule.
+
+**This does not touch rule 13's own independent discipline.** A correction
+layer's own reserved test population (e.g. the currently-active League Two
+multiplier / League One walk-forward work, or H2H-shrinkage k-fitting) is a
+separate holdout governed by rule 13, not this rule — it stays reserved for
+exactly as long as its own train/test cycle requires. Converting the
+underlying league's core-model training-eligibility under this rule has no
+bearing on whether a correction layer already built on top of it still has
+its own genuinely-unspent test slice; each layer's evidentiary status
+remains independently checked per rule 13, regardless of what this rule
+does to the layer beneath it.

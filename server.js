@@ -391,35 +391,61 @@ function getLeagueMode(leagueId) {
 }
 
 // Training-data holdout leagues (calibration-rules.md rule 10) — Carabao Cup
-// added 2026-08-10, permanently held out. Mirrors FULLY_EXCLUDED_LEAGUE_IDS in
-// gbdt-train.js / gbdt-train-proxy.js exactly; that filter reads leagueId
-// straight off scoredRecords and has zero dependency on bet mode, stake, or
-// this flag — training-eligibility and staking-eligibility are independent
-// by construction, not just by convention.
-// Championship (40) added 2026-08-19 — rule-10 protected from day one, not
-// retrofitted later like League One/Two's rule-12 date-split conversion had
-// to be (that gap-window complexity is exactly what rule 12 exists to paper
-// over; deciding this up front avoids needing that mechanism at all here).
-// Deliberately whole-population (Carabao Cup's simpler precedent), not
-// date-split (League One/Two's) — see docs/tier-calibration-analysis.md for
-// the full reasoning: no real-money pressure yet, so no reason to convert.
-const TRAINING_HOLDOUT_LEAGUE_IDS = new Set([48, 40]);
-// League One / League Two — date-split holdout (calibration-rules.md rule 12,
-// applied 2026-08-15). Mirrors gbdt-train.js's DATE_SPLIT_LEAGUE_IDS /
-// TRAINING_CUTOFF exactly. A fixture's isTrainingHoldout is computed fresh at
-// scoreOneFixture() (bet-lock) time from its own kickoff vs this cutoff — it
-// is stamped once, permanently, onto the bet record, so already-locked bets
-// (e.g. Crawley Town vs Crewe, Cambridge United vs Wigan) keep whatever value
-// they were given at lock time regardless of any later change here.
-const DATE_SPLIT_HOLDOUT_LEAGUE_IDS = new Set([41, 42]);
-const TRAINING_CUTOFF = '2026-08-11T09:00:00Z'; // see calibration-rules.md rule 12
+// added 2026-08-10, Championship added 2026-08-19. Mirrors
+// FULLY_EXCLUDED_LEAGUE_IDS in gbdt-train.js / gbdt-train-proxy.js exactly;
+// that filter reads leagueId straight off scoredRecords and has zero
+// dependency on bet mode, stake, or this flag — training-eligibility and
+// staking-eligibility are independent by construction, not just by
+// convention.
+// 2026-08-24 (calibration-rules.md rule 15): no rule-10 holdout is permanent
+// by design any more -- it exists only long enough to bank one genuine
+// backtest, then converts to a date-split boundary (rule 12's mechanism)
+// immediately, using its own backtest's compute date as the cutoff.
+// Championship has already been converted (see DATE_SPLIT_HOLDOUT_CUTOFFS
+// below). Carabao Cup (48) stays here, still fully held out, until its
+// corrected re-score (domestic-blend over-broad-filter fix) produces its
+// own banked read and cutoff -- do not drop it from this set early, since
+// isFixtureTrainingHoldout(48, ...) returning false prematurely would make
+// the per-fixture domestic-blend fix select the wrong (filtered) timeline
+// for Carabao Cup's own holdout fixtures.
+const TRAINING_HOLDOUT_LEAGUE_IDS = new Set([48]);
+// Per-league date-split holdout (calibration-rules.md rules 12/15). Mirrors
+// gbdt-train.js's / gbdt-train-proxy.js's DATE_SPLIT_LEAGUE_IDS + cutoffs
+// exactly -- all four copies (this one, the weekly-retrain audit mirror
+// below, models/gbdt-train.js, models/gbdt-train-proxy.js) must move
+// together; there is no shared module for this, by established convention
+// (see models/gbdt-train-proxy.js's own comment on the same duplication).
+// A fixture's isTrainingHoldout is computed fresh at scoreOneFixture()
+// (bet-lock) time from its own kickoff vs its league's cutoff -- it is
+// stamped once, permanently, onto the bet record, so already-locked bets
+// (e.g. Crawley Town vs Crewe, Cambridge United vs Wigan) keep whatever
+// value they were given at lock time regardless of any later change here.
+const DATE_SPLIT_HOLDOUT_CUTOFFS = new Map([
+  // League One / League Two — applied 2026-08-15. Cutoff = commit timestamp
+  // of the temp diagnostic that produced Addendum 19's matched-population
+  // read (2c0ed15, 2026-08-11T08:13:41+01:00 = 07:13:41 UTC), rounded up to
+  // a clean margin past the latest plausible query time that same morning.
+  [41, '2026-08-11T09:00:00Z'],
+  [42, '2026-08-11T09:00:00Z'],
+  // Championship — converted 2026-08-24 per rule 15, immediately after its
+  // one backtest (Addendum, 'backtested_no_edge', already banked in
+  // CALIBRATION_AUDIT[40]). Cutoff = commit timestamp of the endpoint that
+  // produced that read (387adb3, 2026-08-19T21:42:33+01:00 = 20:42:33 UTC),
+  // rounded up past the later display-wiring commit (66e2870, 20:50:18 UTC)
+  // the same evening.
+  [40, '2026-08-19T22:00:00Z'],
+  // Carabao Cup (48) added once its corrected rescore (calibration-rules.md
+  // rule 15, following the domestic-blend over-broad-filter fix) produces
+  // its own banked read and cutoff.
+]);
 
 function isFixtureTrainingHoldout(leagueId, kickoffIso) {
   const lid = parseInt(leagueId, 10);
   if (TRAINING_HOLDOUT_LEAGUE_IDS.has(lid)) return true;
-  if (DATE_SPLIT_HOLDOUT_LEAGUE_IDS.has(lid)) {
+  const cutoff = DATE_SPLIT_HOLDOUT_CUTOFFS.get(lid);
+  if (cutoff !== undefined) {
     if (!kickoffIso) return true;
-    return new Date(kickoffIso).getTime() < new Date(TRAINING_CUTOFF).getTime();
+    return new Date(kickoffIso).getTime() < new Date(cutoff).getTime();
   }
   return false;
 }
@@ -3391,20 +3417,29 @@ function runWalkForwardBlock(blockLabel, trainBefore, testEnd, onComplete, extra
 // breakdown only — the actual training-data exclusion is enforced inside
 // gbdt-train.js itself (the source of truth), this is just so the "new
 // fixtures folded in, by competition" log entry doesn't count fixtures that
-// were never actually eligible to be folded in. Carabao Cup stays fully
-// excluded; League One/Two follow the same date-split cutoff as
-// gbdt-train.js's DATE_SPLIT_LEAGUE_IDS/TRAINING_CUTOFF (calibration-rules.md
-// rule 12) so this log doesn't silently misreport once the cutoff is live.
-const WEEKLY_RETRAIN_FULLY_EXCLUDED_LEAGUE_IDS = new Set([48, 40]);
-const WEEKLY_RETRAIN_DATE_SPLIT_LEAGUE_IDS = new Set([41, 42]);
-const WEEKLY_RETRAIN_TRAINING_CUTOFF = '2026-08-11T09:00:00Z';
+// were never actually eligible to be folded in. 2026-08-24 (rule 15): no
+// league stays fully/permanently excluded any more -- each converts to its
+// own date-split cutoff immediately after its one banked backtest. Carabao
+// Cup (48) is still mid-holdout pending its corrected re-score, so it stays
+// here for now. Must stay in lockstep with gbdt-train.js's own constants
+// (the actual source of truth) and this file's own
+// isFixtureTrainingHoldout/DATE_SPLIT_HOLDOUT_CUTOFFS above -- three-plus
+// copies of the same policy, no shared module, by established convention in
+// this codebase.
+const WEEKLY_RETRAIN_FULLY_EXCLUDED_LEAGUE_IDS = new Set([48]);
+const WEEKLY_RETRAIN_DATE_SPLIT_CUTOFFS = new Map([
+  [41, '2026-08-11T09:00:00Z'],
+  [42, '2026-08-11T09:00:00Z'],
+  [40, '2026-08-19T22:00:00Z'],
+]);
 
 function isWeeklyRetrainExcluded(leagueId, date) {
   const lid = parseInt(leagueId, 10);
   if (WEEKLY_RETRAIN_FULLY_EXCLUDED_LEAGUE_IDS.has(lid)) return true;
-  if (WEEKLY_RETRAIN_DATE_SPLIT_LEAGUE_IDS.has(lid)) {
+  const cutoff = WEEKLY_RETRAIN_DATE_SPLIT_CUTOFFS.get(lid);
+  if (cutoff !== undefined) {
     if (!date) return true;
-    return new Date(date).getTime() < new Date(WEEKLY_RETRAIN_TRAINING_CUTOFF).getTime();
+    return new Date(date).getTime() < new Date(cutoff).getTime();
   }
   return false;
 }
@@ -7400,7 +7435,7 @@ const CALIBRATION_AUDIT = {
   48:  { reliable: true, status: 'unseen_population', note: 'Single deliberate look completed 2026-08-11 against the full matched-odds population (n=330) — no train/test split, none of this data has ever been used for tuning. Structural gap found: Carabao Cup Round 1 fixtures (smaller-club pairings, e.g. Sutton Utd, Newport County, Accrington Stanley) show near-zero Pinnacle odds-market coverage historically — a real, confirmed data-availability limit, not a team-name-matching bug (verified via debug mode: 100% of misses were zero-event API responses, not failed name matches). Corrected 2026-08-18 (Addendum 24): a bug in computeUnifiedEdge (marginStrippedImplied read the wrong odds-object field names) silently NaN\'d every edge computation from Track A (2026-08-14) onward, so this reading was frozen at its pre-Track-A figures the whole time, not genuinely recomputed. Corrected: posEdgeN=225 (was 168), ROI +10.5% (was +18.5%), still well below the rule-6 decision-grade floor, not a confirmed edge — same conclusion, corrected number.' },
   41:  { reliable: true, status: 'unseen_population', note: 'Single deliberate look completed 2026-08-11 against the full matched-odds population (n=3,344) — no train/test split, none of this data has ever been used for tuning. As of 2026-08-15 (rule 12): training exclusion is now date-split at kickoff cutoff 2026-08-11T09:00:00Z, not whole-league — this backtest population (all pre-cutoff) stays permanently protected and this reading never changes; fixtures kicking off at/after the cutoff feed the weekly retrain and accumulate as a separate, normal Live reading instead. Corrected 2026-08-18 (Addendum 24): a bug in computeUnifiedEdge (marginStrippedImplied read the wrong odds-object field names) silently NaN\'d every edge computation from Track A (2026-08-14) onward, so this reading was frozen at its pre-Track-A figures the whole time, not genuinely recomputed — the originally-reported posEdgeN=1,580/ROI -3.6% never actually reflected Track A\'s calFactor/margin-stripping correction. Corrected: posEdgeN=2,231, ROI -3.9% — still no confirmed edge (same conclusion as before), but the per-tier cells shifted; the 50-55% tier (n=322) still shows a CI excluding zero, now (-28.2%, -4.7%). Real-money impact of the bug: none — settings.paperTradeOnly/paperKellyFraction were never mutated by it (runEvCalibration()\'s auto-management explicitly skips roi===null leagues, confirmed via live settings read); this was a reporting-layer bug, not a bet-locking one (scoreOneFixture never calls computeUnifiedEdge).' },
   42:  { reliable: true, status: 'unseen_population', note: 'Single deliberate look completed 2026-08-11 against the full matched-odds population (n=3,338) — no train/test split, none of this data has ever been used for tuning. As of 2026-08-15 (rule 12): training exclusion is now date-split at kickoff cutoff 2026-08-11T09:00:00Z, not whole-league — this backtest population (all pre-cutoff) stays permanently protected and this reading never changes; fixtures kicking off at/after the cutoff feed the weekly retrain and accumulate as a separate, normal Live reading instead. Corrected 2026-08-18 (Addendum 24): a bug in computeUnifiedEdge (marginStrippedImplied read the wrong odds-object field names) silently NaN\'d every edge computation from Track A (2026-08-14) onward, so this reading was frozen at its pre-Track-A figures the whole time, not genuinely recomputed — the originally-reported posEdgeN=1,746/ROI +4.2% never actually reflected Track A\'s calFactor/margin-stripping correction. Corrected: posEdgeN=2,346, ROI +3.1% — still no confirmed edge (same conclusion as before), per-tier cells shifted; see /api/league-tier-matrix for the current per-cell breakdown. Real-money impact of the bug: none — settings.paperTradeOnly/paperKellyFraction were never mutated by it (runEvCalibration()\'s auto-management explicitly skips roi===null leagues, confirmed via live settings read); this was a reporting-layer bug, not a bet-locking one (scoreOneFixture never calls computeUnifiedEdge).' },
-  40:  { reliable: false, status: 'backtested_no_edge', note: 'Single disciplined backtest completed 2026-08-19 on the full rule-10-protected, genuinely-unseen population (16 seasons, 8357 fixtures scored, 3460 matched with closing odds — 147 misses all no_event_match, pre-dating Odds API coverage). Calibration broadly overconfident in mid-high tiers (e.g. 60-65%: predicted 62.4% vs actual 50.7%; 70-75%: predicted 72.0% vs actual 56.9%). Pooled ROI on posEdge>=5% bets: n=2321 (clears rule-6 decision-grade floor), ROI -0.67%, 95% CI [-5.74%, +4.4%] — spans zero, no confirmed edge. Individual tier CIs are noisier (a couple non-zero-crossing, e.g. 35-40% and 65-70% positive) but none clear the ~300-400 floor on their own and some "significant" results are expected by chance across 10 tiers tested — not treated as decision-grade. Per calibration-rules rule 3 (single look, no re-testing) and the task brief, NOT added to UNSEEN_POPULATION_LEAGUES/historicalSource:"real-backtest" since the result does not confirm a genuine edge. Domestic-blend fix (2026-08-19) empirically verified correct on 93 real promotion/relegation boundary crossings before this backtest ran. Coverage: API-Sports league 40, Odds API soccer_efl_champ, teamsMatch() clean.' },
+  40:  { reliable: false, status: 'backtested_no_edge', note: 'Single disciplined backtest completed 2026-08-19 on the full rule-10-protected, genuinely-unseen population (16 seasons, 8357 fixtures scored, 3460 matched with closing odds — 147 misses all no_event_match, pre-dating Odds API coverage). Calibration broadly overconfident in mid-high tiers (e.g. 60-65%: predicted 62.4% vs actual 50.7%; 70-75%: predicted 72.0% vs actual 56.9%). Pooled ROI on posEdge>=5% bets: n=2321 (clears rule-6 decision-grade floor), ROI -0.67%, 95% CI [-5.74%, +4.4%] — spans zero, no confirmed edge. Individual tier CIs are noisier (a couple non-zero-crossing, e.g. 35-40% and 65-70% positive) but none clear the ~300-400 floor on their own and some "significant" results are expected by chance across 10 tiers tested — not treated as decision-grade. Per calibration-rules rule 3 (single look, no re-testing) and the task brief, NOT added to UNSEEN_POPULATION_LEAGUES/historicalSource:"real-backtest" since the result does not confirm a genuine edge. Domestic-blend fix (2026-08-19) empirically verified correct on 93 real promotion/relegation boundary crossings before this backtest ran. Coverage: API-Sports league 40, Odds API soccer_efl_champ, teamsMatch() clean. As of 2026-08-24 (rule 15): with this backtest already banked and no further test in progress, a permanent whole-population holdout was never buying anything further — training exclusion is now date-split at kickoff cutoff 2026-08-19T22:00:00Z (anchored to this backtest\'s own compute date, not the date this rule was applied), same end-state League One/Two reached after their own rule-12 conversion. This reading stays exactly as reported above and never changes; fixtures kicking off at/after the cutoff feed the weekly retrain from here on. Per rule 12\'s own decoupling requirement, this is a training-pool-only decision — the deliberate exclusion from UNSEEN_POPULATION_LEAGUES/historicalSource:"real-backtest" above (a no-confirmed-edge read, not a confirmed one) is untouched by it.' },
 };
 
 // Correction-layer-backtest readings (calibration-rules.md rules 13/14).

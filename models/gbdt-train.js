@@ -29,46 +29,56 @@ const L2_LAMBDA = 1.0;  // L2 regularisation on leaf values (Newton step)
 // local data/ dir only when DATA_DIR truly isn't set (e.g. run standalone in dev).
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../data');
 
-// Carabao Cup — deliberately held-aside, never-yet-calibrated population
-// (docs/tier-calibration-analysis.md Addenda 16-19, calibration-rules.md rule
-// 10). Paper-only, no real-money pressure to fold it in, so it stays under
-// rule 10's original permanent, whole-population exclusion indefinitely.
-// Championship (40) added 2026-08-19, same rule-10 protection, decided at
-// day-1 addition rather than retrofitted later like League One/Two's rule-12
-// conversion — no real-money pressure yet, so no reason to convert.
-const FULLY_EXCLUDED_LEAGUE_IDS = new Set([48, 40]);
+// 2026-08-24 (calibration-rules.md rule 15): no rule-10 holdout stays fully/
+// permanently excluded any more -- it exists only long enough to bank one
+// genuine backtest, then converts immediately to a date-split cutoff (rule
+// 12's mechanism), same end-state League One/Two reached. Carabao Cup (48)
+// is the one league still here, pending its own corrected rescore (the
+// domestic-blend over-broad-filter fix, same date) producing a clean banked
+// read to anchor its cutoff to. Championship (40) converted below the moment
+// this rule was adopted, since its one backtest ('backtested_no_edge',
+// CALIBRATION_AUDIT[40]) was already banked with nothing further to protect.
+const FULLY_EXCLUDED_LEAGUE_IDS = new Set([48]);
 
-// League One / League Two — split by fixture kickoff date, not by league
-// (calibration-rules.md rule 12, applied 2026-08-15). Real money is staked on
-// these leagues and new fixtures resolve weekly with no way to improve the
-// model, but Addendum 19's backtest (the basis for the currently green-flagged
-// real-money cells) was computed against the full pre-cutoff population and
-// must never be contaminated. Anything with a kickoff strictly before
-// TRAINING_CUTOFF stays excluded from training forever, preserving exactly
-// the population that read was computed against. Anything at or after the
-// cutoff is training-eligible once it resolves, same as every other league on
-// the weekly retrain cycle. This is a training-pool-only decision — it does
-// NOT authorize touching avgHomeWinRate/homeAdvBaseWeight/etc. (rule 10) for
-// either league, and it must never be inferred from UNSEEN_POPULATION_LEAGUES
-// / historicalSource in server.js, which stay decoupled and permanently
-// 'real-backtest' regardless of what this filter does (rule 12).
-const DATE_SPLIT_LEAGUE_IDS = new Set([41, 42]);
-// Set to the commit timestamp of the temp diagnostic endpoint that produced
-// Addendum 19's matched-population read (2c0ed15, 2026-08-11T08:13:41+01:00 =
-// 07:13:41 UTC), rounded up to a clean, conservative margin past the latest
-// plausible query time that same morning — so no fixture that could have
-// contributed to the already-published +/-ROI figures is ever folded into
-// training later.
-const TRAINING_CUTOFF = '2026-08-11T09:00:00Z';
+// Per-league date-split cutoff (calibration-rules.md rules 12/15). Real money
+// is staked on League One/Two and new fixtures resolve weekly with no way to
+// improve the model on them, but each league's own banked backtest was
+// computed against its own pre-cutoff population and must never be
+// contaminated. Anything with a kickoff strictly before a league's own
+// cutoff stays excluded from training forever, preserving exactly the
+// population that league's read was computed against. Anything at or after
+// is training-eligible once it resolves, same as every other league on the
+// weekly retrain cycle. This is a training-pool-only decision — it does NOT
+// authorize touching avgHomeWinRate/homeAdvBaseWeight/etc. (rule 10) for any
+// of these leagues, and it must never be inferred from
+// UNSEEN_POPULATION_LEAGUES/historicalSource in server.js, which stay
+// decoupled and permanently 'real-backtest' regardless of what this filter
+// does (rule 12).
+const DATE_SPLIT_CUTOFFS = new Map([
+  // League One / League Two — commit timestamp of the temp diagnostic that
+  // produced Addendum 19's matched-population read (2c0ed15,
+  // 2026-08-11T08:13:41+01:00 = 07:13:41 UTC), rounded up to a clean margin
+  // past the latest plausible query time that same morning.
+  [41, '2026-08-11T09:00:00Z'],
+  [42, '2026-08-11T09:00:00Z'],
+  // Championship — commit timestamp of the endpoint that produced its
+  // banked backtest read (387adb3, 2026-08-19T21:42:33+01:00 =
+  // 20:42:33 UTC), rounded up past the later display-wiring commit
+  // (66e2870, 20:50:18 UTC) the same evening.
+  [40, '2026-08-19T22:00:00Z'],
+  // Carabao Cup (48) added once its corrected rescore produces its own
+  // banked read and cutoff.
+]);
 
 function isTrainingExcluded(leagueId, date) {
   const lid = parseInt(leagueId, 10);
   if (FULLY_EXCLUDED_LEAGUE_IDS.has(lid)) return true;
-  if (DATE_SPLIT_LEAGUE_IDS.has(lid)) {
+  const cutoff = DATE_SPLIT_CUTOFFS.get(lid);
+  if (cutoff !== undefined) {
     // No date on record → fail safe toward exclusion rather than risk folding
     // in a fixture that can't be verified as post-cutoff.
     if (!date) return true;
-    return new Date(date).getTime() < new Date(TRAINING_CUTOFF).getTime();
+    return new Date(date).getTime() < new Date(cutoff).getTime();
   }
   return false;
 }

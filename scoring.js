@@ -382,7 +382,9 @@ const LEAGUE_CONFIG = {
   // Added 2026-08-19, paper-only, zero calibration history — same guard as 48/41/42
   // above (no avgHomeWinRate/avgDrawRate/avgAwayWinRate/avgGoalsPerGame; neutral
   // marketEfficiency/drawBaseWeight/homeAdvBaseWeight only). Rule-10 protected
-  // from day one (TRAINING_HOLDOUT_LEAGUE_IDS in server.js).
+  // from day one through its one banked backtest; converted to a rule-12/15
+  // date-split (cutoff 2026-08-19T22:00:00Z) once that read was banked — see
+  // DATE_SPLIT_HOLDOUT_CUTOFFS in server.js and CALIBRATION_AUDIT[40].
   40:  { name: 'Championship', marketEfficiency: 1.0, drawBaseWeight: 1.0, homeAdvBaseWeight: 1.0 },
 };
 
