@@ -8602,7 +8602,7 @@ app.get('/api/_diag/fetch-weather-archive', (req, res) => {
   const limit = parseInt(req.query.limit, 10) || 1000;
   const targets = getResolvedLocationsForWeather().slice(0, limit);
   _weatherArchiveRunning = true;
-  _weatherArchiveStatus = { phase: 'running', total: targets.length, done: 0, fixturesMatched: 0, failed: 0, startedAt: new Date().toISOString() };
+  _weatherArchiveStatus = { phase: 'running', total: targets.length, done: 0, fixturesMatched: 0, failed: 0, failedSamples: [], startedAt: new Date().toISOString() };
   res.json({ started: true, targetLocations: targets.length, note: 'Poll GET /api/_diag/weather-archive-status for progress.' });
 
   (async () => {
@@ -8632,6 +8632,14 @@ app.get('/api/_diag/fetch-weather-archive', (req, res) => {
         }
       } catch (e) {
         _weatherArchiveStatus.failed++;
+        if (_weatherArchiveStatus.failedSamples.length < 10) {
+          _weatherArchiveStatus.failedSamples.push({
+            lat, lon,
+            message: e.message,
+            status: e.response?.status ?? null,
+            data: e.response?.data ?? null,
+          });
+        }
       }
       _weatherArchiveStatus.done++;
       writeJSON('weather-history.json', weatherHistory);
