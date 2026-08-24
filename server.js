@@ -5010,18 +5010,22 @@ app.get('/api/backfill/status', (_req, res) => {
   res.json({ status: 'complete', ...meta });
 });
 
-// TEMP ADMIN — weather integration Part 1 step 2 (2026-08-24). Forces the next
-// POST /api/backfill/historical(rescore=false) run to re-fetch EVERY league/season
-// combo instead of skipping already-cached ones, so venue (just added to
-// stripFixture()) gets backfilled into the ~80,145 already-stored historical
-// fixtures. Only clears fetchedLeagues -- fixtures/scoredRecords/optimisedWeights
-// are left exactly as they are; Phase 1's fixtureMap re-fetch merges by fixture id,
-// overwriting old venue-less entries with fresh venue-including ones for the same
-// id, so this is additive/idempotent, not destructive. Deliberately POST, not GET,
-// so it can't fire from a stray link click or crawler -- this is a real state
-// change (~247 API-Sports calls once the backfill run that follows it actually
-// executes), same caution tier as rescore=true. Remove once venue recovery is done.
-app.post('/api/_diag/clear-fetch-cache', (_req, res) => {
+// TEMP ADMIN — weather integration Part 1 step 2 (2026-08-24). Single GET-able
+// action combining what would otherwise be two calls: clears fetchedLeagues (so
+// Phase 1 of runHistoricalBackfill re-fetches EVERY league/season combo instead of
+// skipping already-cached ones) and immediately kicks off that backfill run
+// (rescore=false), so venue (just added to stripFixture()) gets backfilled into the
+// ~80,145 already-stored historical fixtures. fixtures get merged by fixture id
+// (fresh venue-including entries overwrite old venue-less ones for the same id) --
+// additive/idempotent, not destructive. scoredRecords/optimisedWeights are
+// completely untouched -- rescore=false means already-scored fixtures (matched by
+// id) are never re-scored, only their raw fixture record gets refreshed. Real state
+// change (~247 API-Sports calls) and real cost, same caution tier as rescore=true,
+// but GET rather than POST specifically at the user's request (deliberately typing
+// this URL into a browser they're already authenticated in is itself the
+// confirmation gate here). Poll /api/backfill/historical/status for progress.
+// Remove once venue recovery is done.
+app.get('/api/_diag/recover-venue-data', (_req, res) => {
   if (_historicalBackfillRunning) return res.status(409).json({ error: 'Backfill already running -- wait for it to finish first' });
   const existing = readJSON('backfill-historical.json');
   if (!existing) return res.status(404).json({ error: 'backfill-historical.json not found' });
@@ -5030,8 +5034,10 @@ app.post('/api/_diag/clear-fetch-cache', (_req, res) => {
   writeJSON('backfill-historical.json', existing);
   res.json({
     cleared: clearedCount,
-    note: 'fetchedLeagues cache cleared. fixtures/scoredRecords/optimisedWeights untouched. Now POST /api/backfill/historical (no rescore param, or rescore=false explicitly) to re-fetch every league/season combo and merge venue into the existing fixture pool.',
+    started: true,
+    note: 'fetchedLeagues cache cleared and historical backfill (rescore=false) started in the background -- poll GET /api/backfill/historical/status for progress. fixtures/scoredRecords/optimisedWeights are otherwise untouched.',
   });
+  runHistoricalBackfill({ rescore: false }).catch(e => console.error('[HistoricalBackfill]', e.message));
 });
 
 // Historical backfill — full 3-season fetch, factor scoring, weight optimisation
@@ -8309,6 +8315,150 @@ app.get('/api/_diag/venue-coverage', (_req, res) => {
       date: f.fixture?.date,
     })),
   });
+});
+
+// TEMP DIAGNOSTIC — H2H anomaly shrinkage fitting (2026-08-24, calibration-rules.md
+// discipline throughout). Fits k in teamProfiles.js's dormant computeH2HAnomalyWeight
+// per that function's own comment: reuse shrinkage.js's empirical-Bayes
+// method-of-moments (k = within-pair variance / between-pair variance), fit on a
+// TRAIN-only split, single disciplined look at TEST once. Read-only and diagnostic --
+// team profiles are rebuilt in-memory via buildProfileFromFixtures (a pure function,
+// no disk writes) restricted to TRAIN-period fixtures only; team-profiles.json itself
+// is never touched, so this cannot corrupt live profile data. No scoring/betting path
+// reads this endpoint's output; wiring computeH2HAnomalyWeight's fitted k into live
+// scoring is a separate, later decision, same governance as the home/away multiplier
+// and fixture congestion toggles.
+//
+// Split: genuine chronological 80/20 by date across the full population (not per
+// league) -- H2H pairs frequently span years of history, so a global date cutoff
+// naturally gives every pair's TRAIN-period matches the fixtures leading up to it,
+// exactly mirroring how the live modifier actually works (anomaly computed from past
+// results, applied prospectively).
+//
+// Fitting population: every oppositionAnomalies entry (across all teams' TRAIN-only
+// profiles) that already cleared buildProfileFromFixtures' own matches threshold --
+// NOT restricted further to "significant" (|anomalyScore|>=0.12) entries, since
+// pre-filtering to only extreme cases before estimating between-pair variance would
+// bias the fit toward overstating how much real signal exists. Cell shape matches
+// shrinkage.js exactly: {n: matches, value: actualWinRate}, varianceForHitRate.
+//
+// Test evaluation: for each TRAIN-derived candidate (team T's oppositionAnomalies
+// entry vs opponent O), find TEST-period fixtures where T was literally the home side
+// and O the away side -- the exact scope the live modifier actually applies to
+// (homeProfile.oppositionAnomalies vs awayProfile.teamId). Compares mean absolute
+// calibration error (actual TEST-period T-vs-O home win rate minus predicted) between
+// the current flat 0.5 weight and the fitted-k weight.
+app.get('/api/_diag/h2h-shrinkage-fit', async (_req, res) => {
+  try {
+    const { buildProfileFromFixtures, computeH2HAnomalyWeight, CONTEXT_THRESHOLDS } = require('./teamProfiles');
+    const { empiricalBayesShrink, varianceForHitRate } = require('./shrinkage');
+
+    const hist = readHistoricalCached() || {};
+    const allFixtures = (hist.fixtures || []).filter(f => ['FT', 'AET', 'PEN'].includes(f.fixture?.status?.short));
+    allFixtures.sort((a, b) => new Date(a.fixture.date) - new Date(b.fixture.date));
+
+    const cutoffIdx  = Math.floor(allFixtures.length * 0.8);
+    const cutoffDate = allFixtures[cutoffIdx]?.fixture?.date;
+    const trainFixtures = allFixtures.slice(0, cutoffIdx);
+    const testFixtures  = allFixtures.slice(cutoffIdx);
+
+    // Group TRAIN fixtures by team (mirrors updateTeamProfiles' own grouping, but
+    // in-memory only -- no readProfiles()/saveProfiles(), nothing persisted).
+    const teamData = {};
+    for (const fix of trainFixtures) {
+      const homeId = fix.teams?.home?.id, awayId = fix.teams?.away?.id;
+      if (!homeId || !awayId) continue;
+      if (!teamData[homeId]) teamData[homeId] = { name: fix.teams.home.name, fixes: [] };
+      if (!teamData[awayId]) teamData[awayId] = { name: fix.teams.away.name, fixes: [] };
+      teamData[homeId].fixes.push(fix);
+      teamData[awayId].fixes.push(fix);
+    }
+
+    // Build TRAIN-only profiles, collect fitting cells, yield periodically (same
+    // pattern as updateTeamProfiles' own sinceYield >= 100).
+    const fittingCells = [];
+    const teamAnomalies = {}; // teamId -> oppositionAnomalies, for the TEST-eval pass below
+    let sinceYield = 0;
+    for (const [teamId, { name, fixes }] of Object.entries(teamData)) {
+      const profile = buildProfileFromFixtures(teamId, name, fixes);
+      if (profile?.oppositionAnomalies?.length) {
+        teamAnomalies[teamId] = profile.oppositionAnomalies;
+        for (const a of profile.oppositionAnomalies) {
+          fittingCells.push({ id: `${teamId}_${a.opponentId}`, n: a.matches, value: a.actualWinRate });
+        }
+      }
+      if (++sinceYield >= 100) { sinceYield = 0; await new Promise(r => setImmediate(r)); }
+    }
+
+    if (fittingCells.length < 10) {
+      return res.json({ error: 'Too few fitting cells to estimate k reliably', fittingCellCount: fittingCells.length });
+    }
+
+    const shrunk = empiricalBayesShrink(fittingCells, varianceForHitRate);
+    const fittedK = shrunk[0]?.k;
+
+    // Index TEST fixtures by exact home/away pairing for O(1) lookup below.
+    const testPairIndex = new Map();
+    for (const fix of testFixtures) {
+      const homeId = fix.teams?.home?.id, awayId = fix.teams?.away?.id;
+      const g = fix.goals;
+      if (!homeId || !awayId || g?.home == null || g?.away == null) continue;
+      const key = `${homeId}_${awayId}`;
+      if (!testPairIndex.has(key)) testPairIndex.set(key, []);
+      testPairIndex.get(key).push(g.home > g.away ? 'home' : g.home < g.away ? 'away' : 'draw');
+    }
+
+    // Evaluate: for every TRAIN-derived candidate anomaly, check if that exact
+    // home-team-vs-away-opponent pairing recurred in TEST, and how well flat vs
+    // fitted weighting predicted the TEST-period result.
+    let sumAbsErrFlat = 0, sumAbsErrFitted = 0, totalTestMatches = 0, candidatesWithTestCoverage = 0;
+    const sampleRows = [];
+    for (const [teamId, anomalies] of Object.entries(teamAnomalies)) {
+      for (const a of anomalies) {
+        const key = `${teamId}_${a.opponentId}`;
+        const testResults = testPairIndex.get(key);
+        if (!testResults || !testResults.length) continue;
+        candidatesWithTestCoverage++;
+        const testActualHomeWinRate = testResults.filter(r => r === 'home').length / testResults.length;
+
+        const flatWeight   = 0.5;
+        const fittedWeight = computeH2HAnomalyWeight(a.matches, fittedK);
+        const predFlat   = a.expectedWinRate + a.anomalyScore * flatWeight;
+        const predFitted = a.expectedWinRate + a.anomalyScore * fittedWeight;
+
+        const errFlat   = Math.abs(testActualHomeWinRate - predFlat);
+        const errFitted = Math.abs(testActualHomeWinRate - predFitted);
+        sumAbsErrFlat   += errFlat   * testResults.length;
+        sumAbsErrFitted += errFitted * testResults.length;
+        totalTestMatches += testResults.length;
+
+        if (sampleRows.length < 15) {
+          sampleRows.push({
+            teamId, opponentName: a.opponentName, trainMatches: a.matches,
+            trainAnomalyScore: a.anomalyScore, testMatches: testResults.length,
+            testActualHomeWinRate: +testActualHomeWinRate.toFixed(3),
+            predFlat: +predFlat.toFixed(3), predFitted: +predFitted.toFixed(3),
+            errFlat: +errFlat.toFixed(3), errFitted: +errFitted.toFixed(3),
+          });
+        }
+      }
+    }
+
+    res.json({
+      note: 'Train-only fit, single test-set look, per calibration-rules.md. fittedK from shrinkage.js empiricalBayesShrink against every oppositionAnomalies cell in TRAIN (not pre-filtered to "significant" ones, to avoid biasing the variance estimate). meanAbsCalibErrorFlat/Fitted are matches-weighted mean |actual TEST home-win-rate - predicted| across every TRAIN-derived candidate that recurred in TEST as the same home-vs-away pairing -- lower is better-calibrated. Diagnostic only; no scoring/betting path reads this.',
+      split: { cutoffDate, trainFixtures: trainFixtures.length, testFixtures: testFixtures.length },
+      fitting: { fittingCellCount: fittingCells.length, fittedK: +fittedK.toFixed(3), currentFlatWeightEquivalentK: 6 },
+      testEvaluation: {
+        candidatesWithTestCoverage,
+        totalTestMatchesCovered: totalTestMatches,
+        meanAbsCalibErrorFlat:   totalTestMatches ? +(sumAbsErrFlat / totalTestMatches).toFixed(4) : null,
+        meanAbsCalibErrorFitted: totalTestMatches ? +(sumAbsErrFitted / totalTestMatches).toFixed(4) : null,
+      },
+      sampleRows,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0, 5) });
+  }
 });
 
 app.get('/api/server-status', async (_req, res) => {
