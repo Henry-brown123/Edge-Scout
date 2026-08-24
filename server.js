@@ -8483,10 +8483,16 @@ const GEOCODE_ADDITIONS = {
   'Napoli':    { lat: 40.8518, lon: 14.2681 },
   'Lyon':      { lat: 45.7640, lon: 4.8357 },
 };
+// Deliberately does NOT depend on in-memory _geocodeStatus from the run that
+// produced the corrections list above -- a deploy between that run and this one
+// restarts the process and wipes it. GEOCODE_CORRECTIONS is applied unconditionally
+// (safe either way, these are curated known-good values). The parenthetical
+// fallback instead recomputes the still-unresolved city list fresh from the
+// historical population via getTopUnresolvedCities -- cities already resolved by
+// the geocoding run are automatically excluded by that function's own
+// venueCoords() check, so this naturally reflects current state regardless of
+// what happened in a since-restarted process.
 app.get('/api/_diag/fix-geocode-errors', (_req, res) => {
-  if (!_geocodeStatus || _geocodeStatus.phase !== 'complete') {
-    return res.status(409).json({ error: 'Run and complete /api/_diag/geocode-top-cities first' });
-  }
   const applied = [];
   for (const [city, coords] of Object.entries(GEOCODE_CORRECTIONS)) {
     const was = CITY_COORDS[city] ? { ...CITY_COORDS[city] } : null;
@@ -8496,17 +8502,18 @@ app.get('/api/_diag/fix-geocode-errors', (_req, res) => {
   for (const [city, coords] of Object.entries(GEOCODE_ADDITIONS)) {
     if (!CITY_COORDS[city]) { CITY_COORDS[city] = coords; applied.push({ city, type: 'added_for_parenthetical_fallback', now: coords }); }
   }
-  // Parenthetical fallback: any "no_match" result whose city string looks like
-  // "Venue Name (City)" gets pointed at that city's coordinates if already resolved.
+  // Parenthetical fallback: any still-unresolved city whose name looks like
+  // "Venue Name (City)" gets pointed at that city's coordinates if already resolved
+  // (including by the corrections/additions just applied above).
+  const stillUnresolved = getTopUnresolvedCities(300);
   const parenFixed = [];
-  for (const r of _geocodeStatus.results) {
-    if (r.error !== 'no_match') continue;
-    const m = r.city.match(/\(([^)]+)\)\s*$/);
+  for (const { city, fixtures } of stillUnresolved) {
+    const m = city.match(/\(([^)]+)\)\s*$/);
     if (!m) continue;
     const innerCity = m[1].trim();
     if (CITY_COORDS[innerCity]) {
-      CITY_COORDS[r.city] = CITY_COORDS[innerCity];
-      parenFixed.push({ city: r.city, resolvedVia: innerCity, coords: CITY_COORDS[innerCity], fixtureCount: r.fixtureCount });
+      CITY_COORDS[city] = CITY_COORDS[innerCity];
+      parenFixed.push({ city, resolvedVia: innerCity, coords: CITY_COORDS[innerCity], fixtureCount: fixtures.length });
     }
   }
   writeJSON('stadiums.json', { venues: VENUE_COORDS, cities: CITY_COORDS });
