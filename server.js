@@ -737,6 +737,17 @@ function venueCoords(venueName, city) {
       vLower.includes(k.toLowerCase()) || k.toLowerCase().includes(vLower)
     );
     if (key) return VENUE_COORDS[key];
+    // Weather integration Part 1 (2026-08-24): a real, confirmed minority of
+    // fixtures (mostly non-English leagues) put a "Venue Name (City)" compound
+    // string in venue.name with venue.city literally null -- the city-fallback
+    // below never ran for these, since it only ever looked at the `city` param.
+    // The geocode-correction pass keys CITY_COORDS by that exact compound string
+    // for these cases (see /api/_diag/fix-geocode-errors' parenthetical
+    // fallback), so also check CITY_COORDS by venueName before giving up.
+    const cityViaName = Object.keys(CITY_COORDS).find(k =>
+      vLower.includes(k.toLowerCase()) || k.toLowerCase().includes(vLower)
+    );
+    if (cityViaName) return CITY_COORDS[cityViaName];
   }
   if (city) {
     const cLower = city.toLowerCase();
@@ -8474,6 +8485,15 @@ const GEOCODE_CORRECTIONS = {
   'Hamilton':                      { lat: 55.7772,  lon: -4.0338 },
   'San Sebastian':                 { lat: 43.31283, lon: -1.97499 },
   'Stoke':                         { lat: 53.00415, lon: -2.18538 }, // dedupe onto the already-correct "Stoke-on-Trent, Staffordshire" entry
+  // Round 2 (top-250 re-run) surfaced the same class of error again --
+  // confirmed individually the same way as round 1's list above.
+  'Lincoln':                       { lat: 53.2307,  lon: -0.5406 },  // -> Nebraska, USA again (bare variant of "Lincoln, Lincolnshire")
+  'Wien':                          { lat: 48.2082,  lon: 16.3738 },  // -> Wien, Missouri, USA (should be Vienna, Austria)
+  'La Coruna':                     { lat: 43.3623,  lon: -8.4115 },  // -> Coahuila, Mexico (should be A Coruña, Spain)
+  'Warszawa':                      { lat: 52.2297,  lon: 21.0122 },  // -> Warszawa Historic District, Ohio, USA (should be Warsaw, Poland)
+  'Jamor, Oeiras':                 { lat: 38.7106,  lon: -9.2963 },  // -> Uttar Pradesh, India (should be Oeiras, Portugal)
+  'Saint Etienne':                 { lat: 45.4397,  lon: 4.3872 },   // -> a different, small French commune (should be Saint-Étienne, matching the already-correct "Saint-Ètienne" entry)
+  'Cornella':                      { lat: 41.35,    lon: 2.08333 }, // -> Victoria, Australia (should be Cornellà de Llobregat, Spain, matching the already-correct entry)
 };
 // City names not otherwise resolved anywhere in the top-200 run, needed only as
 // parenthetical-extraction targets below.
