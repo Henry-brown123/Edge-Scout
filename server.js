@@ -1119,7 +1119,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   // own-competition table nor the domestic blend had a usable entry.
   let homeStandingsOverride = null, awayStandingsOverride = null;
   if (context === 'international') {
-    const hist = readJSON('backfill-historical.json');
+    const hist = readHistoricalCached();
     if (hist?.fixtures?.length) {
       const intlHistorical = hist.fixtures.filter(f =>
         INTERNATIONAL_LEAGUE_IDS.has(f.league?.id) &&
@@ -1538,7 +1538,7 @@ async function runMorningScan(leagueIds) {
   const allFormFixtures = new Map(); // fixtureId → fixture
 
   // Load historical backfill pool once — shared across all leagues, no API cost.
-  const backfillData = readJSON('backfill-historical.json') || { fixtures: [] };
+  const backfillData = readHistoricalCached() || { fixtures: [] };
   const backfillFixtures = (backfillData.fixtures || [])
     .filter(f => f.fixture?.status?.short === 'FT');
 
@@ -1740,7 +1740,7 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
     // Load historical backfill pool — same enrichment as runMorningScan, so the T-60
     // rescore sees the same team-pool size as the morning scan instead of falling back
     // to just the live last=60 fetch (which can trip the low-confidence gate on its own).
-    const backfillData = readJSON('backfill-historical.json') || { fixtures: [] };
+    const backfillData = readHistoricalCached() || { fixtures: [] };
     const backfillFixtures = (backfillData.fixtures || [])
       .filter(f => f.fixture?.status?.short === 'FT');
 
@@ -2030,7 +2030,7 @@ async function runHourlyRescan() {
   if (!toRefresh.length) return { refreshed: 0 };
 
   const settings = getSettings();
-  const backfillData = readJSON('backfill-historical.json') || { fixtures: [] };
+  const backfillData = readHistoricalCached() || { fixtures: [] };
   const backfillFixtures = (backfillData.fixtures || []).filter(f => f.fixture?.status?.short === 'FT');
   const fixtureStatsDb = getFixtureStats();
 
@@ -3370,7 +3370,7 @@ function isWeeklyRetrainExcluded(leagueId, date) {
 }
 
 function getEligibleTrainingSnapshot() {
-  const hist = readJSON('backfill-historical.json') || {};
+  const hist = readHistoricalCached() || {};
   const records = hist.scoredRecords || [];
   const eligible = records.filter(r =>
     r.homeFactors && r.awayFactors && r.actualOutcome && r.context &&
@@ -4964,7 +4964,7 @@ app.post('/api/backfill/historical/apply-weights', (req, res) => {
 let _leagueOptRunning = false;
 app.post('/api/optimise/leagues', (req, res) => {
   if (_leagueOptRunning) return res.status(409).json({ error: 'Optimisation already running' });
-  const data = readJSON('backfill-historical.json');
+  const data = readHistoricalCached();
   if (!data?.scoredRecords?.length) return res.status(400).json({ error: 'No scored records — run historical backfill first' });
 
   _leagueOptRunning = true;
@@ -5318,7 +5318,7 @@ async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null,
   }
 
   try {
-    const hist = readJSON('backfill-historical.json');
+    const hist = readHistoricalCached();
     if (!hist?.fixtures?.length) throw new Error('backfill-historical.json empty or missing');
 
     const closing = getClosingOdds();
@@ -5521,7 +5521,7 @@ app.get('/api/backfill/closing-odds/status', (req, res) => res.json(_closingOdds
 // Per-league diagnostic: actual vs model home/draw/away rates from scored records
 // GET /api/league/diagnostic?leagues=88,94  (omit for all leagues)
 app.get('/api/league/diagnostic', async (req, res) => {
-  const data = readJSON('backfill-historical.json');
+  const data = readHistoricalCached();
   if (!data?.scoredRecords?.length) return res.json({ leagues: {} });
   const filter = req.query.leagues ? new Set(req.query.leagues.split(',').map(s => s.trim())) : null;
   const settings = getSettings();
@@ -5583,7 +5583,7 @@ app.get('/api/league/diagnostic', async (req, res) => {
 // Calibration data from all historical scored records for Fix 3 chart
 app.get('/api/backfill/historical/calibration', async (req, res) => {
   const { computeModelProb, WEIGHTS_BY_CONTEXT } = require('./scoring');
-  const data = readJSON('backfill-historical.json');
+  const data = readHistoricalCached();
   if (!data?.scoredRecords?.length) return res.json({ bands: {}, total: 0 });
 
   const settings = getSettings();
@@ -5641,7 +5641,7 @@ app.post('/api/backfill/fixture-stats', async (req, res) => {
   res.json({ started: true });
 
   try {
-    const historical = readJSON('backfill-historical.json');
+    const historical = readHistoricalCached();
     if (!historical?.fixtures?.length) {
       console.log('[StatsBackfill] No historical fixtures found — run historical backfill first');
       return;
@@ -5717,7 +5717,7 @@ app.post('/api/backfill/lineups', async (req, res) => {
   res.json({ started: true, rebuild });
 
   try {
-    const historical = readJSON('backfill-historical.json');
+    const historical = readHistoricalCached();
     if (!historical?.fixtures?.length) {
       console.log('[LineupsBackfill] No historical fixtures — run historical backfill first');
       return;
@@ -6712,7 +6712,7 @@ app.post('/api/bookmakers/:id/restriction', (req, res) => {
 // ─── FACTOR DISTRIBUTION DIAGNOSTIC ─────────────────────────────────────────
 
 app.get('/api/diagnostics/data-coverage', (req, res) => {
-  const data     = readJSON('backfill-historical.json');
+  const data     = readHistoricalCached();
   const lineups  = readJSON('lineups.json') || {};
   const stats    = readJSON('fixture-stats.json') || {};
   const profiles = require('./teamProfiles').readProfiles();
@@ -6769,7 +6769,7 @@ app.get('/api/diagnostics/data-coverage', (req, res) => {
 
 app.get('/api/diagnostics/factor-distribution', (req, res) => {
   const { computeModelProb: _unused, WEIGHTS_BY_CONTEXT: WBC } = require('./scoring');
-  const data = readJSON('backfill-historical.json');
+  const data = readHistoricalCached();
   if (!data?.scoredRecords?.length) return res.json({ error: 'No historical data' });
 
   const FACTORS = ['form', 'homeAdv', 'xg', 'h2h', 'defense', 'momentum', 'injuries', 'standings'];
@@ -6821,7 +6821,7 @@ async function runBackfillChain() {
     console.log('[Backfill] Phase 1/3: historical fixtures…');
     await runHistoricalBackfill({ rescore: false });
 
-    const hist = readJSON('backfill-historical.json');
+    const hist = readHistoricalCached();
     if (!hist?.fixtures?.length) {
       console.warn('[Backfill] Historical returned 0 fixtures — rate-limited. The nightly 00:05 cron will retry tomorrow.');
       _startupStatus.phase = 'rate-limited';
@@ -7005,7 +7005,7 @@ function startupCheck() {
 
 // Extracted backfill logic callable without HTTP context
 async function runFixtureStatsBackfillFn({ budget = 2000 } = {}) {
-  const historical = readJSON('backfill-historical.json');
+  const historical = readHistoricalCached();
   if (!historical?.fixtures?.length) return;
 
   // Interleave by league so budget runs give proportional coverage to all 6 leagues,
@@ -7072,7 +7072,7 @@ async function runFixtureStatsBackfillFn({ budget = 2000 } = {}) {
 }
 
 async function runLineupsBackfillFn({ rebuild = false, budget = 7000 } = {}) {
-  const historical = readJSON('backfill-historical.json');
+  const historical = readHistoricalCached();
   if (!historical?.fixtures?.length) return;
 
   const targets = historical.fixtures.filter(f =>
@@ -7162,7 +7162,7 @@ function normaliseTeamName(name) {
 // Quick sample to inspect actual field values in both files
 app.get('/api/diagnostics/ev-dataset-sample', (_req, res) => {
   const rawCo   = readJSON('closing-odds.json');
-  const rawHist = readJSON('backfill-historical.json');
+  const rawHist = readHistoricalCached();
   const coArr   = Array.isArray(rawCo) ? rawCo : Object.entries(rawCo || {}).map(([k,v]) => ({_key: k, ...v}));
   const histArr = Array.isArray(rawHist) ? rawHist : Object.values(rawHist || {});
   // Also try matching the first CO fixture ID against historical
@@ -7190,7 +7190,7 @@ app.get('/api/diagnostics/ev-dataset-sample', (_req, res) => {
 app.get('/api/diagnostics/ev-dataset', (_req, res) => {
   try {
     const rawCo      = readJSON('closing-odds.json');
-    const rawHist    = readJSON('backfill-historical.json');
+    const rawHist    = readHistoricalCached();
 
     // closing-odds.json may be an object (keyed by fixtureId) or array
     const coEntries  = Array.isArray(rawCo) ? rawCo : (rawCo ? Object.values(rawCo) : []);
@@ -7532,7 +7532,7 @@ const VALIDATED_SPLITS = {
 // over the full population is a standing crash risk every time those load.
 // Same yield treatment as the other full-population loops fixed today.
 async function computeMatchedEdgeFixtures() {
-  const historical     = readJSON('backfill-historical.json') || {};
+  const historical     = readHistoricalCached() || {};
   const scoredRecords  = historical.scoredRecords || [];
   const optWeights     = historical.optimisedWeights || {};
   const closingOdds    = readJSON('closing-odds.json') || {};   // keyed by fixtureId
@@ -7820,7 +7820,7 @@ async function runEvCalibrationConsensus() {
   // fields immediately after pulling out just what's needed (scoredRecords/
   // optimisedWeights) so they're GC-eligible before the next large parse,
   // not held for the rest of the function.
-  let historical = readJSON('backfill-historical.json') || {};
+  let historical = readHistoricalCached() || {};
   const scoredRecords = historical.scoredRecords || [];
   const optWeights     = historical.optimisedWeights || {};
   historical = null; // release before the next large parse
@@ -8235,7 +8235,7 @@ app.get('/api/server-status', async (_req, res) => {
 // long enough that waiting for it synchronously is unreliable (see runGbdtRetrain's
 // comment). Poll GET /api/admin/retrain-status for completion.
 app.post('/api/admin/trigger-retrain', (_req, res) => {
-  const hist = readJSON('backfill-historical.json') || {};
+  const hist = readHistoricalCached() || {};
   const scoredCount = hist.scoredRecords?.length ?? 0;
   const result = runGbdtRetrain(`manual trigger via POST /api/admin/trigger-retrain (scoredCount=${scoredCount})`);
   if (!result.success) return res.status(409).json({ success: false, error: result.error });
@@ -8390,7 +8390,7 @@ function getWOWYHighConfCount() {
   return count;
 }
 app.get('/api/startup/status', (_req, res) => {
-  const hist    = readJSON('backfill-historical.json');
+  const hist    = readHistoricalCached();
   const stats   = readJSON('fixture-stats.json') || {};
   const lineups = readJSON('lineups.json') || {};
   const wowyHighConf = getWOWYHighConfCount();
