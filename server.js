@@ -8310,6 +8310,48 @@ app.get('/api/_diag/domestic-blend-trace', (_req, res) => {
     }
   }
 
+  // Separate question, unrelated to the buggy/corrected comparison above:
+  // does League One/Two's own frozen Addendum 19/24 population drift on a
+  // fresh rescore for a reason that has nothing to do with today's Part A
+  // fix -- specifically, Championship (40) joined DOMESTIC_LEAGUE_IDS_FOR_BLEND
+  // on 2026-08-19 (fdab315), and today's rescore is the first one to actually
+  // recompute League One/Two's own scoredRecords since that landed. Simulates
+  // the pre-Championship blend pool (every fixture except league 40) and
+  // compares each League One/Two fixture's own standings inputs against the
+  // current (Championship-included) pool, to confirm or rule out that theory
+  // with fixture-level evidence rather than just cell-count drift.
+  const preChampionshipPool = allFixtures.filter(f => parseInt(f.league?.id, 10) !== 40);
+  const preChampionshipTimeline = buildDomesticTimeline(preChampionshipPool);
+  const traceLeagueVsPreChampionship = (leagueId) => {
+    const records = scoredRecords.filter(r => parseInt(r.leagueId, 10) === leagueId);
+    let scanned2 = 0, changed2 = 0;
+    const sample2 = [];
+    for (const r of records) {
+      const fix = fixtureById.get(r.fixtureId);
+      if (!fix) continue;
+      scanned2++;
+      const homeId = fix.teams?.home?.id, awayId = fix.teams?.away?.id, fixDate = fix.fixture?.date;
+      const currentHome = snap(oldTimeline, homeId, fixDate), currentAway = snap(oldTimeline, awayId, fixDate);
+      const preHome = snap(preChampionshipTimeline, homeId, fixDate), preAway = snap(preChampionshipTimeline, awayId, fixDate);
+      const isChanged = JSON.stringify(currentHome) !== JSON.stringify(preHome) || JSON.stringify(currentAway) !== JSON.stringify(preAway);
+      if (isChanged) {
+        changed2++;
+        if (sample2.length < 10) {
+          sample2.push({
+            fixtureId: r.fixtureId,
+            fixture: `${fix.teams?.home?.name} vs ${fix.teams?.away?.name}`,
+            date: fixDate,
+            home: { name: fix.teams?.home?.name, currentWithChampionship: currentHome, preChampionship: preHome },
+            away: { name: fix.teams?.away?.name, currentWithChampionship: currentAway, preChampionship: preAway },
+          });
+        }
+      }
+    }
+    return { scanned: scanned2, changed: changed2, pctChanged: scanned2 ? Math.round((changed2 / scanned2) * 1000) / 10 : 0, sample: sample2 };
+  };
+  const leagueOneVsPreChampionship = traceLeagueVsPreChampionship(41);
+  const leagueTwoVsPreChampionship = traceLeagueVsPreChampionship(42);
+
   res.json({
     note: 'old = pre-9c49e45 fully unfiltered pool (the ground truth for a fixture that is itself a permanent/temporary holdout, since its own score never trains anything). buggy = the 9c49e45 fix as originally shipped (one filtered pool for every fixture). corrected = the per-fixture-choice fix applied today. For Carabao Cup specifically, every fixture is itself a holdout (TRAINING_HOLDOUT_LEAGUE_IDS has 48), so corrected should match old almost exactly -- confirms the degradation is reversed, not just reduced.',
     summary: {
@@ -8321,6 +8363,11 @@ app.get('/api/_diag/domestic-blend-trace', (_req, res) => {
       correctedPctChanged: scanned ? Math.round((correctedEitherChanged / scanned) * 1000) / 10 : 0,
     },
     correctedChangedSample,
+    championshipBlendDriftCheck: {
+      note: 'Independent check: does including Championship (40) in DOMESTIC_LEAGUE_IDS_FOR_BLEND change League One/Two fixtures\' own standings inputs, versus a pool that excludes Championship entirely (simulating the pre-2026-08-19 blend set)? If leagueOne shows drift and leagueTwo does not, that would explain why League One\'s own reported n/roi moved off its frozen Addendum 19/24 figure on this rescore while League Two\'s did not (League One is Championship\'s actual promotion/relegation partner; League Two is not).',
+      leagueOne: leagueOneVsPreChampionship,
+      leagueTwo: leagueTwoVsPreChampionship,
+    },
   });
 });
 
