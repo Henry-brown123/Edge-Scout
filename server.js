@@ -2959,10 +2959,27 @@ async function runHistoricalBackfill({ rescore = false, skipOptimise = false, on
       // timeline needs the cutoff-aware pool: pre-cutoff League One/Two fixtures
       // are excluded from it entirely, exactly mirroring isFixtureTrainingHoldout's
       // existing rule-12 check used everywhere else this cutoff already applies.
-      const domesticTimelineFixtures = allFixtures.filter(f =>
+      // 2026-08-24: the above filter was applied globally -- to the timeline used
+      // for EVERY fixture, including holdout fixtures scoring THEMSELVES. That's
+      // broader than the leak this was meant to close: the actual leakage path is
+      // a training-eligible fixture's score (which trains the model) accidentally
+      // drawing on a permanently-protected league's data. A holdout fixture's own
+      // score never trains anything either way (that's what "holdout" means), so
+      // filtering the pool when a holdout fixture scores itself doesn't prevent
+      // any leakage that isn't already prevented by its own exclusion -- it just
+      // strips real, non-leaking data and forces null/multi-year-stale fallbacks.
+      // Confirmed empirically: 928/1101 (84.3%) of Carabao Cup's scored population
+      // showed a degraded standings input this way (some straight to neutral-50
+      // nulls, some to snapshots years out of date) after a full rescore.
+      // Fix: build both pools once, pick per-fixture by whether THAT fixture is
+      // itself a holdout -- training-eligible fixtures keep the filtered pool
+      // (original leak stays closed, unchanged), holdout fixtures now use the
+      // real unfiltered pool for their own scoring (no leakage risk either way).
+      const filteredDomesticTimelineFixtures = allFixtures.filter(f =>
         !isFixtureTrainingHoldout(f.league?.id, f.fixture?.date)
       );
-      const domesticTimeline = buildDomesticTimeline(domesticTimelineFixtures);
+      const filteredDomesticTimeline = buildDomesticTimeline(filteredDomesticTimelineFixtures);
+      const fullDomesticTimeline     = buildDomesticTimeline(allFixtures);
       let   scored         = 0;
       const checkpointEvery = isLargeRun ? LARGE_RUN_PERSIST_EVERY : OPTIMISE_EVERY;
       let   nextCheckpointAt = Math.ceil(scoredMap.size / checkpointEvery) * checkpointEvery;
@@ -2992,7 +3009,14 @@ async function runHistoricalBackfill({ rescore = false, skipOptimise = false, on
         // record is skipped and logged rather than aborting everything after it.
         let record;
         try {
-          record = scoreFixtureFromPool(fix, teamIndex, standingsIndex, domesticTimeline);
+          // Per-fixture choice, not a batch-wide constant: this fixture's own
+          // holdout status decides which pool it draws its cross-league standing
+          // from, not the pool used for whichever fixture happened to be scored
+          // most recently.
+          const domesticTimelineForFixture = isFixtureTrainingHoldout(fix.league?.id, fix.fixture?.date)
+            ? fullDomesticTimeline
+            : filteredDomesticTimeline;
+          record = scoreFixtureFromPool(fix, teamIndex, standingsIndex, domesticTimelineForFixture);
         } catch (e) {
           console.error(`[HistoricalBackfill] scoreFixtureFromPool failed for fixture ${fix.fixture?.id} (${fix.league?.id}/${fix.league?.season}): ${e.message}`);
           continue;
@@ -8194,11 +8218,20 @@ app.get('/api/_diag/domestic-blend-trace', (_req, res) => {
     return result;
   };
 
-  // OLD = exactly pre-9c49e45 behaviour: unfiltered fixture pool.
+  // OLD = pre-9c49e45 behaviour: fully unfiltered fixture pool for everyone.
   const oldTimeline = buildDomesticTimeline(allFixtures);
-  // NEW = exactly current behaviour: rule-12 holdouts excluded before pooling.
-  const newPool = allFixtures.filter(f => !isFixtureTrainingHoldout(f.league?.id, f.fixture?.date));
-  const newTimeline = buildDomesticTimeline(newPool);
+  // BUGGY = the 9c49e45 behaviour this whole investigation found overbroad:
+  // one filtered pool applied to every fixture regardless of its own status.
+  const buggyPool = allFixtures.filter(f => !isFixtureTrainingHoldout(f.league?.id, f.fixture?.date));
+  const buggyTimeline = buildDomesticTimeline(buggyPool);
+  // CORRECTED = the fix applied today: per-fixture choice, mirroring the exact
+  // logic now in runHistoricalBackfill's scoring loop. Kept as two pre-built
+  // pools (not per-fixture rebuilds) for the same reason production does it
+  // this way -- cheap to pick from, expensive to rebuild per fixture.
+  const correctedFilteredTimeline = buggyTimeline; // identical pool, reused
+  const correctedFullTimeline     = oldTimeline;   // identical pool, reused
+  const correctedTimelineFor = (fix) =>
+    isFixtureTrainingHoldout(fix.league?.id, fix.fixture?.date) ? correctedFullTimeline : correctedFilteredTimeline;
 
   const fixtureById = new Map(allFixtures.map(f => [f.fixture?.id, f]));
   const carabaoRecords = scoredRecords.filter(r => parseInt(r.leagueId, 10) === 48);
@@ -8208,45 +8241,51 @@ app.get('/api/_diag/domestic-blend-trace', (_req, res) => {
     return s ? { date: s.date, rank: s.rank, leagueSize: s.leagueSize, gamesPlayed: s.gamesPlayed, proxyScore: rankToProxyScore(s.rank, s.leagueSize) } : null;
   };
 
-  let scanned = 0, homeChanged = 0, awayChanged = 0, eitherChanged = 0;
-  const changedSample = [];
+  // Two comparisons reported side by side: (1) buggy vs old -- reproduces the
+  // original finding, should still show heavy drift; (2) corrected vs old --
+  // the actual fix validation, should show ~zero drift for Carabao Cup since
+  // every Carabao Cup fixture is itself a holdout and now always resolves to
+  // correctedFullTimeline, identical to oldTimeline.
+  let scanned = 0, buggyEitherChanged = 0, correctedEitherChanged = 0;
+  const correctedChangedSample = [];
   for (const r of carabaoRecords) {
     const fix = fixtureById.get(r.fixtureId);
     if (!fix) continue;
     scanned++;
     const homeId = fix.teams?.home?.id, awayId = fix.teams?.away?.id, fixDate = fix.fixture?.date;
-    const oldHome = snap(oldTimeline, homeId, fixDate), newHome = snap(newTimeline, homeId, fixDate);
-    const oldAway = snap(oldTimeline, awayId, fixDate), newAway = snap(newTimeline, awayId, fixDate);
-    const hChanged = JSON.stringify(oldHome) !== JSON.stringify(newHome);
-    const aChanged = JSON.stringify(oldAway) !== JSON.stringify(newAway);
-    if (hChanged) homeChanged++;
-    if (aChanged) awayChanged++;
-    if (hChanged || aChanged) {
-      eitherChanged++;
-      if (changedSample.length < 10) {
-        changedSample.push({
+    const oldHome = snap(oldTimeline, homeId, fixDate), oldAway = snap(oldTimeline, awayId, fixDate);
+    const buggyHome = snap(buggyTimeline, homeId, fixDate), buggyAway = snap(buggyTimeline, awayId, fixDate);
+    const correctedTl = correctedTimelineFor(fix);
+    const correctedHome = snap(correctedTl, homeId, fixDate), correctedAway = snap(correctedTl, awayId, fixDate);
+
+    const buggyChanged = JSON.stringify(oldHome) !== JSON.stringify(buggyHome) || JSON.stringify(oldAway) !== JSON.stringify(buggyAway);
+    const correctedChanged = JSON.stringify(oldHome) !== JSON.stringify(correctedHome) || JSON.stringify(oldAway) !== JSON.stringify(correctedAway);
+    if (buggyChanged) buggyEitherChanged++;
+    if (correctedChanged) {
+      correctedEitherChanged++;
+      if (correctedChangedSample.length < 10) {
+        correctedChangedSample.push({
           fixtureId: r.fixtureId,
           fixture: `${fix.teams?.home?.name} vs ${fix.teams?.away?.name}`,
           date: fixDate,
-          currentModelProb: r.modelProb, currentEdge: r.edge, currentSuccessScore: r.successScore,
-          home: { teamId: homeId, name: fix.teams?.home?.name, changed: hChanged, old: oldHome, new: newHome },
-          away: { teamId: awayId, name: fix.teams?.away?.name, changed: aChanged, old: oldAway, new: newAway },
+          home: { name: fix.teams?.home?.name, old: oldHome, corrected: correctedHome },
+          away: { name: fix.teams?.away?.name, old: oldAway, corrected: correctedAway },
         });
       }
     }
   }
 
   res.json({
-    note: 'old = pre-9c49e45 unfiltered domestic-timeline pool; new = current isFixtureTrainingHoldout-filtered pool. A team snapshot resolving to null means no qualifying domestic history was found under that pool at all (falls through to neutral 50 in resolveStandingsScore).',
+    note: 'old = pre-9c49e45 fully unfiltered pool (the ground truth for a fixture that is itself a permanent/temporary holdout, since its own score never trains anything). buggy = the 9c49e45 fix as originally shipped (one filtered pool for every fixture). corrected = the per-fixture-choice fix applied today. For Carabao Cup specifically, every fixture is itself a holdout (TRAINING_HOLDOUT_LEAGUE_IDS has 48), so corrected should match old almost exactly -- confirms the degradation is reversed, not just reduced.',
     summary: {
       carabaoCupFixturesScanned: scanned,
       totalCarabaoCupScoredRecords: carabaoRecords.length,
-      homeSnapshotChanged: homeChanged,
-      awaySnapshotChanged: awayChanged,
-      eitherSideChanged: eitherChanged,
-      pctEitherChanged: scanned ? Math.round((eitherChanged / scanned) * 1000) / 10 : 0,
+      buggyEitherSideChanged: buggyEitherChanged,
+      buggyPctChanged: scanned ? Math.round((buggyEitherChanged / scanned) * 1000) / 10 : 0,
+      correctedEitherSideChanged: correctedEitherChanged,
+      correctedPctChanged: scanned ? Math.round((correctedEitherChanged / scanned) * 1000) / 10 : 0,
     },
-    changedSample,
+    correctedChangedSample,
   });
 });
 
