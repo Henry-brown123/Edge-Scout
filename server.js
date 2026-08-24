@@ -8352,6 +8352,181 @@ app.get('/api/_diag/venue-coverage', (_req, res) => {
   });
 });
 
+// Shared by the geocoding and weather-archive jobs below -- same unresolved-city
+// grouping as /api/_diag/venue-coverage's cityLevelAnalysis, but also keeps each
+// city's actual fixture list (id + kickoff date) since the weather-archive job
+// needs to know exactly which hours to pull out of each city's Open-Meteo response.
+function getTopUnresolvedCities(limit) {
+  const hist = readHistoricalCached() || {};
+  const allFixtures = (hist.fixtures || []).filter(f => ['FT', 'AET', 'PEN'].includes(f.fixture?.status?.short));
+  const cityMap = {};
+  for (const f of allFixtures) {
+    const name = f.fixture?.venue?.name, city = f.fixture?.venue?.city;
+    if (venueCoords(name, city)) continue; // already resolvable, not part of the gap
+    const key = city || name;
+    if (!key) continue;
+    if (!cityMap[key]) cityMap[key] = [];
+    cityMap[key].push({ fixtureId: f.fixture.id, date: f.fixture.date });
+  }
+  return Object.entries(cityMap)
+    .sort((a, b) => b[1].length - a[1].length)
+    .slice(0, limit)
+    .map(([city, fixtures]) => ({ city, fixtures }));
+}
+
+let _geocodeRunning = false;
+let _geocodeStatus  = null;
+
+// TEMP ADMIN — weather integration Part 1, geocoding round (2026-08-24). Geocodes
+// the top-N unresolved cities (by fixture count, per getTopUnresolvedCities) via
+// Open-Meteo's free Geocoding API (no key, same provider as the Archive API used
+// next) and merges results directly into the live CITY_COORDS object -- mutating
+// it in place (not reassigning) so venueCoords() picks up new cities immediately,
+// in this same running process, with no restart needed. Also persists to
+// stadiums.json so it survives a restart. Passes only the city's own name to the
+// geocoder (no country hint available in the stripped fixture data) -- Open-Meteo
+// ranks by population/prominence when ambiguous, which favours the correct match
+// for well-known city names but is a real, acknowledged limitation for obscure or
+// duplicate-name cities; ambiguous geocodes are recorded in the response rather
+// than silently trusted. GET (not POST) per the same reasoning as
+// recover-venue-data: deliberately typing this URL into an authenticated session
+// is itself the confirmation gate for this real, if free, external-API action.
+app.get('/api/_diag/geocode-top-cities', (req, res) => {
+  if (_geocodeRunning) return res.status(409).json({ error: 'Geocoding already running', status: _geocodeStatus });
+  const limit = parseInt(req.query.limit, 10) || 200;
+  const targets = getTopUnresolvedCities(limit);
+  _geocodeRunning = true;
+  _geocodeStatus = { phase: 'running', total: targets.length, done: 0, resolved: 0, failed: 0, startedAt: new Date().toISOString(), results: [] };
+  res.json({ started: true, targetCities: targets.length, note: 'Poll GET /api/_diag/geocode-status for progress.' });
+
+  (async () => {
+    for (const { city, fixtures } of targets) {
+      try {
+        const primaryName = city.split(',')[0].trim();
+        const { data } = await axios.get('https://geocoding-api.open-meteo.com/v1/search', {
+          params: { name: primaryName, count: 1, language: 'en', format: 'json' },
+          timeout: 8000,
+        });
+        const match = data?.results?.[0];
+        if (match) {
+          CITY_COORDS[city] = { lat: match.latitude, lon: match.longitude };
+          _geocodeStatus.resolved++;
+          _geocodeStatus.results.push({ city, geocodedAs: match.name, country: match.country, admin1: match.admin1, lat: match.latitude, lon: match.longitude, fixtureCount: fixtures.length });
+        } else {
+          _geocodeStatus.failed++;
+          _geocodeStatus.results.push({ city, error: 'no_match', fixtureCount: fixtures.length });
+        }
+      } catch (e) {
+        _geocodeStatus.failed++;
+        _geocodeStatus.results.push({ city, error: e.message, fixtureCount: fixtures.length });
+      }
+      _geocodeStatus.done++;
+      // Incremental persistence -- a kill mid-run loses at most the current city,
+      // same reasoning as runHistoricalBackfill's per-league incremental save.
+      writeJSON('stadiums.json', { venues: VENUE_COORDS, cities: CITY_COORDS });
+      await new Promise(r => setTimeout(r, 300));
+    }
+    _geocodeStatus.phase = 'complete';
+    _geocodeStatus.completedAt = new Date().toISOString();
+    _geocodeRunning = false;
+  })().catch(e => {
+    _geocodeStatus.phase = 'error';
+    _geocodeStatus.error = e.message;
+    _geocodeRunning = false;
+  });
+});
+
+app.get('/api/_diag/geocode-status', (_req, res) => {
+  if (!_geocodeStatus) return res.json({ status: 'not_run' });
+  res.json({ running: _geocodeRunning, ..._geocodeStatus });
+});
+
+// ─── ARCHIVED WEATHER CLASSIFICATION ───────────────────────────────────────────
+// Distinct from classifyWeather() (live path) which takes Open-Meteo FORECAST
+// data's precipitation_probability (a %) -- the Archive API returns actual
+// measured precipitation (mm) instead, since "probability" isn't a meaningful
+// concept for weather that already happened. Thresholds are standard
+// meteorological hourly-rate bands (light/moderate/heavy rain), not tuned to
+// this dataset -- same spirit as classifyWeather's own untuned probability
+// cutoffs. wind threshold (30 km/h) matches classifyWeather's exactly, for
+// consistency between the live and historical classification paths.
+function classifyArchivedWeather(precipitationMm, windSpeedKmh) {
+  if ((precipitationMm ?? 0) >= 7.5) return 'heavy_rain';
+  if ((precipitationMm ?? 0) >= 2.5) return 'rain';
+  if ((windSpeedKmh ?? 0) >= 30) return 'wind';
+  return 'clear';
+}
+
+let _weatherArchiveRunning = false;
+let _weatherArchiveStatus  = null;
+
+// TEMP ADMIN — weather integration Part 1, Archive weather fetch (2026-08-24). For
+// each of the top-N unresolved cities that geocode-top-cities successfully
+// resolved, fetches ONE Open-Meteo Archive API call covering that city's own
+// fixture date range (min to max, not the full 2010-2026 span every city doesn't
+// need), then immediately reduces the (potentially huge, multi-year hourly)
+// response down to just the specific hours matching that city's actual fixtures
+// -- the full hourly array is never retained past that one city's processing, so
+// steady-state memory stays bounded regardless of date-range length, same
+// discipline as every other heavy backfill in this codebase. Persists results to
+// weather-history.json keyed by fixtureId: {condition, precipitationMm, windSpeedKmh}.
+app.get('/api/_diag/fetch-weather-archive', (req, res) => {
+  if (_weatherArchiveRunning) return res.status(409).json({ error: 'Weather archive fetch already running', status: _weatherArchiveStatus });
+  const limit = parseInt(req.query.limit, 10) || 200;
+  const targets = getTopUnresolvedCities(limit).filter(({ city }) => CITY_COORDS[city]);
+  const skippedUngeocoded = getTopUnresolvedCities(limit).length - targets.length;
+  _weatherArchiveRunning = true;
+  _weatherArchiveStatus = { phase: 'running', total: targets.length, done: 0, fixturesMatched: 0, failed: 0, skippedUngeocoded, startedAt: new Date().toISOString() };
+  res.json({ started: true, targetCities: targets.length, skippedUngeocoded, note: 'Poll GET /api/_diag/weather-archive-status for progress.' });
+
+  (async () => {
+    const weatherHistory = readJSON('weather-history.json') || {};
+    for (const { city, fixtures } of targets) {
+      try {
+        const { lat, lon } = CITY_COORDS[city];
+        const dates = fixtures.map(f => new Date(f.date).getTime());
+        const startDate = new Date(Math.min(...dates)).toISOString().slice(0, 10);
+        const endDate   = new Date(Math.max(...dates)).toISOString().slice(0, 10);
+        const { data } = await axios.get('https://archive-api.open-meteo.com/v1/archive', {
+          params: { latitude: lat, longitude: lon, start_date: startDate, end_date: endDate,
+                     hourly: 'precipitation,windspeed_10m', timezone: 'UTC' },
+          timeout: 20000,
+        });
+        const times = data?.hourly?.time || [];
+        const precip = data?.hourly?.precipitation || [];
+        const wind   = data?.hourly?.windspeed_10m || [];
+        // Build a lookup once per city (not per fixture) -- O(hours) not O(hours x fixtures).
+        const hourIndex = new Map(times.map((t, i) => [t.slice(0, 13), i])); // 'YYYY-MM-DDTHH'
+        for (const f of fixtures) {
+          const hourKey = new Date(f.date).toISOString().slice(0, 13);
+          const idx = hourIndex.get(hourKey);
+          if (idx == null) continue;
+          const p = precip[idx], w = wind[idx];
+          weatherHistory[f.fixtureId] = { condition: classifyArchivedWeather(p, w), precipitationMm: p, windSpeedKmh: w };
+          _weatherArchiveStatus.fixturesMatched++;
+        }
+      } catch (e) {
+        _weatherArchiveStatus.failed++;
+      }
+      _weatherArchiveStatus.done++;
+      writeJSON('weather-history.json', weatherHistory);
+      await new Promise(r => setTimeout(r, 300));
+    }
+    _weatherArchiveStatus.phase = 'complete';
+    _weatherArchiveStatus.completedAt = new Date().toISOString();
+    _weatherArchiveRunning = false;
+  })().catch(e => {
+    _weatherArchiveStatus.phase = 'error';
+    _weatherArchiveStatus.error = e.message;
+    _weatherArchiveRunning = false;
+  });
+});
+
+app.get('/api/_diag/weather-archive-status', (_req, res) => {
+  if (!_weatherArchiveStatus) return res.json({ status: 'not_run' });
+  res.json({ running: _weatherArchiveRunning, ..._weatherArchiveStatus });
+});
+
 // TEMP DIAGNOSTIC — H2H anomaly shrinkage fitting (2026-08-24, calibration-rules.md
 // discipline throughout). Fits k in teamProfiles.js's dormant computeH2HAnomalyWeight
 // per that function's own comment: reuse shrinkage.js's empirical-Bayes
