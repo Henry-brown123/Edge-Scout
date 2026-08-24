@@ -8222,6 +8222,50 @@ function readHistoricalCached() {
   return data;
 }
 
+// TEMP DIAGNOSTIC — Weather integration Part 1 step 1 (2026-08-24). Confirms the
+// venue-coordinate table (data/stadiums.json, built in an earlier session) is still
+// current and complete against the REAL historical fixture population, rather than
+// trusting a remembered venue count. data/stadiums.json is gitignored and lives only
+// on this server's persistent disk -- there is no way to check it from the local repo
+// checkout. Read-only, no scoring/betting-path effect. Remove once Part 1's weather
+// backfill has actually run against this table.
+app.get('/api/_diag/venue-coverage', (_req, res) => {
+  const hist = readHistoricalCached() || {};
+  const allFixtures = hist.fixtures || [];
+
+  const venueMap = {};
+  for (const f of allFixtures) {
+    if (!['FT', 'AET', 'PEN'].includes(f.fixture?.status?.short)) continue;
+    const name = f.fixture?.venue?.name;
+    const city = f.fixture?.venue?.city;
+    const key = name || city || null;
+    if (!key) continue;
+    if (!venueMap[key]) venueMap[key] = { name, city, fixtures: 0, resolved: null };
+    venueMap[key].fixtures++;
+  }
+
+  let resolvedCount = 0, unresolvedFixtures = 0;
+  const unresolved = [];
+  for (const [key, v] of Object.entries(venueMap)) {
+    const coords = venueCoords(v.name, v.city);
+    v.resolved = !!coords;
+    if (coords) resolvedCount++;
+    else { unresolvedFixtures += v.fixtures; unresolved.push({ key, name: v.name, city: v.city, fixtures: v.fixtures }); }
+  }
+  unresolved.sort((a, b) => b.fixtures - a.fixtures);
+
+  res.json({
+    note: 'venueTableSize = current data/stadiums.json venues+cities entry count on THIS server. distinctVenuesInPopulation = distinct venue/city keys seen across all FT/AET/PEN historical fixtures. resolvedViaTable = how many of those distinct venues venueCoords() can already resolve. unresolvedTop20 = the highest-fixture-count venues still missing coordinates, in priority order for the Archive API fetch.',
+    venueTableSize: { venues: Object.keys(VENUE_COORDS).length, cities: Object.keys(CITY_COORDS).length },
+    distinctVenuesInPopulation: Object.keys(venueMap).length,
+    resolvedViaTable: resolvedCount,
+    unresolvedVenueCount: Object.keys(venueMap).length - resolvedCount,
+    unresolvedFixtureCount: unresolvedFixtures,
+    totalFTFixtures: allFixtures.filter(f => ['FT', 'AET', 'PEN'].includes(f.fixture?.status?.short)).length,
+    unresolvedTop20: unresolved.slice(0, 20),
+  });
+});
+
 app.get('/api/server-status', async (_req, res) => {
   if (_serverStatusCache && (Date.now() - _serverStatusCacheAt) < SERVER_STATUS_CACHE_MS) {
     return res.json({
