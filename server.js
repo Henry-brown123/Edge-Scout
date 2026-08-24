@@ -2836,7 +2836,14 @@ const LARGE_RUN_PERSIST_EVERY = 2000;
 // Strip a raw API-Sports fixture down to fields needed for profiling + factor scoring.
 function stripFixture(f) {
   return {
-    fixture: { id: f.fixture.id, date: f.fixture.date, status: { short: f.fixture.status.short } },
+    // venue retained (was previously dropped, discovered 2026-08-24 during weather
+    // integration Part 1 — every historical fixture's venue was silently unavailable,
+    // an architectural gap, not a data gap: 80,145 fixtures had already been stripped
+    // of it before the venue-coordinate table or weather work existed to need it) so
+    // venueCoords()-based weather lookups work against the historical population, not
+    // just live fixtures. name/city only, same shape venueCoords() already expects.
+    fixture: { id: f.fixture.id, date: f.fixture.date, status: { short: f.fixture.status.short },
+               venue: f.fixture.venue ? { name: f.fixture.venue.name || null, city: f.fixture.venue.city || null } : null },
     teams:   { home: { id: f.teams.home.id, name: f.teams.home.name },
                away: { id: f.teams.away.id, name: f.teams.away.name } },
     goals:   { home: f.goals.home, away: f.goals.away },
@@ -5001,6 +5008,30 @@ app.get('/api/backfill/status', (_req, res) => {
   if (!meta) return res.json({ status: 'not_run' });
   if (meta.error) return res.json({ status: 'error', ...meta });
   res.json({ status: 'complete', ...meta });
+});
+
+// TEMP ADMIN — weather integration Part 1 step 2 (2026-08-24). Forces the next
+// POST /api/backfill/historical(rescore=false) run to re-fetch EVERY league/season
+// combo instead of skipping already-cached ones, so venue (just added to
+// stripFixture()) gets backfilled into the ~80,145 already-stored historical
+// fixtures. Only clears fetchedLeagues -- fixtures/scoredRecords/optimisedWeights
+// are left exactly as they are; Phase 1's fixtureMap re-fetch merges by fixture id,
+// overwriting old venue-less entries with fresh venue-including ones for the same
+// id, so this is additive/idempotent, not destructive. Deliberately POST, not GET,
+// so it can't fire from a stray link click or crawler -- this is a real state
+// change (~247 API-Sports calls once the backfill run that follows it actually
+// executes), same caution tier as rescore=true. Remove once venue recovery is done.
+app.post('/api/_diag/clear-fetch-cache', (_req, res) => {
+  if (_historicalBackfillRunning) return res.status(409).json({ error: 'Backfill already running -- wait for it to finish first' });
+  const existing = readJSON('backfill-historical.json');
+  if (!existing) return res.status(404).json({ error: 'backfill-historical.json not found' });
+  const clearedCount = Object.keys(existing.fetchedLeagues || {}).length;
+  existing.fetchedLeagues = {};
+  writeJSON('backfill-historical.json', existing);
+  res.json({
+    cleared: clearedCount,
+    note: 'fetchedLeagues cache cleared. fixtures/scoredRecords/optimisedWeights untouched. Now POST /api/backfill/historical (no rescore param, or rescore=false explicitly) to re-fetch every league/season combo and merge venue into the existing fixture pool.',
+  });
 });
 
 // Historical backfill — full 3-season fetch, factor scoring, weight optimisation
