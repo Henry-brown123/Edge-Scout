@@ -286,7 +286,16 @@ function computeBankrollAccount(file, account, betFilter, defaultInitial) {
   }
 
   const current = parseFloat((base + betPnl).toFixed(2));
-  return { ...stored, initial, current };
+  // baseline (2026-08-24): the true deposit/withdrawal/reset-adjusted anchor —
+  // was computed here as `base` but never returned, so every consumer computing
+  // gain/loss used `current - initial` (the raw original seed figure), silently
+  // ignoring any deposits/withdrawals since. Confirmed live: a real account
+  // funded with an extra deposit on top of its initial £1000 was showing a
+  // false "+£898.52" gain when the account was actually down against total
+  // money put in. `initial` is kept as-is (the original seed, still meaningful
+  // as its own fact) — `baseline` is what any P&L/percentage figure should
+  // subtract from `current`.
+  return { ...stored, initial, current, baseline: parseFloat(base.toFixed(2)) };
 }
 
 function getBankroll() {

@@ -2627,8 +2627,13 @@ function renderScout() {
   const resolved = bets.filter(b => b.stage === 'RESOLVED');
   const wins     = resolved.filter(b => b.result === 'win').length;
   const losses   = resolved.filter(b => b.result === 'loss').length;
-  const pnl      = bankroll.current - bankroll.initial;
-  const pnlPct   = ((pnl / bankroll.initial) * 100).toFixed(1);
+  // Was bankroll.current - bankroll.initial — ignored any deposits/withdrawals
+  // since the account was opened, so a funded account showed a false "gain"
+  // equal to whatever was deposited on top of the true P&L. baseline is the
+  // deposit/withdrawal-adjusted anchor computeBankrollAccount() already tracks.
+  const pnlBase  = bankroll.baseline ?? bankroll.initial;
+  const pnl      = bankroll.current - pnlBase;
+  const pnlPct   = pnlBase ? ((pnl / pnlBase) * 100).toFixed(1) : '0.0';
 
   document.getElementById('s-bankroll').textContent = `£${bankroll.current.toLocaleString('en-GB', {minimumFractionDigits:2,maximumFractionDigits:2})}`;
   document.getElementById('s-bankroll').className   = `stat-value ${pnl >= 0 ? 'c-green' : 'c-red'}`;
@@ -3102,7 +3107,15 @@ async function renderPerfMode(mode) {
   // /api/state, so no extra fetch needed here.
   const realBankroll = STATE.realBankroll?.current || 0;
   const bankrollCurrent  = mode === 'paper' ? bankroll.current : mode === 'real' ? realBankroll : bankroll.current + realBankroll;
-  const bankrollBaseline = mode === 'paper' ? (bankroll.initial || 0) : bankrollCurrent;
+  // Was `mode === 'real' ? bankrollCurrent : ...` for the non-paper branch — a
+  // self-referential baseline (current used as its own comparison point) that
+  // made periodPnlPct meaningless for real/combined. Same underlying fix as
+  // renderScout()/renderBankrollPanel(): use the deposit/withdrawal-adjusted
+  // baseline computeBankrollAccount() tracks, not the raw original seed and
+  // definitely not current itself.
+  const paperBaseline = bankroll.baseline ?? bankroll.initial ?? 0;
+  const realBaseline  = STATE.realBankroll?.baseline ?? STATE.realBankroll?.initial ?? 0;
+  const bankrollBaseline = mode === 'paper' ? paperBaseline : mode === 'real' ? realBaseline : paperBaseline + realBaseline;
 
   // Mode-filtered, deduplicated bet set (fixtureId+mode, since combined can hold the
   // same fixtureId once under paper and once under real — both are legitimate rows).
@@ -5282,7 +5295,9 @@ function renderBankrollPanel() {
   const s = STATE.settings || {};
   const renderSide = (account, br) => {
     br = br || { initial: 1000, current: 1000 };
-    const pnl = br.current - br.initial;
+    // Was br.current - br.initial — same fix as renderScout()'s s-pnl figure:
+    // ignored deposits/withdrawals, showing a false gain on any funded account.
+    const pnl = br.current - (br.baseline ?? br.initial);
     const prefix = account === 'paper' ? 'bp-paper' : 'bp-real';
     document.getElementById(`${prefix}-summary`).textContent = `£${br.current.toFixed(2)}`;
     document.getElementById(`${prefix}-balance`).textContent = `£${br.current.toFixed(2)}`;
