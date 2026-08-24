@@ -8441,6 +8441,83 @@ app.get('/api/_diag/geocode-status', (_req, res) => {
   res.json({ running: _geocodeRunning, ..._geocodeStatus });
 });
 
+// TEMP ADMIN — weather integration Part 1, geocode correction pass (2026-08-24).
+// Open-Meteo's Geocoding API ranks matches by population/prominence when given a
+// bare city name with no country hint (the only signal available from the
+// stripped fixture data) -- correct for well-known cities, but a real, confirmed
+// minority collided with a more populous same-named place elsewhere in the world
+// (Genova -> Guatemala, Fleetwood -> Pennsylvania, Perth -> Australia, Brentford ->
+// South Dakota, Lincoln -> Nebraska, Livingston -> Montana, Brest -> Belarus, Palma
+// de Mallorca -> Mexico, Den Haag -> South Africa, Hamilton -> Canada, Villarreal ->
+// wrong Spanish region, Lisboa/San Sebastian -> language-variant duplicates of an
+// already-correctly-resolved entry under a different name). Each entry below was
+// individually confirmed by football-context knowledge (which league/competition
+// that city's fixtures actually belong to), not inferred automatically -- this is
+// a manual, reviewed correction list, not a heuristic. Also fixes the "no_match"
+// entries whose city field was actually a "Venue Name (City)" string (a small
+// number of leagues populate this field that way) by extracting the parenthetical
+// city and reusing whatever CITY_COORDS entry that city already resolved to
+// elsewhere in this same run -- zero extra geocoding calls needed for those.
+const GEOCODE_CORRECTIONS = {
+  'Genova':                        { lat: 44.4056,  lon: 8.9463 },
+  'Lisboa':                        { lat: 38.72509, lon: -9.1498 },
+  'Villarreal':                    { lat: 39.9375,  lon: -0.1029 },
+  'Fleetwood, Lancashire':         { lat: 53.9171,  lon: -3.0022 },
+  'Fleetwood':                     { lat: 53.9171,  lon: -3.0022 },
+  'Perth':                         { lat: 56.3958,  lon: -3.4308 },
+  'Brentford, Middlesex':          { lat: 51.4875,  lon: -0.3058 },
+  'Lincoln, Lincolnshire':         { lat: 53.2307,  lon: -0.5406 },
+  'Livingston':                    { lat: 55.8833,  lon: -3.5225 },
+  'Brest':                         { lat: 48.3904,  lon: -4.4861 },
+  'Palma de Mallorca':             { lat: 39.5696,  lon: 2.6502 },
+  'Den Haag':                      { lat: 52.0705,  lon: 4.3007 },
+  'Hamilton':                      { lat: 55.7772,  lon: -4.0338 },
+  'San Sebastian':                 { lat: 43.31283, lon: -1.97499 },
+  'Stoke':                         { lat: 53.00415, lon: -2.18538 }, // dedupe onto the already-correct "Stoke-on-Trent, Staffordshire" entry
+};
+// City names not otherwise resolved anywhere in the top-200 run, needed only as
+// parenthetical-extraction targets below.
+const GEOCODE_ADDITIONS = {
+  'Inverness': { lat: 57.4778, lon: -4.2247 },
+  'Marseille': { lat: 43.2965, lon: 5.3698 },
+  'Napoli':    { lat: 40.8518, lon: 14.2681 },
+  'Lyon':      { lat: 45.7640, lon: 4.8357 },
+};
+app.get('/api/_diag/fix-geocode-errors', (_req, res) => {
+  if (!_geocodeStatus || _geocodeStatus.phase !== 'complete') {
+    return res.status(409).json({ error: 'Run and complete /api/_diag/geocode-top-cities first' });
+  }
+  const applied = [];
+  for (const [city, coords] of Object.entries(GEOCODE_CORRECTIONS)) {
+    const was = CITY_COORDS[city] ? { ...CITY_COORDS[city] } : null;
+    CITY_COORDS[city] = coords;
+    applied.push({ city, type: 'corrected', was, now: coords });
+  }
+  for (const [city, coords] of Object.entries(GEOCODE_ADDITIONS)) {
+    if (!CITY_COORDS[city]) { CITY_COORDS[city] = coords; applied.push({ city, type: 'added_for_parenthetical_fallback', now: coords }); }
+  }
+  // Parenthetical fallback: any "no_match" result whose city string looks like
+  // "Venue Name (City)" gets pointed at that city's coordinates if already resolved.
+  const parenFixed = [];
+  for (const r of _geocodeStatus.results) {
+    if (r.error !== 'no_match') continue;
+    const m = r.city.match(/\(([^)]+)\)\s*$/);
+    if (!m) continue;
+    const innerCity = m[1].trim();
+    if (CITY_COORDS[innerCity]) {
+      CITY_COORDS[r.city] = CITY_COORDS[innerCity];
+      parenFixed.push({ city: r.city, resolvedVia: innerCity, coords: CITY_COORDS[innerCity], fixtureCount: r.fixtureCount });
+    }
+  }
+  writeJSON('stadiums.json', { venues: VENUE_COORDS, cities: CITY_COORDS });
+  res.json({
+    correctionsApplied: applied.length,
+    parentheticalFallbacksApplied: parenFixed.length,
+    corrections: applied,
+    parentheticalFallbacks: parenFixed,
+  });
+});
+
 // ─── ARCHIVED WEATHER CLASSIFICATION ───────────────────────────────────────────
 // Distinct from classifyWeather() (live path) which takes Open-Meteo FORECAST
 // data's precipitation_probability (a %) -- the Archive API returns actual
