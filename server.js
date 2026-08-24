@@ -8170,6 +8170,86 @@ app.get('/api/_diag/rescore-readiness', (_req, res) => {
   });
 });
 
+// TEMP DIAGNOSTIC — Part 1 rescore investigation (2026-08-24). Rigorously trace
+// the domestic-blend fix's actual effect on Carabao Cup fixtures, since the
+// pre-rescore per-fixture scored values are gone (rescore=true overwrites
+// scoredRecords in place, no backup) and can't be diffed directly. Instead,
+// recomputes the domestic timeline TWICE against the CURRENT raw fixture pool
+// -- once exactly as the pre-9c49e45 code did (unfiltered), once exactly as
+// the current code does (isFixtureTrainingHoldout-filtered) -- and shows the
+// actual home/away standings-snapshot resolution under each for real Carabao
+// Cup fixtures. This isolates the fix's causal mechanism directly rather than
+// inferring it from the aggregate tier-matrix shift. Read-only, no writes.
+app.get('/api/_diag/domestic-blend-trace', (_req, res) => {
+  const hist = readHistoricalCached() || {};
+  const allFixtures = hist.fixtures || [];
+  const scoredRecords = hist.scoredRecords || [];
+
+  const rankToProxyScore = (rank, leagueSize) => !leagueSize ? 50 : Math.round(((leagueSize - rank + 1) / leagueSize) * 100);
+  const lookupDomesticStanding = (timeline, teamId, asOfDate) => {
+    const tl = timeline[String(teamId)];
+    if (!tl?.length) return null;
+    let result = null;
+    for (const snap of tl) { if (snap.date < asOfDate) result = snap; else break; }
+    return result;
+  };
+
+  // OLD = exactly pre-9c49e45 behaviour: unfiltered fixture pool.
+  const oldTimeline = buildDomesticTimeline(allFixtures);
+  // NEW = exactly current behaviour: rule-12 holdouts excluded before pooling.
+  const newPool = allFixtures.filter(f => !isFixtureTrainingHoldout(f.league?.id, f.fixture?.date));
+  const newTimeline = buildDomesticTimeline(newPool);
+
+  const fixtureById = new Map(allFixtures.map(f => [f.fixture?.id, f]));
+  const carabaoRecords = scoredRecords.filter(r => parseInt(r.leagueId, 10) === 48);
+
+  const snap = (timeline, teamId, asOfDate) => {
+    const s = lookupDomesticStanding(timeline, teamId, asOfDate);
+    return s ? { date: s.date, rank: s.rank, leagueSize: s.leagueSize, gamesPlayed: s.gamesPlayed, proxyScore: rankToProxyScore(s.rank, s.leagueSize) } : null;
+  };
+
+  let scanned = 0, homeChanged = 0, awayChanged = 0, eitherChanged = 0;
+  const changedSample = [];
+  for (const r of carabaoRecords) {
+    const fix = fixtureById.get(r.fixtureId);
+    if (!fix) continue;
+    scanned++;
+    const homeId = fix.teams?.home?.id, awayId = fix.teams?.away?.id, fixDate = fix.fixture?.date;
+    const oldHome = snap(oldTimeline, homeId, fixDate), newHome = snap(newTimeline, homeId, fixDate);
+    const oldAway = snap(oldTimeline, awayId, fixDate), newAway = snap(newTimeline, awayId, fixDate);
+    const hChanged = JSON.stringify(oldHome) !== JSON.stringify(newHome);
+    const aChanged = JSON.stringify(oldAway) !== JSON.stringify(newAway);
+    if (hChanged) homeChanged++;
+    if (aChanged) awayChanged++;
+    if (hChanged || aChanged) {
+      eitherChanged++;
+      if (changedSample.length < 10) {
+        changedSample.push({
+          fixtureId: r.fixtureId,
+          fixture: `${fix.teams?.home?.name} vs ${fix.teams?.away?.name}`,
+          date: fixDate,
+          currentModelProb: r.modelProb, currentEdge: r.edge, currentSuccessScore: r.successScore,
+          home: { teamId: homeId, name: fix.teams?.home?.name, changed: hChanged, old: oldHome, new: newHome },
+          away: { teamId: awayId, name: fix.teams?.away?.name, changed: aChanged, old: oldAway, new: newAway },
+        });
+      }
+    }
+  }
+
+  res.json({
+    note: 'old = pre-9c49e45 unfiltered domestic-timeline pool; new = current isFixtureTrainingHoldout-filtered pool. A team snapshot resolving to null means no qualifying domestic history was found under that pool at all (falls through to neutral 50 in resolveStandingsScore).',
+    summary: {
+      carabaoCupFixturesScanned: scanned,
+      totalCarabaoCupScoredRecords: carabaoRecords.length,
+      homeSnapshotChanged: homeChanged,
+      awaySnapshotChanged: awayChanged,
+      eitherSideChanged: eitherChanged,
+      pctEitherChanged: scanned ? Math.round((eitherChanged / scanned) * 1000) / 10 : 0,
+    },
+    changedSample,
+  });
+});
+
 app.get('/api/server-status', async (_req, res) => {
   if (_serverStatusCache && (Date.now() - _serverStatusCacheAt) < SERVER_STATUS_CACHE_MS) {
     return res.json({
