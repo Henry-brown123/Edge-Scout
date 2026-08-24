@@ -8132,6 +8132,35 @@ function readHistoricalCached() {
   return data;
 }
 
+// TEMP DIAGNOSTIC — Part 1 of today's brief (domestic-blend rescore safety check).
+// Reports live memory headroom on the Standard (2GB) instance against the current
+// population size, so the rescore go/no-go decision is made on real numbers, not
+// an assumption that the plan upgrade alone is sufficient — exactly what the brief
+// asked to confirm before proceeding. Read-only, no scoring/betting-path effect.
+// Remove once the rescore decision has actually been made, per standing practice.
+app.get('/api/_diag/rescore-readiness', (_req, res) => {
+  const mem = process.memoryUsage();
+  const hist = readHistoricalCached() || {};
+  const toMB = b => Math.round(b / 1024 / 1024);
+  res.json({
+    memory: {
+      rssMB: toMB(mem.rss),
+      heapUsedMB: toMB(mem.heapUsed),
+      heapTotalMB: toMB(mem.heapTotal),
+      externalMB: toMB(mem.external),
+    },
+    v8HeapStatsMB: (() => {
+      const v8 = require('v8').getHeapStatistics();
+      return { heapSizeLimitMB: toMB(v8.heap_size_limit), totalHeapMB: toMB(v8.total_heap_size), usedHeapMB: toMB(v8.used_heap_size) };
+    })(),
+    population: {
+      fixtures: hist.fixtures?.length ?? 0,
+      scoredRecords: hist.scoredRecords?.length ?? 0,
+    },
+    note: 'Compare heapUsedMB/rssMB against heapSizeLimitMB with real traffic idle. A rescore run should stay well under heapSizeLimitMB throughout — if rssMB is already a large fraction of it at rest, that is itself a reason for caution before triggering rescore=true.',
+  });
+});
+
 app.get('/api/server-status', async (_req, res) => {
   if (_serverStatusCache && (Date.now() - _serverStatusCacheAt) < SERVER_STATUS_CACHE_MS) {
     return res.json({
