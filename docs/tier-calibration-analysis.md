@@ -5102,3 +5102,260 @@ diagnostic endpoints from this task (`recover-venue-data`,
 `weather-walkforward-validation`, `h2h-pooled-bucket-fit`) removed, along
 with their now-orphaned support code — confirmed via `git diff` and a
 full-file syntax check.
+
+## Addendum 30 — CLV methodology clarification, and diagnosing tonight's 8/8 Carabao Cup loss
+
+Overnight, fully autonomous per the brief — diagnosis and strategic
+analysis only, per calibration-rules.md rule 4's spirit: nothing here
+tunes a parameter because tonight lost. No live scoring/gating/settings
+code was touched by this addendum. A separate, forward-looking document,
+[`real-money-strategy-proposal.md`](real-money-strategy-proposal.md),
+carries Pillar 2 (the strategic proposal) and the Betfair-automation
+scoping note.
+
+**A note on data access, stated plainly per the brief's own instruction to
+flag uncertainty**: this session has no live server/API credentials and
+the user was offline overnight, so nothing below required a fresh live
+query was fabricated. Everything here comes from (a) this project's own
+already-published documentation (extensive — 29 prior addenda,
+calibration-rules.md, model-versioning.md), (b) direct reads of the
+current source code (server.js, teamProfiles.js, weightOptimiser.js), and
+(c) the specific bet details already visible in tonight's own
+conversation (Scout-tab screenshots and Betfair Exchange screenshots the
+user pasted earlier tonight). Where a claim rests on (c) at less than full
+precision (exact `modelProb` to the decimal, rather than the visible tier
+band), that is flagged inline, not presented as more precise than it is.
+
+### Immediate correction, unrelated to the rest of this addendum but too consequential to bury
+
+**The live system is running real-money stakes at Quarter-Kelly (0.25),
+not the 1/8 Kelly (0.125) the task brief assumes.** `SETTINGS_DEFAULTS.realKellyFraction`
+is `0.25` (`server.js`), and every real-money card on the Scout tab
+tonight explicitly labeled its stake box "Quarter-Kelly · real" — this
+isn't a fallback guess, it's the confirmed live value. This means
+tonight's actual stakes (and every future real-money stake, until changed)
+are sized at **double** the risk fraction the brief's own framing assumed.
+This is worth fixing or consciously confirming before any further
+real-money activity, independent of everything else in this addendum —
+see the strategy proposal's Kelly-fraction section for the recommendation.
+
+### Add-on — CLV methodology check
+
+**What the CLV dashboard actually compares** (`fetchClosingOddsForBet()`,
+`server.js`): a bet's `actualOdds` (whatever price was taken at lock or at
+manual placement/conversion, whenever that happened) against Pinnacle's
+price snapshot dated at **kickoff** (`date: kickoffIso` passed to the Odds
+API's historical endpoint, validated to be within 15 minutes of kickoff).
+The fetch itself only runs in a T-5-to-kickoff cron window, independent of
+whenever the bet was actually locked.
+
+**This is unambiguously a market-drift metric, not an execution-quality
+metric**, exactly as the brief suspected. A bet's CLV can be negative for
+two entirely different reasons that the current dashboard cannot
+distinguish: (a) genuinely poor execution — the price taken was worse than
+what the market offered at the time, or (b) good execution followed by the
+market moving further in the bet's own favor between lock and kickoff
+(the price shortening because more money backed the same side) — which is
+if anything a *mildly encouraging* signal about the pick's direction, not
+a red flag about how it was placed. The brief's own example (Watford
+2.32 taken vs. a 2.00 quote at lock — a real, executed improvement) can
+still show negative CLV under this metric for reason (b), and there is
+currently no way to tell the two apart from the dashboard alone.
+
+**Recommendation: show both figures, not one.** The data for a genuine
+execution-quality metric already exists on every bet at zero additional
+cost — `pinnacleOddsAtLock` (`server.js:2021`) is captured at the moment
+of lock/placement, specifically noted in its own code comment as "the
+actual reference price a human compares a soft-book quote against." A
+second metric, `(actualOdds - pinnacleOddsAtLock) / pinnacleOddsAtLock`,
+requires no new API calls — it's a pure computation over already-stored
+fields. Recommend adding this as "Execution CLV" alongside the existing
+metric (rename the existing one "Market-Drift CLV" or similar, so neither
+reads as the sole verdict on a bet), on the CLV dashboard (`renderClv()`,
+`public/index.html`) and the CSV export. Not implemented in this addendum
+— flagged as a Pillar 2 near-term item, since it's cheap and directly
+prevents the exact misreading the brief describes from recurring.
+
+### Pillar 1 — Diagnosing tonight's result
+
+**Tonight's 8 real-money Carabao Cup bets** (reconstructed from this
+session's own conversation — Scout-tab and Betfair Exchange screenshots
+pasted earlier tonight; exact `modelProb` decimals for 2 of the 8 are not
+directly confirmed and are flagged below):
+
+| Fixture | Pick | Tier band shown | Actual odds/stake (exchange-confirmed) | Historical backtest cited |
+|---|---|---|---|---|
+| Blackburn vs Sheffield Utd | Home | *not confirmed — see caveat* | £55 @ 2.84 | *not confirmed* |
+| Watford vs Peterborough | Home | *not confirmed — see caveat* | £110 @ 2.32 | *not confirmed* |
+| Stevenage vs Reading | Home | 40-45% | £62 @ 2.74 | +22.6% (n=45) |
+| Southampton vs West Ham | Home | 55-60% | £140 @ 2.10 | +24.2% (n=16, thin) |
+| Cardiff vs Norwich | Home | 45-50% | £93 @ 2.92 | +14.5%-band reading |
+| Stoke vs Hull | Away (Hull) | 45-50% | £135 @ 3.42 | +11.1% (n=28, thin) |
+| Cambridge Utd vs Millwall | Home | 40-45% | £90 @ 3.30 | +16.6%-band reading |
+| Blackpool vs Lincoln | Home | 45-50% | £150 @ 3.01 | +11.1% (n=28, thin) |
+
+**Caveat, stated plainly**: Blackburn vs Sheffield Utd and Watford vs
+Peterborough's real-mode tier bands were not directly re-confirmed in
+tonight's conversation (Watford's earlier *watching-stage* projection was
+actually a Draw at <35%, which flipped to a Home Win pick by lock time —
+consistent with the pattern below). For the joint-probability calculation,
+both are estimated at the same 40-50%-favorite band the other six sit in,
+which is the most defensible assumption available without live access —
+explicitly an estimate, not a confirmed figure. Re-pulling the exact
+`bets.json` records once online would sharpen this but is very unlikely to
+change the qualitative conclusion (see below).
+
+#### 6. The joint-probability gut-check
+
+Using tier-band midpoints (0.45, 0.45 estimated; 0.425; 0.575; 0.475;
+0.475; 0.425; 0.475), assuming independence:
+
+**P(all 8 lose) ≈ 0.55 × 0.55 × 0.575 × 0.425 × 0.525 × 0.525 × 0.575 × 0.525 ≈ 0.62%** — roughly 1-in-160, if each bet's stated probability were genuinely accurate and the outcomes were independent.
+
+That is a real, low number — not something to wave away as "just
+variance," but **the independence assumption is very likely false here,
+and that matters more than the raw number.** All 8 fixtures were the same
+competition, the same round, the same night. If even one shared factor
+pushed multiple favorites' *true* win probability down simultaneously
+(squad rotation being the obvious, well-known candidate for early domestic
+cup rounds), then these were never 8 independent 0.6%-tail events — they
+were a smaller number of correlated bad reads sharing one root cause,
+which is a completely different, more actionable diagnosis than "the
+model is badly broken." Section 9 below finds direct, structural evidence
+for exactly that shared-cause explanation.
+
+#### 4. Live vs. historical scoring: a confirmed, pre-existing, previously-documented divergence
+
+Traced directly in code (`scoreOneFixture` vs. `scoreFixtureFromPool` in
+`weightOptimiser.js`) and cross-referenced against this project's own
+prior finding on the exact question (this document, ~line 720, from an
+earlier unrelated reconciliation task): **`scoreFixtureFromPool` — the
+function every single Historical/backtest number in this entire document
+is computed from — never calls `applyTeamProfileModifiers` at all.** No
+home/away multiplier, no H2H anomaly, no weather, no WOWY, no transfer
+modifier, in any backtest figure this project has ever produced. Live
+scoring (`scoreOneFixture`) does call it, and since Addendum 28 that
+includes an *active, default-on* home/away strength multiplier — a
+materially larger live-only adjustment than existed when the earlier note
+characterized this gap as "a handful of extra live-only adjustment
+factors... not worth re-deriving the whole analysis over."
+
+This is not a new bug — it's a real, structural, already-somewhat-known
+divergence that has quietly grown larger since it was last assessed. It
+means every tier badge shown on the Scout tab (including tonight's) is
+measuring the fixture against a *slightly different model* than the one
+that actually produced its live pick — directionally the right ballpark,
+never byte-for-byte the same computation. Not, on its own, sufficient to
+explain 8/8 losses. Compounds meaningfully with the cup-specific finding
+below.
+
+#### 5 & 9. Lineup freshness and the structural cup-competition problem
+
+Two distinct, compounding findings, both traced directly in code:
+
+**Finding A — the core model has no general squad-rotation detector.**
+`computeModelProb`'s inputs (form, xG, H2H, defense, momentum, standings)
+are all built from *past match results* — not today's team sheet. The
+only mechanism that reacts to *today's* lineup at all is WOWY
+(`applyTeamProfileModifiers`, gated behind `wowyActive`), and WOWY is
+narrowly designed to catch one or two individually-tracked *high-importance
+players* being confirmedly absent — it has no way to represent "this club
+rested nine first-teamers," which is the actual, well-known pattern in
+early domestic cup rounds. A team fielding a youth-and-fringe side still
+gets scored almost entirely off their full-strength squad's recent
+results, because that's the only signal the model has.
+
+**Finding B — the home/away multiplier is itself blind to competition
+context, compounding Finding A specifically for cup ties.**
+`buildProfileFromFixtures`'s home/away record (`teamProfiles.js`) pools a
+team's home/away fixtures across **all** competitions in its stored
+history, with no competition-type filter. A team's home win-rate
+multiplier is therefore built substantially from *league* form (since
+teams play far more league games than cup games), then applied uniformly
+to a cup fixture as if the same home advantage transfers — even on a night
+when that "home" fixture is being contested by a reserve side facing a
+motivated visitor. This is a genuine, football-literate, first-principles
+reason cup competitions specifically should be treated as structurally
+less reliable, independent of any statistical evidence — the model's home
+advantage signal is measuring the wrong team's history on a rotated night.
+
+**On the specific question of whether tonight's lineups were confirmed or
+stale**: `lineups.json` is a periodically-refreshed cache
+(`getLineups()`), not a fetch performed live at lock time — confirming its
+freshness for tonight's specific 8 fixtures requires a live read this
+session cannot perform tonight. Flagged as an open item for morning
+verification, not asserted either way.
+
+#### 7 & 8. Carabao Cup's own sample sizes, and the cup-vs-league comparison
+
+Pulled from the exhaustive documentation review (full detail in the
+companion strategy proposal's evidence section): **Carabao Cup's own
+formally banked reading is posEdgeN=192, ROI +8.04%**, with this
+project's own audit explicitly stating it is *"still well below the
+rule-6 decision-grade floor... not a confirmed edge"* (`CALIBRATION_AUDIT[48]`,
+current as of Addendum 27). Every one of tonight's individual per-fixture
+citations — n=45, n=31, n=28 (thin), n=16 (thin) — sits below even that
+already-sub-floor pooled figure, several explicitly labeled "thin" by the
+UI itself.
+
+Across every cup/tournament competition this project has ever backtested
+(Carabao Cup, Champions League, Europa League, Conference League), **none
+has ever cleared the rule-6 decision-grade floor** (~300-400 posEdge
+bets), versus League One (2,227) and League Two (2,346), which both do.
+Cup confidence intervals are also systematically wider — Conference
+League's spans 208 percentage points end to end. This project has also
+already found two independent, confirmed structural reasons for this, not
+just a volume artifact: a standings-fabrication bug specific to
+knockout-competition scoring (the historical scorer has no real
+standings concept for cup competitions and reconstructs a nonsensical
+proxy instead — confirmed on the full 9,551-fixture cup population), and a
+genuine, robust two-legged-tie aggregate-state dynamic (teams 2+ down
+after leg 1 still win the home leg 33.1% of the time — a real "backs
+against the wall" effect no model feature currently accounts for).
+
+#### 10. Recommendation
+
+**Yes — tournament football should be treated as structurally less
+reliable for real money than league football**, on the combined weight of:
+this project's own repeatedly-confirmed thinner/noisier backtest evidence
+across every cup competition tested; two independently-confirmed
+structural scoring bugs specific to knockout competitions; and two
+additional, newly-identified (tonight) first-principles reasons the
+model's core mechanisms — no general rotation detection, and a
+competition-blind home/away multiplier — are specifically weaker on cup
+nights. This is not a reaction to tonight's outcome; every piece of
+supporting evidence above either predates tonight or is a structural code
+property independent of any single night's result. Tonight is a
+consistent, unsurprising instance of an already-known pattern, not new
+evidence on its own.
+
+**The proximate cause of tonight's specific loss, most likely**: real
+money was staked against Carabao Cup fixtures via the green-flag
+manual-curation feature — which this project's own Addendum 22 explicitly
+built as a *human judgment aid*, "purely a display/curation feature, no
+gating... no automatic flagging logic of any kind" — using per-fixture
+sample sizes (n=45 down to n=16, several self-labeled "thin") thinner than
+even the weakest of the six cells that same addendum's own
+evidence-reconciliation exercise judged acceptable to flag (the thinnest
+of those, League Two 65-70% at n=77, was itself called "weakest-evidenced
+of the six" and explicitly caveated as high-risk). Carabao Cup was never
+among that original, evidence-reconciled set of six — its cells appear to
+have been flagged separately, without that same reconciliation step. This
+is a process gap, not a model failure: the tool worked as designed (a
+human curation aid), but was applied against evidence thinner than the
+standard this project has applied everywhere else.
+
+### Compliance and API usage
+
+No parameter, base rate, weight, or settings default was changed anywhere
+in this addendum. No new API-Sports or Odds API calls were made — every
+figure above comes from already-published documentation, direct source
+reads, and this session's own conversation history. Auto-retrain gate:
+last live-confirmed `false` earlier this same session (`/api/server-status`,
+~19:06 and ~21:53); nothing in this addendum's diagnosis work touches the
+training path, so there is no mechanism by which it could have changed —
+a fresh confirmatory check is still recommended once back online, per the
+brief's own "before and after" instruction, since "after" cannot be
+verified live while offline. No temporary diagnostic endpoints were
+created for this addendum — everything was answered from existing docs,
+source reads, and conversation history, so there is nothing to clean up.
