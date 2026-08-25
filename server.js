@@ -8859,6 +8859,189 @@ app.get('/api/_diag/h2h-shrinkage-fit', async (_req, res) => {
   }
 });
 
+// TEMP DIAGNOSTIC — Weather-sensitivity population + calibration test (2026-08-25,
+// calibration-rules.md discipline throughout, same governance pattern as the H2H
+// shrinkage fit above). teamProfiles.js's weatherSensitivity field already exists
+// and already feeds a LIVE, ungated modifier in applyTeamProfileModifiers -- but it
+// has never fired in production: its own guard checks classifyWeather()'s 'clear'
+// return value against a schema key list of ['dry','rain','heavy_rain','wind'],
+// which never matches 'clear', so the baseline 'dry' bucket has never once been
+// incremented for any team, ever (confirmed 2026-08-25). This diagnostic corrects
+// that key mismatch ONLY here, in-memory -- team-profiles.json and
+// teamProfiles.js's live addResultToProfile()/applyTeamProfileModifiers() are never
+// touched, so today's live scoring behavior is completely unaffected by running
+// this. Whether to fix the live bug and/or gate this modifier behind a settings
+// flag (same pattern as homeAwayMultiplierActive/congestionModifierActive) is a
+// separate, later decision.
+//
+// Split: genuine chronological 80/20 by date across the full population, same as
+// the H2H diagnostic. weatherSensitivity is built per-team from TRAIN fixtures only,
+// joined against weather-history.json by fixture ID (fixtures with no weather data
+// simply don't contribute -- no imputation). Candidate (team, condition) pairs are
+// exactly the ones the live modifier's own guard would allow to fire: dry.matches>=8,
+// cond.matches>=8, |dry.winRate - cond.winRate|>=0.10 (WEATHER_MIN/WEATHER_GAP,
+// copied verbatim from applyTeamProfileModifiers). intlSparsityDamp is replicated
+// exactly (dampens only 'international'-context profiles with <10 TRAIN fixtures).
+//
+// Test evaluation: for each TEST-period fixture with real weather data and a
+// non-clear condition, checks whether either side is a TRAIN-derived candidate for
+// that exact condition; pools that side's TEST-period actual win rate under the
+// condition and compares two predictions against it -- predFlat (today's live
+// behavior: dry win rate, since the modifier never fires) vs predAdjusted (dry win
+// rate + diff*0.5*sparsityDamp, the modifier AS DESIGNED once the key bug is fixed).
+app.get('/api/_diag/weather-sensitivity-fit', async (_req, res) => {
+  try {
+    const hist = readHistoricalCached() || {};
+    const weatherHistory = readJSON('weather-history.json') || {};
+    const allFixtures = (hist.fixtures || [])
+      .filter(f => ['FT', 'AET', 'PEN'].includes(f.fixture?.status?.short) && f.goals?.home != null && f.goals?.away != null);
+    allFixtures.sort((a, b) => new Date(a.fixture.date) - new Date(b.fixture.date));
+
+    const cutoffIdx  = Math.floor(allFixtures.length * 0.8);
+    const cutoffDate = allFixtures[cutoffIdx]?.fixture?.date;
+    const trainFixtures = allFixtures.slice(0, cutoffIdx);
+    const testFixtures  = allFixtures.slice(cutoffIdx);
+
+    const WEATHER_MIN = 8, WEATHER_GAP = 0.10;
+    const bucketKey = (cond) => cond === 'clear' ? 'dry' : (['rain', 'heavy_rain', 'wind'].includes(cond) ? cond : null);
+
+    // Build TRAIN-only weatherSensitivity + context + dataPoints per team.
+    const teamWx = {}; // teamId -> { name, dataPoints, leagueCounts:{}, dry:{}, rain:{}, heavy_rain:{}, wind:{} }
+    function ensureTeam(id, name) {
+      if (!teamWx[id]) teamWx[id] = {
+        name, dataPoints: 0, leagueCounts: {},
+        dry: { wins: 0, matches: 0 }, rain: { wins: 0, matches: 0 },
+        heavy_rain: { wins: 0, matches: 0 }, wind: { wins: 0, matches: 0 },
+      };
+      return teamWx[id];
+    }
+    let sinceYield = 0;
+    for (const f of trainFixtures) {
+      const homeId = f.teams?.home?.id, awayId = f.teams?.away?.id;
+      if (!homeId || !awayId) continue;
+      const hg = f.goals.home, ag = f.goals.away;
+      const home = ensureTeam(homeId, f.teams.home.name);
+      const away = ensureTeam(awayId, f.teams.away.name);
+      home.dataPoints++; away.dataPoints++;
+      const ctx = classifyFixture(f.league?.id);
+      home.leagueCounts[ctx] = (home.leagueCounts[ctx] || 0) + 1;
+      away.leagueCounts[ctx] = (away.leagueCounts[ctx] || 0) + 1;
+
+      const wx  = weatherHistory[f.fixture.id];
+      const key = wx ? bucketKey(wx.condition) : null;
+      if (key) {
+        home[key].matches++; if (hg > ag) home[key].wins++;
+        away[key].matches++; if (ag > hg) away[key].wins++;
+      }
+      if (++sinceYield >= 500) { sinceYield = 0; await new Promise(r => setImmediate(r)); }
+    }
+
+    function winRate(b) { return b.matches > 0 ? b.wins / b.matches : null; }
+    function context(t) {
+      const best = Object.entries(t.leagueCounts).sort((a, b) => b[1] - a[1])[0];
+      return best ? best[0] : 'club_domestic';
+    }
+    function sparsityDamp(t) {
+      return context(t) === 'international' ? Math.min(t.dataPoints / 10, 1) : 1;
+    }
+
+    // Candidates: (teamId, condKey) pairs the live modifier's own guard would allow to fire.
+    const candidates = {}; // teamId -> { condKey -> { diff, dryWinRate, condWinRate, damp, ... } }
+    for (const [teamId, t] of Object.entries(teamWx)) {
+      for (const condKey of ['rain', 'heavy_rain', 'wind']) {
+        const dry = t.dry, cond = t[condKey];
+        if (dry.matches < WEATHER_MIN || cond.matches < WEATHER_MIN) continue;
+        const dryWr = winRate(dry), condWr = winRate(cond);
+        if (dryWr == null || condWr == null) continue;
+        const diff = condWr - dryWr;
+        if (Math.abs(diff) < WEATHER_GAP) continue;
+        if (!candidates[teamId]) candidates[teamId] = {};
+        candidates[teamId][condKey] = {
+          diff, dryWinRate: dryWr, condWinRate: condWr, damp: sparsityDamp(t),
+          trainCondMatches: cond.matches, trainDryMatches: dry.matches,
+        };
+      }
+    }
+    const candidateCount = Object.values(candidates).reduce((s, c) => s + Object.keys(c).length, 0);
+
+    if (candidateCount === 0) {
+      return res.json({
+        note: "No (team, condition) pairs cleared the live modifier's own threshold (8+ matches each side, 10pp+ gap) on TRAIN data.",
+        split: { cutoffDate, trainFixtures: trainFixtures.length, testFixtures: testFixtures.length },
+        candidateCount: 0,
+      });
+    }
+
+    // TEST evaluation: pool each candidate's actual TEST-period record under that
+    // exact condition, weighted by matches (same pooling shape as the H2H diagnostic).
+    const testRecord = {}; // teamId -> condKey -> {wins, matches}
+    for (const f of testFixtures) {
+      const wx = weatherHistory[f.fixture.id];
+      if (!wx || !wx.condition || wx.condition === 'clear') continue;
+      const condKey = wx.condition;
+      const homeId  = f.teams?.home?.id, awayId = f.teams?.away?.id;
+      const hg = f.goals.home, ag = f.goals.away;
+      if (candidates[homeId]?.[condKey]) {
+        testRecord[homeId] = testRecord[homeId] || {};
+        const r = testRecord[homeId][condKey] = testRecord[homeId][condKey] || { wins: 0, matches: 0 };
+        r.matches++; if (hg > ag) r.wins++;
+      }
+      if (candidates[awayId]?.[condKey]) {
+        testRecord[awayId] = testRecord[awayId] || {};
+        const r = testRecord[awayId][condKey] = testRecord[awayId][condKey] || { wins: 0, matches: 0 };
+        r.matches++; if (ag > hg) r.wins++;
+      }
+    }
+
+    let sumAbsErrFlat = 0, sumAbsErrAdjusted = 0, totalTestMatches = 0, candidatesWithTestCoverage = 0;
+    const sampleRows = [];
+    for (const [teamId, conds] of Object.entries(testRecord)) {
+      for (const [condKey, rec] of Object.entries(conds)) {
+        if (!rec.matches) continue;
+        const c = candidates[teamId][condKey];
+        candidatesWithTestCoverage++;
+        const testActualWinRate = rec.wins / rec.matches;
+        const predFlat     = c.dryWinRate; // today's live behavior -- modifier never fires
+        const predAdjusted = Math.min(1, Math.max(0, c.dryWinRate + c.diff * 0.5 * c.damp));
+        const errFlat     = Math.abs(testActualWinRate - predFlat);
+        const errAdjusted = Math.abs(testActualWinRate - predAdjusted);
+        sumAbsErrFlat     += errFlat * rec.matches;
+        sumAbsErrAdjusted += errAdjusted * rec.matches;
+        totalTestMatches  += rec.matches;
+        if (sampleRows.length < 20) {
+          sampleRows.push({
+            teamId, teamName: teamWx[teamId]?.name, condition: condKey,
+            trainDryMatches: c.trainDryMatches, trainCondMatches: c.trainCondMatches,
+            trainDryWinRate: +c.dryWinRate.toFixed(3), trainCondWinRate: +c.condWinRate.toFixed(3),
+            testMatches: rec.matches, testActualWinRate: +testActualWinRate.toFixed(3),
+            predFlat: +predFlat.toFixed(3), predAdjusted: +predAdjusted.toFixed(3),
+            errFlat: +errFlat.toFixed(3), errAdjusted: +errAdjusted.toFixed(3),
+          });
+        }
+      }
+    }
+
+    res.json({
+      note: "Train-only weatherSensitivity build (clear/dry key bug fixed in this diagnostic only, live code untouched), single test-set look, per calibration-rules.md. Candidates are (team, condition) pairs clearing the LIVE modifier's own threshold (8+ matches each side, >=10pp win-rate gap vs dry). predFlat = dry win rate (today's actual live behavior, since the modifier never fires due to the key bug) vs predAdjusted = the modifier AS DESIGNED (dry + diff*0.5*sparsityDamp). meanAbsCalibError is matches-weighted mean |actual TEST win rate - predicted| across every TRAIN-derived candidate with TEST-period coverage under that same condition -- lower is better-calibrated. Diagnostic only; team-profiles.json and live scoring code untouched, no scoring/betting path reads this.",
+      split: { cutoffDate, trainFixtures: trainFixtures.length, testFixtures: testFixtures.length },
+      weatherDataCoverage: {
+        trainFixturesWithWeather: trainFixtures.filter(f => weatherHistory[f.fixture.id]).length,
+        testFixturesWithWeather:  testFixtures.filter(f => weatherHistory[f.fixture.id]).length,
+      },
+      candidateCount,
+      testEvaluation: {
+        candidatesWithTestCoverage,
+        totalTestMatchesCovered: totalTestMatches,
+        meanAbsCalibErrorFlat:     totalTestMatches ? +(sumAbsErrFlat / totalTestMatches).toFixed(4) : null,
+        meanAbsCalibErrorAdjusted: totalTestMatches ? +(sumAbsErrAdjusted / totalTestMatches).toFixed(4) : null,
+      },
+      sampleRows,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0, 5) });
+  }
+});
+
 app.get('/api/server-status', async (_req, res) => {
   if (_serverStatusCache && (Date.now() - _serverStatusCacheAt) < SERVER_STATUS_CACHE_MS) {
     return res.json({
