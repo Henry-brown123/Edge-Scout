@@ -8600,17 +8600,25 @@ function getResolvedLocationsForWeather() {
 app.get('/api/_diag/fetch-weather-archive', (req, res) => {
   if (_weatherArchiveRunning) return res.status(409).json({ error: 'Weather archive fetch already running', status: _weatherArchiveStatus });
   const limit = parseInt(req.query.limit, 10) || 1000;
-  const targets = getResolvedLocationsForWeather().slice(0, limit);
+  const existingWeather = readJSON('weather-history.json') || {};
+  const allTargets = getResolvedLocationsForWeather();
+  // Skip locations whose fixtures are already all covered -- makes re-runs after
+  // a quota reset resume instead of re-spending calls on already-fetched places.
+  const targets = allTargets
+    .filter(t => !t.fixtures.every(f => existingWeather[f.fixtureId]))
+    .slice(0, limit);
+  const skipped = allTargets.length - targets.length;
   _weatherArchiveRunning = true;
-  _weatherArchiveStatus = { phase: 'running', total: targets.length, done: 0, fixturesMatched: 0, failed: 0, rateLimitRetries: 0, failedSamples: [], startedAt: new Date().toISOString() };
-  res.json({ started: true, targetLocations: targets.length, note: 'Poll GET /api/_diag/weather-archive-status for progress.' });
+  _weatherArchiveStatus = { phase: 'running', total: targets.length, skippedAlreadyCovered: skipped, done: 0, fixturesMatched: 0, failed: 0, rateLimitRetries: 0, failedSamples: [], startedAt: new Date().toISOString() };
+  res.json({ started: true, targetLocations: targets.length, skippedAlreadyCovered: skipped, note: 'Poll GET /api/_diag/weather-archive-status for progress.' });
 
-  const RATE_LIMIT_WAIT_MS = 65000; // Open-Meteo's 429 body says "try again in one minute"
+  const RATE_LIMIT_WAIT_MS = 65000; // only worth waiting out for a MINUTELY cap -- hourly/daily won't clear within a retry
   const MAX_RATE_LIMIT_RETRIES = 2;
 
   (async () => {
-    const weatherHistory = readJSON('weather-history.json') || {};
+    const weatherHistory = existingWeather;
     for (const { lat, lon, fixtures } of targets) {
+      if (_weatherArchiveStatus.phase === 'stopped_daily_limit') break;
       try {
         const dates = fixtures.map(f => new Date(f.date).getTime());
         const startDate = new Date(Math.min(...dates)).toISOString().slice(0, 10);
@@ -8625,12 +8633,18 @@ app.get('/api/_diag/fetch-weather-archive', (req, res) => {
             }));
             break;
           } catch (e) {
-            if (e.response?.status === 429 && attempt < MAX_RATE_LIMIT_RETRIES) {
+            const reason = e.response?.data?.reason || '';
+            if (e.response?.status === 429 && /daily/i.test(reason)) {
+              // Won't clear today -- stop burning the rest of the batch on guaranteed failures.
+              _weatherArchiveStatus.phase = 'stopped_daily_limit';
+              throw e;
+            }
+            if (e.response?.status === 429 && /minutely/i.test(reason) && attempt < MAX_RATE_LIMIT_RETRIES) {
               _weatherArchiveStatus.rateLimitRetries++;
               await new Promise(r => setTimeout(r, RATE_LIMIT_WAIT_MS));
               continue;
             }
-            throw e;
+            throw e; // hourly (or anything else) -- record and move on, no wait
           }
         }
         const times = data?.hourly?.time || [];
@@ -8661,12 +8675,15 @@ app.get('/api/_diag/fetch-weather-archive', (req, res) => {
       writeJSON('weather-history.json', weatherHistory);
       await new Promise(r => setTimeout(r, 1200));
     }
-    _weatherArchiveStatus.phase = 'complete';
+    if (_weatherArchiveStatus.phase !== 'stopped_daily_limit') _weatherArchiveStatus.phase = 'complete';
     _weatherArchiveStatus.completedAt = new Date().toISOString();
     _weatherArchiveRunning = false;
   })().catch(e => {
-    _weatherArchiveStatus.phase = 'error';
-    _weatherArchiveStatus.error = e.message;
+    if (_weatherArchiveStatus.phase !== 'stopped_daily_limit') {
+      _weatherArchiveStatus.phase = 'error';
+      _weatherArchiveStatus.error = e.message;
+    }
+    _weatherArchiveStatus.completedAt = new Date().toISOString();
     _weatherArchiveRunning = false;
   });
 });
