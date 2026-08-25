@@ -523,8 +523,14 @@ function addResultToProfile(teamId, isHome, won, drawn, opponentId, opponentName
   ['homeWinRate','awayWinRate','overallWinRate','homeWinRateMultiplier','awayWinRateMultiplier','homeConfidence','awayConfidence']
     .forEach(k => { if (typeof p[k] === 'number') p[k] = parseFloat(p[k].toFixed(3)); });
 
-  // Update weather sensitivity
-  const wsKey = weatherCondition && ['dry','rain','heavy_rain','wind'].includes(weatherCondition) ? weatherCondition : null;
+  // Update weather sensitivity. Fixed 2026-08-25: classifyWeather()/
+  // classifyArchivedWeather() return 'clear' for the calm baseline, never 'dry' --
+  // this filter previously checked the condition against a key list containing
+  // 'dry' instead of 'clear', so the baseline bucket was never once incremented,
+  // for any team, regardless of data volume. See docs/tier-calibration-analysis.md
+  // Addendum 29.
+  const wsKey = weatherCondition === 'clear' ? 'dry'
+    : (weatherCondition && ['rain','heavy_rain','wind'].includes(weatherCondition) ? weatherCondition : null);
   if (wsKey && p.weatherSensitivity) {
     if (!p.weatherSensitivity[wsKey]) p.weatherSensitivity[wsKey] = { wins: 0, matches: 0, winRate: null };
     const ws = p.weatherSensitivity[wsKey];
@@ -706,13 +712,22 @@ function applyTeamProfileModifiers(probs, homeProfile, awayProfile, context, dat
     }
   }
 
-  // 4. Weather sensitivity modifier
+  // 4. Weather sensitivity modifier. Gated behind opts.weatherModifierActive
+  // (settings.weatherModifierActive, default false) since 2026-08-25 -- a train-only
+  // walk-forward diagnostic found this genuinely promising (single-split calibration
+  // error 0.1912 -> 0.1704, the strongest single-look result of any modifier tested
+  // this session) but it starts OFF pending that walk-forward's per-block result and
+  // an explicit go-live decision, same governance as congestionModifierActive. Never
+  // ran ungated in production: addResultToProfile's weatherSensitivity accumulation
+  // had its own independent bug (see below) that meant the 'dry' baseline bucket
+  // never populated for any team, so this modifier was dead code from the day it was
+  // written regardless of this flag.
   // Requires 8+ matches per condition AND a >10pp gap vs dry before applying.
   const weatherCondition = weather?.condition;
   const WEATHER_MIN = 8;
   const WEATHER_GAP = 0.10;
 
-  if (weatherCondition && weatherCondition !== 'clear') {
+  if (opts.weatherModifierActive === true && weatherCondition && weatherCondition !== 'clear') {
     const condKey = weatherCondition; // 'rain' | 'heavy_rain' | 'wind'
 
     function weatherAdj(profile, side) {
