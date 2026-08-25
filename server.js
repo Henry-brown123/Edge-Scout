@@ -2567,7 +2567,17 @@ function setupScheduler() {
       return m <= (60 + off) && m > (55 + off);
     });
     const locked = watching.filter(w => (new Date(w.kickoff).getTime() - now) / 60000 > (55 + getOffset(w)));
-    if (!toScan.length) return;
+    // Always drop anything past its own window, even on a "quiet" minute where
+    // nothing NEW is entering one. Previously this cleanup only ran nested inside
+    // the toScan-only path below, so a fixture whose window closed on a minute
+    // when no other fixture happened to be entering its own window at the same
+    // moment could sit in Watching indefinitely despite already being scanned
+    // (or needing to be) earlier -- the "Lock overdue" state surfaced on the
+    // Scout tab. Confirmed live 2026-08-25 (Plymouth vs Coventry).
+    if (!toScan.length) {
+      if (locked.length !== watching.length) saveWatching(locked);
+      return;
+    }
     _cronRunning.preMatch = true;
     console.log(`[Cron:PreMatch] ${toScan.length} fixture(s) entering pre-match lock (T-60 ±15 min variation)`);
     try {
