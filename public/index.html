@@ -845,7 +845,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       <table>
         <thead>
           <tr>
-            <th>Fixture</th><th>League</th><th>Bet</th><th>Score <span style="color:var(--muted);font-weight:400">/ Prob / Tier</span></th>
+            <th>Date</th><th>Fixture</th><th>League</th><th>Bet</th><th>Score <span style="color:var(--muted);font-weight:400">/ Prob / Tier</span></th>
             <th>Odds</th><th>Edge</th><th>Stake</th><th>P&L</th><th>Result</th><th></th>
           </tr>
         </thead>
@@ -1098,7 +1098,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       <table>
         <thead>
           <tr>
-            <th>Fixture</th><th>League</th><th>Bet</th><th>Score <span style="color:var(--muted);font-weight:400">/ Prob / Tier</span></th>
+            <th>Date</th><th>Fixture</th><th>League</th><th>Bet</th><th>Score <span style="color:var(--muted);font-weight:400">/ Prob / Tier</span></th>
             <th>Odds</th><th>Edge</th><th>Stake</th><th>P&L</th><th>Result</th><th></th>
           </tr>
         </thead>
@@ -1396,7 +1396,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       <table>
         <thead>
           <tr>
-            <th>Mode</th><th>Fixture</th><th>League</th><th>Bet</th><th>Score <span style="color:var(--muted);font-weight:400">/ Prob / Tier</span></th>
+            <th>Date</th><th>Mode</th><th>Fixture</th><th>League</th><th>Bet</th><th>Score <span style="color:var(--muted);font-weight:400">/ Prob / Tier</span></th>
             <th>Odds</th><th>Edge</th><th>Stake</th><th>P&L</th><th>Result</th><th></th>
           </tr>
         </thead>
@@ -3212,6 +3212,10 @@ async function renderPerfMode(mode) {
   const visibleBets = betLogExpanded[mode] ? placedBets : placedBets.slice(0, BET_LOG_PAGE_SIZE);
 
   visibleBets.forEach(b => {
+    const betDate = new Date(b.lockedAt || b.kickoff || 0);
+    const dateStr = betDate.getFullYear() > 2000
+      ? betDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+      : '—';
     const pnlStr = b.pnl != null ? `${b.pnl >= 0 ? '+' : ''}£${b.pnl.toFixed(2)}` : '—';
     const pnlCls = b.pnl > 0 ? 'c-green' : b.pnl < 0 ? 'c-red' : '';
     // Selection-correctness badge (win/loss/pending/postponed) is always derived from
@@ -3241,6 +3245,7 @@ async function renderPerfMode(mode) {
       : '';
     const tr = document.createElement('tr');
     tr.innerHTML = `
+      <td class="mono" style="color:var(--muted);white-space:nowrap" title="${betDate.getFullYear() > 2000 ? betDate.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) : 'Date unavailable'}">${dateStr}</td>
       ${modeCell}
       <td class="mono">${b.fixture}</td>
       <td style="color:var(--muted)">${b.leagueName || '—'}</td>
@@ -4863,8 +4868,9 @@ function exportCSV(mode = 'paper') {
   // KellySuggestedStake and ActualStake logged separately (not just one "Stake"
   // column) so past sizing decisions are reviewable — actual may differ from
   // suggested if manually adjusted at placement time.
-  const rows = [['Fixture','League','Bet','PickType','Score','ModelProb%','Tier','Odds','PinnacleOddsAtLock','Edge%','KellySuggestedStake','ActualStake','P&L','Result','ModelVersion']];
+  const rows = [['Date','Fixture','League','Bet','PickType','Score','ModelProb%','Tier','Odds','PinnacleOddsAtLock','Edge%','KellySuggestedStake','ActualStake','P&L','Result','ModelVersion']];
   bets.forEach(b => rows.push([
+    (b.lockedAt || b.kickoff) ? new Date(b.lockedAt || b.kickoff).toISOString().split('T')[0] : '',
     b.fixture, b.leagueName, b.bet, b.pickType || (pickTypeOfBetKey(b.bet) || ''), b.successScore,
     b.modelProb != null ? (b.modelProb*100).toFixed(1) : '', tierOfProb(b.modelProb) || '',
     b.bookOdds?.toFixed(2), b.pinnacleOddsAtLock?.toFixed(2) || '', ((b.edge||0)*100).toFixed(2),
