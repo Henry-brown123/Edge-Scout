@@ -4946,3 +4946,159 @@ that the flag mechanically works (that's already guaranteed by the code).
 See `docs/model-versioning.md`'s new "Live-scoring modifier toggles"
 section for the standing governance table and the process for any future
 modifier toggle.
+
+## Addendum 29 — Weather integration completed (venue recovery through walk-forward validation), weather modifier fixed and gated (not activated), H2H pooled-bucket follow-up
+
+### Part 1 — Venue and weather data recovery
+
+`stripFixture()` had always dropped `venue` from the stored historical
+population — the 238-venue coordinate table existed but nothing retained
+venue to match against it. Patched to retain `{name, city}`; re-ran the
+historical backfill (additive, `rescore=false`, ~247 API-Sports calls,
+`scoredRecords` untouched — confirmed via `scoredCount` unchanged and
+`profilesBuilt` staying small, not a mass rescore).
+
+**Venue-level coverage**: two geocoding rounds against Open-Meteo's free
+Geocoding API (top-200, then top-250 of the remainder — a deliberate
+two-round stop per diminishing-returns judgment, not chased further for
+the last few percent) plus a real bug fix (`venueCoords()` never checked
+`CITY_COORDS` via `venue.name` for fixtures storing a "Venue Name (City)"
+compound string with `venue.city` literally `null` — silently made
+~20 high-fixture-count venues unreachable). Final: **87.5% of the
+80,146-fixture FT/AET/PEN population (70,115 fixtures)** resolved to a
+physical location.
+
+**Weather-level coverage**: fetching Open-Meteo Archive data for those
+resolved locations surfaced three real bugs in turn, each fixed before
+re-running — (1) the fetch endpoint was built on the *unresolved*-location
+list by construction, an inverted-logic bug that would have produced an
+empty target list; (2) no error detail was captured, so an 87% failure
+rate was invisible until logging was added; (3) once visible, the errors
+were Open-Meteo 429s across three different windows (minutely, hourly, and
+transiently daily) that a flat 300ms delay and no retry logic couldn't
+survive — fixed with a longer delay, retry-with-backoff on genuine minutely
+limits only, and an immediate abort (not a slow grind) on daily limits.
+Final: **100% of the resolved population — 67,277/67,277 fixtures** — has
+real measured Open-Meteo Archive weather data in `weather-history.json`.
+
+### Part 2 — Weather sensitivity: bug found, fixed, gated — walk-forward did not confirm it
+
+`teamProfiles.js` already had a `weatherSensitivity` field and a live,
+**ungated** modifier in `applyTeamProfileModifiers()` using it — unlike
+every other modifier in this project, which all carry explicit settings
+toggles. Investigating why it had never shown any effect surfaced a
+genuine, independent bug: `classifyWeather()`/`classifyArchivedWeather()`
+return `'clear'` for the calm baseline, but `addResultToProfile()`'s
+bucket-key filter checked incoming conditions against
+`['dry','rain','heavy_rain','wind']` — `'dry'`, never `'clear'`. The
+baseline `dry` bucket had never once incremented, for any team, since this
+code was written, independent of data volume — the modifier had been
+complete dead code from day one.
+
+**Single-split diagnostic** (train-only weatherSensitivity rebuilt from the
+newly-recovered historical weather data, one 80/20 chronological split,
+single test-set look): `meanAbsCalibErrorFlat 0.1912 → meanAbsCalibErrorAdjusted
+0.1704` — an ~11% relative reduction, the strongest single-look result of
+any modifier tested this project. Caveat noted at the time: only 70
+(team, condition) candidates cleared the modifier's own threshold, with
+test coverage on 55 across 257 total matches, and the visible sample was
+entirely `wind` — no `rain`/`heavy_rain` candidates appeared at all.
+
+**Disposition before validation**: fixed the `dry`/`clear` key bug in
+`teamProfiles.js` and added `weatherModifierActive` to `SETTINGS_DEFAULTS`,
+**default `false`** — gating the modifier behind the same governed pattern
+as `congestionModifierActive`/`homeAwayMultiplierActive`, but starting off
+rather than on, since (unlike home/away) this hadn't yet cleared a
+walk-forward bar. Scope confirmed: `applyTeamProfileModifiers` has exactly
+one call site (`scoreOneFixture`, live scoring only) — historical
+`scoredRecords` and any already-locked bet are structurally unreachable by
+this flag. Separately confirmed: `weatherSensitivity` accumulation in
+`addResultToProfile()` is unconditional, not gated by this flag at all —
+data keeps collecting correctly (now that the key bug is fixed) regardless
+of whether the modifier is active, so there is no cost to waiting for
+validation before any future activation decision.
+
+**Walk-forward validation** (4 sequential expanding-window blocks, same
+6-month boundaries as Addendum 26's original-9 away-band validation,
+train = everything strictly before the block, test = the block):
+
+| Block | test matches | before (flat) | after (adjusted) |
+|---|---|---|---|
+| 2024-08 to 2025-02 | 57 | 0.3621 | 0.3534 |
+| 2025-02 to 2025-08 | 8 | 0.4378 | 0.4298 |
+| 2025-08 to 2026-02 | 29 | 0.4004 | 0.4045 (worse) |
+| 2026-02 to 2026-08 | 21 | 0.3860 | 0.3925 (worse) |
+| **Pooled** | **115** | **0.3814** | **0.3787 — 0.7% relative improvement** |
+
+**Does not hold up.** The single-split's ~11% relative improvement
+collapses to 0.7% pooled and reverses direction in 2 of 4 independent
+blocks — the same pattern Addendum 26 used to positively disconfirm the
+original-9 away-band correction, not noise around a real effect. Also
+newly confirmed: every candidate in every block was `wind` — `rain` and
+`heavy_rain` conditions never once cleared the modifier's 8-match/10pp-gap
+threshold, so in practice this has only ever been a wind-sensitivity
+modifier despite its general name.
+
+**Verdict: closed out, not activated.** The bug fix and governed
+`weatherModifierActive` toggle (default `false`) are kept — correct code
+and an honest off-by-default state — but there is no plan to flip it
+without a materially different future result.
+
+### Part 3 — H2H anomaly: pooled-aggregate-bucket follow-up
+
+Follow-up to the isolate-test/shrinkage-fit work referenced in Addendum 21
+and run earlier this session (`fittedK=8.91` vs the flat weight's
+implied `k=6`; per-pairing test found `meanAbsCalibErrorFlat 0.2911` vs
+`meanAbsCalibErrorFitted 0.2916` — flat, inconclusive). That test's power
+was limited by design: `candidatesWithTestCoverage=4170` but only
+`totalTestMatchesCovered=8823` recurred — ~2.1 recurrences per candidate,
+meaning most individual pairings' "actual" ground truth was itself
+estimated from just 1-3 matches.
+
+Redesigned test: same TRAIN split, same `empiricalBayesShrink` fit, same
+TEST-period candidates and matches, but every individual recurring TEST
+match becomes its own observation, binned by predicted probability into
+standard 5pp calibration buckets (same style as this project's tier/EV
+calibration checks) instead of averaging each pairing's thin recurrence
+into one noisy statistic first.
+
+**Result**: `weightedMeanAbsCalibError` — **flat = 0.0588, fitted =
+0.0644** — the fitted weight is slightly *worse* than flat, not better,
+directly answering the "does H2H become a genuine, confirmed candidate"
+question: no. More notably, **every one of the 16 populated flat-weight
+buckets, and 15 of 17 fitted-weight buckets, showed actual win rates
+running higher than predicted** — a strikingly consistent bias from 10%
+predicted probability through 90%, identical under both weighting schemes.
+Since the bias appears regardless of how much weight the anomaly gets, `k`
+is not the bottleneck. Most likely explanation, noted but not chased
+further this session: the simplified test formula uses each team's
+*overall* (home+away blended) win rate as its baseline, while every
+evaluated fixture is specifically a home fixture for that team by
+construction — home advantage alone would produce exactly this pattern,
+independent of H2H anomalies entirely.
+
+**Verdict: closed out.** Not a confirmed candidate under either the
+original or the redesigned, better-powered test.
+
+### Compliance and API usage
+
+Rules 1-3, 13, 14 held throughout: fresh chronological splits, train-only
+fitting for every fit computed in this task, single test-set look per
+diagnostic (weather single-split, weather walk-forward, H2H pooled-bucket
+each looked at once, not iterated), no re-peeking at a result once
+reported. No base-rate or scoring parameter changed anywhere in this task
+except the two explicitly-gated, default-`false`/off-by-design additions
+described above. Auto-retrain gate re-verified `false` before and after
+(`autoRetrainEnabled: false`, model unchanged — `trainedAt: 2026-08-08`,
+`trainN: 40202`). API usage: Part 1's venue/weather recovery used ~247
+API-Sports calls (already-budgeted historical backfill) plus Open-Meteo
+geocoding/Archive calls (free, no key, no daily budget to track); Parts 2
+and 3's diagnostics made zero additional external API calls (read
+entirely from already-cached historical/weather data). All twelve temp
+diagnostic endpoints from this task (`recover-venue-data`,
+`venue-coverage`, `geocode-top-cities`, `geocode-status`,
+`fix-geocode-errors`, `fetch-weather-archive`, `weather-archive-status`,
+`weather-coverage`, `h2h-shrinkage-fit`, `weather-sensitivity-fit`,
+`weather-walkforward-validation`, `h2h-pooled-bucket-fit`) removed, along
+with their now-orphaned support code — confirmed via `git diff` and a
+full-file syntax check.
