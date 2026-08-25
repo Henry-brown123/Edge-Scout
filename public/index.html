@@ -2804,6 +2804,17 @@ function recommendedCard(b) {
 function watchingCard(w) {
   const kickoff = w.kickoff ? new Date(w.kickoff).toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' }) : '—';
   const minsOut = w.kickoff ? Math.round((new Date(w.kickoff) - Date.now()) / 60000) : null;
+  // Auto-lock re-scores and removes this card somewhere in a per-fixture T-60±15m
+  // window (see server.js getLockOffsetMinutes) — surfaced here so "not locked yet"
+  // is never ambiguous with "stuck past its window and needs a look."
+  const lockLabel = (() => {
+    if (minsOut == null) return null;
+    const off = w.lockOffsetMinutes ?? 0;
+    const opensAt = 60 + off, closesAt = 55 + off;
+    if (minsOut > opensAt) return `<span style="color:var(--muted)" title="Auto-locks and re-scores between T-${opensAt}m and T-${closesAt}m">Locks in ${minsOut - opensAt}m</span>`;
+    if (minsOut > closesAt) return `<span style="color:var(--amber)" title="Inside its auto-lock window — re-scoring now">Locking now…</span>`;
+    return `<span style="color:var(--red)" title="Past its scheduled T-${opensAt}m/T-${closesAt}m auto-lock window but still showing here — worth a manual check">⚠ Lock overdue</span>`;
+  })();
   // How stale can the number on this card possibly be? Morning scan (07:00), the
   // hourly rescan (on the hour), or T-60 lock all update scoredAt — this is
   // whichever of those ran most recently, so "how current is this" always has a
@@ -2842,6 +2853,7 @@ function watchingCard(w) {
           <span>${w.leagueName}</span>
           <span>🇬🇧 KO ${kickoff}</span>
           ${minsOut != null ? `<span style="color:var(--amber)">T-${minsOut}m</span>` : ''}
+          ${lockLabel || ''}
           ${scoredLabel ? `<span style="color:var(--muted)" title="Most recent of: 07:00 morning scan, hourly rescan, or T-60 lock">${scoredLabel}</span>` : ''}
           <span class="badge badge-amber">Projected: ${projLabel}</span>
         </div>
@@ -5741,6 +5753,14 @@ function openDrawer(w) {
   const kickoff = w.kickoff ? new Date(w.kickoff).toLocaleString('en-GB', { weekday:'short', hour:'2-digit', minute:'2-digit' }) : '—';
   const minsOut = w.kickoff ? Math.round((new Date(w.kickoff) - Date.now()) / 60000) : null;
   const isPreMatch = minsOut != null && minsOut <= 60;
+  const drawerLockLabel = (() => {
+    if (minsOut == null) return '';
+    const off = w.lockOffsetMinutes ?? 0;
+    const opensAt = 60 + off, closesAt = 55 + off;
+    if (minsOut > opensAt) return ` · <span style="color:var(--muted)" title="Auto-locks and re-scores between T-${opensAt}m and T-${closesAt}m">Locks in ${minsOut - opensAt}m</span>`;
+    if (minsOut > closesAt) return ` · <span style="color:var(--amber)" title="Inside its auto-lock window — re-scoring now">Locking now…</span>`;
+    return ` · <span style="color:var(--red)" title="Past its scheduled T-${opensAt}m/T-${closesAt}m auto-lock window but still showing here — worth a manual check">⚠ Lock overdue</span>`;
+  })();
 
   const factors = Object.keys(WEIGHTS);
   const factorRows = factors.map(k => {
@@ -5781,7 +5801,7 @@ function openDrawer(w) {
   document.getElementById('drawer').innerHTML = `
     <button class="drawer-close" onclick="closeDrawer()">✕</button>
     <div class="drawer-title">${w.fixture}</div>
-    <div class="drawer-sub">${w.leagueName} · 🇬🇧 KO ${kickoff}${minsOut != null ? ` · <span style="color:var(--amber)">T-${minsOut}m</span>` : ''}</div>
+    <div class="drawer-sub">${w.leagueName} · 🇬🇧 KO ${kickoff}${minsOut != null ? ` · <span style="color:var(--amber)">T-${minsOut}m</span>` : ''}${drawerLockLabel}</div>
     ${w.lowConfidence ? `<div style="background:rgba(255,82,82,.12);border:1px solid rgba(255,82,82,.3);border-radius:6px;padding:8px 12px;margin:8px 0;font-size:.78rem;color:var(--red)">⚠ <strong>Low confidence</strong> — ${w.lowConfidenceReason || 'model/market divergence'}${w.maxModelBookGap != null ? ` (model diverges ${Math.round(w.maxModelBookGap * 100)}pp from bookmaker on at least one outcome)` : ''}. This fixture will not auto-lock. Review manually before placing.</div>` : ''}
 
     <div class="drawer-section">

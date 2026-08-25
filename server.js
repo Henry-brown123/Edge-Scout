@@ -341,6 +341,16 @@ function roundStake(amount) {
 
 function getBets()         { return readJSON('bets.json')         || []; }
 function getWatching()     { return readJSON('watching.json')     || []; }
+// Deterministic per-fixture, per-day ±15min offset on the T-60 pre-match lock cron
+// (see setupScheduler's "T-60 pre-match locks" job below) -- factored out here so
+// /api/state can expose the SAME value the cron will actually use, letting the
+// Scout tab show a genuine "locks in Xm" countdown instead of a guess.
+function getLockOffsetMinutes(w) {
+  if (w._lockOffset != null) return w._lockOffset;
+  const today = new Date().toISOString().slice(0, 10);
+  const seed = (String(w.id || w.fixtureId || '') + today).split('').reduce((a, c) => a + c.charCodeAt(0), 0);
+  return (seed % 31) - 15; // -15 to +15 minutes
+}
 function getCalibration()  { return readJSON('calibration.json')  || []; }
 function getBookmakers()   { return readJSON('bookmakers.json')    || []; }
 function saveBookmakers(list) { writeJSON('bookmakers.json', list); }
@@ -2549,14 +2559,7 @@ function setupScheduler() {
     if (isRateLimited() || _cronRunning.preMatch) return;
     const watching = getWatching();
     const now = Date.now();
-    // Assign a stable per-fixture daily offset (seeded by fixtureId + today's date)
-    const today = new Date().toISOString().slice(0, 10);
-    const getOffset = w => {
-      if (w._lockOffset != null) return w._lockOffset;
-      // Deterministic-ish: hash fixtureId + date into ±15 range
-      const seed = (String(w.id || w.fixtureId || '') + today).split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-      return (seed % 31) - 15; // -15 to +15 minutes
-    };
+    const getOffset = getLockOffsetMinutes;
     // Lock window: T-(60+offset) to T-(55+offset) — fires for 5 consecutive minutes
     const toScan = watching.filter(w => {
       const m = (new Date(w.kickoff).getTime() - now) / 60000;
@@ -4118,11 +4121,15 @@ app.get('/api/state', (_req, res) => {
   const cal      = getCalibration();
   // Backfill competitionPhase on watching entries that predate the field being stored
   const watching = getWatching().map(w => {
-    if (!w.competitionPhase && w.calId) {
-      const ce = cal.find(c => c.id === w.calId);
-      if (ce?.competitionPhase) return { ...w, competitionPhase: ce.competitionPhase };
+    let entry = w;
+    if (!entry.competitionPhase && entry.calId) {
+      const ce = cal.find(c => c.id === entry.calId);
+      if (ce?.competitionPhase) entry = { ...entry, competitionPhase: ce.competitionPhase };
     }
-    return w;
+    // Same value the T-60 pre-match lock cron will actually use for this fixture
+    // (see getLockOffsetMinutes) — lets the Scout tab show a real "locks in Xm"
+    // countdown instead of guessing at a flat T-60.
+    return { ...entry, lockOffsetMinutes: getLockOffsetMinutes(entry) };
   });
   const settings = getSettings();
   res.json({
