@@ -235,6 +235,16 @@ const SETTINGS_DEFAULTS = {
   // what rule 4's "no correction without a football-justified, measured reason" standard
   // exists to catch. Default false. See docs/tier-calibration-analysis.md Addendum 28.
   congestionModifierActive: false,
+  // Weather sensitivity modifier (teamProfiles.js applyTeamProfileModifiers) never
+  // ran live at all -- addResultToProfile's weatherSensitivity accumulation had its
+  // own independent 'dry'/'clear' key-name bug (fixed 2026-08-25) that meant the
+  // baseline bucket never once incremented, for any team. A train-only single-split
+  // diagnostic found this the strongest single-look result of any modifier tested
+  // this session (calibration error 0.1912 -> 0.1704) -- promising enough to fix and
+  // gate, not yet proven enough to default on. Default false pending walk-forward
+  // validation and an explicit go-live decision. See docs/tier-calibration-analysis.md
+  // Addendum 29.
+  weatherModifierActive: false,
   preferExchange: true,
   preferExchangeBuffer: 5,
   leagueModes: {
@@ -1444,7 +1454,8 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     { wowyActive, competitionPhase, homeMatchday, awayMatchday, season: currentSeason,
       transferModifierActive: settings.transferModifierActive === true,
       homeAwayMultiplierActive: settings.homeAwayMultiplierActive === true,
-      congestionModifierActive: settings.congestionModifierActive === true }
+      congestionModifierActive: settings.congestionModifierActive === true,
+      weatherModifierActive: settings.weatherModifierActive === true }
   );
   probs = adjustedProbs;
 
@@ -8561,6 +8572,148 @@ function classifyArchivedWeather(precipitationMm, windSpeedKmh) {
   return 'clear';
 }
 
+// ─── SHARED WEATHER-SENSITIVITY DIAGNOSTIC HELPERS ─────────────────────────────
+// Factored out of the single-split fit (2026-08-25) so the walk-forward validation
+// below reuses IDENTICAL logic -- same thresholds, same dry/clear key fix, same
+// sparsity dampening -- rather than a hand-copied approximation. Pure functions,
+// no disk I/O; team-profiles.json is never touched by any of this.
+const WEATHER_SENSITIVITY_MIN = 8;
+const WEATHER_SENSITIVITY_GAP = 0.10;
+
+function weatherBucketKey(cond) {
+  return cond === 'clear' ? 'dry' : (['rain', 'heavy_rain', 'wind'].includes(cond) ? cond : null);
+}
+
+function buildTeamWeatherSensitivity(fixtures, weatherHistory) {
+  const teamWx = {};
+  function ensureTeam(id, name) {
+    if (!teamWx[id]) teamWx[id] = {
+      name, dataPoints: 0, leagueCounts: {},
+      dry: { wins: 0, matches: 0 }, rain: { wins: 0, matches: 0 },
+      heavy_rain: { wins: 0, matches: 0 }, wind: { wins: 0, matches: 0 },
+    };
+    return teamWx[id];
+  }
+  for (const f of fixtures) {
+    const homeId = f.teams?.home?.id, awayId = f.teams?.away?.id;
+    if (!homeId || !awayId) continue;
+    const hg = f.goals.home, ag = f.goals.away;
+    const home = ensureTeam(homeId, f.teams.home.name);
+    const away = ensureTeam(awayId, f.teams.away.name);
+    home.dataPoints++; away.dataPoints++;
+    const ctx = classifyFixture(f.league?.id);
+    home.leagueCounts[ctx] = (home.leagueCounts[ctx] || 0) + 1;
+    away.leagueCounts[ctx] = (away.leagueCounts[ctx] || 0) + 1;
+
+    const wx  = weatherHistory[f.fixture.id];
+    const key = wx ? weatherBucketKey(wx.condition) : null;
+    if (key) {
+      home[key].matches++; if (hg > ag) home[key].wins++;
+      away[key].matches++; if (ag > hg) away[key].wins++;
+    }
+  }
+  return teamWx;
+}
+
+function weatherWinRate(b) { return b.matches > 0 ? b.wins / b.matches : null; }
+function weatherContext(t) {
+  const best = Object.entries(t.leagueCounts).sort((a, b) => b[1] - a[1])[0];
+  return best ? best[0] : 'club_domestic';
+}
+function weatherSparsityDamp(t) {
+  return weatherContext(t) === 'international' ? Math.min(t.dataPoints / 10, 1) : 1;
+}
+
+// Candidates: (teamId, condition) pairs clearing the live modifier's own guard.
+function buildWeatherCandidates(teamWx) {
+  const candidates = {};
+  for (const [teamId, t] of Object.entries(teamWx)) {
+    for (const condKey of ['rain', 'heavy_rain', 'wind']) {
+      const dry = t.dry, cond = t[condKey];
+      if (dry.matches < WEATHER_SENSITIVITY_MIN || cond.matches < WEATHER_SENSITIVITY_MIN) continue;
+      const dryWr = weatherWinRate(dry), condWr = weatherWinRate(cond);
+      if (dryWr == null || condWr == null) continue;
+      const diff = condWr - dryWr;
+      if (Math.abs(diff) < WEATHER_SENSITIVITY_GAP) continue;
+      if (!candidates[teamId]) candidates[teamId] = {};
+      candidates[teamId][condKey] = {
+        diff, dryWinRate: dryWr, condWinRate: condWr, damp: weatherSparsityDamp(t),
+        trainCondMatches: cond.matches, trainDryMatches: dry.matches,
+      };
+    }
+  }
+  return candidates;
+}
+
+// Pools each candidate's actual TEST-period record under its exact condition,
+// weighted by matches, and compares predFlat (today's live behavior -- dry win
+// rate, since the modifier is gated off) vs predAdjusted (dry + diff*0.5*damp,
+// the modifier as designed) against it. Returns overall + per-condition splits.
+function evaluateWeatherCandidates(candidates, testFixtures, weatherHistory, teamNames = {}) {
+  const testRecord = {};
+  for (const f of testFixtures) {
+    const wx = weatherHistory[f.fixture.id];
+    if (!wx || !wx.condition || wx.condition === 'clear') continue;
+    const condKey = wx.condition;
+    const homeId  = f.teams?.home?.id, awayId = f.teams?.away?.id;
+    const hg = f.goals.home, ag = f.goals.away;
+    if (candidates[homeId]?.[condKey]) {
+      testRecord[homeId] = testRecord[homeId] || {};
+      const r = testRecord[homeId][condKey] = testRecord[homeId][condKey] || { wins: 0, matches: 0 };
+      r.matches++; if (hg > ag) r.wins++;
+    }
+    if (candidates[awayId]?.[condKey]) {
+      testRecord[awayId] = testRecord[awayId] || {};
+      const r = testRecord[awayId][condKey] = testRecord[awayId][condKey] || { wins: 0, matches: 0 };
+      r.matches++; if (ag > hg) r.wins++;
+    }
+  }
+
+  const mk = () => ({ sumFlat: 0, sumAdjusted: 0, matches: 0, candidatesWithCoverage: 0 });
+  const overall = mk();
+  const byCondition = { rain: mk(), heavy_rain: mk(), wind: mk() };
+  const sampleRows = [];
+
+  for (const [teamId, conds] of Object.entries(testRecord)) {
+    for (const [condKey, rec] of Object.entries(conds)) {
+      if (!rec.matches) continue;
+      const c = candidates[teamId][condKey];
+      const testActualWinRate = rec.wins / rec.matches;
+      const predFlat     = c.dryWinRate;
+      const predAdjusted = Math.min(1, Math.max(0, c.dryWinRate + c.diff * 0.5 * c.damp));
+      const errFlat     = Math.abs(testActualWinRate - predFlat);
+      const errAdjusted = Math.abs(testActualWinRate - predAdjusted);
+
+      for (const bucket of [overall, byCondition[condKey]]) {
+        bucket.sumFlat += errFlat * rec.matches;
+        bucket.sumAdjusted += errAdjusted * rec.matches;
+        bucket.matches += rec.matches;
+        bucket.candidatesWithCoverage++;
+      }
+      if (sampleRows.length < 10) {
+        sampleRows.push({
+          teamId, teamName: teamNames[teamId] || null, condition: condKey, testMatches: rec.matches,
+          testActualWinRate: +testActualWinRate.toFixed(3),
+          predFlat: +predFlat.toFixed(3), predAdjusted: +predAdjusted.toFixed(3),
+        });
+      }
+    }
+  }
+
+  const finalize = (o) => ({
+    candidatesWithTestCoverage: o.candidatesWithCoverage,
+    totalTestMatchesCovered: o.matches,
+    meanAbsCalibErrorFlat:     o.matches ? +(o.sumFlat / o.matches).toFixed(4) : null,
+    meanAbsCalibErrorAdjusted: o.matches ? +(o.sumAdjusted / o.matches).toFixed(4) : null,
+  });
+
+  return {
+    overall: finalize(overall),
+    byCondition: { rain: finalize(byCondition.rain), heavy_rain: finalize(byCondition.heavy_rain), wind: finalize(byCondition.wind) },
+    sampleRows,
+  };
+}
+
 let _weatherArchiveRunning = false;
 let _weatherArchiveStatus  = null;
 
@@ -9036,6 +9189,236 @@ app.get('/api/_diag/weather-sensitivity-fit', async (_req, res) => {
         meanAbsCalibErrorAdjusted: totalTestMatches ? +(sumAbsErrAdjusted / totalTestMatches).toFixed(4) : null,
       },
       sampleRows,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0, 5) });
+  }
+});
+
+// TEMP DIAGNOSTIC — Weather-sensitivity walk-forward validation (2026-08-25,
+// calibration-rules.md discipline throughout). Follow-up to the single-split fit
+// above (0.1912 -> 0.1704), whose entire result rested on ONE split -- exactly the
+// ambiguity Addendum 26 resolved for the correction layer via multi-block
+// walk-forward instead of trusting a single holdout. Same technique here: 4
+// sequential, expanding-window blocks (fit on everything strictly before the
+// block, test on the block), same 6-month boundaries as Addendum 26's original-9
+// away-band validation (2024-08 through 2026-08, this project's own precedent for
+// "most recent 24 months" when a population spans many leagues on different
+// season calendars rather than one season-aligned competition). Reuses the exact
+// same buildTeamWeatherSensitivity/buildWeatherCandidates/evaluateWeatherCandidates
+// helpers as the single-split fit above -- not a re-implementation, so results are
+// directly comparable. That single-split endpoint is left completely untouched
+// (its result is already reported and banked; rule 3 forbids re-running it).
+// Diagnostic only -- team-profiles.json and live scoring code untouched.
+app.get('/api/_diag/weather-walkforward-validation', async (_req, res) => {
+  try {
+    const hist = readHistoricalCached() || {};
+    const weatherHistory = readJSON('weather-history.json') || {};
+    const allFixtures = (hist.fixtures || [])
+      .filter(f => ['FT', 'AET', 'PEN'].includes(f.fixture?.status?.short) && f.goals?.home != null && f.goals?.away != null);
+    allFixtures.sort((a, b) => new Date(a.fixture.date) - new Date(b.fixture.date));
+
+    const BLOCKS = [
+      { label: '2024-08 to 2025-02', start: '2024-08-01', end: '2025-02-01' },
+      { label: '2025-02 to 2025-08', start: '2025-02-01', end: '2025-08-01' },
+      { label: '2025-08 to 2026-02', start: '2025-08-01', end: '2026-02-01' },
+      { label: '2026-02 to 2026-08', start: '2026-02-01', end: '2026-08-25' },
+    ];
+
+    const blockResults = [];
+    let pooledSumFlat = 0, pooledSumAdjusted = 0, pooledMatches = 0;
+    const pooledByCondition = {
+      rain: { sumFlat: 0, sumAdjusted: 0, matches: 0 },
+      heavy_rain: { sumFlat: 0, sumAdjusted: 0, matches: 0 },
+      wind: { sumFlat: 0, sumAdjusted: 0, matches: 0 },
+    };
+
+    for (const block of BLOCKS) {
+      const startMs = new Date(block.start).getTime();
+      const endMs   = new Date(block.end).getTime();
+      const trainFixtures = allFixtures.filter(f => new Date(f.fixture.date).getTime() < startMs);
+      const testFixtures  = allFixtures.filter(f => {
+        const t = new Date(f.fixture.date).getTime();
+        return t >= startMs && t < endMs;
+      });
+
+      const teamWx = buildTeamWeatherSensitivity(trainFixtures, weatherHistory);
+      const teamNames = Object.fromEntries(Object.entries(teamWx).map(([id, t]) => [id, t.name]));
+      const candidates = buildWeatherCandidates(teamWx);
+      const candidateCount = Object.values(candidates).reduce((s, c) => s + Object.keys(c).length, 0);
+      const evalResult = evaluateWeatherCandidates(candidates, testFixtures, weatherHistory, teamNames);
+
+      pooledSumFlat     += (evalResult.overall.meanAbsCalibErrorFlat ?? 0)     * evalResult.overall.totalTestMatchesCovered;
+      pooledSumAdjusted += (evalResult.overall.meanAbsCalibErrorAdjusted ?? 0) * evalResult.overall.totalTestMatchesCovered;
+      pooledMatches     += evalResult.overall.totalTestMatchesCovered;
+      for (const condKey of ['rain', 'heavy_rain', 'wind']) {
+        const bc = evalResult.byCondition[condKey];
+        pooledByCondition[condKey].sumFlat     += (bc.meanAbsCalibErrorFlat ?? 0)     * bc.totalTestMatchesCovered;
+        pooledByCondition[condKey].sumAdjusted += (bc.meanAbsCalibErrorAdjusted ?? 0) * bc.totalTestMatchesCovered;
+        pooledByCondition[condKey].matches     += bc.totalTestMatchesCovered;
+      }
+
+      blockResults.push({
+        block: block.label,
+        trainFixtures: trainFixtures.length,
+        testFixtures: testFixtures.length,
+        candidateCount,
+        testEvaluation: evalResult.overall,
+        byCondition: evalResult.byCondition,
+      });
+
+      await new Promise(r => setImmediate(r));
+    }
+
+    const pooledByConditionFinal = {};
+    for (const condKey of ['rain', 'heavy_rain', 'wind']) {
+      const p = pooledByCondition[condKey];
+      pooledByConditionFinal[condKey] = {
+        totalTestMatchesCovered: p.matches,
+        meanAbsCalibErrorFlat:     p.matches ? +(p.sumFlat / p.matches).toFixed(4) : null,
+        meanAbsCalibErrorAdjusted: p.matches ? +(p.sumAdjusted / p.matches).toFixed(4) : null,
+      };
+    }
+
+    res.json({
+      note: "4-block expanding-window walk-forward (train = everything strictly before the block, test = the block), same technique and 6-month boundaries as Addendum 26's original-9 away-band validation. Each block independently rebuilds weatherSensitivity from TRAIN only via the exact same helpers as the single-split fit (clear/dry key fix applied only in-memory here, live code untouched) and evaluates against that block's TEST fixtures. Diagnostic only; no live wiring, no flag flipped by this endpoint.",
+      blocks: blockResults,
+      pooled: {
+        totalTestMatchesCovered: pooledMatches,
+        meanAbsCalibErrorFlat:     pooledMatches ? +(pooledSumFlat / pooledMatches).toFixed(4) : null,
+        meanAbsCalibErrorAdjusted: pooledMatches ? +(pooledSumAdjusted / pooledMatches).toFixed(4) : null,
+        byCondition: pooledByConditionFinal,
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0, 5) });
+  }
+});
+
+// TEMP DIAGNOSTIC — H2H anomaly pooled-aggregate-bucket follow-up (2026-08-25,
+// calibration-rules.md discipline throughout). The original per-pairing test
+// (/api/_diag/h2h-shrinkage-fit, left untouched -- its result is already reported
+// and banked, rule 3 forbids re-running it) found candidatesWithTestCoverage=4170
+// but only totalTestMatchesCovered=8823 -- ~2.1 recurrences per candidate on
+// average, meaning most individual pairings' "actual TEST win rate" ground truth
+// was itself estimated from just 1-3 matches, a genuinely noisy target to
+// calibrate against. This is a specific, named methodological limitation being
+// addressed -- not a re-peek at a disappointing result (rule 3's actual concern).
+//
+// Same TRAIN split, same fitting method (empiricalBayesShrink against every
+// oppositionAnomalies cell, unfiltered), same TEST-period candidates and matches
+// as the original test -- but instead of averaging each pairing's own thin
+// recurrence into one noisy per-candidate statistic, every individual recurring
+// TEST match becomes its own observation, binned by predicted probability into
+// standard 5pp calibration buckets (same style as this project's tier-calibration
+// and EV-calibration checks elsewhere). Bucket-level n pools across many
+// different candidates that happen to land in the same predicted range, directly
+// fixing the "thin per-pairing" problem without touching what's being measured.
+// Diagnostic only; no live wiring, team-profiles.json untouched.
+app.get('/api/_diag/h2h-pooled-bucket-fit', async (_req, res) => {
+  try {
+    const { buildProfileFromFixtures, computeH2HAnomalyWeight } = require('./teamProfiles');
+    const { empiricalBayesShrink, varianceForHitRate } = require('./shrinkage');
+
+    const hist = readHistoricalCached() || {};
+    const allFixtures = (hist.fixtures || []).filter(f => ['FT', 'AET', 'PEN'].includes(f.fixture?.status?.short));
+    allFixtures.sort((a, b) => new Date(a.fixture.date) - new Date(b.fixture.date));
+
+    const cutoffIdx  = Math.floor(allFixtures.length * 0.8);
+    const cutoffDate = allFixtures[cutoffIdx]?.fixture?.date;
+    const trainFixtures = allFixtures.slice(0, cutoffIdx);
+    const testFixtures  = allFixtures.slice(cutoffIdx);
+
+    const teamData = {};
+    for (const fix of trainFixtures) {
+      const homeId = fix.teams?.home?.id, awayId = fix.teams?.away?.id;
+      if (!homeId || !awayId) continue;
+      if (!teamData[homeId]) teamData[homeId] = { name: fix.teams.home.name, fixes: [] };
+      if (!teamData[awayId]) teamData[awayId] = { name: fix.teams.away.name, fixes: [] };
+      teamData[homeId].fixes.push(fix);
+      teamData[awayId].fixes.push(fix);
+    }
+
+    const fittingCells = [];
+    const teamAnomalies = {};
+    let sinceYield = 0;
+    for (const [teamId, { name, fixes }] of Object.entries(teamData)) {
+      const profile = buildProfileFromFixtures(teamId, name, fixes);
+      if (profile?.oppositionAnomalies?.length) {
+        teamAnomalies[teamId] = profile.oppositionAnomalies;
+        for (const a of profile.oppositionAnomalies) {
+          fittingCells.push({ id: `${teamId}_${a.opponentId}`, n: a.matches, value: a.actualWinRate });
+        }
+      }
+      if (++sinceYield >= 100) { sinceYield = 0; await new Promise(r => setImmediate(r)); }
+    }
+
+    if (fittingCells.length < 10) {
+      return res.json({ error: 'Too few fitting cells to estimate k reliably', fittingCellCount: fittingCells.length });
+    }
+
+    const shrunk = empiricalBayesShrink(fittingCells, varianceForHitRate);
+    const fittedK = shrunk[0]?.k;
+
+    const testPairIndex = new Map();
+    for (const fix of testFixtures) {
+      const homeId = fix.teams?.home?.id, awayId = fix.teams?.away?.id;
+      const g = fix.goals;
+      if (!homeId || !awayId || g?.home == null || g?.away == null) continue;
+      const key = `${homeId}_${awayId}`;
+      if (!testPairIndex.has(key)) testPairIndex.set(key, []);
+      testPairIndex.get(key).push(g.home > g.away ? 1 : 0); // 1 = home won this individual match
+    }
+
+    const NUM_BUCKETS = 20; // 5pp each
+    const bucketIndex = (p) => Math.min(NUM_BUCKETS - 1, Math.max(0, Math.floor(p * NUM_BUCKETS)));
+    const bucketLabel = (i) => `${i * 5}-${i * 5 + 5}%`;
+    const mkBuckets = () => Array.from({ length: NUM_BUCKETS }, () => ({ n: 0, sumPred: 0, sumActual: 0 }));
+    const flatBuckets   = mkBuckets();
+    const fittedBuckets = mkBuckets();
+    let candidatesWithTestCoverage = 0, totalTestMatchesCovered = 0;
+
+    for (const [teamId, anomalies] of Object.entries(teamAnomalies)) {
+      for (const a of anomalies) {
+        const key = `${teamId}_${a.opponentId}`;
+        const testResults = testPairIndex.get(key);
+        if (!testResults || !testResults.length) continue;
+        candidatesWithTestCoverage++;
+        totalTestMatchesCovered += testResults.length;
+
+        const flatWeight   = 0.5;
+        const fittedWeight = computeH2HAnomalyWeight(a.matches, fittedK);
+        const predFlat   = Math.min(1, Math.max(0, a.expectedWinRate + a.anomalyScore * flatWeight));
+        const predFitted = Math.min(1, Math.max(0, a.expectedWinRate + a.anomalyScore * fittedWeight));
+
+        const fb = flatBuckets[bucketIndex(predFlat)];
+        const gb = fittedBuckets[bucketIndex(predFitted)];
+        for (const actual of testResults) {
+          fb.n++; fb.sumPred += predFlat; fb.sumActual += actual;
+          gb.n++; gb.sumPred += predFitted; gb.sumActual += actual;
+        }
+      }
+    }
+
+    function summarize(buckets) {
+      const rows = buckets.map((b, i) => b.n ? {
+        bucket: bucketLabel(i), n: b.n,
+        meanPredicted: +(b.sumPred / b.n).toFixed(3),
+        actualRate:    +(b.sumActual / b.n).toFixed(3),
+        calibError:    +((b.sumActual / b.n) - (b.sumPred / b.n)).toFixed(3),
+      } : null).filter(Boolean);
+      const totalN = rows.reduce((s, r) => s + r.n, 0);
+      const weightedMAE = totalN ? rows.reduce((s, r) => s + Math.abs(r.calibError) * r.n, 0) / totalN : null;
+      return { rows, totalN, weightedMeanAbsCalibError: weightedMAE != null ? +weightedMAE.toFixed(4) : null };
+    }
+
+    res.json({
+      note: "Pooled-aggregate-bucket follow-up to the original per-pairing H2H test -- same TRAIN split, same empiricalBayesShrink fit, same TEST-period candidates/matches, but every individual recurring TEST match is its own observation binned by predicted probability into 5pp buckets (same style as this project's tier/EV calibration checks), rather than averaging each pairing's own 1-3-match recurrence into a single noisy statistic first. weightedMeanAbsCalibError is the n-weighted mean |bucket actual rate - bucket mean predicted| across all populated buckets -- lower is better-calibrated. Diagnostic only; no live wiring.",
+      split: { cutoffDate, trainFixtures: trainFixtures.length, testFixtures: testFixtures.length },
+      fitting: { fittingCellCount: fittingCells.length, fittedK: +fittedK.toFixed(3), currentFlatWeightEquivalentK: 6 },
+      testEvaluation: { candidatesWithTestCoverage, totalTestMatchesCovered },
+      flatWeightBuckets:   summarize(flatBuckets),
+      fittedWeightBuckets: summarize(fittedBuckets),
     });
   } catch (e) {
     res.status(500).json({ error: e.message, stack: e.stack?.split('\n').slice(0, 5) });
