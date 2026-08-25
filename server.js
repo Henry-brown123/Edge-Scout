@@ -8602,8 +8602,11 @@ app.get('/api/_diag/fetch-weather-archive', (req, res) => {
   const limit = parseInt(req.query.limit, 10) || 1000;
   const targets = getResolvedLocationsForWeather().slice(0, limit);
   _weatherArchiveRunning = true;
-  _weatherArchiveStatus = { phase: 'running', total: targets.length, done: 0, fixturesMatched: 0, failed: 0, failedSamples: [], startedAt: new Date().toISOString() };
+  _weatherArchiveStatus = { phase: 'running', total: targets.length, done: 0, fixturesMatched: 0, failed: 0, rateLimitRetries: 0, failedSamples: [], startedAt: new Date().toISOString() };
   res.json({ started: true, targetLocations: targets.length, note: 'Poll GET /api/_diag/weather-archive-status for progress.' });
+
+  const RATE_LIMIT_WAIT_MS = 65000; // Open-Meteo's 429 body says "try again in one minute"
+  const MAX_RATE_LIMIT_RETRIES = 2;
 
   (async () => {
     const weatherHistory = readJSON('weather-history.json') || {};
@@ -8612,11 +8615,24 @@ app.get('/api/_diag/fetch-weather-archive', (req, res) => {
         const dates = fixtures.map(f => new Date(f.date).getTime());
         const startDate = new Date(Math.min(...dates)).toISOString().slice(0, 10);
         const endDate   = new Date(Math.max(...dates)).toISOString().slice(0, 10);
-        const { data } = await axios.get('https://archive-api.open-meteo.com/v1/archive', {
-          params: { latitude: lat, longitude: lon, start_date: startDate, end_date: endDate,
-                     hourly: 'precipitation,windspeed_10m', timezone: 'UTC' },
-          timeout: 20000,
-        });
+        let data;
+        for (let attempt = 0; ; attempt++) {
+          try {
+            ({ data } = await axios.get('https://archive-api.open-meteo.com/v1/archive', {
+              params: { latitude: lat, longitude: lon, start_date: startDate, end_date: endDate,
+                         hourly: 'precipitation,windspeed_10m', timezone: 'UTC' },
+              timeout: 20000,
+            }));
+            break;
+          } catch (e) {
+            if (e.response?.status === 429 && attempt < MAX_RATE_LIMIT_RETRIES) {
+              _weatherArchiveStatus.rateLimitRetries++;
+              await new Promise(r => setTimeout(r, RATE_LIMIT_WAIT_MS));
+              continue;
+            }
+            throw e;
+          }
+        }
         const times = data?.hourly?.time || [];
         const precip = data?.hourly?.precipitation || [];
         const wind   = data?.hourly?.windspeed_10m || [];
@@ -8643,7 +8659,7 @@ app.get('/api/_diag/fetch-weather-archive', (req, res) => {
       }
       _weatherArchiveStatus.done++;
       writeJSON('weather-history.json', weatherHistory);
-      await new Promise(r => setTimeout(r, 300));
+      await new Promise(r => setTimeout(r, 1200));
     }
     _weatherArchiveStatus.phase = 'complete';
     _weatherArchiveStatus.completedAt = new Date().toISOString();
