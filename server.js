@@ -8693,6 +8693,28 @@ app.get('/api/_diag/weather-archive-status', (_req, res) => {
   res.json({ running: _weatherArchiveRunning, ..._weatherArchiveStatus });
 });
 
+app.get('/api/_diag/weather-coverage', (_req, res) => {
+  const weatherHistory = readJSON('weather-history.json') || {};
+  const targets = getResolvedLocationsForWeather();
+  const totalResolvedFixtures = targets.reduce((sum, t) => sum + t.fixtures.length, 0);
+  let coveredFixtures = 0;
+  let locationsFullyCovered = 0;
+  for (const t of targets) {
+    const covered = t.fixtures.filter(f => weatherHistory[f.fixtureId]).length;
+    coveredFixtures += covered;
+    if (covered === t.fixtures.length) locationsFullyCovered++;
+  }
+  res.json({
+    totalLocations: targets.length,
+    locationsFullyCovered,
+    locationsRemaining: targets.length - locationsFullyCovered,
+    totalResolvedFixtures,
+    coveredFixtures,
+    coveragePct: totalResolvedFixtures ? +(100 * coveredFixtures / totalResolvedFixtures).toFixed(1) : 0,
+    weatherHistoryEntryCount: Object.keys(weatherHistory).length,
+  });
+});
+
 // TEMP DIAGNOSTIC — H2H anomaly shrinkage fitting (2026-08-24, calibration-rules.md
 // discipline throughout). Fits k in teamProfiles.js's dormant computeH2HAnomalyWeight
 // per that function's own comment: reuse shrinkage.js's empirical-Bayes
