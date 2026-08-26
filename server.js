@@ -7702,6 +7702,99 @@ const VALIDATED_SPLITS = {
   848: { testFrom: '2024-11-07T14:30:00Z', splitCommit: 'fbb8dbd' }, // Conference League, 2026-08-11
 };
 
+// TEMP DIAGNOSTIC — remove after use. User asked which original-9 tier x
+// league cells are genuinely promising vs. just noisy, having noticed some
+// grid cells show positive ROI at sizeable n. Screens every (league, 5pp
+// tier, pick-type) cell for BOTH ROI and calibration error together, same
+// lens Addendum 22 applied to League One/Two's green-flagged cells — a
+// positive-ROI cell riding on real overconfidence underneath it is a red
+// flag, not a candidate. Honors each league's own VALIDATED_SPLITS testFrom
+// cutoff (same test-only population runEvCalibration() already restricts
+// to) so this isn't scored against train-contaminated data.
+app.get('/api/admin/diag-original9-tier-screen', async (_req, res) => {
+  try {
+    const matched = await computeMatchedEdgeFixtures();
+    const ORIGINAL_9 = new Set([39, 140, 135, 78, 61, 2, 179, 88, 94]);
+    const EUROPA = 3; // has its own genuine split too — reported separately, not folded into "the 9"
+
+    const testOnly = matched.filter(f => {
+      const lid = parseInt(f.leagueId, 10);
+      if (!ORIGINAL_9.has(lid) && lid !== EUROPA) return false;
+      const split = VALIDATED_SPLITS[lid];
+      if (!split) return true;
+      return new Date(f.date) >= new Date(split.testFrom);
+    });
+
+    const TIERS = [
+      { label: '35-40%', min: 0.35, max: 0.40 },
+      { label: '40-45%', min: 0.40, max: 0.45 },
+      { label: '45-50%', min: 0.45, max: 0.50 },
+      { label: '50-55%', min: 0.50, max: 0.55 },
+      { label: '55-60%', min: 0.55, max: 0.60 },
+      { label: '60-65%', min: 0.60, max: 0.65 },
+      { label: '65-70%', min: 0.65, max: 0.70 },
+      { label: '70-75%', min: 0.70, max: 0.75 },
+      { label: '75-80%', min: 0.75, max: 0.80 },
+      { label: '80-100%', min: 0.80, max: 1.01 },
+    ];
+
+    const byLeague = {};
+    for (const f of testOnly) {
+      const lid = parseInt(f.leagueId, 10);
+      (byLeague[lid] = byLeague[lid] || []).push(f);
+    }
+
+    const { LEAGUE_CONFIG } = require('./scoring');
+    const cells = [];
+    for (const [lidStr, fixtures] of Object.entries(byLeague)) {
+      const lid = parseInt(lidStr, 10);
+      const leagueName = LEAGUE_CONFIG[lid]?.name || `League ${lid}`;
+      for (const pickType of ['home', 'away', 'draw']) {
+        const picks = fixtures.filter(f => f.topOutcome === pickType);
+        for (const t of TIERS) {
+          const inTier = picks.filter(f => f.modelProb >= t.min && f.modelProb < t.max);
+          const n = inTier.length;
+          if (n < 20) continue; // too thin to say anything, don't even report it
+          const avgPred = inTier.reduce((s, f) => s + f.modelProb, 0) / n;
+          const actualWinRate = inTier.reduce((s, f) => s + (f.won ? 1 : 0), 0) / n;
+          const calibErrPp = +((avgPred - actualWinRate) * 100).toFixed(1);
+
+          const pos = inTier.filter(f => f.edge >= 0.05);
+          const returns = pos.map(f => f.won ? (f.pinnacleOdds - 1) : -1);
+          if (!returns.length) continue;
+          const mean = returns.reduce((s, v) => s + v, 0) / returns.length;
+          let ciLow = null, ciHigh = null;
+          if (returns.length > 1) {
+            const variance = returns.reduce((s, v) => s + (v - mean) ** 2, 0) / (returns.length - 1);
+            const se = Math.sqrt(variance / returns.length);
+            ciLow  = +((mean - 1.96 * se) * 100).toFixed(1);
+            ciHigh = +((mean + 1.96 * se) * 100).toFixed(1);
+          }
+
+          cells.push({
+            league: leagueName, leagueId: lid, tier: t.label, pickType,
+            n, posEdgeN: pos.length,
+            roi: +(mean * 100).toFixed(1), ci: [ciLow, ciHigh],
+            calibErrPp,
+            wellCalibrated: Math.abs(calibErrPp) < 3,
+            ciExcludesZero: ciLow !== null && ciLow > 0,
+          });
+        }
+      }
+    }
+
+    cells.sort((a, b) => b.roi - a.roi);
+
+    res.json({
+      note: 'TEMP diagnostic — every (league, tier, pick-type) cell among the original 9 (plus Europa League, which has its own genuine split) with n>=20 posEdge-eligible fixtures, test-only population (VALIDATED_SPLITS honored). wellCalibrated = |calibErrPp| < 3pp. ciExcludesZero = 95% CI on posEdge ROI fully positive. Sorted by ROI descending — cross-reference calibErrPp before trusting a high-ROI row. Delete this endpoint once read.',
+      totalCells: cells.length,
+      cells,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
 // Track A — single source of truth for "match scoredRecords against closing odds
 // and compute the unified edge" — the exact logic scoreOneFixture uses (calFactor
 // boost, margin-stripped Pinnacle benchmark, absolute edge), shared by
