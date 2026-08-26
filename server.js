@@ -356,7 +356,7 @@ function getBookmakers()   { return readJSON('bookmakers.json')    || []; }
 function saveBookmakers(list) { writeJSON('bookmakers.json', list); }
 
 const DEFAULT_BOOKMAKERS = [
-  { id: 'betfair_exchange', name: 'Betfair Exchange', tier: 1, commission: 0.05,  parentGroup: 'Flutter Entertainment',       balance: null, status: 'active', statusUpdatedAt: null, statusNotes: '', maxStake: null, maxStakeObserved: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Exchange — lay/back, 5% commission (confirmed against account P&L statement, 2026-08-19).' },
+  { id: 'betfair_exchange', name: 'Betfair Exchange', tier: 1, commission: 0.06,  parentGroup: 'Flutter Entertainment',       balance: null, status: 'active', statusUpdatedAt: null, statusNotes: '', maxStake: null, maxStakeObserved: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Exchange — lay/back, 6% commission on net winnings only (updated 2026-08-26 per account holder; previously recorded as 5% on 2026-08-19 -- rate may have moved with Betfair\'s Premium Charge tier). Applied automatically at settlement (checkAndResolve) -- do not pre-net commission manually when logging actualOdds/actualStake.' },
   { id: 'smarkets',         name: 'Smarkets',         tier: 1, commission: 0.02,  parentGroup: 'Smarkets',                    balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Exchange — ~2% commission. No restrictions ever.' },
   { id: 'matchbook',        name: 'Matchbook',         tier: 1, commission: 0.015, parentGroup: 'Matchbook (Exchange)',         balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'Peer-to-peer exchange. 1.5% commission.' },
   { id: 'betdaq',           name: 'BETDAQ',            tier: 1, commission: 0.02,  parentGroup: 'BETDAQ',                      balance: null, status: 'active', maxStake: null, lastUsed: null, betsThisWeek: 0, betsThisMonth: 0, totalBets: 0, totalStaked: 0, totalReturned: 0, restrictionSignals: [], notes: 'UKGC-regulated peer-to-peer exchange. 2% commission. Back/lay markets.' },
@@ -4350,6 +4350,21 @@ app.get('/api/clv-report', (req, res) => {
   const last10     = withClv.slice(0, 10);
   const avgLast10  = last10.length ? last10.reduce((s, b) => s + b.clv, 0) / last10.length : null;
 
+  // Execution CLV (Addendum 30 recommendation) — actualOdds vs Pinnacle's price at
+  // LOCK time (pinnacleOddsAtLock, captured free on every bet already), not at
+  // kickoff. Distinct question from the market-drift `clv` above: this answers
+  // "did I get a good price against the market I actually faced," not "did the
+  // market move after I bet." Computed over the same `withClv`-filtered bet set
+  // for a like-for-like population, but only where pinnacleOddsAtLock exists (not
+  // every bet has it — pre-dates its 2026-08-21 introduction, or the fixture had
+  // no Pinnacle price at lock time).
+  const withExecClv = withClv
+    .filter(b => b.pinnacleOddsAtLock > 0 && b.actualOdds > 0)
+    .map(b => ({ ...b, executionClv: +(((b.actualOdds - b.pinnacleOddsAtLock) / b.pinnacleOddsAtLock) * 100).toFixed(2) }));
+  const avgExecutionClv    = withExecClv.length ? withExecClv.reduce((s, b) => s + b.executionClv, 0) / withExecClv.length : null;
+  const execLast10         = withExecClv.slice(0, 10);
+  const avgExecutionClvLast10 = execLast10.length ? execLast10.reduce((s, b) => s + b.executionClv, 0) / execLast10.length : null;
+
   // CLV distribution buckets: <-5, -5 to 0, 0 to 3, 3 to 7, 7 to 15, >15
   const buckets = [
     { label: '< −5%',   min: -Infinity, max: -5,       count: 0 },
@@ -4398,10 +4413,18 @@ app.get('/api/clv-report', (req, res) => {
     interpretation = { level: 'insufficient', avgClv: parseFloat((avgClv || 0).toFixed(2)), n: withClv.length, text: `${withClv.length} bet${withClv.length > 1 ? 's' : ''} with CLV data — need at least 3 for a meaningful signal.` };
   }
 
+  const executionClvById = new Map(withExecClv.map(b => [b.id, b.executionClv]));
+
   res.json({
     n: withClv.length,
     avgClv:     avgClv    != null ? parseFloat(avgClv.toFixed(2))    : null,
     avgLast10:  avgLast10 != null ? parseFloat(avgLast10.toFixed(2)) : null,
+    // Execution CLV (Addendum 30) — separate from the market-drift `clv`/`avgClv`
+    // above. `nWithPinnacleAtLock` is deliberately reported alongside, since it
+    // can be smaller than `n` (not every bet has a captured lock-time price).
+    avgExecutionClv:        avgExecutionClv        != null ? parseFloat(avgExecutionClv.toFixed(2))        : null,
+    avgExecutionClvLast10:  avgExecutionClvLast10  != null ? parseFloat(avgExecutionClvLast10.toFixed(2))  : null,
+    nWithPinnacleAtLock: withExecClv.length,
     buckets,
     leagueBreakdown,
     bandBreakdown,
@@ -4410,6 +4433,8 @@ app.get('/api/clv-report', (req, res) => {
       id: b.id, fixture: b.fixture, bet: b.bet, leagueName: b.leagueName,
       successScore: b.successScore, actualOdds: b.actualOdds,
       closingOdds: b.closingOdds, clv: b.clv,
+      pinnacleOddsAtLock: b.pinnacleOddsAtLock ?? null,
+      executionClv: executionClvById.get(b.id) ?? null,
       closingOddsBookmaker: b.closingOddsBookmaker, placedAt: b.placedAt,
     })),
   });
@@ -6757,7 +6782,7 @@ app.post('/api/bets/:id/convert-to-real', (req, res) => {
   if (bet.mode === 'real') return res.status(400).json({ error: 'Already real' });
   if (bet.result) return res.status(400).json({ error: 'Bet already resolved — mode cannot change' });
 
-  const { bookmakerId, bookmakerName, actualOdds } = req.body;
+  const { bookmakerId, bookmakerName, actualOdds, actualStake } = req.body;
   if (!bookmakerId || !bookmakerName) return res.status(400).json({ error: 'bookmakerId and bookmakerName required' });
   const odds = parseFloat(actualOdds);
   if (!(odds > 1)) return res.status(400).json({ error: 'Invalid actualOdds' });
@@ -6766,8 +6791,16 @@ app.post('/api/bets/:id/convert-to-real', (req, res) => {
   const realBr            = getRealBankrollAccount().current;
   const kellyFrac          = settings.realKellyFraction ?? 0.25;
   const calibrationFactor = settings.calibrationFactor ?? 1.08;
-  const realKelly = kelly(bet.modelProb * calibrationFactor, odds, kellyFrac, realBr);
-  const stake = roundStake(realKelly.stake);
+  // If a real stake is provided (the amount actually placed on the exchange, e.g.
+  // liquidity-constrained or manually sized differently from the Kelly suggestion),
+  // trust it as the authoritative record — this is a place for logging what really
+  // happened, not overriding it with a theoretical figure. Falls back to the
+  // Kelly-computed suggestion only when omitted, preserving the original behavior
+  // for callers that don't supply one.
+  const providedStake = parseFloat(actualStake);
+  const stake = (providedStake > 0)
+    ? roundStake(providedStake)
+    : roundStake(kelly(bet.modelProb * calibrationFactor, odds, kellyFrac, realBr).stake);
 
   bet.mode            = 'real';
   bet.kellyFraction   = kellyFrac;

@@ -1773,7 +1773,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       </div>
     </div>
     <p style="font-family:'DM Mono',monospace;font-size:.73rem;color:var(--text2);margin:0 0 16px">
-      CLV measures whether your bet price beat what Pinnacle closed at, ~5 minutes before kickoff. Consistently positive CLV is the strongest evidence of genuine edge.
+      Market-Drift CLV measures whether your bet price beat what Pinnacle closed at, ~5 minutes before kickoff — this tracks the market's own movement between your lock and kickoff, not how good your price was when you took it. Execution CLV (below) answers that second question directly.
     </p>
 
     <!-- Interpretation banner -->
@@ -1782,12 +1782,12 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     <!-- Summary stats row -->
     <div class="grid-4" style="margin-bottom:16px">
       <div class="stat-tile">
-        <div class="stat-label">Avg CLV (All)</div>
+        <div class="stat-label">Avg Market-Drift CLV (All)</div>
         <div class="stat-value" id="clv-avg-all">—</div>
         <div class="stat-sub" id="clv-n-all">— bets</div>
       </div>
       <div class="stat-tile">
-        <div class="stat-label">Avg CLV (Last 10)</div>
+        <div class="stat-label">Avg Market-Drift CLV (Last 10)</div>
         <div class="stat-value" id="clv-avg-10">—</div>
         <div class="stat-sub">recent trend</div>
       </div>
@@ -1800,6 +1800,26 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
         <div class="stat-label">Bets Pending CLV</div>
         <div class="stat-value" id="clv-pending">—</div>
         <div class="stat-sub">awaiting T−5</div>
+      </div>
+    </div>
+
+    <!-- Execution CLV row (Addendum 30) — separate question from market-drift above:
+         did this bet beat the market it actually faced at lock time, not what the
+         market did afterward. Zero extra API cost, computed from pinnacleOddsAtLock
+         (already captured on every bet). -->
+    <div style="margin-bottom:16px">
+      <div style="font-size:.75rem;font-weight:600;color:var(--text2);margin-bottom:8px;font-family:'DM Mono',monospace">Execution CLV — vs Pinnacle at YOUR lock time, not kickoff</div>
+      <div class="grid-2">
+        <div class="stat-tile">
+          <div class="stat-label">Avg Execution CLV (All)</div>
+          <div class="stat-value" id="clv-exec-avg-all">—</div>
+          <div class="stat-sub" id="clv-exec-n-all">— bets with a lock-time Pinnacle price</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-label">Avg Execution CLV (Last 10)</div>
+          <div class="stat-value" id="clv-exec-avg-10">—</div>
+          <div class="stat-sub">recent trend</div>
+        </div>
       </div>
     </div>
 
@@ -4087,6 +4107,12 @@ async function renderClv() {
   document.getElementById('clv-avg-10').textContent   = fmt(clv.avgLast10);
   document.getElementById('clv-avg-10').className     = `stat-value ${cls(clv.avgLast10)}`;
 
+  document.getElementById('clv-exec-avg-all').textContent = fmt(clv.avgExecutionClv);
+  document.getElementById('clv-exec-avg-all').className   = `stat-value ${cls(clv.avgExecutionClv)}`;
+  document.getElementById('clv-exec-n-all').textContent    = `${clv.nWithPinnacleAtLock || 0} bet${clv.nWithPinnacleAtLock !== 1 ? 's' : ''} with a lock-time Pinnacle price`;
+  document.getElementById('clv-exec-avg-10').textContent  = fmt(clv.avgExecutionClvLast10);
+  document.getElementById('clv-exec-avg-10').className    = `stat-value ${cls(clv.avgExecutionClvLast10)}`;
+
   const posCount = (clv.bets || []).filter(b => b.clv > 0).length;
   const posPct   = clv.n ? ((posCount / clv.n) * 100).toFixed(0) : '—';
   document.getElementById('clv-pos-pct').textContent  = clv.n ? `${posPct}%` : '—';
@@ -6322,7 +6348,7 @@ async function openBmPanel(betId) {
   const convertingFromPaper = bet.mode !== 'real';
   document.getElementById('bmp-title').textContent    = convertingFromPaper ? `${bet.fixture} — Convert to Real` : bet.fixture;
   document.getElementById('bmp-subtitle').textContent = convertingFromPaper
-    ? `${bet.bet} · score ${bet.successScore} · book odds ${bet.bookOdds?.toFixed(2)} · stake will be re-sized with real Kelly against the real bankroll on confirm`
+    ? `${bet.bet} · score ${bet.successScore} · book odds ${bet.bookOdds?.toFixed(2)} · enter the exact odds and stake you actually placed on the exchange below (leave stake blank to fall back to a fresh real-Kelly suggestion)`
     : `${bet.bet} · score ${bet.successScore} · book odds ${bet.bookOdds?.toFixed(2)} · Kelly £${(bet.displayStake ?? bet.suggestedStake)?.toFixed(2)}`;
   const pinnRef = document.getElementById('bmp-pinnacle-ref');
   if (bet.pinnacleOddsAtLock) {
@@ -6610,22 +6636,27 @@ async function confirmPlacement() {
   const bet = (STATE.bets || []).find(b => b.id === _bmPanelBetId);
   const convertingFromPaper = bet && bet.mode !== 'real';
 
-  // Converting a paper bet to real: the server is the sole authority on stake —
-  // it re-sizes with the real Kelly fraction against the real bankroll (never
-  // whatever this panel's stake field shows, which was only ever a paper-Kelly
-  // preview). Sending a client-computed stake here would either be ignored or,
-  // worse, silently mislead about what actually got sized.
+  // Converting a paper bet to real: this panel's exchange workflow places the bet
+  // on Betfair FIRST (at whatever stake the market's liquidity actually allows),
+  // then logs it here afterward — so the stake field is the real, already-placed
+  // amount, not a theoretical suggestion to go act on. Send it as the
+  // authoritative record; the server falls back to a fresh Kelly suggestion only
+  // if this field is left blank (e.g. converting before ever placing anything).
   if (convertingFromPaper) {
+    const stakeVal = parseFloat(document.getElementById('bmp-stake').value);
     try {
       const { bet: updated } = await apiFetch(`/api/bets/${_bmPanelBetId}/convert-to-real`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ bookmakerId: _bmSelectedId, bookmakerName: _bmSelectedName, actualOdds: odds }),
+        body:    JSON.stringify({
+          bookmakerId: _bmSelectedId, bookmakerName: _bmSelectedName, actualOdds: odds,
+          ...(stakeVal > 0 ? { actualStake: stakeVal } : {}),
+        }),
       });
       closeBmPanel();
       await loadState();
       renderScout();
-      toast(`Converted to real — ${_bmSelectedName} @ ${odds}, £${updated.actualStake?.toFixed(2)} (real Kelly)`, 'success');
+      toast(`Converted to real — ${_bmSelectedName} @ ${odds}, £${updated.actualStake?.toFixed(2)}`, 'success');
     } catch (e) {
       toast('Convert to real failed: ' + e.message, 'error');
     }
