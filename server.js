@@ -7835,6 +7835,43 @@ app.get('/api/admin/diag-l1-block-tiers', async (_req, res) => {
       return { n, roi: +(mean * 100).toFixed(2), ci: [ciLow, ciHigh] };
     }
 
+    // Clean-scope re-run: 50-55% excluded from BOTH the fitting population and
+    // the test population, not just carved out of an already-fitted fit's
+    // tier breakdown. The Platt fit above (and its A/B per block) was trained
+    // on data that included the bad 50-55% cell, which could itself bias the
+    // curve fitted for the tiers above it. This checks whether a rule scoped
+    // to bandMin=0.55 from the start is stable across all 4 blocks the way
+    // League Two's deployed rule is, rather than just "not obviously worse."
+    const pool5055ex = pool.filter(f => f.modelProb >= 0.55);
+    const validationFit5055ex = fitPlatt(pool5055ex.filter(f => new Date(f.date) < new Date('2025-08-01')));
+    const pooledBefore5055exOnly = [], pooledAfter5055exOnly = [];
+    const blocks5055ex = BLOCKS.map(b => {
+      const train = pool5055ex.filter(f => new Date(f.date) < new Date(b.trainBefore));
+      const test  = pool5055ex.filter(f => new Date(f.date) >= new Date(b.testStart) && new Date(f.date) < new Date(b.testEnd));
+      if (train.length < 30 || !test.length) return { label: b.label, skipped: true, trainN: train.length, testN: test.length };
+      const fit = fitPlatt(train);
+      const correctedProbs = test.map(f => plattP(f.modelProb, fit.A, fit.B));
+
+      const beforePos = test.filter(f => f.edge >= 0.05);
+      const beforeReturns = beforePos.map(f => f.won ? (f.pinnacleOdds - 1) : -1);
+      const afterPairs = test.map((f, i) => ({ f, edge: correctedEdge(f, correctedProbs[i]) })).filter(x => x.edge !== null);
+      const afterPos = afterPairs.filter(x => x.edge >= 0.05);
+      const afterReturns = afterPos.map(x => x.f.won ? (x.f.pinnacleOdds - 1) : -1);
+
+      pooledBefore5055exOnly.push(...beforeReturns);
+      pooledAfter5055exOnly.push(...afterReturns);
+
+      const beforeRoi = beforeReturns.length ? beforeReturns.reduce((s, v) => s + v, 0) / beforeReturns.length : null;
+      const afterRoi  = afterReturns.length ? afterReturns.reduce((s, v) => s + v, 0) / afterReturns.length : null;
+
+      return {
+        label: b.label, trainN: train.length, testN: test.length,
+        fit: { A: +fit.A.toFixed(4), B: +fit.B.toFixed(4) },
+        posEdgeNBefore: beforePos.length, roiBefore: beforeRoi !== null ? +(beforeRoi * 100).toFixed(1) : null,
+        posEdgeNAfter: afterPos.length, roiAfter: afterRoi !== null ? +(afterRoi * 100).toFixed(1) : null,
+      };
+    });
+
     res.json({
       note: 'TEMP diagnostic — League One 50%+ per-tier breakdown per walk-forward block, tracing whether the 2023-24 block\'s ROI regression concentrates in the 50-55% cell (Addendum 22\'s confirmed-negative cell) or spreads across the band. Delete this endpoint once read.',
       poolSize: pool.length,
@@ -7845,9 +7882,15 @@ app.get('/api/admin/diag-l1-block-tiers', async (_req, res) => {
       },
       blocks,
       pooledAcrossAllBlocks: {
-        note: '95% CI via normal approximation on per-bet returns (mean ± 1.96*SE) — same method as /api/admin/walkforward-pool and Addendum 20/21. "including5055" reproduces Addendum 26\'s original 50-100% pooled read on fresh data; "excluding5055" is the same population with League One\'s one confirmed-negative cell (Addendum 22) carved out.',
+        note: '95% CI via normal approximation on per-bet returns (mean ± 1.96*SE) — same method as /api/admin/walkforward-pool and Addendum 20/21. "including5055" reproduces Addendum 26\'s original 50-100% pooled read on fresh data; "excluding5055" is the same population with League One\'s one confirmed-negative cell (Addendum 22) carved out (fit still trained on data including 50-55%, only the tier itself is excluded from the pooled result).',
         including5055: { before: pooledCi(pooledBeforeAll), after: pooledCi(pooledAfterAll) },
         excluding5055: { before: pooledCi(pooledBeforeEx5055), after: pooledCi(pooledAfterEx5055) },
+      },
+      cleanScope55Plus: {
+        note: 'Clean re-run scoped to modelProb>=0.55 from the start — 50-55% excluded from the FIT itself (train population), not just from the reported tier breakdown. This is the actual candidate rule (bandMin 0.55) if deployment goes ahead, not a derived slice of the 0.50 fit above.',
+        validationFit: { A: +validationFit5055ex.A.toFixed(4), B: +validationFit5055ex.B.toFixed(4), trainN: validationFit5055ex.trainN },
+        blocks: blocks5055ex,
+        pooled: { before: pooledCi(pooledBefore5055exOnly), after: pooledCi(pooledAfter5055exOnly) },
       },
     });
   } catch (e) {
