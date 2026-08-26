@@ -7675,6 +7675,152 @@ app.get('/api/correction-layer-backtests', (_req, res) => {
   });
 });
 
+// TEMP DIAGNOSTIC — remove after use. Addendum 26 found League One's 50%+
+// correction-layer walk-forward regressed in exactly one of its 4 blocks
+// (2023-24 season: ROI -10.65% before correction -> -15.92% after, even
+// though calibration improved -9.3pp -> -2.9pp). Before deploying League
+// One's correction live (mirroring League Two's 2026-08-19 deployment),
+// this checks whether that regression concentrates in League One's 50-55%
+// tier specifically — the one cell in the whole tier x league matrix with a
+// confirmed CI-excluding-zero negative reading (Addendum 22, n=230,
+// ROI -15.5%) — or is spread evenly across the 50-100% band the correction
+// pools together. Refits Platt A/B per expanding-window block (same
+// methodology as Addendum 26) since the temp endpoint that produced the
+// original fit was already cleaned up per this project's standard practice.
+app.get('/api/admin/diag-l1-block-tiers', async (_req, res) => {
+  try {
+    const matched      = await computeMatchedEdgeFixtures();
+    const closingOdds  = readJSON('closing-odds.json') || {};
+    const settings     = getSettings();
+    const calFactor    = settings.calibrationFactor ?? 1.08;
+    const { computeUnifiedEdge } = require('./scoring');
+
+    const pool = matched
+      .filter(f => parseInt(f.leagueId, 10) === 41 && f.topOutcome !== 'draw' && f.modelProb >= 0.50)
+      .sort((a, b) => new Date(a.date) - new Date(b.date));
+
+    function fitPlatt(train) {
+      const xs = train.map(f => { const p = Math.min(Math.max(f.modelProb, 1e-6), 1 - 1e-6); return Math.log(p / (1 - p)); });
+      const ys = train.map(f => (f.won ? 1 : 0));
+      const n  = train.length;
+      let A = 1, B = 0;
+      const lr = 0.05;
+      for (let iter = 0; iter < 20000; iter++) {
+        let gA = 0, gB = 0;
+        for (let i = 0; i < n; i++) {
+          const z = A * xs[i] + B;
+          const p = 1 / (1 + Math.exp(-z));
+          const err = p - ys[i];
+          gA += err * xs[i];
+          gB += err;
+        }
+        A -= lr * gA / n;
+        B -= lr * gB / n;
+      }
+      return { A, B, trainN: n };
+    }
+
+    function plattP(p, A, B) {
+      const clamped = Math.min(Math.max(p, 1e-6), 1 - 1e-6);
+      const logit = Math.log(clamped / (1 - clamped));
+      const z = A * logit + B;
+      if (z < -35) return 1e-15;
+      if (z > 35) return 1 - 1e-15;
+      return 1 / (1 + Math.exp(-z));
+    }
+
+    function correctedEdge(f, correctedProb) {
+      const co = closingOdds[f.fixtureId] || closingOdds[String(f.fixtureId)];
+      if (!co) return null;
+      const { edge } = computeUnifiedEdge(correctedProb, co, f.topOutcome, { applyCalFactor: true, calFactor });
+      return edge;
+    }
+
+    const BLOCKS = [
+      { label: '2022-23 season',           trainBefore: '2022-08-01', testStart: '2022-08-01', testEnd: '2023-08-01' },
+      { label: '2023-24 season',           trainBefore: '2023-08-01', testStart: '2023-08-01', testEnd: '2024-08-01' },
+      { label: '2024-25 season',           trainBefore: '2024-08-01', testStart: '2024-08-01', testEnd: '2025-08-01' },
+      { label: '2025-26 season (partial)', trainBefore: '2025-08-01', testStart: '2025-08-01', testEnd: '2026-08-26' },
+    ];
+
+    const TIERS = [
+      { label: '50-55%',  min: 0.50, max: 0.55 },
+      { label: '55-60%',  min: 0.55, max: 0.60 },
+      { label: '60-65%',  min: 0.60, max: 0.65 },
+      { label: '65-70%',  min: 0.65, max: 0.70 },
+      { label: '70-75%',  min: 0.70, max: 0.75 },
+      { label: '75-80%',  min: 0.75, max: 0.80 },
+      { label: '80-100%', min: 0.80, max: 1.01 },
+    ];
+
+    // Sanity check: fit on everything before 2025-08-01 (same cutoff the
+    // currently-deployed League Two rule's "most-recent-block" fit used) and
+    // compare against scoring.js's League One rule (A=0.9567, B=-0.2086,
+    // trainN=1077) — if this methodology reproduces a close match, the
+    // block-level fits below can be trusted.
+    const validationTrain = pool.filter(f => new Date(f.date) < new Date('2025-08-01'));
+    const validationFit   = fitPlatt(validationTrain);
+
+    const blocks = BLOCKS.map(b => {
+      const train = pool.filter(f => new Date(f.date) < new Date(b.trainBefore));
+      const test  = pool.filter(f => new Date(f.date) >= new Date(b.testStart) && new Date(f.date) < new Date(b.testEnd));
+      if (train.length < 30 || !test.length) {
+        return { label: b.label, skipped: true, trainN: train.length, testN: test.length };
+      }
+      const fit = fitPlatt(train);
+
+      const tiers = TIERS.map(t => {
+        const inTier = test.filter(f => f.modelProb >= t.min && f.modelProb < t.max);
+        const n = inTier.length;
+        if (!n) return { tier: t.label, n: 0 };
+
+        const avgRaw       = inTier.reduce((s, f) => s + f.modelProb, 0) / n;
+        const correctedProbs = inTier.map(f => plattP(f.modelProb, fit.A, fit.B));
+        const avgCorrected = correctedProbs.reduce((s, p) => s + p, 0) / n;
+        const actualWinRate = inTier.reduce((s, f) => s + (f.won ? 1 : 0), 0) / n;
+
+        const beforePos = inTier.filter(f => f.edge >= 0.05);
+        const beforeRoi = beforePos.length
+          ? beforePos.reduce((s, f) => s + (f.won ? (f.pinnacleOdds - 1) : -1), 0) / beforePos.length : null;
+
+        const afterPairs = inTier.map((f, i) => ({ f, edge: correctedEdge(f, correctedProbs[i]) })).filter(x => x.edge !== null);
+        const afterPos   = afterPairs.filter(x => x.edge >= 0.05);
+        const afterRoi   = afterPos.length
+          ? afterPos.reduce((s, x) => s + (x.f.won ? (x.f.pinnacleOdds - 1) : -1), 0) / afterPos.length : null;
+
+        return {
+          tier: t.label, n,
+          calibErrBeforePp: +((avgRaw - actualWinRate) * 100).toFixed(1),
+          calibErrAfterPp:  +((avgCorrected - actualWinRate) * 100).toFixed(1),
+          posEdgeNBefore: beforePos.length,
+          roiBefore: beforeRoi !== null ? +(beforeRoi * 100).toFixed(1) : null,
+          posEdgeNAfter: afterPos.length,
+          roiAfter: afterRoi !== null ? +(afterRoi * 100).toFixed(1) : null,
+        };
+      });
+
+      return {
+        label: b.label, trainN: train.length, testN: test.length,
+        fit: { A: +fit.A.toFixed(4), B: +fit.B.toFixed(4) },
+        tiers,
+      };
+    });
+
+    res.json({
+      note: 'TEMP diagnostic — League One 50%+ per-tier breakdown per walk-forward block, tracing whether the 2023-24 block\'s ROI regression concentrates in the 50-55% cell (Addendum 22\'s confirmed-negative cell) or spreads across the band. Delete this endpoint once read.',
+      poolSize: pool.length,
+      validationFit: {
+        A: +validationFit.A.toFixed(4), B: +validationFit.B.toFixed(4), trainN: validationFit.trainN,
+        expectedFromScoringJs: { A: 0.9567, B: -0.2086, trainN: 1077 },
+        readAs: 'If A/B here are close to expectedFromScoringJs, this refit methodology matches the one that produced the currently-deployed parameters and the per-block fits below can be trusted.',
+      },
+      blocks,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
 // Leagues with a genuine, documented train/test split (docs/calibration-rules.md
 // rule 9). For these, runEvCalibration() reports the held-out test-set figure only
 // — the fixtures on/after testFrom were never touched during tuning — rather than
