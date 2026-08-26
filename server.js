@@ -7761,6 +7761,14 @@ app.get('/api/admin/diag-l1-block-tiers', async (_req, res) => {
     const validationTrain = pool.filter(f => new Date(f.date) < new Date('2025-08-01'));
     const validationFit   = fitPlatt(validationTrain);
 
+    // Flat pools of individual posEdge bet returns across all 4 blocks, for a
+    // normal-approximation 95% CI (mean ± 1.96*SE) — same method this project
+    // uses everywhere else (Addendum 20/21, /api/admin/walkforward-pool).
+    // Kept separate for "all 50-100%" vs "55-100% only" so the 50-55% cell's
+    // effect on the pooled CI is visible directly, not asserted.
+    const pooledBeforeAll = [], pooledAfterAll = [];
+    const pooledBeforeEx5055 = [], pooledAfterEx5055 = [];
+
     const blocks = BLOCKS.map(b => {
       const train = pool.filter(f => new Date(f.date) < new Date(b.trainBefore));
       const test  = pool.filter(f => new Date(f.date) >= new Date(b.testStart) && new Date(f.date) < new Date(b.testEnd));
@@ -7780,13 +7788,20 @@ app.get('/api/admin/diag-l1-block-tiers', async (_req, res) => {
         const actualWinRate = inTier.reduce((s, f) => s + (f.won ? 1 : 0), 0) / n;
 
         const beforePos = inTier.filter(f => f.edge >= 0.05);
-        const beforeRoi = beforePos.length
-          ? beforePos.reduce((s, f) => s + (f.won ? (f.pinnacleOdds - 1) : -1), 0) / beforePos.length : null;
+        const beforeReturns = beforePos.map(f => f.won ? (f.pinnacleOdds - 1) : -1);
+        const beforeRoi = beforeReturns.length ? beforeReturns.reduce((s, v) => s + v, 0) / beforeReturns.length : null;
 
         const afterPairs = inTier.map((f, i) => ({ f, edge: correctedEdge(f, correctedProbs[i]) })).filter(x => x.edge !== null);
         const afterPos   = afterPairs.filter(x => x.edge >= 0.05);
-        const afterRoi   = afterPos.length
-          ? afterPos.reduce((s, x) => s + (x.f.won ? (x.f.pinnacleOdds - 1) : -1), 0) / afterPos.length : null;
+        const afterReturns = afterPos.map(x => x.f.won ? (x.f.pinnacleOdds - 1) : -1);
+        const afterRoi   = afterReturns.length ? afterReturns.reduce((s, v) => s + v, 0) / afterReturns.length : null;
+
+        pooledBeforeAll.push(...beforeReturns);
+        pooledAfterAll.push(...afterReturns);
+        if (t.label !== '50-55%') {
+          pooledBeforeEx5055.push(...beforeReturns);
+          pooledAfterEx5055.push(...afterReturns);
+        }
 
         return {
           tier: t.label, n,
@@ -7806,6 +7821,20 @@ app.get('/api/admin/diag-l1-block-tiers', async (_req, res) => {
       };
     });
 
+    function pooledCi(returns) {
+      const n = returns.length;
+      if (!n) return { n: 0 };
+      const mean = returns.reduce((s, v) => s + v, 0) / n;
+      let ciLow = null, ciHigh = null;
+      if (n > 1) {
+        const variance = returns.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1);
+        const se = Math.sqrt(variance / n);
+        ciLow  = +((mean - 1.96 * se) * 100).toFixed(1);
+        ciHigh = +((mean + 1.96 * se) * 100).toFixed(1);
+      }
+      return { n, roi: +(mean * 100).toFixed(2), ci: [ciLow, ciHigh] };
+    }
+
     res.json({
       note: 'TEMP diagnostic — League One 50%+ per-tier breakdown per walk-forward block, tracing whether the 2023-24 block\'s ROI regression concentrates in the 50-55% cell (Addendum 22\'s confirmed-negative cell) or spreads across the band. Delete this endpoint once read.',
       poolSize: pool.length,
@@ -7815,6 +7844,11 @@ app.get('/api/admin/diag-l1-block-tiers', async (_req, res) => {
         readAs: 'If A/B here are close to expectedFromScoringJs, this refit methodology matches the one that produced the currently-deployed parameters and the per-block fits below can be trusted.',
       },
       blocks,
+      pooledAcrossAllBlocks: {
+        note: '95% CI via normal approximation on per-bet returns (mean ± 1.96*SE) — same method as /api/admin/walkforward-pool and Addendum 20/21. "including5055" reproduces Addendum 26\'s original 50-100% pooled read on fresh data; "excluding5055" is the same population with League One\'s one confirmed-negative cell (Addendum 22) carved out.',
+        including5055: { before: pooledCi(pooledBeforeAll), after: pooledCi(pooledAfterAll) },
+        excluding5055: { before: pooledCi(pooledBeforeEx5055), after: pooledCi(pooledAfterEx5055) },
+      },
     });
   } catch (e) {
     res.status(500).json({ error: e.message, stack: e.stack });
