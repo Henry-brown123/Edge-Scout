@@ -5359,3 +5359,126 @@ brief's own "before and after" instruction, since "after" cannot be
 verified live while offline. No temporary diagnostic endpoints were
 created for this addendum — everything was answered from existing docs,
 source reads, and conversation history, so there is nothing to clean up.
+
+## Addendum 31 — League One correction-layer deployment check: negative, not just "not yet"
+
+Follow-up to Addendum 30's Pillar 2 proposal, which recommended holding
+League One's correction layer (League Two's sibling, `league-one-50plus`
+in `scoring.js`, still undeployed) behind Phase 2, gated on League Two's
+own live results. The user asked directly what stands between League One
+and going green at 50-100%, having just set League Two 50-100% and the
+two 45-50% cells live via the manual green-flag UI. This addendum answers
+that with a real diagnostic, not a restatement of the existing walk-forward
+figures — and the honest answer moved from "promising, one open question"
+to "no, on the evidence in hand" over the course of the check.
+
+### What prompted the check
+
+League One's walk-forward validation (Addendum 26) showed a genuine ROI
+regression in its 2023-24 block (-10.65% before correction → -15.92%
+after), the one block where the correction made things worse. That block's
+test population sits right on top of League One's 50-55% tier — the single
+cell in the entire tier×league matrix with a confirmed, CI-excluding-zero
+negative reading on the whole-history pool (Addendum 22: n=230, ROI -15.5%,
+CI [-30.1%, -0.9%]). The question: is the block-2 regression that one known
+bad cell dragging down an otherwise-sound band, or something broader?
+
+### Method
+
+Built a temporary diagnostic (`GET /api/admin/diag-l1-block-tiers`, removed
+after this addendum) reusing `computeMatchedEdgeFixtures()` — the same
+live-scoring-pipeline population `runEvCalibration()` uses — refitting Platt
+A/B per expanding-window block (same technique as Addendum 26) since the
+original fitting code had already been cleaned up per this project's usual
+practice. A refit on all League One 50%+ data before 2025-08-01 produced
+A=0.934, B=-0.1812 against the currently-deployed rule's A=0.9567, B=-0.2086
+(fit on a very similar but not identical population/date) — close enough in
+direction and magnitude to trust the methodology, not exact (expected, given
+scoring fixes applied since the original fit and gradient-descent precision).
+
+### Finding 1 — the regression is not isolated to 50-55%
+
+Breaking the 2023-24 block into individual 5pp tiers: 50-55% is bad
+(-15.1%→-16.1%), but so is 65-70% (-32.6%→-24.9%, the worst tier in the
+block by far), 70-75% (-4.0%→-6.8%), and the thin 75-80%/80-100% tails.
+55-60% is the only tier that degrades sharply under correction while
+starting positive (+9.8%→+1.5%). This was a broadly bad season for League
+One's model across nearly the whole 50%+ range, not a single bad cell
+dragging an otherwise-clean band down.
+
+### Finding 2 — 50-55% is nonetheless a real, independent, structural problem
+
+Raw (pre-correction) ROI for League One 50-55% across all 4 independent
+walk-forward blocks: -7.7%, -15.1%, -4.3%, -14.4%. **Negative in every
+single block**, not just in the pooled whole-history figure Addendum 22
+already flagged. This is a materially stronger, block-independent
+confirmation of that finding, not a new one — but it settles that it isn't
+an artifact of one bad multi-year average. The correction layer does not
+fix this cell: it makes it worse in 3 of 4 blocks (-9.0%, -16.1%, -21.8%
+after correction) and only turns it positive in the one block (2024-25)
+where everything else was also unusually strong.
+
+### Finding 3 — excluding 50-55% does not clear the bar either, once fit cleanly
+
+A first pass, pooling the existing fit's tier-level results with 50-55%
+simply excluded from the reported total, looked encouraging: n=301
+(posEdge, corrected), ROI +12.35%, 95% CI **[+1.0%, +23.7%]** — excluding
+zero. But that fit was still *trained* on data including the bad 50-55%
+cell, which could itself be skewing the curve it produces for the tiers
+above it. A clean re-run — 50-55% excluded from both the training
+population and the test population, i.e. the actual candidate rule
+(`bandMin: 0.55`) rather than a derived slice of the 0.50 one — gives a
+materially weaker result: pooled n=332 (posEdge, corrected), ROI +9.64%,
+95% CI **[-1.1%, +20.4%]**. Spans zero. The clean fit is also considerably
+more aggressive (A≈0.50-0.98 per block, vs ≈0.93-1.13 for the contaminated
+fit) — a different, more conservative correction shape, and one that no
+longer confirms the tier's edge. The 2023-24 block also remains negative
+even with 50-55% excluded entirely (-5.6% raw → -8.5% after correction) —
+consistent with Finding 1: that season's problem was not localized to the
+one bad cell, so removing the cell doesn't remove the problem.
+
+### Verdict
+
+**Do not deploy League One's correction layer at this time — neither the
+full 50-100% band nor a narrowed 55-100% band.** Both fail to clear a
+CI-excludes-zero bar once checked properly; the promising 55-100% figure
+from the first pass was an artifact of fitting on contaminated data, not a
+real result. This is a genuine finding from new, disciplined analysis (a
+walk-forward-style check on freshly re-sliced data, using the same
+methodology this project applies everywhere else), not a re-litigation of
+Addendum 26's original look under rule 3 — it answers a question Addendum
+26 didn't ask (does narrowing the band rescue the result?), and the answer
+is no.
+
+**Separately, and regardless of the correction-layer decision**: League
+One's 50-55% tier should be treated as a structural real-money exclusion,
+the same way the 40-45% tier is treated across all leagues. It is now
+confirmed negative in the pooled whole-history read (Addendum 22) *and*
+independently in every one of 4 walk-forward blocks — not currently
+green-flagged, and this addendum found no reason to reconsider that. No
+code or settings change was needed to act on this finding: League One's
+correction rule was already dormant (not in
+`settings.deployedCorrectionRuleIds`), and green flags do not gate
+bet-locking — nothing was live-exposed to any of the scenarios checked
+above at any point during this diagnostic.
+
+**Open question, not investigated here**: why was 2023-24 broadly bad for
+League One's model, beyond the model's usual variance? Worth a dedicated
+look if League One's correction layer is revisited later, since a
+Platt-scaling fix only addresses miscalibrated confidence, not whatever
+else may have been wrong that season.
+
+**No change to League Two.** Its own correction layer (Addendum 26,
+deployed 2026-08-19) was independently confirmed stable and improving in
+every one of its 4 blocks with no equivalent structural weak cell —
+nothing in this addendum's finding calls that into question.
+
+### Compliance and API usage
+
+One temporary diagnostic endpoint (`GET /api/admin/diag-l1-block-tiers`)
+was built for this check and is removed as part of this addendum's commit.
+No settings, weights, base rates, or `CORRECTION_LAYER_RULES` parameters
+were changed — League One's rule remains exactly as Addendum 26 left it,
+fitted but undeployed. No new API-Sports or Odds API calls were made; all
+figures came from `computeMatchedEdgeFixtures()` against already-collected
+matched-odds data. Auto-retrain gate untouched by this work.
