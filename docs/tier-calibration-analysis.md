@@ -5482,3 +5482,62 @@ were changed — League One's rule remains exactly as Addendum 26 left it,
 fitted but undeployed. No new API-Sports or Odds API calls were made; all
 figures came from `computeMatchedEdgeFixtures()` against already-collected
 matched-odds data. Auto-retrain gate untouched by this work.
+
+## Addendum 32 — Does the 40-45% exclusion actually generalize to League One/Two?
+
+The user pushed back on the blanket "40-45% excluded, every league, no exceptions"
+policy after noticing League Two's own 40-45% tier showed a decent-looking ROI
+on 500+ games (the Scout-tab tier badge: +3.5%, n=514) — a fair challenge,
+since the original finding (n=430, ROI -21.5%, CI [-34.4%, -8.6%], original 9
+leagues pooled) was never about thin data; it was a decisive, confirmed loss,
+generalized to other leagues on the theory that a pattern reproducing
+independently across 9 markets is more likely a trait of the model's own
+behavior at that confidence range than 9 unrelated coincidences. That's a
+reasonable prior, not a proof — and nobody had actually checked whether League
+One/Two's own 40-45% cells survive the same scrutiny (calibration error, a
+real CI, walk-forward-block stability) applied to every other candidate cell
+this session, rather than the pooled point estimate alone.
+
+### Method
+
+Temporary diagnostic (`GET /api/admin/diag-l1l2-4045-screen`, removed after
+this addendum) against the already-banked unseen-population matched data
+(rule 10) — no new out-of-sample data, no fitted parameters, same
+reconciliation precedent as Addendum 22/26.
+
+### Result — the exclusion holds, checked properly
+
+**League Two (42), 40-45%**: n=855, posEdgeN=514, ROI **+3.46%, 95% CI
+[-8.2%, +15.1%]** — spans zero. Calibration is excellent (-0.1pp — the
+model's 42.4% predicted vs 42.5% actual is about as accurate as this
+project's readings get), which makes this a clean null result, not a muddy
+one: the model isn't wrong here, it's that being right about a ~42% shot
+doesn't create betting value once the market has priced it. Walk-forward by
+season: +14.8% / -5.3% / +15.0% / -0.7% — bounces around zero with no
+stability, nothing like the "improves in every block" pattern that made
+League Two's actual 50%+ correction (Addendum 26) credible.
+
+**League One (41), 40-45%**: n=769, posEdgeN=446, ROI **-4.66%, 95% CI
+[-17.0%, +7.7%]** — also spans zero, leaning negative. One block (2022-23:
+ROI -27.2%, CI [-55.1%, +0.8%]) comes close to a confirmed loss on its own.
+
+### Verdict
+
+The blanket exclusion is not overturned, but the reasoning updates: League
+One/Two's own 40-45% cells are not independently *confirmed negative* the
+way the original 9's pooled figure is — they're *not confirmed positive
+either*, and genuinely unstable block-to-block, a different and weaker
+flavor of the same "no real edge here" conclusion, reached on their own
+evidence rather than by association. The challenge that prompted this check
+was legitimate and correctly identified that the generalization had never
+actually been tested for these two leagues specifically — it just happens
+to hold up once tested.
+
+### Compliance
+
+One temporary diagnostic endpoint built and removed as part of this
+addendum's commit. No settings, weights, or `CALIBRATION_AUDIT`/green-flag
+state changed — nothing here was live-gated in the first place (40-45% is
+excluded by policy across every league, not by an individual green flag).
+No new API-Sports or Odds API calls; all figures from
+`computeMatchedEdgeFixtures()` against already-collected matched-odds data.
