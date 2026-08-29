@@ -7710,6 +7710,63 @@ app.get('/api/correction-layer-backtests', (_req, res) => {
   });
 });
 
+// TEMP DIAGNOSTIC — remove after use. User asked whether paper bets are being
+// priced against real, achievable bookmaker odds or something fabricated,
+// prompted by the "Unknown" bookmaker finding earlier. There IS a synthetic
+// fallback still live in the candidate-scoring loop: `bookOdds[teamKey] ||
+// (1 / c.prob * 1.06)` — when no real bookmaker price is found for a
+// fixture/outcome (event missing from Odds API coverage, or present with zero
+// priced bookmakers), the "market" price gets fabricated FROM THE MODEL'S OWN
+// PROBABILITY plus an assumed 6% margin, not from any real market. Worse: if
+// Pinnacle is also missing, the edge computation's implied-probability
+// benchmark falls back to `1/displayOdds` — i.e. derived from that same
+// synthetic price — making edge a near-deterministic function of calFactor
+// vs the assumed margin, not a real market comparison. This checks how often
+// that actually happens in the real bet log, not just whether it's
+// theoretically possible.
+app.get('/api/admin/diag-synthetic-odds-audit', (_req, res) => {
+  try {
+    const bets = getBets();
+    const TOLERANCE = 0.01; // 1% relative — real market noise won't coincidentally land this close to the formula
+
+    const results = bets
+      .filter(b => b.modelProb > 0 && b.actualOdds > 0)
+      .map(b => {
+        const synthetic = 1 / b.modelProb * 1.06;
+        const relDiff = Math.abs(b.actualOdds - synthetic) / synthetic;
+        return {
+          id: b.id, fixture: b.fixture, leagueId: b.leagueId, leagueName: b.leagueName,
+          mode: b.mode, lockedAt: b.lockedAt || b.placedAt, modelProb: b.modelProb,
+          actualOdds: b.actualOdds, syntheticWouldBe: +synthetic.toFixed(3),
+          relDiff: +relDiff.toFixed(4),
+          looksLikelySynthetic: relDiff < TOLERANCE,
+        };
+      });
+
+    const synthetic = results.filter(r => r.looksLikelySynthetic);
+    const real = results.filter(r => !r.looksLikelySynthetic);
+
+    const byLeague = {};
+    for (const r of results) {
+      const key = r.leagueName || r.leagueId;
+      if (!byLeague[key]) byLeague[key] = { total: 0, likelySynthetic: 0 };
+      byLeague[key].total++;
+      if (r.looksLikelySynthetic) byLeague[key].likelySynthetic++;
+    }
+
+    res.json({
+      note: 'TEMP diagnostic — flags bets whose actualOdds sits within 1% of what the synthetic fallback (1/modelProb*1.06) would have produced. A match this close to a specific formula is very unlikely to be real market coincidence, especially repeated across many bets. Not proof for any single bet (a real price could theoretically land close by chance) but the aggregate rate is the real signal. Delete this endpoint once read.',
+      totalBets: results.length,
+      likelySyntheticCount: synthetic.length,
+      likelySyntheticPct: results.length ? +((synthetic.length / results.length) * 100).toFixed(1) : null,
+      byLeague,
+      likelySyntheticBets: synthetic,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
 // Leagues with a genuine, documented train/test split (docs/calibration-rules.md
 // rule 9). For these, runEvCalibration() reports the held-out test-set figure only
 // — the fixtures on/after testFrom were never touched during tuning — rather than
