@@ -5709,3 +5709,278 @@ addendum's commit. No settings, weights, `CALIBRATION_AUDIT`, or green-flag
 state changed. No new API-Sports or Odds API calls; all figures from
 `computeMatchedEdgeFixtures()` against already-collected matched-odds data,
 strictly pre-cutoff.
+
+## Addendum 35 — Paper bet log validity audit: a real odds-fabrication bug, three matching bugs, and how the historical record was corrected
+
+Triggered by a direct question: would the paper bets in this log have been
+placeable at or near their stated odds with a real bookmaker, and why were
+most of them logged against an "Unknown" bookmaker? This is not a
+calibration or tier-tuning exercise — it's a data-integrity audit of the
+bet log and the live odds pipeline that produces it — so `docs/calibration-
+rules.md`'s train/test rules don't gate it, but the same "validate before
+concluding, don't accept a convenient answer" discipline applied throughout.
+
+### Finding 1 — a genuine odds-fabrication bug in live scoring
+
+`scoreOneFixture`'s candidate-scoring loop had a fallback:
+`displayOdds = bookOdds[teamKey] || (1 / c.prob * 1.06)` — when no real
+bookmaker price existed for a fixture/outcome, the "market" price was
+invented from the model's own probability plus an assumed 6% margin, not
+from any real market. Worse: the edge calculation's implied-probability
+benchmark then fell back to `1/displayOdds` — i.e. derived from that same
+synthetic price — making "edge" a near-deterministic function of
+`calFactor` vs the assumed margin, not a real market comparison.
+
+Quantified via a diagnostic that flagged any bet within 1% of the exact
+synthetic value: **29 of 165 bets (17.6%)** matched, concentrated almost
+entirely in fixtures with genuinely thin or absent market coverage —
+Conference League 16/16, Europa League 3/3, Champions League 2/2, FIFA
+World Cup 2/10, one or two singles scattered across otherwise well-covered
+domestic leagues. For the Conference/Europa/Champions League fixtures the
+match wasn't merely close — `relDiff` was **exactly 0** to many decimal
+places, i.e. mathematical proof of fabrication, not a statistical
+coincidence.
+
+**Fix (deployed 2026-08-29 17:42, commit `684cd73`):** a `hasRealOdds` flag
+— Pinnacle's raw per-outcome price preferred, then a real UK book price,
+else the candidate's score is forced to 0 and no bet is created at all.
+No fabrication, no fallback price, ever, going forward.
+
+### Finding 2 — the bookmaker-routing panel was silently dropping Pinnacle from its own display row
+
+Found from a user screenshot showing a real "Pinnacle: 1.87" reference
+elsewhere on a bet card while Pinnacle's own row in the bookmaker table was
+blank — an internal inconsistency the same fixture couldn't produce
+honestly. Root cause: `_buildBookmakerMarket`'s event lookup was
+exact-string-match only (no fuzzy fallback), and a flat `.slice(0,8)` cap
+on the bookmaker list had no guarantee Pinnacle survived it. **Fixed**
+with a fuzzy `teamsMatch()` fallback for the lookup and by moving Pinnacle
+to the front of the list before the cap is applied.
+
+### Finding 3 — two distinct team-name matching bugs, found only because they were checked rather than assumed fine
+
+1. **Shared-token false positives.** `teamsMatch()`'s fallback matched on
+   any shared 4+ character token — "Real Sociedad" and "Real Madrid" share
+   "real"; "Dundee" and "Dundee United" share "dundee". An independent
+   per-team `.find()" lookup returned whichever candidate came first in
+   the API's array, regardless of which team was actually being searched
+   for — confirmed via a standalone reproduction before and after the fix,
+   per explicit instruction not to just work around it. **Fixed** with
+   `extractH2hPrices()`: home's price is matched and removed from the
+   candidate pool first, then away is matched only among what's left,
+   making cross-assignment structurally impossible.
+2. **Non-decomposing special characters silently deleted.** `normaliseTeam`
+   relied on NFD decomposition to strip accents, but letters with a
+   built-in stroke/bar (ø, đ, ł) have no NFD decomposition — they were
+   deleted outright rather than transliterated, so `normaliseTeam("Bodø/
+   Glimt")` produced `"bodglimt"` instead of `"bodoglimt"`, never matching
+   api-football's plain-ASCII spelling. Found while validating the
+   qualification-key fix below (a "not found" result that turned out to be
+   sitting right there in the raw event list). **Fixed** with an explicit
+   transliteration table (ø→o, đ→d, ł→l, æ→ae, œ→oe, ß→ss) ahead of the
+   existing diacritic-stripping step.
+
+### Design decision — two-tier odds benchmark, confirmed by the user
+
+Historical bets use Pinnacle **closing** odds (the best available
+reconstruction after the fact); bets going forward use Pinnacle odds
+**live at the moment of lock** — the point a bet genuinely "places," and
+the actual reference the user compares a real bookmaker's quote against
+when choosing where to execute on Betfair Exchange. Checked and confirmed:
+the existing T-60 pre-match lock cron already re-fetches odds fresh on
+every cycle, so this requirement was already satisfied by existing
+behaviour — no scoring-path change needed, only the historical
+reconstruction below.
+
+### Real bets: explicitly excluded from every correction, by direct instruction
+
+Real bets already carry a genuine, human-confirmed execution record
+(stake, odds, and returns as actually placed on Betfair Exchange) that
+must never be overwritten with a market-reference price, even when that
+reference price is more "accurate" in the abstract. Every correction tool
+built for this addendum unconditionally skips `mode === 'real'` bets —
+confirmed on every dry run by exact-match `pnlDelta: 0` across all 15 real
+bets, including the one (Crawley Town vs Crewe, a cash-out) that had
+initially been miscategorised before this rule was made explicit.
+
+### Historical backfill: built, dry-run reviewed twice, applied
+
+`POST/GET /api/admin/backfill-bet-pinnacle-odds` (real, permanent,
+`?dryRun=true` supported) — three-tier priority per bet: cached closing
+Pinnacle price → fresh historical fetch → `pinnacleOddsAtLock` fallback.
+Real bets skipped entirely; resolved bets get `pnl` recomputed via the
+same commission formula as live resolution; automatic timestamped backup
+before every write. Applied to the full 171-bet log:
+
+- **15 real bets** — confirmed untouched (`pnlDelta: 0` on every one)
+- **137 paper bets** — corrected to real historical Pinnacle prices
+- **19 bets** — no real price recoverable from any source (see below)
+- Net paper P&L: **£3,332.11 → £3,567.43** (+£235.32)
+
+### The European qualifying-round gap: investigated exhaustively, not accepted at face value
+
+The user twice pushed back on "no data exists" for the remaining
+unverified bets, correctly — both times a real, fixable issue was
+underneath:
+
+1. **Is it "no bookmaker had it" or "our provider never catalogued it"?**
+   Raw historical-odds queries for these fixtures returned exactly one
+   event, always the *same* wrong, later, unrelated fixture, regardless of
+   which exact date was queried — and the same pattern held checking the
+   provider's lightweight `/events` schedule (not just the priced-market
+   endpoint) at four snapshots per fixture, from a week out to an hour
+   before kickoff. `/sports?all=true` showed the three UEFA sport keys
+   marked `active:false` for this specific administrative gap (between the
+   qualifying/play-off round and the new league-phase kickoff); a control
+   query for the same sport keys during last season's genuinely-live
+   window returned full, real, correctly-named coverage. Conclusion: a
+   genuine provider-side cataloguing gap for this narrow calendar window,
+   not a code bug — Odds API's `soccer_uefa_champs_league` /
+   `soccer_uefa_europa_league` / `soccer_uefa_europa_conference_league`
+   keys appear scoped to the main league phase only.
+2. **But real bookmakers plainly do price these fixtures** — the user's
+   own real-world Betfair experience was right to be skeptical of "no
+   market exists" for something like a UEFA play-off round. The catalogue
+   listing turned up a distinct, never-before-queried sport key:
+   `soccer_uefa_champs_league_qualification`. Checked directly: Lyon vs
+   Fenerbahçe had a full real market there — **22 bookmakers, including
+   Pinnacle** (1.90 / 3.68 / 4.12). No equivalent key exists for Europa
+   League or Conference League anywhere in the full catalogue — checked
+   exhaustively, not assumed absent.
+
+**Fix:** `QUALIFICATION_SPORT_FALLBACK` wired into both `fetchOddsForLeague`
+(live scoring/locking — so future Champions League qualifying-round
+fixtures get real odds instead of being skipped) and
+`fetchClosingOddsForBet` (historical correction, trying each sport key in
+turn rather than giving up after the first miss). This closed 2 of the 21
+originally-unverified bets (Lyon vs Fenerbahçe, Bodø/Glimt vs NEC
+Nijmegen — the latter also needed the `normaliseTeam` fix above to match
+at all). Europa League and Conference League remain a genuine, currently
+unfixable gap for their qualifying/play-off rounds specifically — 19 bets.
+
+### Prospective fix — no-market-data fixtures now surface as info-only, never lockable
+
+Separately from the historical correction: a fixture with no real market
+anywhere already couldn't reach the lock threshold (score forced to 0,
+lock requires ≥40 — structurally impossible, not just unlikely) but it
+also silently failed the WATCHING threshold (≥20), so it was invisible
+rather than informative. Per explicit design instruction: a match with no
+odds shouldn't carry any value calculation, but should still show the
+model's read on the outcome. `runMorningScan` and `runHourlyRescan` now
+surface these with a `noMarketData` flag — odds/edge/EV/Kelly/score
+explicitly `null` (rendered "N/A" / a "NO MARKET" badge in the UI, not a
+misleading `0`), the displayed pick chosen by raw model probability rather
+than the now-meaningless tied-at-zero `successScore`, and "Lock now"
+disabled with an explanatory tooltip. The lock gate itself needed no
+change — already safe by construction.
+
+### Independent verification: is the corrected data actually trustworthy, not just internally self-consistent?
+
+Two rounds of external verification, prompted by the user surfacing a
+ChatGPT conversation raising the same question from a different angle:
+
+1. **Internal cross-check** — for 128 corrected bets, compared the odds
+   captured live at lock (`fetchOddsForLeague` → `_buildOddsMap`) against
+   the independently re-fetched historical closing price
+   (`fetchClosingOddsForBet` → `extractH2hPrices`) — two code paths
+   sharing almost no logic. Median divergence 3.9%, mean 6.2%, 83.6%
+   within ±10% — consistent with normal pre-match drift, not a hidden
+   skew. Of 6 outliers exceeding 20%, 2 turned out to be the already-known
+   fabricated FIFA World Cup bets (Argentina vs Cape Verde Islands,
+   England vs Congo DR — the synthetic-odds audit had already flagged
+   these independently of the CL/EL/Conference set); the other 4 had
+   ordinary explanations (thin lower-league markets, one-sided blowout
+   mismatches).
+2. **External spot-checks** — 5 bets checked against real, named
+   bookmaker/odds-comparison sources (not the ChatGPT conversation's own
+   claims, which were separately found to be unreliable — a suspicious
+   "OddsGPT" citation, an admission its first answer wasn't actually
+   Pinnacle/Betfair-sourced despite presenting it that way, and numbers
+   for the same fixture that moved between its own messages). 4 of 5
+   independently-sourced real prices matched or nearly matched our
+   pipeline's numbers, including one exact match (Millwall vs Norwich,
+   2.91 both sides) and one confirmation of the live *lock-time* capture
+   specifically (Doncaster vs Middlesbrough, 5.25 logged vs ~5.08 real).
+   The fifth (Argentina vs Cape Verde) confirmed the already-known
+   fabrication and that the backfill had correctly recovered accurate
+   real data for it (1.15 corrected vs ~1.13-1.17 real).
+
+**Conclusion:** the two things that were actually broken (fabrication,
+name-matching) are now identified, fixed, and excluded from performance
+reporting. Everything else checked — both by internal cross-validation and
+external, independently-sourced spot-checks — is consistent with a
+healthy pipeline, not a systematically skewed one. This is high confidence
+from convergent evidence, not a claim of exhaustive, bet-by-bet proof.
+
+### The 9 remaining bets with zero recoverable data: externally researched, not left fabricated
+
+The 9 winning Conference League bets among the 19 still-unverified had
+confirmed-fabricated odds contributing **£1,223.18** to the paper log's
+recorded P&L with no real number available from Odds API under any key,
+at any snapshot. Rather than leave them fabricated or exclude them
+silently, real second-leg odds were researched externally (Sportytrader,
+Sports Gambler, CBS Sports, FOX Sports, ESPN, Betmines — independently
+verified by this project, not taken from the ChatGPT conversation that
+prompted the question) and applied via a one-off, now-removed correction:
+
+| Fixture | Old (fabricated) | Corrected | Confidence |
+|---|---|---|---|
+| FK Partizan vs Getafe | 2.09 | 3.15 | High — direct 2nd-leg quote |
+| Borac Banja Luka vs Víkingur Reykjavík | 2.30 | 2.15 | Medium — two 2nd-leg quotes disagreed, midpoint used |
+| FC St. Gallen vs FC Nordsjælland | 2.43 | 2.80 | Low — no direct 2nd-leg quote, estimated |
+| Brann vs PAOK | 2.33 | 3.00 | High — direct 2nd-leg quote |
+| FC Copenhagen vs Inter Turku | 2.34 | 1.30 | Medium-high — inferred from 1st-leg |
+| Riga FC vs KÍ Klaksvík | 2.29 | 1.47 | High — direct 2nd-leg quote |
+| SC Freiburg vs Motherwell | 2.08 | 1.19 | High — direct decimal conversion |
+| FK Jablonec vs Rangers | 2.38 | 3.50 | Low — no direct 2nd-leg quote, wide uncertainty |
+| KuPS vs Shamrock Rovers | 2.32 | 1.87 | High — direct 2nd-leg quote |
+
+Each bet's confidence level and source note are preserved on the record
+itself (`oddsSource`, `oddsResearchNote`), not just in this write-up.
+Net effect on total P&L: **£1,223.18 → £1,222.80** — a near-total wash in
+aggregate despite every individual bet moving substantially, in both
+directions. Worth remembering: this coincidence says nothing about
+accuracy at the individual-bet level, which is what actually matters for
+any future calibration work drawing on this population.
+
+### Final state of the 171-bet log
+
+- **15 real bets** — untouched throughout, exactly as executed on Betfair
+  Exchange
+- **146 paper bets** — grounded in real market data (137 via Odds API
+  Pinnacle history, 9 via externally-researched real odds, confidence
+  levels preserved)
+- **10 paper bets** — still genuinely unrecoverable (Europa League/
+  Conference League losses and zero-stake wins among the 19; the 9 with
+  material P&L are now fixed above), left flagged `oddsUnverified` rather
+  than guessed at
+- Net paper P&L, final: **£3,567.43** — the manual research pass ran
+  first (£1,223.18 → £1,222.80 on those 9 bets specifically, a near-wash
+  in aggregate) and the Odds-API backfill ran second across the whole log
+  including those already-corrected 9 (£3,332.11 → £3,567.43, +£235.32,
+  entirely from the other 137 bets since the 9 were already fixed and the
+  backfill correctly left them untouched, returning `none_found` for each)
+
+### Verdict
+
+The paper log's validity concern that opened this investigation was
+justified — there was a real fabrication bug, not a false alarm — but it
+was narrower in scope than "the model's Pinnacle odds might all be
+nonsense": isolated to fixtures with zero real market coverage, now
+excluded from performance reporting for the unfixable remainder, corrected
+with real data everywhere it was recoverable, and structurally prevented
+from recurring going forward (no fabrication path exists anymore; a
+no-market fixture now either finds a real price via the qualification-key
+fallback or is skipped/shown info-only, never bet on).
+
+### Compliance
+
+Two temporary/one-off diagnostic endpoints and one one-off correction
+endpoint built and removed as part of this addendum's work
+(`diag-synthetic-odds-audit`, `diag-unverified-bets-raw-check`,
+`diag-historical-endpoint-behavior`, `diag-uefa-events-catalog-check`,
+`apply-manual-odds-research`). One real, permanent endpoint added and kept
+(`backfill-bet-pinnacle-odds`) for any future re-run should new historical
+data become available. No settings, weights, `CALIBRATION_AUDIT`, or
+green-flag state changed — this is a data-integrity correction to the bet
+log and its supporting pipeline, not a calibration or tuning exercise.
