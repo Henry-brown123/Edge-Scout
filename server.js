@@ -971,7 +971,8 @@ function _buildTotalsMap(events) {
   return map;
 }
 
-async function fetchOddsForLeague(sport) {
+async function fetchOddsForLeague(sport, fallbackSport = null) {
+  let events = [];
   try {
     // 'both_teams_to_score' (and the correctly-spelled 'btts') are rejected by this
     // Odds API plan/endpoint with a 422 — requesting either causes the WHOLE call to
@@ -981,10 +982,24 @@ async function fetchOddsForLeague(sport) {
     const { data } = await oddsApi.get(`/sports/${sport}/odds`, {
       params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h,totals', oddsFormat: 'decimal' },
     });
-    const events = data || [];
-    _oddsRawCache[sport] = events;
-    return { oddsMap: _buildOddsMap(events), totalsMap: _buildTotalsMap(events) };
-  } catch (e) { console.error('[Odds] fetchOddsForLeague failed:', e.response?.status, e.response?.data?.message || e.message); return { oddsMap: {}, totalsMap: {} }; }
+    events = data || [];
+  } catch (e) { console.error('[Odds] fetchOddsForLeague failed:', e.response?.status, e.response?.data?.message || e.message); }
+
+  // Some competitions (currently just Champions League) split qualifying/play-off
+  // rounds into a separate sport key from the main league-phase one — see
+  // QUALIFICATION_SPORT_FALLBACK. Merge in events from that key too so fixtures in
+  // that window get real odds instead of falling through to the synthetic fallback.
+  if (fallbackSport) {
+    try {
+      const { data: fbData } = await oddsApi.get(`/sports/${fallbackSport}/odds`, {
+        params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h,totals', oddsFormat: 'decimal' },
+      });
+      events = events.concat(fbData || []);
+    } catch (e) { console.error('[Odds] fetchOddsForLeague fallback failed:', e.response?.status, e.response?.data?.message || e.message); }
+  }
+
+  _oddsRawCache[sport] = events;
+  return { oddsMap: _buildOddsMap(events), totalsMap: _buildTotalsMap(events) };
 }
 
 // Build the per-bookmaker market array for a fixture from cached raw events.
@@ -1754,7 +1769,7 @@ async function runMorningScan(leagueIds) {
       const standings = sd?.response?.[0]?.league?.standings || [];
 
       // Odds
-      const { oddsMap, totalsMap } = await fetchOddsForLeague(meta.sport || 'soccer_epl');
+      const { oddsMap, totalsMap } = await fetchOddsForLeague(meta.sport || 'soccer_epl', QUALIFICATION_SPORT_FALLBACK[String(leagueId)]);
 
       // Pre-load fixture stats cache from disk (populated by pre-match lock and stats backfill)
       const fixtureStatsDb = getFixtureStats();
@@ -1989,7 +2004,7 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
 
     const { data: std } = await apiSports.get('/standings', { params: { league: leagueId, season: meta.season } });
     const standings = std?.response?.[0]?.league?.standings || [];
-    const { oddsMap, totalsMap } = await fetchOddsForLeague(meta.sport || 'soccer_epl');
+    const { oddsMap, totalsMap } = await fetchOddsForLeague(meta.sport || 'soccer_epl', QUALIFICATION_SPORT_FALLBACK[String(leagueId)]);
 
     const scored = await scoreOneFixture(fix, enrichedFormFixtures, standings, statsCache, oddsMap, settings, totalsMap);
     const best   = scored.results.reduce((a, b) => a.successScore > b.successScore ? a : b);
@@ -2243,7 +2258,7 @@ async function runHourlyRescan() {
 
       const { data: sd } = await apiSports.get('/standings', { params: { league: leagueId, season: meta.season } });
       const standings = sd?.response?.[0]?.league?.standings || [];
-      const { oddsMap, totalsMap } = await fetchOddsForLeague(meta.sport || 'soccer_epl');
+      const { oddsMap, totalsMap } = await fetchOddsForLeague(meta.sport || 'soccer_epl', QUALIFICATION_SPORT_FALLBACK[String(leagueId)]);
 
       for (const w of entries) {
         try {
@@ -2536,42 +2551,51 @@ function extractH2hPrices(outcomes, home, away) {
 }
 
 async function fetchClosingOddsForBet(bet) {
-  const sport = CLOSING_ODDS_SPORT_MAP[String(bet.leagueId)];
-  if (!sport) return { closingOdds: null, bookmaker: null, snapshotTs: null };
+  const primarySport = CLOSING_ODDS_SPORT_MAP[String(bet.leagueId)];
+  if (!primarySport) return { closingOdds: null, bookmaker: null, snapshotTs: null };
+
+  // Champions League splits qualifying/play-off rounds into a separate sport key
+  // from the main league-phase one (see QUALIFICATION_SPORT_FALLBACK) — try both
+  // rather than assuming a miss on the primary key means no real price exists.
+  const sportsToTry = [primarySport, QUALIFICATION_SPORT_FALLBACK[String(bet.leagueId)]].filter(Boolean);
 
   // The Odds API's historical endpoint rejects a milliseconds-precision timestamp
   // with 422 INVALID_HISTORICAL_TIMESTAMP — exact-second precision only.
   const kickoffIso = new Date(bet.kickoff).toISOString().split('.')[0] + 'Z';
-  try {
-    const resp = await oddsApi.get(`/historical/sports/${sport}/odds`, {
-      params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h',
-                oddsFormat: 'decimal', date: kickoffIso },
-    });
-    const events = resp.data?.data || resp.data || [];
-    const [home, away] = (bet.fixture || '').split(' vs ');
-    const ev = events.find(e => teamsMatch(e.home_team, home) && teamsMatch(e.away_team, away));
-    if (!ev) return { closingOdds: null, bookmaker: null, snapshotTs: null };
+  const [home, away] = (bet.fixture || '').split(' vs ');
 
-    // Prefer Pinnacle; no fallback — spec requires Pinnacle or null
-    const bm = ev.bookmakers?.find(b => b.key === 'pinnacle');
-    if (!bm) return { closingOdds: null, bookmaker: null, snapshotTs: null };
+  for (const sport of sportsToTry) {
+    try {
+      const resp = await oddsApi.get(`/historical/sports/${sport}/odds`, {
+        params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h',
+                  oddsFormat: 'decimal', date: kickoffIso },
+      });
+      const events = resp.data?.data || resp.data || [];
+      const ev = events.find(e => teamsMatch(e.home_team, home) && teamsMatch(e.away_team, away));
+      if (!ev) continue;
 
-    const mkt = bm.markets?.find(m => m.key === 'h2h');
-    if (!mkt) return { closingOdds: null, bookmaker: null, snapshotTs: null };
+      // Prefer Pinnacle; no fallback — spec requires Pinnacle or null
+      const bm = ev.bookmakers?.find(b => b.key === 'pinnacle');
+      if (!bm) continue;
 
-    // Validate snapshot is within 15 minutes of kickoff
-    const snapTs  = bm.last_update || kickoffIso;
-    const ageMins = Math.abs(new Date(kickoffIso) - new Date(snapTs)) / 60000;
-    if (ageMins > 15) return { closingOdds: null, bookmaker: null, snapshotTs: snapTs };
+      const mkt = bm.markets?.find(m => m.key === 'h2h');
+      if (!mkt) continue;
 
-    const prices = extractH2hPrices(mkt.outcomes, home, away);
-    const closingOdds = bet.bet === 'Home Win' ? prices.home : bet.bet === 'Away Win' ? prices.away : prices.draw;
+      // Validate snapshot is within 15 minutes of kickoff
+      const snapTs  = bm.last_update || kickoffIso;
+      const ageMins = Math.abs(new Date(kickoffIso) - new Date(snapTs)) / 60000;
+      if (ageMins > 15) continue;
 
-    return { closingOdds, bookmaker: bm.key, snapshotTs: snapTs };
-  } catch (e) {
-    console.error(`[CLV:fetch] ${bet.fixture}: ${e.message}`);
-    return { closingOdds: null, bookmaker: null, snapshotTs: null };
+      const prices = extractH2hPrices(mkt.outcomes, home, away);
+      const closingOdds = bet.bet === 'Home Win' ? prices.home : bet.bet === 'Away Win' ? prices.away : prices.draw;
+      if (!(closingOdds > 1)) continue;
+
+      return { closingOdds, bookmaker: bm.key, snapshotTs: snapTs };
+    } catch (e) {
+      console.error(`[CLV:fetch] ${bet.fixture} (${sport}): ${e.message}`);
+    }
   }
+  return { closingOdds: null, bookmaker: null, snapshotTs: null };
 }
 
 const _cronRunning = { backfill: false, morningScan: false, preMatch: false, resolve: false, clv: false, hourlyRescan: false };
@@ -5475,6 +5499,21 @@ const CLOSING_ODDS_SPORT_MAP = {
   '40':  'soccer_efl_champ',
 };
 
+// Odds API tracks Champions League qualifying/play-off rounds as a completely
+// separate product from the main league-phase sport key — confirmed live
+// 2026-08-29: Lyon vs Fenerbahce (an Aug 2026 CL play-off fixture) had a full
+// real market (22 bookmakers incl. Pinnacle) under this key, while
+// soccer_uefa_champs_league returned nothing at all for the same fixture/date,
+// which is why every CL qualifying-round bet this season had its price
+// fabricated by the (now-fixed) synthetic-odds fallback instead of using a
+// real price. No equivalent 'qualification' key exists for Europa League or
+// Conference League in Odds API's catalog (checked directly against
+// /sports?all=true) — their pre-league-phase rounds appear to have no
+// distinct product at all, so this fallback only applies to league 2.
+const QUALIFICATION_SPORT_FALLBACK = {
+  '2': 'soccer_uefa_champs_league_qualification',
+};
+
 let _closingOddsStatus = {
   running: false, startedAt: null, completedAt: null, error: null,
   creditsUsed: 0, creditsRemaining: null,
@@ -5499,6 +5538,14 @@ function normaliseTeam(name) {
   return (name || '')
     .normalize('NFD')                          // decompose accented chars (ã → a + combining tilde)
     .replace(/[̀-ͯ]/g, '')           // strip combining diacritical marks
+    // Letters with no NFD decomposition (a stroke/bar through the letter, not a
+    // combining mark) — NFD leaves these untouched, so without this they were
+    // silently deleted by the [^a-z0-9 ] strip below instead of transliterated.
+    // Found via Bodø/Glimt (Odds API's spelling) failing to match Bodo/Glimt
+    // (api-football's spelling): normaliseTeam produced "bodglimt" (ø vanished)
+    // instead of "bodoglimt", so teamsMatch never connected the two.
+    .replace(/ø/gi, 'o').replace(/đ/gi, 'd').replace(/ł/gi, 'l')
+    .replace(/æ/gi, 'ae').replace(/œ/gi, 'oe').replace(/ß/gi, 'ss')
     .toLowerCase()
     .replace(/\bfc\b|\baf\b|\bsc\b|\bac\b|\bcd\b|\bfk\b/g, '')
     .replace(/[^a-z0-9 ]/g, '')
@@ -7941,133 +7988,6 @@ async function _backfillBetPinnacleOddsHandler(req, res) {
 }
 app.get('/api/admin/backfill-bet-pinnacle-odds', _backfillBetPinnacleOddsHandler);
 app.post('/api/admin/backfill-bet-pinnacle-odds', _backfillBetPinnacleOddsHandler);
-
-// TEMP DIAGNOSTIC — remove after use. User pushed back (fairly) on "no bookmaker
-// had this match" for the 21 unverified CL/EL/Conference League qualifying-round
-// bets — real bookmakers plainly do offer markets on games like PSG vs Arsenal
-// and UEFA qualifiers generally. The /odds (h2h) endpoint conflates two very
-// different things: "Odds API never catalogued this fixture at all" vs "Odds API
-// knew about the fixture but no bookmaker had submitted a price for it yet at
-// the queried snapshot time." This checks the lighter-weight /events endpoint
-// (event listing only, no markets) for a sample of the 21 bets, at several
-// snapshot times before kickoff, to see whether the fixture appears in Odds
-// API's own schedule at all -- settling whether this is a provider cataloguing
-// gap (their events list is just missing pre-league-phase qualifiers) or
-// something else. Also lists the full /sports?all=true catalog filtered for any
-// UEFA-related key we might not already be querying (e.g. a distinct
-// qualifying-round sport key).
-app.get('/api/admin/diag-uefa-events-catalog-check', async (req, res) => {
-  try {
-    const targetIds = (req.query.ids || '').split(',').filter(Boolean);
-    let bets = getBets().filter(b => [2, 3, 848].includes(parseInt(b.leagueId, 10)) && b.mode !== 'real');
-    if (targetIds.length) bets = bets.filter(b => targetIds.includes(b.id));
-    else bets = bets.slice(0, 6); // sample across the three competitions
-
-    const results = [];
-    for (const bet of bets) {
-      const sport = CLOSING_ODDS_SPORT_MAP[String(bet.leagueId)];
-      const kickoff = new Date(bet.kickoff);
-      const snapshots = [
-        { label: 'T-1h', date: new Date(kickoff.getTime() - 1 * 3600 * 1000) },
-        { label: 'T-24h', date: new Date(kickoff.getTime() - 24 * 3600 * 1000) },
-        { label: 'T-72h', date: new Date(kickoff.getTime() - 72 * 3600 * 1000) },
-        { label: 'T-7d', date: new Date(kickoff.getTime() - 7 * 24 * 3600 * 1000) },
-      ];
-      const [home, away] = (bet.fixture || '').split(' vs ');
-      const perSnapshot = [];
-      for (const snap of snapshots) {
-        try {
-          const iso = snap.date.toISOString().split('.')[0] + 'Z';
-          const resp = await oddsApi.get(`/historical/sports/${sport}/events`, {
-            params: { apiKey: ODDS_API_KEY, date: iso },
-          });
-          const events = resp.data?.data || resp.data || [];
-          const match = events.find(e =>
-            (teamsMatch(e.home_team, home) && teamsMatch(e.away_team, away)) ||
-            (normaliseTeam(e.home_team) === normaliseTeam(home) && normaliseTeam(e.away_team) === normaliseTeam(away))
-          );
-          perSnapshot.push({
-            snapshot: snap.label, queriedDate: iso, totalEventsInCatalog: events.length,
-            fixtureFoundInCatalog: !!match,
-            matchedCommenceTime: match?.commence_time || null,
-            sampleEventNames: events.slice(0, 5).map(e => `${e.home_team} vs ${e.away_team}`),
-          });
-        } catch (e) {
-          perSnapshot.push({ snapshot: snap.label, error: e.message, status: e.response?.status });
-        }
-      }
-      results.push({ id: bet.id, fixture: bet.fixture, kickoff: bet.kickoff, sport, perSnapshot });
-    }
-
-    // Champions League has a distinct 'soccer_uefa_champs_league_qualification'
-    // sport key in the catalog that this project has never queried — check it
-    // directly for the CL bets among the 21, in case qualifying-round fixtures
-    // are tracked there instead of under the main league-phase key.
-    const qualificationCheck = [];
-    const clBets = getBets().filter(b => parseInt(b.leagueId, 10) === 2 && b.mode !== 'real' && b.oddsUnverified !== false);
-    for (const bet of clBets.slice(0, 5)) {
-      const kickoff = new Date(bet.kickoff);
-      const [home, away] = (bet.fixture || '').split(' vs ');
-      const iso = new Date(kickoff.getTime() - 1 * 3600 * 1000).toISOString().split('.')[0] + 'Z';
-      try {
-        const resp = await oddsApi.get('/historical/sports/soccer_uefa_champs_league_qualification/events', {
-          params: { apiKey: ODDS_API_KEY, date: iso },
-        });
-        const events = resp.data?.data || resp.data || [];
-        const match = events.find(e =>
-          (teamsMatch(e.home_team, home) && teamsMatch(e.away_team, away)) ||
-          (normaliseTeam(e.home_team) === normaliseTeam(home) && normaliseTeam(e.away_team) === normaliseTeam(away)) ||
-          `${e.home_team} vs ${e.away_team}` === bet.fixture
-        );
-
-        let oddsCheck = null;
-        try {
-          const oddsResp = await oddsApi.get('/historical/sports/soccer_uefa_champs_league_qualification/odds', {
-            params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal', date: iso },
-          });
-          const oddsEvents = oddsResp.data?.data || oddsResp.data || [];
-          const oddsMatch = oddsEvents.find(e => `${e.home_team} vs ${e.away_team}` === (match ? `${match.home_team} vs ${match.away_team}` : bet.fixture));
-          oddsCheck = {
-            eventFoundInOddsResponse: !!oddsMatch,
-            bookmakerKeys: oddsMatch?.bookmakers?.map(b => b.key) || [],
-            hasPinnacle: !!oddsMatch?.bookmakers?.find(b => b.key === 'pinnacle'),
-            pinnacleH2h: oddsMatch?.bookmakers?.find(b => b.key === 'pinnacle')?.markets?.find(m => m.key === 'h2h')?.outcomes || null,
-          };
-        } catch (e) {
-          oddsCheck = { error: e.message, status: e.response?.status };
-        }
-
-        qualificationCheck.push({
-          id: bet.id, fixture: bet.fixture, queriedDate: iso, totalEventsInCatalog: events.length,
-          fixtureFoundInCatalog: !!match, matchedCommenceTime: match?.commence_time || null,
-          allEventNames: events.map(e => `${e.home_team} vs ${e.away_team}`),
-          oddsCheck,
-        });
-      } catch (e) {
-        qualificationCheck.push({ id: bet.id, fixture: bet.fixture, error: e.message, status: e.response?.status, apiError: e.response?.data });
-      }
-    }
-
-    let sportsCatalog = null;
-    try {
-      const sportsResp = await oddsApi.get('/sports', { params: { apiKey: ODDS_API_KEY, all: 'true' } });
-      sportsCatalog = (sportsResp.data || [])
-        .filter(s => /uefa|champ|europa|conference|qualif/i.test(s.key) || /uefa|champ|europa|conference|qualif/i.test(s.title))
-        .map(s => ({ key: s.key, title: s.title, active: s.active }));
-    } catch (e) {
-      sportsCatalog = { error: e.message };
-    }
-
-    res.json({
-      note: 'TEMP diagnostic — checks Odds API\'s /events catalog (schedule only, no markets) at several pre-kickoff snapshots for a sample of the 21 unverified bets, to distinguish "fixture never catalogued by the provider" from "catalogued but unpriced at the time we checked". Also lists every UEFA/qualifying-related sport key currently in /sports?all=true, in case a separate qualifying-round key exists that this project has never queried, and directly checks soccer_uefa_champs_league_qualification for the CL bets. Delete this endpoint once read.',
-      sportsCatalogMatches: sportsCatalog,
-      qualificationKeyCheck: qualificationCheck,
-      results,
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message, stack: e.stack });
-  }
-});
 
 // Leagues with a genuine, documented train/test split (docs/calibration-rules.md
 // rule 9). For these, runEvCalibration() reports the held-out test-set figure only
