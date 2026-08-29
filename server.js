@@ -8088,6 +8088,72 @@ app.get('/api/admin/diag-unverified-bets-raw-check', async (_req, res) => {
   }
 });
 
+// TEMP DIAGNOSTIC — remove after use. Follow-up to diag-unverified-bets-raw-check:
+// every query for CL/EL/Conference League returned exactly one event, always the
+// SAME event regardless of which August date was requested, and always a
+// recognisable September league-phase fixture (PSG vs Arsenal, etc.) rather than
+// the actual August qualifying-round match asked about. That specific pattern
+// (single result, ignores the date param, always a later fixture) suggests the
+// historical endpoint's snapshot coverage for these three sport keys may not
+// reach back into August at all this season, rather than a matching bug on this
+// project's side. Checks that directly: (1) the same historical call without the
+// date param, to see what the endpoint returns unfiltered; (2) a historical query
+// for a date deep in LAST season (when these competitions' league phase was
+// definitely live and presumably well-covered), to isolate "never worked for
+// these sport keys" from "doesn't reach back this far this season specifically";
+// (3) /sports?all=true metadata for these three sport keys.
+app.get('/api/admin/diag-historical-endpoint-behavior', async (_req, res) => {
+  try {
+    const sportKeys = {
+      2: 'soccer_uefa_champs_league', 3: 'soccer_uefa_europa_league', 848: 'soccer_uefa_europa_conference_league',
+    };
+    const out = {};
+    for (const [leagueId, sport] of Object.entries(sportKeys)) {
+      out[leagueId] = { sport };
+
+      // (1) No date param
+      try {
+        const r1 = await oddsApi.get(`/historical/sports/${sport}/odds`, {
+          params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal' },
+        });
+        const events1 = r1.data?.data || r1.data || [];
+        out[leagueId].noDateParam = { eventCount: events1.length, names: events1.map(e => `${e.home_team} vs ${e.away_team}`) };
+      } catch (e) {
+        out[leagueId].noDateParam = { error: e.message, status: e.response?.status };
+      }
+
+      // (2) Deep into last season (2025-11-01, well within a live league phase last time round)
+      try {
+        const r2 = await oddsApi.get(`/historical/sports/${sport}/odds`, {
+          params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal', date: '2025-11-05T19:00:00Z' },
+        });
+        const events2 = r2.data?.data || r2.data || [];
+        out[leagueId].lastSeasonDate = { eventCount: events2.length, names: events2.map(e => `${e.home_team} vs ${e.away_team}`) };
+      } catch (e) {
+        out[leagueId].lastSeasonDate = { error: e.message, status: e.response?.status };
+      }
+    }
+
+    // (3) Sport metadata
+    try {
+      const sportsResp = await oddsApi.get('/sports', { params: { apiKey: ODDS_API_KEY, all: 'true' } });
+      const allSports = sportsResp.data || [];
+      for (const [leagueId, sport] of Object.entries(sportKeys)) {
+        out[leagueId].sportMetadata = allSports.find(s => s.key === sport) || null;
+      }
+    } catch (e) {
+      out._sportsMetaError = e.message;
+    }
+
+    res.json({
+      note: 'TEMP diagnostic — isolates whether the historical odds endpoint genuinely lacks August 2026 coverage for CL/EL/Conference League specifically, vs a broader/different issue. Compare lastSeasonDate (should show real Nov-2025 fixtures if the endpoint works at all for these sport keys) against the earlier August 2026 queries. Delete this endpoint once read.',
+      byLeague: out,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
 // Leagues with a genuine, documented train/test split (docs/calibration-rules.md
 // rule 9). For these, runEvCalibration() reports the held-out test-set figure only
 // — the fixtures on/after testFrom were never touched during tuning — rather than
