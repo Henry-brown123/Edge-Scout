@@ -7791,85 +7791,6 @@ app.get('/api/correction-layer-backtests', (_req, res) => {
   });
 });
 
-// TEMP DIAGNOSTIC — remove after use. User asked whether paper bets are being
-// priced against real, achievable bookmaker odds or something fabricated,
-// prompted by the "Unknown" bookmaker finding earlier. There IS a synthetic
-// fallback still live in the candidate-scoring loop: `bookOdds[teamKey] ||
-// (1 / c.prob * 1.06)` — when no real bookmaker price is found for a
-// fixture/outcome (event missing from Odds API coverage, or present with zero
-// priced bookmakers), the "market" price gets fabricated FROM THE MODEL'S OWN
-// PROBABILITY plus an assumed 6% margin, not from any real market. Worse: if
-// Pinnacle is also missing, the edge computation's implied-probability
-// benchmark falls back to `1/displayOdds` — i.e. derived from that same
-// synthetic price — making edge a near-deterministic function of calFactor
-// vs the assumed margin, not a real market comparison. This checks how often
-// that actually happens in the real bet log, not just whether it's
-// theoretically possible.
-app.get('/api/admin/diag-synthetic-odds-audit', (_req, res) => {
-  try {
-    const bets = getBets();
-    const TOLERANCE = 0.01; // 1% relative — real market noise won't coincidentally land this close to the formula
-
-    const results = bets
-      .filter(b => b.modelProb > 0 && b.actualOdds > 0)
-      .map(b => {
-        const synthetic = 1 / b.modelProb * 1.06;
-        const relDiff = Math.abs(b.actualOdds - synthetic) / synthetic;
-        return {
-          id: b.id, fixture: b.fixture, leagueId: b.leagueId, leagueName: b.leagueName,
-          mode: b.mode, lockedAt: b.lockedAt || b.placedAt, modelProb: b.modelProb,
-          actualOdds: b.actualOdds, syntheticWouldBe: +synthetic.toFixed(3),
-          relDiff: +relDiff.toFixed(4),
-          looksLikelySynthetic: relDiff < TOLERANCE,
-        };
-      });
-
-    const synthetic = results.filter(r => r.looksLikelySynthetic);
-    const real = results.filter(r => !r.looksLikelySynthetic);
-
-    const byLeague = {};
-    for (const r of results) {
-      const key = r.leagueName || r.leagueId;
-      if (!byLeague[key]) byLeague[key] = { total: 0, likelySynthetic: 0 };
-      byLeague[key].total++;
-      if (r.looksLikelySynthetic) byLeague[key].likelySynthetic++;
-    }
-
-    // Pinnacle-coverage check, for designing the fix: was pinnacleOddsAtLock
-    // actually captured for the fabricated bets (meaning switching to Pinnacle
-    // would have prevented them), or was Pinnacle ALSO missing at lock time
-    // (meaning some fixtures genuinely have no price anywhere that early, and
-    // the fix still needs a "skip, don't fabricate" path, not just a new
-    // primary source). Also reports whole-log Pinnacle coverage to size the
-    // historical-backfill task — every bet with a real pinnacleOddsAtLock can
-    // be corrected from data already on the record, no re-fetch needed.
-    const idToBet = new Map(bets.map(b => [b.id, b]));
-    const syntheticPinnacleCheck = synthetic.map(r => {
-      const b = idToBet.get(r.id);
-      return { id: r.id, fixture: r.fixture, pinnacleOddsAtLock: b?.pinnacleOddsAtLock ?? null, pinnacleWasAvailable: (b?.pinnacleOddsAtLock ?? 0) > 0 };
-    });
-    const allWithPinnacle = bets.filter(b => b.pinnacleOddsAtLock > 0).length;
-    const allResolvedWithPinnacle = bets.filter(b => b.pinnacleOddsAtLock > 0 && b.result).length;
-    const allResolved = bets.filter(b => b.result).length;
-
-    res.json({
-      note: 'TEMP diagnostic — flags bets whose actualOdds sits within 1% of what the synthetic fallback (1/modelProb*1.06) would have produced. A match this close to a specific formula is very unlikely to be real market coincidence, especially repeated across many bets. Not proof for any single bet (a real price could theoretically land close by chance) but the aggregate rate is the real signal. Delete this endpoint once read.',
-      totalBets: results.length,
-      likelySyntheticCount: synthetic.length,
-      likelySyntheticPct: results.length ? +((synthetic.length / results.length) * 100).toFixed(1) : null,
-      byLeague,
-      likelySyntheticBets: synthetic,
-      pinnacleCoverageForSyntheticBets: syntheticPinnacleCheck,
-      wholeLogPinnacleCoverage: {
-        totalBets: bets.length, withPinnacleOddsAtLock: allWithPinnacle,
-        resolvedTotal: allResolved, resolvedWithPinnacleOddsAtLock: allResolvedWithPinnacle,
-      },
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message, stack: e.stack });
-  }
-});
-
 // One-time historical correction (2026-08-29): replaces every PAPER bet's
 // actualOdds with a genuine Pinnacle closing price and recomputes pnl for
 // resolved bets (stake and win/loss result unchanged -- only the assumed
@@ -7878,8 +7799,8 @@ app.get('/api/admin/diag-synthetic-odds-audit', (_req, res) => {
 // genuine, human-confirmed execution record (Betfair Exchange for every real
 // bet so far), and Pinnacle's closing price would be a worse, not better,
 // source of truth for what actually happened with real money. Priority per
-// paper bet: (1) closing-odds.json, if already cached AND
-// tagged bookmaker:'pinnacle' specifically -- the bulk backfill falls back to
+// paper bet: (1) closing-odds.json, if already cached AND tagged
+// bookmaker:'pinnacle' specifically -- the bulk backfill falls back to
 // "first available bookmaker" when Pinnacle is missing, so a non-Pinnacle
 // cached entry is deliberately NOT reused here; (2) a fresh per-bet call to
 // fetchClosingOddsForBet, which is Pinnacle-only with no fallback and
@@ -7888,14 +7809,14 @@ app.get('/api/admin/diag-synthetic-odds-audit', (_req, res) => {
 // this benefits future analysis, not just this one-off correction; (3)
 // bet.pinnacleOddsAtLock, the lock-time snapshot, when neither closing-odds
 // source has anything (very old fixtures beyond the historical archive, or a
-// genuine provider gap). Bets where none of the three yield a price get
-// oddsUnverified:true instead of being silently left on the old number --
-// per the user's own preference, kept in the log for audit but excluded from
-// performance stats downstream. Backs up bets.json before writing anything.
-// Registered for GET too (not just POST) so it can be triggered as a plain
-// URL in an authenticated browser tab, matching how every other diagnostic
-// this session got run -- the dryRun query param is the actual safety gate
-// here, not the HTTP method.
+// genuine provider gap -- confirmed 2026-08-29 for CL/EL/Conference League
+// qualifying-round fixtures specifically, see docs/tier-calibration-analysis.md).
+// Bets where none of the three yield a price get oddsUnverified:true instead
+// of being silently left on the old number -- kept in the log for audit but
+// excluded from performance stats downstream. Backs up bets.json before
+// writing anything. Registered for GET too (not just POST) so it can be
+// triggered as a plain URL in an authenticated browser tab -- the dryRun
+// query param is the actual safety gate here, not the HTTP method.
 async function _backfillBetPinnacleOddsHandler(req, res) {
   try {
     const dryRun = req.query.dryRun === 'true';
@@ -7908,15 +7829,8 @@ async function _backfillBetPinnacleOddsHandler(req, res) {
     const report = [];
 
     for (const bet of bets) {
-      // Real bets are never touched by this backfill. Their actualOdds/stake/pnl
-      // are already a genuine, human-confirmed execution record (the exact price
-      // and bookmaker -- Betfair Exchange for every real bet so far -- actually
-      // used, captured via convert-to-real/placement confirmation for exactly
-      // this reason) — a real market benchmark like Pinnacle's closing price
-      // would be a WORSE, not better, source of truth for what actually happened
-      // with real money, and overwriting it would destroy the true record.
-      // Pinnacle-price correction only ever made sense for paper bets, which
-      // never had a captured real execution price to begin with.
+      // Real bets are never touched by this backfill -- their actualOdds/
+      // stake/pnl are already a genuine, human-confirmed execution record.
       if (bet.mode === 'real') {
         report.push({
           id: bet.id, fixture: bet.fixture, leagueName: bet.leagueName, mode: bet.mode, result: bet.result || null,
@@ -7943,7 +7857,6 @@ async function _backfillBetPinnacleOddsHandler(req, res) {
           correctedOdds = fetched.closingOdds;
           source = 'closing_odds_live_fetch';
           // Cache it for everyone else, matching the bulk backfill's own shape.
-          const [home, away] = (bet.fixture || '').split(' vs ');
           closing[bet.fixtureId] = {
             fixtureId: bet.fixtureId,
             homeOdds: outcomeKey === 'home' ? correctedOdds : (closing[bet.fixtureId]?.homeOdds ?? null),
@@ -8028,131 +7941,6 @@ async function _backfillBetPinnacleOddsHandler(req, res) {
 }
 app.get('/api/admin/backfill-bet-pinnacle-odds', _backfillBetPinnacleOddsHandler);
 app.post('/api/admin/backfill-bet-pinnacle-odds', _backfillBetPinnacleOddsHandler);
-
-// TEMP DIAGNOSTIC — remove after use. User pushed back on treating the ~21
-// European-cup bets' pinnacleOddsAtLock:null/closing-odds-null as "no real
-// data exists" -- correctly, given this project already found once this
-// session that an assumption like that was actually a pipeline bug (the
-// bookmaker-routing panel's slice(0,8) cap). Re-checks every currently
-// unverified bet: (1) with the just-fixed extractH2hPrices matching, in case
-// the per-outcome bug was silently causing some of these too; (2) for any
-// still unresolved, calls the raw historical Odds API endpoint directly for
-// that exact sport+date, bypassing ALL fixture-level matching, and returns
-// every event Odds API actually has for that day verbatim -- so it's
-// possible to see directly whether the event is genuinely absent (a real
-// provider-coverage gap for that specific qualifying-round fixture) or
-// present under a name our teamsMatch() fuzzy logic isn't bridging (a
-// second, distinct matching bug from the one already fixed).
-app.get('/api/admin/diag-unverified-bets-raw-check', async (_req, res) => {
-  try {
-    const bets = getBets().filter(b => [2, 3, 848].includes(parseInt(b.leagueId, 10)) && b.mode !== 'real');
-    const results = [];
-    for (const bet of bets) {
-      const refetch = await fetchClosingOddsForBet(bet);
-      if (refetch.closingOdds > 1 && refetch.bookmaker === 'pinnacle') {
-        results.push({ id: bet.id, fixture: bet.fixture, kickoff: bet.kickoff, outcome: 'now_resolves', closingOdds: refetch.closingOdds });
-        continue;
-      }
-
-      const sport = CLOSING_ODDS_SPORT_MAP[String(bet.leagueId)];
-      const kickoffIso = new Date(bet.kickoff).toISOString().split('.')[0] + 'Z';
-      try {
-        const resp = await oddsApi.get(`/historical/sports/${sport}/odds`, {
-          params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal', date: kickoffIso },
-        });
-        const events = resp.data?.data || resp.data || [];
-        const [home, away] = (bet.fixture || '').split(' vs ');
-        const exactMatch = events.find(e => e.home_team === home && e.away_team === away);
-        const fuzzyMatch = events.find(e => teamsMatch(e.home_team, home) && teamsMatch(e.away_team, away));
-        results.push({
-          id: bet.id, fixture: bet.fixture, kickoff: bet.kickoff, sport, queriedDate: kickoffIso,
-          outcome: events.length === 0 ? 'zero_events_returned' : (exactMatch || fuzzyMatch) ? 'event_found_but_no_pinnacle_or_stale' : 'event_not_matched',
-          totalEventsReturned: events.length,
-          allRawEventNames: events.map(e => `${e.home_team} vs ${e.away_team}`),
-          matchedEvent: (exactMatch || fuzzyMatch) ? { home: (exactMatch||fuzzyMatch).home_team, away: (exactMatch||fuzzyMatch).away_team, bookmakerKeys: (exactMatch||fuzzyMatch).bookmakers?.map(b=>b.key) || [] } : null,
-        });
-      } catch (e) {
-        results.push({ id: bet.id, fixture: bet.fixture, kickoff: bet.kickoff, sport, outcome: 'api_error', error: e.message, status: e.response?.status, apiError: e.response?.data });
-      }
-    }
-    const byOutcome = {};
-    for (const r of results) byOutcome[r.outcome] = (byOutcome[r.outcome] || 0) + 1;
-    res.json({
-      note: 'TEMP diagnostic — re-checks every unverified CL/EL/Conference League bet against the raw, unfiltered historical Odds API response for its exact kickoff date, bypassing fixture matching entirely. now_resolves = the just-fixed per-outcome matching bug was silently the cause. zero_events_returned = genuine provider gap for that date/competition. event_not_matched = the event IS in the raw response (see allRawEventNames) but under a name teamsMatch() cannot bridge -- a second, distinct bug worth fixing. event_found_but_no_pinnacle_or_stale = matched but Pinnacle genuinely absent from that specific event or its snapshot is >15min from kickoff. Delete this endpoint once read.',
-      totalChecked: results.length,
-      byOutcome,
-      results,
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message, stack: e.stack });
-  }
-});
-
-// TEMP DIAGNOSTIC — remove after use. Follow-up to diag-unverified-bets-raw-check:
-// every query for CL/EL/Conference League returned exactly one event, always the
-// SAME event regardless of which August date was requested, and always a
-// recognisable September league-phase fixture (PSG vs Arsenal, etc.) rather than
-// the actual August qualifying-round match asked about. That specific pattern
-// (single result, ignores the date param, always a later fixture) suggests the
-// historical endpoint's snapshot coverage for these three sport keys may not
-// reach back into August at all this season, rather than a matching bug on this
-// project's side. Checks that directly: (1) the same historical call without the
-// date param, to see what the endpoint returns unfiltered; (2) a historical query
-// for a date deep in LAST season (when these competitions' league phase was
-// definitely live and presumably well-covered), to isolate "never worked for
-// these sport keys" from "doesn't reach back this far this season specifically";
-// (3) /sports?all=true metadata for these three sport keys.
-app.get('/api/admin/diag-historical-endpoint-behavior', async (_req, res) => {
-  try {
-    const sportKeys = {
-      2: 'soccer_uefa_champs_league', 3: 'soccer_uefa_europa_league', 848: 'soccer_uefa_europa_conference_league',
-    };
-    const out = {};
-    for (const [leagueId, sport] of Object.entries(sportKeys)) {
-      out[leagueId] = { sport };
-
-      // (1) No date param
-      try {
-        const r1 = await oddsApi.get(`/historical/sports/${sport}/odds`, {
-          params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal' },
-        });
-        const events1 = r1.data?.data || r1.data || [];
-        out[leagueId].noDateParam = { eventCount: events1.length, names: events1.map(e => `${e.home_team} vs ${e.away_team}`) };
-      } catch (e) {
-        out[leagueId].noDateParam = { error: e.message, status: e.response?.status };
-      }
-
-      // (2) Deep into last season (2025-11-01, well within a live league phase last time round)
-      try {
-        const r2 = await oddsApi.get(`/historical/sports/${sport}/odds`, {
-          params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal', date: '2025-11-05T19:00:00Z' },
-        });
-        const events2 = r2.data?.data || r2.data || [];
-        out[leagueId].lastSeasonDate = { eventCount: events2.length, names: events2.map(e => `${e.home_team} vs ${e.away_team}`) };
-      } catch (e) {
-        out[leagueId].lastSeasonDate = { error: e.message, status: e.response?.status };
-      }
-    }
-
-    // (3) Sport metadata
-    try {
-      const sportsResp = await oddsApi.get('/sports', { params: { apiKey: ODDS_API_KEY, all: 'true' } });
-      const allSports = sportsResp.data || [];
-      for (const [leagueId, sport] of Object.entries(sportKeys)) {
-        out[leagueId].sportMetadata = allSports.find(s => s.key === sport) || null;
-      }
-    } catch (e) {
-      out._sportsMetaError = e.message;
-    }
-
-    res.json({
-      note: 'TEMP diagnostic — isolates whether the historical odds endpoint genuinely lacks August 2026 coverage for CL/EL/Conference League specifically, vs a broader/different issue. Compare lastSeasonDate (should show real Nov-2025 fixtures if the endpoint works at all for these sport keys) against the earlier August 2026 queries. Delete this endpoint once read.',
-      byLeague: out,
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message, stack: e.stack });
-  }
-});
 
 // Leagues with a genuine, documented train/test split (docs/calibration-rules.md
 // rule 9). For these, runEvCalibration() reports the held-out test-set figure only
