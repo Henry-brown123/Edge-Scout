@@ -5541,3 +5541,86 @@ state changed — nothing here was live-gated in the first place (40-45% is
 excluded by policy across every league, not by an individual green flag).
 No new API-Sports or Odds API calls; all figures from
 `computeMatchedEdgeFixtures()` against already-collected matched-odds data.
+
+## Addendum 33 — Calibration-adjusted tier screen, original 9 leagues: no candidates, two new confirmed losers
+
+Follow-up to the user's original question about whether some original-9
+tier×league cells showing positive ROI at sizeable n deserve a second look.
+Screened every (league, tier, pick-type) cell among the original 9 (plus
+Europa League, which has its own genuine split) with n≥20 posEdge-eligible
+fixtures — 93 cells total — for ROI, a real 95% CI (not the point estimate
+alone), and calibration error together, the same lens Addendum 22 applied to
+League One/Two's green-flagged cells.
+
+### Method
+
+Temporary diagnostic (`GET /api/admin/diag-original9-tier-screen`, removed
+after this addendum), reusing `computeMatchedEdgeFixtures()` — the same
+live-scoring-pipeline population `runEvCalibration()` uses — restricted to
+each league's own `VALIDATED_SPLITS` test-only population (rule 9), so
+nothing here is scored against train-contaminated data. No new out-of-sample
+data, no fitted parameters — descriptive statistics on already-computed
+figures, same reconciliation precedent as Addendum 22/26/32.
+
+### Result — zero candidates clear the bar
+
+Of 93 cells, **none are both well-calibrated (|calibErrPp| < 3pp) and have a
+95% CI confirming a positive edge.** This reinforces, with direct evidence
+rather than a general assertion, the strategy proposal's original stance
+that no original-9 league/tier shows a confirmed edge.
+
+**The eye-catching high-ROI cells are exactly the trap Addendum 22 warned
+about** — thin and badly miscalibrated. Primeira Liga 65-70% home: +651.8%
+ROI on posEdgeN=5, CI [-133.6%, +1437.2%], calibration off by 15.2pp.
+Scottish Premiership 50-55% away: +92.5% on posEdgeN=**2**. Every cell whose
+CI nominally "excludes zero" on the positive side (Champions League 45-50%
+home, Europa League 55-60% home, Bundesliga 55-60% home) carries a real
+calibration gap (4.8-19.8pp) and thin volume (n=23-55) — the same
+overconfidence-riding-a-flattering-point-estimate pattern found elsewhere
+this session, not genuine edge.
+
+### Two new, genuinely confirmed losers (well-calibrated AND CI fully negative)
+
+- **Premier League, away picks, 50-55%**: n=46, ROI **-80.1%**, 95% CI
+  [-119.1%, -41.1%], calibration error 0.2pp — essentially exact. The
+  model's probability estimate here is honest; it loses anyway, meaning the
+  market already prices this band correctly (or better) and there's no
+  value to extract even from an accurate read.
+- **La Liga, away picks, 35-40%**: n=35, ROI **-64.1%**, 95% CI [-112.2%,
+  -15.9%], calibration error 1.3pp.
+
+Plus **Ligue 1's own 40-45% tier, both pick types, independently confirmed
+negative at real volume** — home (n=130, ROI -50.5%, CI [-76.2%, -24.9%],
+though itself badly miscalibrated at 14.6pp overconfident) and away (n=72,
+ROI -63.9%, CI [-102.6%, -25.3%]). This is a different, stronger evidentiary
+status than the blanket 40-45% policy check in Addendum 32 (which found
+League One/Two's 40-45% cells merely *unconfirmed*, not independently
+*confirmed negative*) — Ligue 1's own data clears the bar for a genuine,
+independent confirmation of the existing exclusion.
+
+### One cell worth tracking, not yet acting on
+
+**Ligue 1, home picks, 45-50%**: n=122, ROI **+12.2%**, calibration error
+only -1.6pp (clean), 95% CI [-24.1%, +48.5%] — still spans zero, not
+confirmed, but the largest, cleanest, most positively-leaning reading found
+anywhere in the original 9. Worth revisiting once more data accumulates
+(same "wait for genuinely new fixtures, not a re-peek" discipline as
+everywhere else in this project) rather than acting on now.
+
+### Verdict
+
+No change to real-money scope: nothing here was eligible for green-flagging
+in the first place, and this screen found no new candidate that would be.
+Two new cells (Premier League away 50-55%, La Liga away 35-40%) join the
+40-45% band and League One 50-55% as specific, independently confirmed
+losers worth remembering if this project ever builds a structural
+exclusion list beyond the blanket tier rule. Ligue 1 home 45-50% is flagged
+for future attention only.
+
+### Compliance
+
+One temporary diagnostic endpoint (`GET /api/admin/diag-original9-tier-screen`)
+built and removed as part of this addendum's commit. No settings, weights,
+or green-flag state changed. No new API-Sports or Odds API calls; all
+figures from `computeMatchedEdgeFixtures()` against already-collected
+matched-odds data.
