@@ -1520,28 +1520,58 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   const results = [];
   for (const c of candidates) {
     const teamKey   = lookup[c.label];
-    const displayOdds = bookOdds[teamKey] || (1 / c.prob * 1.06); // UK book odds for Kelly + display
+    // Real, tradeable price for this outcome. Pinnacle's raw price is preferred —
+    // it's available even when a full 3-way market hasn't formed yet (unlike
+    // pinnStripped below, which needs all three outcomes priced to margin-strip),
+    // which is exactly why pinnacleOddsAtLock was showing up on bets whose
+    // displayOdds/edge still fell through past it. UK retail book is the second
+    // real-market source. Confirmed empirically (2026-08-29 audit): computing
+    // "value" against a price fabricated from the model's own probability
+    // (1/prob*1.06) is circular by construction — it produced a near-guaranteed
+    // positive edge on every fixture that hit that path, 100% of the time for
+    // Conference/Europa/Champions League fixtures with no market data at all.
+    // No fabrication now — hasRealOdds=false forces this candidate's score to 0,
+    // which already fails both the WATCHING (>=20) and lock (>=40)
+    // successThreshold gates, so the fixture is silently skipped rather than
+    // recommended or bet on. `results` still always gets exactly 3 entries
+    // (unchanged shape) — every downstream `results.reduce(...)` (several
+    // without an initial value) depends on that and would throw on an empty array.
+    const pinnacleRawForOutcome = bookOdds._pinnacleRaw?.[teamKey];
+    const ukPriceForOutcome     = bookOdds[teamKey];
+    const hasRealOdds = pinnacleRawForOutcome > 1 || ukPriceForOutcome > 1;
+    const realOdds    = pinnacleRawForOutcome > 1 ? pinnacleRawForOutcome : ukPriceForOutcome;
+    // Internal-only divide-by-zero guard for impliedP below when there's truly no
+    // real price anywhere — never stored on the entry, never surfaced to the UI
+    // or used for staking; hasRealOdds:false already zeroes the score regardless.
+    const displayOdds = hasRealOdds ? realOdds : (1 / c.prob * 1.06);
     // Pinnacle margin-stripped probability is the sharpest available market benchmark.
-    // Fall back to implied from display odds when Pinnacle is not present (e.g. WC fixtures).
+    // Fall back to implied from the real (Pinnacle-raw-or-UK-book) price when the
+    // full 3-way Pinnacle market isn't available.
     const impliedP  = pinnStripped?.[teamKey] ?? (1 / displayOdds);
     const calProb   = Math.min(0.97, c.prob * calFactor);
-    const edge      = calProb - impliedP;
+    const edge      = hasRealOdds ? (calProb - impliedP) : null;
     const pinnacleEdgeVsMarket = pinnStripped ? calProb - (pinnStripped[teamKey] ?? (1 / displayOdds)) : null;
-    const rawScore  = computeSuccessScore(calProb, displayOdds, homeFormCount, dataConf, pinnacleEdgeVsMarket, leagueId, context);
-    let finalScore = Math.round(rawScore * wxMod * effMult);
+    const rawScore  = hasRealOdds
+      ? computeSuccessScore(calProb, displayOdds, homeFormCount, dataConf, pinnacleEdgeVsMarket, leagueId, context)
+      : 0;
+    let finalScore = hasRealOdds ? Math.round(rawScore * wxMod * effMult) : 0;
     // Serie A's 20%+ edge band shows systematic overconfidence in the real GBDT
     // pipeline (-11.24% ROI on n=175, see docs/july-upgrade-notes.md) while the
     // 10-15% band is profitable — drop only the high-edge picks below the 40-point
     // lock threshold so they never lock as bets, leaving the rest of the league untouched.
-    if (parseInt(leagueId, 10) === 135 && edge > 0.20) finalScore = Math.min(finalScore, 39);
-    const k         = kelly(calProb, displayOdds, settings.paperKellyFraction, getAvailableBankroll('paper'));
+    if (hasRealOdds && parseInt(leagueId, 10) === 135 && edge > 0.20) finalScore = Math.min(finalScore, 39);
+    const k = hasRealOdds
+      ? kelly(calProb, displayOdds, settings.paperKellyFraction, getAvailableBankroll('paper'))
+      : { stake: 0, fraction: 0 };
 
     const entry = {
       market: 'match_outcome',
-      bet: c.label, modelProb: c.prob, calibratedProb: calProb, bookOdds: displayOdds, impliedProb: impliedP,
+      bet: c.label, modelProb: c.prob, calibratedProb: calProb,
+      bookOdds: hasRealOdds ? displayOdds : null, impliedProb: impliedP,
       edge, successScore: finalScore, kelly: k,
-      ev: calProb * (displayOdds - 1) - (1 - calProb),
+      ev: hasRealOdds ? (calProb * (displayOdds - 1) - (1 - calProb)) : null,
       pinnacleAvailable: !!pinnStripped,
+      hasRealOdds,
       // Raw Pinnacle price (with margin), not the stripped true-probability used for
       // edge calc — this is what a human actually compares a soft-book price against.
       pinnacleOddsRaw: bookOdds._pinnacleRaw?.[teamKey] ?? null,
@@ -1948,8 +1978,13 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
     // someone thinking a real-money bet was logged when nothing was.
     const fixtureLabel = `${scored.homeName} vs ${scored.awayName}`;
     if (best.successScore < threshold) {
-      console.log(`[PreMatch] ${fixtureLabel} DROPPED (score ${best.successScore} < ${threshold})`);
-      return { dropped: true, reason: 'score_below_threshold', fixture: fixtureLabel,
+      // Distinguish "no real market data anywhere" (all 3 candidates hasRealOdds:false,
+      // forced to score 0) from a genuinely-scored-but-weak pick — same threshold gate,
+      // different reason, worth telling apart in logs when auditing why a fixture never
+      // locked (was it actually a bad price, or did nobody ever price it?).
+      const noMarketData = scored.results.every(r => r.hasRealOdds === false);
+      console.log(`[PreMatch] ${fixtureLabel} DROPPED (score ${best.successScore} < ${threshold})${noMarketData ? ' — no real market odds available' : ''}`);
+      return { dropped: true, reason: noMarketData ? 'no_market_data' : 'score_below_threshold', fixture: fixtureLabel,
         successScore: best.successScore, threshold };
     }
     if (scored.lowConfidence) {
