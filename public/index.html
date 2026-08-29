@@ -2446,6 +2446,7 @@ async function checkApiStatus() {
 
 // ─── SCORE BADGE ─────────────────────────────────────────────────────────────
 function scoreBadge(n) {
+  if (n == null) return `<div class="score-badge score-0" title="No bookmaker has priced this fixture anywhere — score isn't computable, not zero">N/A</div>`;
   const cls = n >= 80 ? 'score-80' : n >= 60 ? 'score-60' : n >= 40 ? 'score-40' : 'score-0';
   return `<div class="score-badge ${cls}">${n}</div>`;
 }
@@ -2886,8 +2887,11 @@ function watchingCard(w) {
         ${contextBadge(w.context)}
         ${weatherBadge(w.weatherCondition)}
         ${w.lowConfidence ? '<span class="badge badge-red" title="Model diverges from bookmaker beyond data-confidence threshold — will not auto-lock">LOW CONF</span>' : ''}
-        <button class="btn btn-ghost btn-sm" title="Preview only — does not lock or commit anything" onclick="event.stopPropagation();previewRealStake('${w.fixture.replace(/'/g, "\\'")}', ${w.modelProb ?? 'null'}, ${w.bookOdds ?? 'null'}, 'based on the current watching-card reading — the actual lock re-scores fresh and may differ')">Preview real stake</button>
-        <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openLockModal('${w.id}')">Lock now</button>
+        ${w.noMarketData ? '<span class="badge" style="background:rgba(148,163,184,.15);border:1px solid rgba(148,163,184,.35);color:var(--muted)" title="No bookmaker has priced this fixture anywhere — shown for information only. Cannot be locked, paper or real, at any score.">NO MARKET</span>' : ''}
+        ${w.noMarketData ? '' : `<button class="btn btn-ghost btn-sm" title="Preview only — does not lock or commit anything" onclick="event.stopPropagation();previewRealStake('${w.fixture.replace(/'/g, "\\'")}', ${w.modelProb ?? 'null'}, ${w.bookOdds ?? 'null'}, 'based on the current watching-card reading — the actual lock re-scores fresh and may differ')">Preview real stake</button>`}
+        ${w.noMarketData
+          ? `<button class="btn btn-ghost btn-sm" disabled title="No real price exists for this fixture — cannot be locked" style="opacity:.45;cursor:not-allowed">Lock now</button>`
+          : `<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openLockModal('${w.id}')">Lock now</button>`}
       </div>
     </div>`;
 }
@@ -5820,7 +5824,9 @@ function openDrawer(w) {
     )
   ).join('');
 
-  const oddsNote = isPreMatch
+  const oddsNote = w.noMarketData
+    ? `<p style="font-size:.72rem;color:var(--muted);font-family:'DM Mono',monospace;margin:0 0 10px">⊘ No bookmaker has priced this fixture anywhere — shown for information only, value fields below are N/A and this can never lock (paper or real).</p>`
+    : isPreMatch
     ? `<p style="font-size:.72rem;color:var(--green);font-family:'DM Mono',monospace;margin:0 0 10px">⚡ T-60 — live confirmed odds</p>`
     : `<p style="font-size:.72rem;color:var(--text2);font-family:'DM Mono',monospace;margin:0 0 10px">Morning scan odds · Will refresh at T-60</p>`;
 

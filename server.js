@@ -1827,7 +1827,23 @@ async function runMorningScan(leagueIds) {
           };
           calNow.push(calEntry);
 
-          if (best.successScore >= 20) { // low threshold for WATCHING
+          // A fixture with no real market anywhere (hasRealOdds:false on all three
+          // candidates) always scores 0 — that's correct for locking (no price means
+          // no edge means no bet, see the successScore < threshold gate in
+          // runPreMatchScan) but it used to also mean the fixture never appeared in
+          // WATCHING at all, silently. The model still has a view on the outcome even
+          // with no price to size a bet against, so surface it as an info-only
+          // WATCHING card instead of dropping it — never eligible to lock regardless
+          // (that gate is untouched), just visible with value fields explicitly N/A.
+          const noMarketData = scored.results.every(r => r.hasRealOdds === false);
+          if (best.successScore >= 20 || noMarketData) { // low threshold for WATCHING
+            // successScore ties at 0 across all three candidates when noMarketData —
+            // `best` would arbitrarily be whichever candidate is first in the array,
+            // not the model's actual favourite. Pick by raw probability instead so the
+            // pick shown here reflects what the model actually thinks.
+            const displayPick = noMarketData
+              ? scored.results.reduce((a, b) => (b.calibratedProb ?? b.modelProb ?? 0) > (a.calibratedProb ?? a.modelProb ?? 0) ? b : a)
+              : best;
             watching.push({
               id: uuidv4(),
               fixtureId:  fix.fixture.id,
@@ -1837,16 +1853,17 @@ async function runMorningScan(leagueIds) {
               kickoff:    fix.fixture?.date,
               stage:      'WATCHING',
               scoredAt:   new Date().toISOString(),
-              projectedScore:  best.successScore,
-              projectedBet:    best.bet,
-              modelProb:       best.modelProb,
-              calibratedProb:  best.calibratedProb,
+              noMarketData,
+              projectedScore:  noMarketData ? null : displayPick.successScore,
+              projectedBet:    displayPick.bet,
+              modelProb:       displayPick.modelProb,
+              calibratedProb:  displayPick.calibratedProb,
               correctionVersion: scored.correctionVersion,
-              bookOdds:        best.bookOdds,
-              impliedProb:     best.impliedProb,
-              edge:            best.edge,
-              ev:              best.ev,
-              kelly:           best.kelly,
+              bookOdds:        noMarketData ? null : displayPick.bookOdds,
+              impliedProb:     noMarketData ? null : displayPick.impliedProb,
+              edge:            noMarketData ? null : displayPick.edge,
+              ev:              noMarketData ? null : displayPick.ev,
+              kelly:           noMarketData ? null : displayPick.kelly,
               allCandidates:   [...scored.results, ...(scored.goalsCandidates || [])],
               weather:         scored.weather,
               homeF:           scored.homeF,
@@ -1864,7 +1881,7 @@ async function runMorningScan(leagueIds) {
               paperTradeOnly:   scored.paperTradeOnly,
               isTrainingHoldout: scored.isTrainingHoldout,
             });
-            console.log(`  [WATCHING] ${scored.homeName} vs ${scored.awayName} — score ${best.successScore}`);
+            console.log(`  [WATCHING] ${scored.homeName} vs ${scored.awayName} — ${noMarketData ? 'no market data (info only)' : `score ${displayPick.successScore}`}`);
           }
         } catch (e) { console.error(`  [MorningScan] score error ${fix.fixture?.id}: ${e.message}`); }
       }
@@ -2288,16 +2305,27 @@ async function runHourlyRescan() {
           const best   = scored.results.reduce((a, b) => a.successScore > b.successScore ? a : b);
           persistOddsSnapshot(fix, scored, meta.sport || 'soccer_epl', 'hourly_rescan', leagueId, meta.name, settings);
 
+          // Same noMarketData handling as runMorningScan's WATCHING creation — keep
+          // an already-visible info-only card in sync rather than letting it go stale,
+          // and re-derive the displayed pick by probability (not successScore, which
+          // ties at 0 across all three candidates) so it still reflects the model's
+          // actual favourite if the fixture still has no real market on refresh.
+          const noMarketData = scored.results.every(r => r.hasRealOdds === false);
+          const displayPick = noMarketData
+            ? scored.results.reduce((a, b) => (b.calibratedProb ?? b.modelProb ?? 0) > (a.calibratedProb ?? a.modelProb ?? 0) ? b : a)
+            : best;
+
           Object.assign(w, {
-            projectedScore:   best.successScore,
-            projectedBet:     best.bet,
-            modelProb:        best.modelProb,
-            calibratedProb:   best.calibratedProb,
-            bookOdds:         best.bookOdds,
-            impliedProb:      best.impliedProb,
-            edge:             best.edge,
-            ev:               best.ev,
-            kelly:            best.kelly,
+            noMarketData,
+            projectedScore:   noMarketData ? null : displayPick.successScore,
+            projectedBet:     displayPick.bet,
+            modelProb:        displayPick.modelProb,
+            calibratedProb:   displayPick.calibratedProb,
+            bookOdds:         noMarketData ? null : displayPick.bookOdds,
+            impliedProb:      noMarketData ? null : displayPick.impliedProb,
+            edge:             noMarketData ? null : displayPick.edge,
+            ev:               noMarketData ? null : displayPick.ev,
+            kelly:            noMarketData ? null : displayPick.kelly,
             allCandidates:    [...scored.results, ...(scored.goalsCandidates || [])],
             weather:          scored.weather,
             homeF:            scored.homeF,
