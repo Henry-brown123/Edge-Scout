@@ -8017,6 +8017,79 @@ async function _backfillBetPinnacleOddsHandler(req, res) {
 app.get('/api/admin/backfill-bet-pinnacle-odds', _backfillBetPinnacleOddsHandler);
 app.post('/api/admin/backfill-bet-pinnacle-odds', _backfillBetPinnacleOddsHandler);
 
+// ONE-OFF, hardcoded correction — remove after use, will never need to run again.
+// Odds API has zero coverage for these 9 Conference League qualifying-round bets
+// (confirmed exhaustively: no event at any snapshot from a week out to an hour
+// before kickoff, under either the main or qualification-fallback sport keys), so
+// they're unreachable by the general Pinnacle backfill above. Their currently-
+// logged odds are confirmed fabricated (exact match to the synthetic 1/prob*1.06
+// formula, not just suspected). Real odds researched externally (Sportytrader,
+// Sports Gambler, CBS Sports, FOX Sports, Betmines — direct second-leg quotes
+// where available, otherwise a reasoned estimate from first-leg context, flagged
+// per-bet with a confidence level so the record is honest about which numbers are
+// solid vs estimated). Recomputes pnl for each (all wins; no commission on paper
+// bets, so pnl = (odds-1)*stake exactly). Backs up bets.json before writing.
+const MANUAL_ODDS_CORRECTIONS = {
+  '26cfd1e5-0f2a-4473-8887-9458d03ba88b': { fixture: 'FK Partizan vs Getafe', odds: 3.15, stake: 130,
+    confidence: 'high', note: 'Direct 2nd-leg quote: Partizan 3.15 / draw 3.30 / Getafe 2.25 (Telecomasia)' },
+  '1397055f-5ffc-4534-bc08-d448ab2da867': { fixture: 'Borac Banja Luka vs Vikingur Reykjavik', odds: 2.15, stake: 110,
+    confidence: 'medium', note: 'Two 2nd-leg quotes disagreed (1.90 vs 2.40) — used midpoint (Sports Mole)' },
+  '772146af-c9d0-45df-85ab-b1fd30e24216': { fixture: 'FC ST. Gallen vs FC Nordsjaelland', odds: 2.80, stake: 100,
+    confidence: 'low', note: 'No direct 2nd-leg quote found — estimated from 1st-leg context (Nordsjaelland home -204) and away-favourite reasoning, not a verified snapshot' },
+  '821a5c5b-52c7-4bcb-a71f-3401a1795b7c': { fixture: 'Brann vs PAOK', odds: 3.00, stake: 100,
+    confidence: 'high', note: 'Direct 2nd-leg quote: best odds on Brann 3.00 at Shangrila (Sportytrader)' },
+  '5e89972f-a427-4e63-9fe7-b9f1021e1059': { fixture: 'FC Copenhagen vs Inter Turku', odds: 1.30, stake: 100,
+    confidence: 'medium-high', note: 'No direct 2nd-leg quote — inferred from 1st-leg away price (1.50) shortening further at home (Sports Mole/Oddschecker)' },
+  '2697ca6e-8681-4fd0-9067-e49e1e46e0a7': { fixture: 'Riga vs KI Klaksvik', odds: 1.47, stake: 100,
+    confidence: 'high', note: 'Direct 2nd-leg quote: Riga 1.47 at Shangrila, 59.83% implied (Sportytrader/FutHead)' },
+  '0b9025b0-b186-4022-b91c-33f6ac0d26cb': { fixture: 'SC Freiburg vs Motherwell', odds: 1.19, stake: 120,
+    confidence: 'high', note: 'Direct decimal conversion of -526 American 2nd-leg moneyline (Sports Gambler)' },
+  '88422400-36b9-4904-bb00-1515542ad24e': { fixture: 'FK Jablonec vs Rangers', odds: 3.50, stake: 100,
+    confidence: 'low', note: 'No direct 2nd-leg quote — only 1st-leg (away) data available (Rangers -294), wide uncertainty' },
+  'fd044b1b-4c50-4210-8c94-1583366a4940': { fixture: 'KuPS vs Shamrock Rovers', odds: 1.87, stake: 100,
+    confidence: 'high', note: 'Direct 2nd-leg quote: KuPS moneyline avg 1.87 (ESPN/Betbuilders)' },
+};
+app.get('/api/admin/apply-manual-odds-research', (req, res) => {
+  try {
+    const dryRun = req.query.dryRun === 'true';
+    const bets = getBets();
+    const report = [];
+    for (const [id, corr] of Object.entries(MANUAL_ODDS_CORRECTIONS)) {
+      const bet = bets.find(b => b.id === id);
+      if (!bet) { report.push({ id, fixture: corr.fixture, error: 'bet not found in current log' }); continue; }
+      const oldActualOdds = bet.actualOdds;
+      const oldPnl = bet.pnl;
+      const newPnl = +((corr.odds - 1) * corr.stake).toFixed(2);
+      if (!dryRun) {
+        bet.actualOdds = corr.odds;
+        bet.pnl = newPnl;
+        bet.oddsUnverified = false;
+        bet.oddsSource = `external_research_${corr.confidence.replace('-', '_')}`;
+        bet.oddsResearchNote = corr.note;
+      }
+      report.push({
+        id, fixture: bet.fixture, mode: bet.mode, result: bet.result,
+        oldActualOdds, correctedOdds: corr.odds, confidence: corr.confidence, note: corr.note,
+        oldPnl, newPnl, pnlDelta: +((newPnl - oldPnl).toFixed(2)),
+      });
+    }
+    const oldTotal = report.reduce((s, r) => s + (r.oldPnl || 0), 0);
+    const newTotal = report.reduce((s, r) => s + (r.newPnl ?? r.oldPnl ?? 0), 0);
+    if (!dryRun) {
+      writeJSON(`bets-backup-pre-manual-odds-research-${Date.now()}.json`, getBets());
+      writeJSON('bets.json', bets, { allowEmpty: true });
+    }
+    res.json({
+      note: dryRun ? 'DRY RUN — nothing written. Re-run without ?dryRun=true to apply.' : 'Applied — bets.json updated, backup written.',
+      count: report.length,
+      oldTotalPnl: +oldTotal.toFixed(2), newTotalPnl: +newTotal.toFixed(2), pnlDelta: +((newTotal - oldTotal).toFixed(2)),
+      report,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
 // Leagues with a genuine, documented train/test split (docs/calibration-rules.md
 // rule 9). For these, runEvCalibration() reports the held-out test-set figure only
 // — the fixtures on/after testFrom were never touched during tuning — rather than
