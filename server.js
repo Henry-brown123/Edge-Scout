@@ -7999,6 +7999,35 @@ app.get('/api/admin/diag-uefa-events-catalog-check', async (req, res) => {
       results.push({ id: bet.id, fixture: bet.fixture, kickoff: bet.kickoff, sport, perSnapshot });
     }
 
+    // Champions League has a distinct 'soccer_uefa_champs_league_qualification'
+    // sport key in the catalog that this project has never queried — check it
+    // directly for the CL bets among the 21, in case qualifying-round fixtures
+    // are tracked there instead of under the main league-phase key.
+    const qualificationCheck = [];
+    const clBets = getBets().filter(b => parseInt(b.leagueId, 10) === 2 && b.mode !== 'real' && b.oddsUnverified !== false);
+    for (const bet of clBets.slice(0, 5)) {
+      const kickoff = new Date(bet.kickoff);
+      const [home, away] = (bet.fixture || '').split(' vs ');
+      const iso = new Date(kickoff.getTime() - 1 * 3600 * 1000).toISOString().split('.')[0] + 'Z';
+      try {
+        const resp = await oddsApi.get('/historical/sports/soccer_uefa_champs_league_qualification/events', {
+          params: { apiKey: ODDS_API_KEY, date: iso },
+        });
+        const events = resp.data?.data || resp.data || [];
+        const match = events.find(e =>
+          (teamsMatch(e.home_team, home) && teamsMatch(e.away_team, away)) ||
+          (normaliseTeam(e.home_team) === normaliseTeam(home) && normaliseTeam(e.away_team) === normaliseTeam(away))
+        );
+        qualificationCheck.push({
+          id: bet.id, fixture: bet.fixture, queriedDate: iso, totalEventsInCatalog: events.length,
+          fixtureFoundInCatalog: !!match, matchedCommenceTime: match?.commence_time || null,
+          allEventNames: events.map(e => `${e.home_team} vs ${e.away_team}`),
+        });
+      } catch (e) {
+        qualificationCheck.push({ id: bet.id, fixture: bet.fixture, error: e.message, status: e.response?.status, apiError: e.response?.data });
+      }
+    }
+
     let sportsCatalog = null;
     try {
       const sportsResp = await oddsApi.get('/sports', { params: { apiKey: ODDS_API_KEY, all: 'true' } });
@@ -8010,8 +8039,9 @@ app.get('/api/admin/diag-uefa-events-catalog-check', async (req, res) => {
     }
 
     res.json({
-      note: 'TEMP diagnostic — checks Odds API\'s /events catalog (schedule only, no markets) at several pre-kickoff snapshots for a sample of the 21 unverified bets, to distinguish "fixture never catalogued by the provider" from "catalogued but unpriced at the time we checked". Also lists every UEFA/qualifying-related sport key currently in /sports?all=true, in case a separate qualifying-round key exists that this project has never queried. Delete this endpoint once read.',
+      note: 'TEMP diagnostic — checks Odds API\'s /events catalog (schedule only, no markets) at several pre-kickoff snapshots for a sample of the 21 unverified bets, to distinguish "fixture never catalogued by the provider" from "catalogued but unpriced at the time we checked". Also lists every UEFA/qualifying-related sport key currently in /sports?all=true, in case a separate qualifying-round key exists that this project has never queried, and directly checks soccer_uefa_champs_league_qualification for the CL bets. Delete this endpoint once read.',
       sportsCatalogMatches: sportsCatalog,
+      qualificationKeyCheck: qualificationCheck,
       results,
     });
   } catch (e) {
