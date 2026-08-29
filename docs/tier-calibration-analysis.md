@@ -5624,3 +5624,88 @@ built and removed as part of this addendum's commit. No settings, weights,
 or green-flag state changed. No new API-Sports or Odds API calls; all
 figures from `computeMatchedEdgeFixtures()` against already-collected
 matched-odds data.
+
+## Addendum 34 — Championship tier screen: one real signal, still sub-floor; no green-flag candidates
+
+Follow-up to the user's question of whether Championship (added 2026-08-19,
+the most recent of the four out-of-sample additions) has had the same
+rigor applied as League One/Two before any tier could be considered for
+green-flagging.
+
+### What already existed
+
+Championship got one disciplined backtest on the full rule-10-protected,
+genuinely-unseen population (`CALIBRATION_AUDIT[40]`, computed 2026-08-19):
+16 seasons, 8357 fixtures scored, 3460 matched with closing odds. Pooled
+ROI on posEdge≥5% bets: n=2321, ROI -0.67%, 95% CI [-5.74%, +4.4%] — no
+confirmed edge overall. The note flagged "a couple non-zero-crossing"
+individual tiers without full per-cell detail, and per rule 3 that
+population can never be re-tested to look for a better story once the
+single look is banked.
+
+### Method
+
+Temporary diagnostic (`GET /api/admin/diag-championship-tier-screen`,
+removed after this addendum), reading the SAME already-banked population
+more completely — ROI + a real 95% CI + calibration error per (tier,
+pick-type) cell — restricted strictly to kickoffs before the 2026-08-19
+cutoff (`models/gbdt-train.js`'s own `DATE_SPLIT_CUTOFFS`), so nothing that
+has since fed the weekly retrain leaks into what should stay a frozen
+single look. Overall pooled figure reproduced almost exactly (n=2327,
+ROI -0.6%, CI [-5.7%, +4.5%]) — confirms the reconstruction is faithful,
+not a new test.
+
+### Result
+
+**One genuinely credible positive signal, not yet enough volume**:
+Championship home picks, 65-70% — n=111, posEdgeN=95, ROI **+19.4%**, 95%
+CI **[1.1%, 37.8%]** (excludes zero), calibration error -2.2pp (clean).
+This is the most credible positive reading across every calibration screen
+run this session — real, not thin-and-miscalibrated noise — but posEdgeN=95
+sits well under this project's own ~300-400 decision-grade floor. Real
+signal, insufficient volume; the only path to more evidence is live
+paper-bet accumulation going forward (same discipline as every other
+"promising but unconfirmed" cell this session), since rule 3 forecloses
+re-testing the frozen backtest population itself.
+
+**Two negative findings worth remembering independent of the general
+40-45% policy**:
+- **45-50% home**: n=537, posEdgeN=**361** — clears the decision-grade
+  floor on its own, the largest credible population in this screen. ROI
+  -11.82%, 95% CI [-24.2%, +0.6%] — misses confirming negative by a
+  hair, with real overconfidence (5.1pp). Close enough, at enough volume,
+  to weigh heavily against ever green-flagging this band.
+- **60-65% away**: n=37, ROI -34.1%, CI [-66.7%, -1.5%] — confirmed
+  negative, though thin, with severe miscalibration (21.6pp overconfident).
+
+Every other cell (35-40% both pick types, 50-55%/55-60% both pick types,
+40-45% away, 60-65% home, 70-80% home) spans zero with no confirmed
+direction.
+
+### Separately — a real-money gating gap noted, not acted on
+
+Checking Championship's current mechanics: despite the addition commit's
+"paper-only, rule-10 protected from day one" description, the league is
+not hard-blocked in code — it sits at the same default `leagueMode:
+'paper'` every league starts at, with no `LEAGUE_CONFIG.paperTradeOnly`
+lock (unlike what the strategy proposal recommended for cup competitions
+generally). Flagged to the user; explicitly declined as unnecessary — sole
+user of the model, manual review of every bet before placement, and
+green-flag discipline already followed in practice. Left as-is by direct
+instruction, not an oversight.
+
+### Verdict
+
+**No Championship tier is ready to green-flag.** The one disciplined
+backtest is done properly and confirms no decision-grade positive edge
+anywhere. 65-70% home is worth tracking as live evidence accumulates; 45-50%
+home and 60-65% away are worth remembering as likely-negative regardless of
+what future evidence shows elsewhere.
+
+### Compliance
+
+One temporary diagnostic endpoint built and removed as part of this
+addendum's commit. No settings, weights, `CALIBRATION_AUDIT`, or green-flag
+state changed. No new API-Sports or Odds API calls; all figures from
+`computeMatchedEdgeFixtures()` against already-collected matched-odds data,
+strictly pre-cutoff.
