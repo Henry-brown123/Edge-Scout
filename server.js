@@ -7710,6 +7710,95 @@ app.get('/api/correction-layer-backtests', (_req, res) => {
   });
 });
 
+// TEMP DIAGNOSTIC — remove after use. Championship (40) got one disciplined
+// backtest (CALIBRATION_AUDIT[40], computed 2026-08-19): pooled ROI -0.67%,
+// CI spans zero, no confirmed edge overall. The note mentions "a couple
+// non-zero-crossing" individual tiers without full detail, and per rule 3
+// that population can never be re-tested to go fishing for a better story.
+// This reads the SAME already-banked population more completely (ROI + a
+// real CI + calibration error per tier/pick-type together, the lens applied
+// everywhere else this session) — not a new look, since it's restricted to
+// exactly the frozen pre-cutoff population (kickoff < 2026-08-19T22:00:00Z,
+// the same cutoff models/gbdt-train.js's DATE_SPLIT_CUTOFFS uses) and adds
+// no fitted parameters. Anything at/after that cutoff has already fed
+// training and is deliberately excluded here to avoid contaminating the
+// single-look population with now-in-sample data.
+app.get('/api/admin/diag-championship-tier-screen', async (_req, res) => {
+  try {
+    const matched = await computeMatchedEdgeFixtures();
+    const CUTOFF = new Date('2026-08-19T22:00:00Z');
+    const pool = matched.filter(f => parseInt(f.leagueId, 10) === 40 && new Date(f.date) < CUTOFF);
+
+    const TIERS = [
+      { label: '<35%',    min: 0,    max: 0.35 },
+      { label: '35-40%',  min: 0.35, max: 0.40 },
+      { label: '40-45%',  min: 0.40, max: 0.45 },
+      { label: '45-50%',  min: 0.45, max: 0.50 },
+      { label: '50-55%',  min: 0.50, max: 0.55 },
+      { label: '55-60%',  min: 0.55, max: 0.60 },
+      { label: '60-65%',  min: 0.60, max: 0.65 },
+      { label: '65-70%',  min: 0.65, max: 0.70 },
+      { label: '70-75%',  min: 0.70, max: 0.75 },
+      { label: '75-80%',  min: 0.75, max: 0.80 },
+      { label: '80-100%', min: 0.80, max: 1.01 },
+    ];
+
+    function pooledCi(returns) {
+      const n = returns.length;
+      if (!n) return { n: 0 };
+      const mean = returns.reduce((s, v) => s + v, 0) / n;
+      let ciLow = null, ciHigh = null;
+      if (n > 1) {
+        const variance = returns.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1);
+        const se = Math.sqrt(variance / n);
+        ciLow  = +((mean - 1.96 * se) * 100).toFixed(1);
+        ciHigh = +((mean + 1.96 * se) * 100).toFixed(1);
+      }
+      return { n, roi: +(mean * 100).toFixed(2), ci: [ciLow, ciHigh] };
+    }
+
+    const cells = [];
+    for (const pickType of ['home', 'away', 'draw']) {
+      const picks = pool.filter(f => f.topOutcome === pickType);
+      for (const t of TIERS) {
+        const inTier = picks.filter(f => f.modelProb >= t.min && f.modelProb < t.max);
+        const n = inTier.length;
+        if (n < 20) continue;
+        const avgPred = inTier.reduce((s, f) => s + f.modelProb, 0) / n;
+        const actualWinRate = inTier.reduce((s, f) => s + (f.won ? 1 : 0), 0) / n;
+        const calibErrPp = +((avgPred - actualWinRate) * 100).toFixed(1);
+        const pos = inTier.filter(f => f.edge >= 0.05);
+        const returns = pos.map(f => f.won ? (f.pinnacleOdds - 1) : -1);
+        const ci = pooledCi(returns);
+        cells.push({
+          tier: t.label, pickType, n, posEdgeN: pos.length,
+          calibErrPp, wellCalibrated: Math.abs(calibErrPp) < 3,
+          roi: ci.roi, ci: ci.ci,
+          ciExcludesZero: ci.ci?.[0] !== null && ci.ci?.[0] > 0,
+          ciConfirmedNegative: ci.ci?.[1] !== null && ci.ci?.[1] < 0,
+        });
+      }
+    }
+    cells.sort((a, b) => b.roi - a.roi);
+
+    // Overall pooled figure, same frozen population, for direct comparison
+    // against CALIBRATION_AUDIT[40]'s stored -0.67% / CI [-5.74%,+4.4%].
+    const allPos = pool.filter(f => f.edge >= 0.05);
+    const overall = pooledCi(allPos.map(f => f.won ? (f.pinnacleOdds - 1) : -1));
+
+    res.json({
+      note: 'TEMP diagnostic — Championship (40), frozen pre-cutoff population only (kickoff < 2026-08-19T22:00:00Z), every (tier, pick-type) cell with n>=20, ROI + 95% CI + calibration error together. wellCalibrated = |calibErrPp| < 3pp. Cross-reference before trusting any high-ROI row. Delete this endpoint once read.',
+      poolSize: pool.length,
+      overallPooled: overall,
+      expectedFromCalibrationAudit: { roi: -0.67, ci: [-5.74, 4.4], posEdgeN: 2321 },
+      totalCells: cells.length,
+      cells,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
 // Leagues with a genuine, documented train/test split (docs/calibration-rules.md
 // rule 9). For these, runEvCalibration() reports the held-out test-set figure only
 // — the fixtures on/after testFrom were never touched during tuning — rather than
