@@ -7942,6 +7942,83 @@ async function _backfillBetPinnacleOddsHandler(req, res) {
 app.get('/api/admin/backfill-bet-pinnacle-odds', _backfillBetPinnacleOddsHandler);
 app.post('/api/admin/backfill-bet-pinnacle-odds', _backfillBetPinnacleOddsHandler);
 
+// TEMP DIAGNOSTIC — remove after use. User pushed back (fairly) on "no bookmaker
+// had this match" for the 21 unverified CL/EL/Conference League qualifying-round
+// bets — real bookmakers plainly do offer markets on games like PSG vs Arsenal
+// and UEFA qualifiers generally. The /odds (h2h) endpoint conflates two very
+// different things: "Odds API never catalogued this fixture at all" vs "Odds API
+// knew about the fixture but no bookmaker had submitted a price for it yet at
+// the queried snapshot time." This checks the lighter-weight /events endpoint
+// (event listing only, no markets) for a sample of the 21 bets, at several
+// snapshot times before kickoff, to see whether the fixture appears in Odds
+// API's own schedule at all -- settling whether this is a provider cataloguing
+// gap (their events list is just missing pre-league-phase qualifiers) or
+// something else. Also lists the full /sports?all=true catalog filtered for any
+// UEFA-related key we might not already be querying (e.g. a distinct
+// qualifying-round sport key).
+app.get('/api/admin/diag-uefa-events-catalog-check', async (req, res) => {
+  try {
+    const targetIds = (req.query.ids || '').split(',').filter(Boolean);
+    let bets = getBets().filter(b => [2, 3, 848].includes(parseInt(b.leagueId, 10)) && b.mode !== 'real');
+    if (targetIds.length) bets = bets.filter(b => targetIds.includes(b.id));
+    else bets = bets.slice(0, 6); // sample across the three competitions
+
+    const results = [];
+    for (const bet of bets) {
+      const sport = CLOSING_ODDS_SPORT_MAP[String(bet.leagueId)];
+      const kickoff = new Date(bet.kickoff);
+      const snapshots = [
+        { label: 'T-1h', date: new Date(kickoff.getTime() - 1 * 3600 * 1000) },
+        { label: 'T-24h', date: new Date(kickoff.getTime() - 24 * 3600 * 1000) },
+        { label: 'T-72h', date: new Date(kickoff.getTime() - 72 * 3600 * 1000) },
+        { label: 'T-7d', date: new Date(kickoff.getTime() - 7 * 24 * 3600 * 1000) },
+      ];
+      const [home, away] = (bet.fixture || '').split(' vs ');
+      const perSnapshot = [];
+      for (const snap of snapshots) {
+        try {
+          const iso = snap.date.toISOString().split('.')[0] + 'Z';
+          const resp = await oddsApi.get(`/historical/sports/${sport}/events`, {
+            params: { apiKey: ODDS_API_KEY, date: iso },
+          });
+          const events = resp.data?.data || resp.data || [];
+          const match = events.find(e =>
+            (teamsMatch(e.home_team, home) && teamsMatch(e.away_team, away)) ||
+            (normaliseTeam(e.home_team) === normaliseTeam(home) && normaliseTeam(e.away_team) === normaliseTeam(away))
+          );
+          perSnapshot.push({
+            snapshot: snap.label, queriedDate: iso, totalEventsInCatalog: events.length,
+            fixtureFoundInCatalog: !!match,
+            matchedCommenceTime: match?.commence_time || null,
+            sampleEventNames: events.slice(0, 5).map(e => `${e.home_team} vs ${e.away_team}`),
+          });
+        } catch (e) {
+          perSnapshot.push({ snapshot: snap.label, error: e.message, status: e.response?.status });
+        }
+      }
+      results.push({ id: bet.id, fixture: bet.fixture, kickoff: bet.kickoff, sport, perSnapshot });
+    }
+
+    let sportsCatalog = null;
+    try {
+      const sportsResp = await oddsApi.get('/sports', { params: { apiKey: ODDS_API_KEY, all: 'true' } });
+      sportsCatalog = (sportsResp.data || [])
+        .filter(s => /uefa|champ|europa|conference|qualif/i.test(s.key) || /uefa|champ|europa|conference|qualif/i.test(s.title))
+        .map(s => ({ key: s.key, title: s.title, active: s.active }));
+    } catch (e) {
+      sportsCatalog = { error: e.message };
+    }
+
+    res.json({
+      note: 'TEMP diagnostic — checks Odds API\'s /events catalog (schedule only, no markets) at several pre-kickoff snapshots for a sample of the 21 unverified bets, to distinguish "fixture never catalogued by the provider" from "catalogued but unpriced at the time we checked". Also lists every UEFA/qualifying-related sport key currently in /sports?all=true, in case a separate qualifying-round key exists that this project has never queried. Delete this endpoint once read.',
+      sportsCatalogMatches: sportsCatalog,
+      results,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
 // Leagues with a genuine, documented train/test split (docs/calibration-rules.md
 // rule 9). For these, runEvCalibration() reports the held-out test-set figure only
 // — the fixtures on/after testFrom were never touched during tuning — rather than
