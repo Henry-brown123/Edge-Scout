@@ -6825,7 +6825,7 @@ app.post('/api/bets/:id/convert-to-real', (req, res) => {
   // raw current equity — see getAvailableBankroll's own comment for why.
   const providedStake = parseFloat(actualStake);
   const stake = (providedStake > 0)
-    ? roundStake(providedStake)
+    ? providedStake
     : roundStake(kelly(bet.modelProb * calibrationFactor, odds, kellyFrac, getAvailableBankroll('real')).stake);
 
   bet.mode            = 'real';
