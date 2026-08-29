@@ -7848,6 +7848,133 @@ app.get('/api/admin/diag-synthetic-odds-audit', (_req, res) => {
   }
 });
 
+// One-time historical correction (2026-08-29): replaces every bet's actualOdds
+// with a genuine Pinnacle closing price and recomputes pnl for resolved bets
+// (stake and win/loss result unchanged -- only the assumed return price
+// corrects). Priority per bet: (1) closing-odds.json, if already cached AND
+// tagged bookmaker:'pinnacle' specifically -- the bulk backfill falls back to
+// "first available bookmaker" when Pinnacle is missing, so a non-Pinnacle
+// cached entry is deliberately NOT reused here; (2) a fresh per-bet call to
+// fetchClosingOddsForBet, which is Pinnacle-only with no fallback and
+// validates the snapshot is within 15 minutes of kickoff -- the freshly
+// fetched price is also written into closing-odds.json as a side effect, so
+// this benefits future analysis, not just this one-off correction; (3)
+// bet.pinnacleOddsAtLock, the lock-time snapshot, when neither closing-odds
+// source has anything (very old fixtures beyond the historical archive, or a
+// genuine provider gap). Bets where none of the three yield a price get
+// oddsUnverified:true instead of being silently left on the old number --
+// per the user's own preference, kept in the log for audit but excluded from
+// performance stats downstream. Backs up bets.json before writing anything.
+app.post('/api/admin/backfill-bet-pinnacle-odds', async (req, res) => {
+  try {
+    const dryRun = req.query.dryRun === 'true';
+    const bets = getBets();
+    const closing = getClosingOdds();
+    const guard = await creditGuard('bet-log Pinnacle closing-odds backfill', bets.length);
+    if (!guard.ok) return res.status(409).json({ error: 'Credit guard blocked this run', guard });
+
+    let liveCallsMade = 0;
+    const report = [];
+
+    for (const bet of bets) {
+      const outcomeKey = bet.bet === 'Home Win' ? 'home' : bet.bet === 'Away Win' ? 'away' : 'draw';
+      let correctedOdds = null, source = null;
+
+      const cached = closing[bet.fixtureId] || closing[String(bet.fixtureId)];
+      if (cached && cached.bookmaker === 'pinnacle') {
+        correctedOdds = outcomeKey === 'home' ? cached.homeOdds : outcomeKey === 'away' ? cached.awayOdds : cached.drawOdds;
+        if (correctedOdds > 1) source = 'closing_odds_cached';
+        else correctedOdds = null;
+      }
+
+      if (!correctedOdds) {
+        const fetched = await fetchClosingOddsForBet(bet);
+        liveCallsMade++;
+        if (fetched.closingOdds > 1 && fetched.bookmaker === 'pinnacle') {
+          correctedOdds = fetched.closingOdds;
+          source = 'closing_odds_live_fetch';
+          // Cache it for everyone else, matching the bulk backfill's own shape.
+          const [home, away] = (bet.fixture || '').split(' vs ');
+          closing[bet.fixtureId] = {
+            fixtureId: bet.fixtureId,
+            homeOdds: outcomeKey === 'home' ? correctedOdds : (closing[bet.fixtureId]?.homeOdds ?? null),
+            awayOdds: outcomeKey === 'away' ? correctedOdds : (closing[bet.fixtureId]?.awayOdds ?? null),
+            drawOdds: outcomeKey === 'draw' ? correctedOdds : (closing[bet.fixtureId]?.drawOdds ?? null),
+            bookmaker: 'pinnacle',
+            collectedAt: fetched.snapshotTs || new Date().toISOString(),
+            snapshotTs: bet.kickoff,
+          };
+        }
+      }
+
+      if (!correctedOdds && bet.pinnacleOddsAtLock > 1) {
+        correctedOdds = bet.pinnacleOddsAtLock;
+        source = 'pinnacle_odds_at_lock';
+      }
+
+      const oldActualOdds = bet.actualOdds;
+      const oldPnl = bet.pnl;
+      let newPnl = oldPnl;
+
+      if (correctedOdds) {
+        if (bet.result) {
+          const stake = bet.actualStake ?? bet.suggestedStake ?? 0;
+          const won = bet.result === 'win';
+          const commissionRate = (bet.mode === 'real' && bet.bookmakerId)
+            ? (getBookmakers().find(bm => bm.id === bet.bookmakerId)?.commission || 0) : 0;
+          const grossWin = (correctedOdds - 1) * stake;
+          newPnl = won ? parseFloat((grossWin * (1 - commissionRate)).toFixed(2)) : -stake;
+        }
+        if (!dryRun) {
+          bet.actualOdds = correctedOdds;
+          bet.pnl = newPnl;
+          bet.oddsUnverified = false;
+          bet.oddsSource = source;
+        }
+      } else if (!dryRun) {
+        bet.oddsUnverified = true;
+        bet.oddsSource = 'none_found';
+      }
+
+      report.push({
+        id: bet.id, fixture: bet.fixture, leagueName: bet.leagueName, mode: bet.mode, result: bet.result || null,
+        oldActualOdds, correctedOdds: correctedOdds || null, source: source || 'none_found',
+        oldPnl, newPnl: correctedOdds ? newPnl : null, pnlDelta: correctedOdds && bet.result ? +((newPnl - oldPnl).toFixed(2)) : null,
+      });
+    }
+
+    if (!dryRun) {
+      writeJSON(`bets-backup-pre-pinnacle-fix-${Date.now()}.json`, getBets());
+      writeJSON('bets.json', bets, { allowEmpty: true });
+      saveClosingOdds(closing);
+    }
+
+    const corrected = report.filter(r => r.source !== 'none_found');
+    const unverified = report.filter(r => r.source === 'none_found');
+    const oldTotalPnl = report.reduce((s, r) => s + (r.oldPnl || 0), 0);
+    const newTotalPnl = report.reduce((s, r) => s + (r.newPnl ?? r.oldPnl ?? 0), 0);
+
+    res.json({
+      note: dryRun
+        ? 'DRY RUN — nothing written. Re-run without ?dryRun=true to apply.'
+        : 'Applied. bets.json backed up before writing (bets-backup-pre-pinnacle-fix-<timestamp>.json). closing-odds.json updated with any freshly-fetched Pinnacle prices.',
+      totalBets: bets.length, liveApiCallsMade: liveCallsMade, creditsRemainingAfter: guard.remaining - liveCallsMade,
+      correctedCount: corrected.length, unverifiedCount: unverified.length,
+      bySource: {
+        closing_odds_cached: report.filter(r => r.source === 'closing_odds_cached').length,
+        closing_odds_live_fetch: report.filter(r => r.source === 'closing_odds_live_fetch').length,
+        pinnacle_odds_at_lock: report.filter(r => r.source === 'pinnacle_odds_at_lock').length,
+        none_found: unverified.length,
+      },
+      oldTotalPnl: +oldTotalPnl.toFixed(2), newTotalPnl: +newTotalPnl.toFixed(2), pnlDelta: +((newTotalPnl - oldTotalPnl).toFixed(2)),
+      unverifiedBets: unverified,
+      fullReport: report,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
 // Leagues with a genuine, documented train/test split (docs/calibration-rules.md
 // rule 9). For these, runEvCalibration() reports the held-out test-set figure only
 // — the fixtures on/after testFrom were never touched during tuning — rather than
