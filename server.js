@@ -7769,63 +7769,6 @@ app.get('/api/correction-layer-backtests', (_req, res) => {
   });
 });
 
-// TEMP DIAGNOSTIC — remove after use. User correctly pushed back on "Pinnacle
-// had no price" as an explanation — Pinnacle is one of the largest bookmakers
-// in Europe and prices major fixtures days out, not hours. The historical
-// pinnacleOddsAtLock:null bets can't be re-checked directly (Odds API has no
-// historical-snapshot endpoint, only current odds), but this tests the live
-// pipeline RIGHT NOW for the same three competitions (Champions/Europa/
-// Conference League), reading Odds API's raw response directly — bypassing
-// _lookupOddsEntry/teamsMatch entirely — to tell apart two very different
-// root causes: (a) Odds API genuinely has no Pinnacle coverage for these
-// competitions (a provider-level gap, matching Addendum 26's separate finding
-// for Champions League's closing-odds pipeline specifically), vs (b) Odds API
-// has the event and Pinnacle's price, but this system's team-name matching
-// fails to find it (a fixable lookup bug, not a data-availability problem).
-app.get('/api/admin/diag-live-pinnacle-coverage', async (_req, res) => {
-  try {
-    const sportKeys = {
-      2:   'soccer_uefa_champs_league',
-      3:   'soccer_uefa_europa_league',
-      848: 'soccer_uefa_europa_conference_league',
-    };
-    const out = {};
-    for (const [leagueId, sport] of Object.entries(sportKeys)) {
-      try {
-        const resp = await oddsApi.get(`/sports/${sport}/odds`, {
-          params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal' },
-        });
-        const events = resp.data || [];
-        out[leagueId] = {
-          sport, eventCount: events.length,
-          events: events.map(ev => {
-            const bookmakerTitles = (ev.bookmakers || []).map(b => b.title);
-            const pinnacle = (ev.bookmakers || []).find(b => b.title === 'Pinnacle');
-            return {
-              home: ev.home_team, away: ev.away_team, commenceTime: ev.commence_time,
-              bookmakerCount: (ev.bookmakers || []).length,
-              bookmakerTitles,
-              hasPinnacle: !!pinnacle,
-              pinnacleH2h: pinnacle?.markets?.find(m => m.key === 'h2h')?.outcomes ?? null,
-            };
-          }),
-        };
-      } catch (e) {
-        out[leagueId] = { sport, error: e.message, status: e.response?.status, apiError: e.response?.data };
-      }
-    }
-    const totalEvents = Object.values(out).reduce((s, l) => s + (l.eventCount || 0), 0);
-    const totalWithPinnacle = Object.values(out).reduce((s, l) => s + (l.events?.filter(e => e.hasPinnacle).length || 0), 0);
-    res.json({
-      note: 'TEMP diagnostic — raw Odds API response for CL/EL/Conference League right now, bypassing this system\'s team-name matching entirely. If hasPinnacle is true for most/all events, the earlier "no coverage" bets were a lookup failure, not a real data gap, and the fix needs to also address teamsMatch/lookup, not just prefer Pinnacle when found. If hasPinnacle is false across the board, that confirms a genuine provider-level gap for these competitions. Delete this endpoint once read.',
-      totalEvents, totalWithPinnacle,
-      byLeague: out,
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message, stack: e.stack });
-  }
-});
-
 // TEMP DIAGNOSTIC — remove after use. User asked whether paper bets are being
 // priced against real, achievable bookmaker odds or something fabricated,
 // prompted by the "Unknown" bookmaker finding earlier. There IS a synthetic
