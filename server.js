@@ -7865,7 +7865,11 @@ app.get('/api/admin/diag-synthetic-odds-audit', (_req, res) => {
 // oddsUnverified:true instead of being silently left on the old number --
 // per the user's own preference, kept in the log for audit but excluded from
 // performance stats downstream. Backs up bets.json before writing anything.
-app.post('/api/admin/backfill-bet-pinnacle-odds', async (req, res) => {
+// Registered for GET too (not just POST) so it can be triggered as a plain
+// URL in an authenticated browser tab, matching how every other diagnostic
+// this session got run -- the dryRun query param is the actual safety gate
+// here, not the HTTP method.
+async function _backfillBetPinnacleOddsHandler(req, res) {
   try {
     const dryRun = req.query.dryRun === 'true';
     const bets = getBets();
@@ -7973,7 +7977,9 @@ app.post('/api/admin/backfill-bet-pinnacle-odds', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message, stack: e.stack });
   }
-});
+}
+app.get('/api/admin/backfill-bet-pinnacle-odds', _backfillBetPinnacleOddsHandler);
+app.post('/api/admin/backfill-bet-pinnacle-odds', _backfillBetPinnacleOddsHandler);
 
 // Leagues with a genuine, documented train/test split (docs/calibration-rules.md
 // rule 9). For these, runEvCalibration() reports the held-out test-set figure only
