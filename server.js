@@ -8029,6 +8029,65 @@ async function _backfillBetPinnacleOddsHandler(req, res) {
 app.get('/api/admin/backfill-bet-pinnacle-odds', _backfillBetPinnacleOddsHandler);
 app.post('/api/admin/backfill-bet-pinnacle-odds', _backfillBetPinnacleOddsHandler);
 
+// TEMP DIAGNOSTIC — remove after use. User pushed back on treating the ~21
+// European-cup bets' pinnacleOddsAtLock:null/closing-odds-null as "no real
+// data exists" -- correctly, given this project already found once this
+// session that an assumption like that was actually a pipeline bug (the
+// bookmaker-routing panel's slice(0,8) cap). Re-checks every currently
+// unverified bet: (1) with the just-fixed extractH2hPrices matching, in case
+// the per-outcome bug was silently causing some of these too; (2) for any
+// still unresolved, calls the raw historical Odds API endpoint directly for
+// that exact sport+date, bypassing ALL fixture-level matching, and returns
+// every event Odds API actually has for that day verbatim -- so it's
+// possible to see directly whether the event is genuinely absent (a real
+// provider-coverage gap for that specific qualifying-round fixture) or
+// present under a name our teamsMatch() fuzzy logic isn't bridging (a
+// second, distinct matching bug from the one already fixed).
+app.get('/api/admin/diag-unverified-bets-raw-check', async (_req, res) => {
+  try {
+    const bets = getBets().filter(b => [2, 3, 848].includes(parseInt(b.leagueId, 10)) && b.mode !== 'real');
+    const results = [];
+    for (const bet of bets) {
+      const refetch = await fetchClosingOddsForBet(bet);
+      if (refetch.closingOdds > 1 && refetch.bookmaker === 'pinnacle') {
+        results.push({ id: bet.id, fixture: bet.fixture, kickoff: bet.kickoff, outcome: 'now_resolves', closingOdds: refetch.closingOdds });
+        continue;
+      }
+
+      const sport = CLOSING_ODDS_SPORT_MAP[String(bet.leagueId)];
+      const kickoffIso = new Date(bet.kickoff).toISOString().split('.')[0] + 'Z';
+      try {
+        const resp = await oddsApi.get(`/historical/sports/${sport}/odds`, {
+          params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal', date: kickoffIso },
+        });
+        const events = resp.data?.data || resp.data || [];
+        const [home, away] = (bet.fixture || '').split(' vs ');
+        const exactMatch = events.find(e => e.home_team === home && e.away_team === away);
+        const fuzzyMatch = events.find(e => teamsMatch(e.home_team, home) && teamsMatch(e.away_team, away));
+        results.push({
+          id: bet.id, fixture: bet.fixture, kickoff: bet.kickoff, sport, queriedDate: kickoffIso,
+          outcome: events.length === 0 ? 'zero_events_returned' : (exactMatch || fuzzyMatch) ? 'event_found_but_no_pinnacle_or_stale' : 'event_not_matched',
+          totalEventsReturned: events.length,
+          allRawEventNames: events.map(e => `${e.home_team} vs ${e.away_team}`),
+          matchedEvent: (exactMatch || fuzzyMatch) ? { home: (exactMatch||fuzzyMatch).home_team, away: (exactMatch||fuzzyMatch).away_team, bookmakerKeys: (exactMatch||fuzzyMatch).bookmakers?.map(b=>b.key) || [] } : null,
+        });
+      } catch (e) {
+        results.push({ id: bet.id, fixture: bet.fixture, kickoff: bet.kickoff, sport, outcome: 'api_error', error: e.message, status: e.response?.status, apiError: e.response?.data });
+      }
+    }
+    const byOutcome = {};
+    for (const r of results) byOutcome[r.outcome] = (byOutcome[r.outcome] || 0) + 1;
+    res.json({
+      note: 'TEMP diagnostic — re-checks every unverified CL/EL/Conference League bet against the raw, unfiltered historical Odds API response for its exact kickoff date, bypassing fixture matching entirely. now_resolves = the just-fixed per-outcome matching bug was silently the cause. zero_events_returned = genuine provider gap for that date/competition. event_not_matched = the event IS in the raw response (see allRawEventNames) but under a name teamsMatch() cannot bridge -- a second, distinct bug worth fixing. event_found_but_no_pinnacle_or_stale = matched but Pinnacle genuinely absent from that specific event or its snapshot is >15min from kickoff. Delete this endpoint once read.',
+      totalChecked: results.length,
+      byOutcome,
+      results,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
 // Leagues with a genuine, documented train/test split (docs/calibration-rules.md
 // rule 9). For these, runEvCalibration() reports the held-out test-set figure only
 // — the fixtures on/after testFrom were never touched during tuning — rather than
