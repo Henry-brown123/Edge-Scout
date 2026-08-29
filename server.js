@@ -987,17 +987,41 @@ async function fetchOddsForLeague(sport) {
   } catch (e) { console.error('[Odds] fetchOddsForLeague failed:', e.response?.status, e.response?.data?.message || e.message); return { oddsMap: {}, totalsMap: {} }; }
 }
 
-// Build the per-bookmaker market array for a fixture from cached raw events
+// Build the per-bookmaker market array for a fixture from cached raw events.
+// Stored verbatim on the bet as `oddsSnapshot` at lock time (a frozen record,
+// not re-fetched later) -- the bookmaker-selection panel's per-row odds all
+// come from here, separately from pinnacleOddsAtLock (captured via the more
+// robust _lookupOddsEntry/_pinnacleRaw path used for scoring/edge). Confirmed
+// live 2026-08-29: those two paths can disagree -- a bet's panel showed a
+// real "Pinnacle: 1.87" reference (from pinnacleOddsAtLock) while Pinnacle's
+// own row in the same table was blank, traced to the flat slice(0,8) below
+// keeping whichever 8 bookmakers happened to come first in Odds API's
+// response order, with nothing guaranteeing Pinnacle -- or any specific
+// book -- was among them.
 function _buildBookmakerMarket(sport, homeName, awayName) {
   const events = _oddsRawCache[sport] || [];
-  const ev = events.find(e => e.home_team === homeName && e.away_team === awayName);
+  // Fuzzy fallback (same teamsMatch() every other odds consumer uses) --
+  // this was exact-string-only, stricter than the rest of the codebase for
+  // no reason tied to this function's purpose.
+  let ev = events.find(e => e.home_team === homeName && e.away_team === awayName);
+  if (!ev) ev = events.find(e => teamsMatch(e.home_team, homeName) && teamsMatch(e.away_team, awayName));
   if (!ev) return [];
-  return (ev.bookmakers || []).slice(0, 8).map(bm => {
+  const allBooks = (ev.bookmakers || []).map(bm => {
     const mkt = bm.markets?.find(m => m.key === 'h2h');
     if (!mkt) return null;
     const get = name => mkt.outcomes?.find(o => o.name === name)?.price ?? null;
     return { name: bm.title, homeOdds: get(homeName), drawOdds: get('Draw'), awayOdds: get(awayName) };
   }).filter(Boolean);
+  // Pinnacle must never be silently capped out -- it's the one book this
+  // whole project treats as the reference price ("does this clear the beat
+  // Pinnacle bar"), so it's moved to the front before the display cap applies
+  // rather than left to chance ordering.
+  const pinnacleIdx = allBooks.findIndex(b => b.name === 'Pinnacle');
+  if (pinnacleIdx > 7) {
+    const [pinnacle] = allBooks.splice(pinnacleIdx, 1);
+    allBooks.unshift(pinnacle);
+  }
+  return allBooks.slice(0, 8);
 }
 
 function persistOddsSnapshot(fix, scored, sport, stage, leagueId, leagueName, settings) {
