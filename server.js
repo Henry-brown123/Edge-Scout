@@ -332,6 +332,30 @@ function getRealBankrollAccount() {
   return computeBankrollAccount('real-bankroll.json', 'real', b => b.mode === 'real', 0);
 }
 
+// Bankroll actually free to size a NEW stake against — current equity minus
+// stakes already committed to bets that are placed/locked but not yet
+// resolved. getBankroll()/getRealBankrollAccount()'s `current` only reflects
+// RESOLVED bet P&L (computeBankrollAccount's betPnl loop requires b.result),
+// so several fixtures locking in the same window, before any of them settle,
+// would each get sized by kelly() against the SAME full bankroll — none
+// aware the others had already claimed a slice of it. Confirmed live
+// 2026-08-29: three same-night paper bets, each independently and correctly
+// half-Kelly-sized in isolation, jointly consumed almost the entire paper
+// bankroll. Fixes staking only — getBankroll()/getRealBankrollAccount()
+// stay unchanged for reporting/display, where "current equity" (not
+// "equity minus open exposure") is the right figure.
+function getAvailableBankroll(mode) {
+  const isReal = mode === 'real';
+  const acct   = isReal ? getRealBankrollAccount() : getBankroll();
+  const open   = getBets().filter(b =>
+    (isReal ? b.mode === 'real' : (!b.mode || b.mode === 'paper')) &&
+    (b.placementStatus === 'placed' || b.placementConfirmed) &&
+    !b.result
+  );
+  const committed = open.reduce((s, b) => s + (b.actualStake || b.suggestedStake || 0), 0);
+  return parseFloat((acct.current - committed).toFixed(2));
+}
+
 function roundStake(amount) {
   if (amount < 10)  return Math.round(amount / 0.5)  * 0.5;
   if (amount < 50)  return Math.round(amount / 5)    * 5;
@@ -1510,7 +1534,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     // 10-15% band is profitable — drop only the high-edge picks below the 40-point
     // lock threshold so they never lock as bets, leaving the rest of the league untouched.
     if (parseInt(leagueId, 10) === 135 && edge > 0.20) finalScore = Math.min(finalScore, 39);
-    const k         = kelly(calProb, displayOdds, settings.paperKellyFraction, getBankroll().current);
+    const k         = kelly(calProb, displayOdds, settings.paperKellyFraction, getAvailableBankroll('paper'));
 
     const entry = {
       market: 'match_outcome',
@@ -1974,7 +1998,7 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
     // accounts gate, but Kelly sizing needs one clean pot, same as paper.
     const realBr    = isReal ? getRealBankrollAccount().current : null;
     const kellyFrac = isReal ? (settings.realKellyFraction ?? 0.25) : (settings.paperKellyFraction ?? 0.5);
-    const bankrollForKelly = isReal ? realBr : getBankroll().current;
+    const bankrollForKelly = getAvailableBankroll(isReal ? 'real' : 'paper');
     const realKelly = kelly(best.modelProb * (settings.calibrationFactor ?? 1.08),
                             best.bookOdds, kellyFrac, bankrollForKelly);
     const br    = getBankroll();
@@ -6796,11 +6820,13 @@ app.post('/api/bets/:id/convert-to-real', (req, res) => {
   // trust it as the authoritative record — this is a place for logging what really
   // happened, not overriding it with a theoretical figure. Falls back to the
   // Kelly-computed suggestion only when omitted, preserving the original behavior
-  // for callers that don't supply one.
+  // for callers that don't supply one. The fallback suggestion sizes against
+  // getAvailableBankroll (equity minus other currently-open bets' stakes), not
+  // raw current equity — see getAvailableBankroll's own comment for why.
   const providedStake = parseFloat(actualStake);
   const stake = (providedStake > 0)
     ? roundStake(providedStake)
-    : roundStake(kelly(bet.modelProb * calibrationFactor, odds, kellyFrac, realBr).stake);
+    : roundStake(kelly(bet.modelProb * calibrationFactor, odds, kellyFrac, getAvailableBankroll('real')).stake);
 
   bet.mode            = 'real';
   bet.kellyFraction   = kellyFrac;
