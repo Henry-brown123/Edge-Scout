@@ -8016,12 +8016,32 @@ app.get('/api/admin/diag-uefa-events-catalog-check', async (req, res) => {
         const events = resp.data?.data || resp.data || [];
         const match = events.find(e =>
           (teamsMatch(e.home_team, home) && teamsMatch(e.away_team, away)) ||
-          (normaliseTeam(e.home_team) === normaliseTeam(home) && normaliseTeam(e.away_team) === normaliseTeam(away))
+          (normaliseTeam(e.home_team) === normaliseTeam(home) && normaliseTeam(e.away_team) === normaliseTeam(away)) ||
+          `${e.home_team} vs ${e.away_team}` === bet.fixture
         );
+
+        let oddsCheck = null;
+        try {
+          const oddsResp = await oddsApi.get('/historical/sports/soccer_uefa_champs_league_qualification/odds', {
+            params: { apiKey: ODDS_API_KEY, regions: 'uk,eu', markets: 'h2h', oddsFormat: 'decimal', date: iso },
+          });
+          const oddsEvents = oddsResp.data?.data || oddsResp.data || [];
+          const oddsMatch = oddsEvents.find(e => `${e.home_team} vs ${e.away_team}` === (match ? `${match.home_team} vs ${match.away_team}` : bet.fixture));
+          oddsCheck = {
+            eventFoundInOddsResponse: !!oddsMatch,
+            bookmakerKeys: oddsMatch?.bookmakers?.map(b => b.key) || [],
+            hasPinnacle: !!oddsMatch?.bookmakers?.find(b => b.key === 'pinnacle'),
+            pinnacleH2h: oddsMatch?.bookmakers?.find(b => b.key === 'pinnacle')?.markets?.find(m => m.key === 'h2h')?.outcomes || null,
+          };
+        } catch (e) {
+          oddsCheck = { error: e.message, status: e.response?.status };
+        }
+
         qualificationCheck.push({
           id: bet.id, fixture: bet.fixture, queriedDate: iso, totalEventsInCatalog: events.length,
           fixtureFoundInCatalog: !!match, matchedCommenceTime: match?.commence_time || null,
           allEventNames: events.map(e => `${e.home_team} vs ${e.away_team}`),
+          oddsCheck,
         });
       } catch (e) {
         qualificationCheck.push({ id: bet.id, fixture: bet.fixture, error: e.message, status: e.response?.status, apiError: e.response?.data });
