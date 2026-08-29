@@ -7754,6 +7754,23 @@ app.get('/api/admin/diag-synthetic-odds-audit', (_req, res) => {
       if (r.looksLikelySynthetic) byLeague[key].likelySynthetic++;
     }
 
+    // Pinnacle-coverage check, for designing the fix: was pinnacleOddsAtLock
+    // actually captured for the fabricated bets (meaning switching to Pinnacle
+    // would have prevented them), or was Pinnacle ALSO missing at lock time
+    // (meaning some fixtures genuinely have no price anywhere that early, and
+    // the fix still needs a "skip, don't fabricate" path, not just a new
+    // primary source). Also reports whole-log Pinnacle coverage to size the
+    // historical-backfill task — every bet with a real pinnacleOddsAtLock can
+    // be corrected from data already on the record, no re-fetch needed.
+    const idToBet = new Map(bets.map(b => [b.id, b]));
+    const syntheticPinnacleCheck = synthetic.map(r => {
+      const b = idToBet.get(r.id);
+      return { id: r.id, fixture: r.fixture, pinnacleOddsAtLock: b?.pinnacleOddsAtLock ?? null, pinnacleWasAvailable: (b?.pinnacleOddsAtLock ?? 0) > 0 };
+    });
+    const allWithPinnacle = bets.filter(b => b.pinnacleOddsAtLock > 0).length;
+    const allResolvedWithPinnacle = bets.filter(b => b.pinnacleOddsAtLock > 0 && b.result).length;
+    const allResolved = bets.filter(b => b.result).length;
+
     res.json({
       note: 'TEMP diagnostic — flags bets whose actualOdds sits within 1% of what the synthetic fallback (1/modelProb*1.06) would have produced. A match this close to a specific formula is very unlikely to be real market coincidence, especially repeated across many bets. Not proof for any single bet (a real price could theoretically land close by chance) but the aggregate rate is the real signal. Delete this endpoint once read.',
       totalBets: results.length,
@@ -7761,6 +7778,11 @@ app.get('/api/admin/diag-synthetic-odds-audit', (_req, res) => {
       likelySyntheticPct: results.length ? +((synthetic.length / results.length) * 100).toFixed(1) : null,
       byLeague,
       likelySyntheticBets: synthetic,
+      pinnacleCoverageForSyntheticBets: syntheticPinnacleCheck,
+      wholeLogPinnacleCoverage: {
+        totalBets: bets.length, withPinnacleOddsAtLock: allWithPinnacle,
+        resolvedTotal: allResolved, resolvedWithPinnacleOddsAtLock: allResolvedWithPinnacle,
+      },
     });
   } catch (e) {
     res.status(500).json({ error: e.message, stack: e.stack });
