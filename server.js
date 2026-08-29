@@ -7821,6 +7821,105 @@ app.get('/api/admin/diag-original9-tier-screen', async (_req, res) => {
   }
 });
 
+// TEMP DIAGNOSTIC — remove after use. User asked whether the "40-45% is a
+// structural exclusion, every league" policy (based on n=430/-21.5% confirmed
+// negative across the original 9) genuinely generalizes to League One/Two, or
+// whether their own reasonably-sized 40-45% readings (n=514/+3.5% for League
+// Two, per the Scout-tab tier badge) deserve their own scrutiny rather than
+// blanket exclusion by association. No new out-of-sample data or fitted
+// parameters here — purely descriptive statistics (calibration error, CI,
+// walk-forward-block stability) on the SAME already-banked unseen-population
+// matched data (rule 10), same reconciliation precedent as Addendum 22/26.
+app.get('/api/admin/diag-l1l2-4045-screen', async (_req, res) => {
+  try {
+    const matched = await computeMatchedEdgeFixtures();
+    const inTier = matched.filter(f => {
+      const lid = parseInt(f.leagueId, 10);
+      return (lid === 41 || lid === 42) && f.modelProb >= 0.40 && f.modelProb < 0.45;
+    });
+
+    function pooledCi(returns) {
+      const n = returns.length;
+      if (!n) return { n: 0 };
+      const mean = returns.reduce((s, v) => s + v, 0) / n;
+      let ciLow = null, ciHigh = null;
+      if (n > 1) {
+        const variance = returns.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1);
+        const se = Math.sqrt(variance / n);
+        ciLow  = +((mean - 1.96 * se) * 100).toFixed(1);
+        ciHigh = +((mean + 1.96 * se) * 100).toFixed(1);
+      }
+      return { n, roi: +(mean * 100).toFixed(2), ci: [ciLow, ciHigh] };
+    }
+
+    function cellStats(fixtures) {
+      const n = fixtures.length;
+      if (!n) return { n: 0 };
+      const avgPred = fixtures.reduce((s, f) => s + f.modelProb, 0) / n;
+      const actualWinRate = fixtures.reduce((s, f) => s + (f.won ? 1 : 0), 0) / n;
+      const pos = fixtures.filter(f => f.edge >= 0.05);
+      const returns = pos.map(f => f.won ? (f.pinnacleOdds - 1) : -1);
+      const ci = pooledCi(returns);
+      return {
+        n, posEdgeN: pos.length,
+        calibErrPp: +((avgPred - actualWinRate) * 100).toFixed(1),
+        avgPredicted: +(avgPred * 100).toFixed(1), actualWinRate: +(actualWinRate * 100).toFixed(1),
+        roi: ci.roi, ci: ci.ci,
+      };
+    }
+
+    const byLeague = {
+      leagueOne: {
+        overall: cellStats(inTier.filter(f => parseInt(f.leagueId, 10) === 41)),
+        home:    cellStats(inTier.filter(f => parseInt(f.leagueId, 10) === 41 && f.topOutcome === 'home')),
+        away:    cellStats(inTier.filter(f => parseInt(f.leagueId, 10) === 41 && f.topOutcome === 'away')),
+        draw:    cellStats(inTier.filter(f => parseInt(f.leagueId, 10) === 41 && f.topOutcome === 'draw')),
+      },
+      leagueTwo: {
+        overall: cellStats(inTier.filter(f => parseInt(f.leagueId, 10) === 42)),
+        home:    cellStats(inTier.filter(f => parseInt(f.leagueId, 10) === 42 && f.topOutcome === 'home')),
+        away:    cellStats(inTier.filter(f => parseInt(f.leagueId, 10) === 42 && f.topOutcome === 'away')),
+        draw:    cellStats(inTier.filter(f => parseInt(f.leagueId, 10) === 42 && f.topOutcome === 'draw')),
+      },
+    };
+
+    // Walk-forward block stability — same 4 season-aligned blocks used for the
+    // League One/Two correction-layer validation (Addendum 26), applied here
+    // to the 40-45% tier specifically (no fit/correction involved — just
+    // whether the pooled reading holds up independently block-by-block, the
+    // same check that revealed League One's 50-55% cell was worse than its
+    // pooled figure suggested).
+    const BLOCKS = [
+      { label: '2022-23 season', start: '2022-08-01', end: '2023-08-01' },
+      { label: '2023-24 season', start: '2023-08-01', end: '2024-08-01' },
+      { label: '2024-25 season', start: '2024-08-01', end: '2025-08-01' },
+      { label: '2025-26 season (partial)', start: '2025-08-01', end: '2026-08-26' },
+    ];
+
+    function blockBreakdown(leagueId) {
+      return BLOCKS.map(b => {
+        const blockFixtures = inTier.filter(f =>
+          parseInt(f.leagueId, 10) === leagueId &&
+          new Date(f.date) >= new Date(b.start) && new Date(f.date) < new Date(b.end)
+        );
+        return { label: b.label, ...cellStats(blockFixtures) };
+      });
+    }
+
+    res.json({
+      note: 'TEMP diagnostic — League One/Two 40-45% tier, checked with the same rigor (calibration error, CI, walk-forward-block stability) applied to any other candidate cell this session, on the already-banked unseen-population matched data (no new out-of-sample data, no fitted parameters). Delete this endpoint once read.',
+      leagueOne41: byLeague.leagueOne,
+      leagueTwo42: byLeague.leagueTwo,
+      walkForwardBlocks: {
+        leagueOne41: blockBreakdown(41),
+        leagueTwo42: blockBreakdown(42),
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
 // Track A — single source of truth for "match scoredRecords against closing odds
 // and compute the unified edge" — the exact logic scoreOneFixture uses (calFactor
 // boost, margin-stripped Pinnacle benchmark, absolute edge), shared by
