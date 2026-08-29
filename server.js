@@ -2509,6 +2509,32 @@ async function checkAndResolve() {
 // ─── CLOSING ODDS FETCH FOR A SINGLE BET (T-5 CLV) ──────────────────────────
 // Returns { closingOdds, bookmaker, snapshotTs } or { closingOdds: null }.
 // Uses the same Odds API historical endpoint as the backfill.
+// Resolves home/draw/away prices from a h2h market's outcomes without the
+// ambiguity an independent per-team fuzzy match can produce when two clubs in
+// the SAME fixture share a name token (teamsMatch's shared-4+-char-token
+// fallback matches "Real Sociedad" to "Real Madrid" too, and "Dundee" to
+// "Dundee United" too -- confirmed live 2026-08-29, silently attributed Real
+// Madrid's own price to a bet on Real Sociedad). Assigns home first from the
+// best available match (exact normalised match tried before fuzzy), removes
+// it from the candidate pool, then matches away only among what's left -- so
+// the two team slots can never resolve to the same outcome entry, regardless
+// of which one Odds API happened to list first.
+function extractH2hPrices(outcomes, home, away) {
+  if (!outcomes) return { home: null, draw: null, away: null };
+  const pool = outcomes.slice();
+  const takeBest = (name) => {
+    let idx = pool.findIndex(o => normaliseTeam(o.name) === normaliseTeam(name));
+    if (idx === -1) idx = pool.findIndex(o => teamsMatch(o.name, name));
+    if (idx === -1) return null;
+    const [taken] = pool.splice(idx, 1);
+    return taken.price ?? null;
+  };
+  const homePrice = takeBest(home);
+  const awayPrice = takeBest(away);
+  const drawEntry = pool.find(o => normaliseTeam(o.name) === 'draw');
+  return { home: homePrice, draw: drawEntry?.price ?? null, away: awayPrice };
+}
+
 async function fetchClosingOddsForBet(bet) {
   const sport = CLOSING_ODDS_SPORT_MAP[String(bet.leagueId)];
   if (!sport) return { closingOdds: null, bookmaker: null, snapshotTs: null };
@@ -2538,11 +2564,8 @@ async function fetchClosingOddsForBet(bet) {
     const ageMins = Math.abs(new Date(kickoffIso) - new Date(snapTs)) / 60000;
     if (ageMins > 15) return { closingOdds: null, bookmaker: null, snapshotTs: snapTs };
 
-    const get = name => mkt.outcomes?.find(o => teamsMatch(o.name, name))?.price ?? null;
-    let closingOdds = null;
-    if (bet.bet === 'Home Win') closingOdds = get(home);
-    else if (bet.bet === 'Away Win') closingOdds = get(away);
-    else closingOdds = get('Draw');
+    const prices = extractH2hPrices(mkt.outcomes, home, away);
+    const closingOdds = bet.bet === 'Home Win' ? prices.home : bet.bet === 'Away Win' ? prices.away : prices.draw;
 
     return { closingOdds, bookmaker: bm.key, snapshotTs: snapTs };
   } catch (e) {
@@ -5685,9 +5708,8 @@ async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null,
             const cbm = ev.bookmakers?.find(b => b.key === bookKey);
             const cmkt = cbm?.markets?.find(m => m.key === 'h2h');
             if (!cmkt) continue;
-            const cget = name => cmkt.outcomes?.find(o => teamsMatch(o.name, name))?.price ?? null;
-            const home3 = cget(home), draw3 = cget('Draw'), away3 = cget(away);
-            if (home3 && draw3 && away3) multiEntry[bookKey] = { homeOdds: home3, drawOdds: draw3, awayOdds: away3, lastUpdate: cbm.last_update || kickoffIso };
+            const cprices = extractH2hPrices(cmkt.outcomes, home, away);
+            if (cprices.home && cprices.draw && cprices.away) multiEntry[bookKey] = { homeOdds: cprices.home, drawOdds: cprices.draw, awayOdds: cprices.away, lastUpdate: cbm.last_update || kickoffIso };
           }
           if (Object.keys(multiEntry).length > 0) closingMulti[fid] = { fixtureId: fid, snapshotTs: kickoffIso, books: multiEntry };
 
@@ -5705,13 +5727,13 @@ async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null,
             if (debug) { debugEntry.outcome = 'no_h2h_market'; _closingOddsStatus.debugEntries.push(debugEntry); console.log(`[ClosingOdds:DEBUG] MISS ${home} vs ${away} — bookmaker ${bm.key} has no h2h market`); }
             continue;
           }
-          const get = name => mkt.outcomes?.find(o => teamsMatch(o.name, name))?.price ?? null;
+          const prices = extractH2hPrices(mkt.outcomes, home, away);
 
           closing[fid] = {
             fixtureId:   fid,
-            homeOdds:    get(home),
-            drawOdds:    get('Draw'),
-            awayOdds:    get(away),
+            homeOdds:    prices.home,
+            drawOdds:    prices.draw,
+            awayOdds:    prices.away,
             bookmaker:   bm.key,
             collectedAt: bm.last_update || kickoffIso,
             snapshotTs:  kickoffIso,
@@ -7848,10 +7870,15 @@ app.get('/api/admin/diag-synthetic-odds-audit', (_req, res) => {
   }
 });
 
-// One-time historical correction (2026-08-29): replaces every bet's actualOdds
-// with a genuine Pinnacle closing price and recomputes pnl for resolved bets
-// (stake and win/loss result unchanged -- only the assumed return price
-// corrects). Priority per bet: (1) closing-odds.json, if already cached AND
+// One-time historical correction (2026-08-29): replaces every PAPER bet's
+// actualOdds with a genuine Pinnacle closing price and recomputes pnl for
+// resolved bets (stake and win/loss result unchanged -- only the assumed
+// return price corrects). Real bets are never touched (see the mode==='real'
+// check in the loop below) -- their actualOdds/stake/pnl are already a
+// genuine, human-confirmed execution record (Betfair Exchange for every real
+// bet so far), and Pinnacle's closing price would be a worse, not better,
+// source of truth for what actually happened with real money. Priority per
+// paper bet: (1) closing-odds.json, if already cached AND
 // tagged bookmaker:'pinnacle' specifically -- the bulk backfill falls back to
 // "first available bookmaker" when Pinnacle is missing, so a non-Pinnacle
 // cached entry is deliberately NOT reused here; (2) a fresh per-bet call to
@@ -7881,6 +7908,24 @@ async function _backfillBetPinnacleOddsHandler(req, res) {
     const report = [];
 
     for (const bet of bets) {
+      // Real bets are never touched by this backfill. Their actualOdds/stake/pnl
+      // are already a genuine, human-confirmed execution record (the exact price
+      // and bookmaker -- Betfair Exchange for every real bet so far -- actually
+      // used, captured via convert-to-real/placement confirmation for exactly
+      // this reason) — a real market benchmark like Pinnacle's closing price
+      // would be a WORSE, not better, source of truth for what actually happened
+      // with real money, and overwriting it would destroy the true record.
+      // Pinnacle-price correction only ever made sense for paper bets, which
+      // never had a captured real execution price to begin with.
+      if (bet.mode === 'real') {
+        report.push({
+          id: bet.id, fixture: bet.fixture, leagueName: bet.leagueName, mode: bet.mode, result: bet.result || null,
+          oldActualOdds: bet.actualOdds, correctedOdds: bet.actualOdds, source: 'real_bet_untouched',
+          oldPnl: bet.pnl, newPnl: bet.pnl, pnlDelta: 0,
+        });
+        continue;
+      }
+
       const outcomeKey = bet.bet === 'Home Win' ? 'home' : bet.bet === 'Away Win' ? 'away' : 'draw';
       let correctedOdds = null, source = null;
 
@@ -7953,7 +7998,8 @@ async function _backfillBetPinnacleOddsHandler(req, res) {
       saveClosingOdds(closing);
     }
 
-    const corrected = report.filter(r => r.source !== 'none_found');
+    const realUntouched = report.filter(r => r.source === 'real_bet_untouched');
+    const corrected = report.filter(r => r.source !== 'none_found' && r.source !== 'real_bet_untouched');
     const unverified = report.filter(r => r.source === 'none_found');
     const oldTotalPnl = report.reduce((s, r) => s + (r.oldPnl || 0), 0);
     const newTotalPnl = report.reduce((s, r) => s + (r.newPnl ?? r.oldPnl ?? 0), 0);
@@ -7963,11 +8009,13 @@ async function _backfillBetPinnacleOddsHandler(req, res) {
         ? 'DRY RUN — nothing written. Re-run without ?dryRun=true to apply.'
         : 'Applied. bets.json backed up before writing (bets-backup-pre-pinnacle-fix-<timestamp>.json). closing-odds.json updated with any freshly-fetched Pinnacle prices.',
       totalBets: bets.length, liveApiCallsMade: liveCallsMade, creditsRemainingAfter: guard.remaining - liveCallsMade,
+      realBetsUntouched: realUntouched.length,
       correctedCount: corrected.length, unverifiedCount: unverified.length,
       bySource: {
         closing_odds_cached: report.filter(r => r.source === 'closing_odds_cached').length,
         closing_odds_live_fetch: report.filter(r => r.source === 'closing_odds_live_fetch').length,
         pinnacle_odds_at_lock: report.filter(r => r.source === 'pinnacle_odds_at_lock').length,
+        real_bet_untouched: realUntouched.length,
         none_found: unverified.length,
       },
       oldTotalPnl: +oldTotalPnl.toFixed(2), newTotalPnl: +newTotalPnl.toFixed(2), pnlDelta: +((newTotalPnl - oldTotalPnl).toFixed(2)),
