@@ -7866,6 +7866,106 @@ app.get('/api/correction-layer-backtests', (_req, res) => {
   });
 });
 
+// TEMP DIAGNOSTIC — remove after use. Coverage audit found League One (41) and
+// League Two (42) are the two largest-population leagues never screened at the
+// same (tier, pick-type) granularity every original-9 league + Europa League
+// (Addendum 33) and Championship (Addendum 34) got — only a pooled overall
+// figure exists for each in CALIBRATION_AUDIT, plus a couple of individually
+// spot-checked tiers (40-45% in Addendum 32, 50-55% in Addendum 22/31). This
+// reads the SAME already-banked, rule-12-protected population more completely
+// (ROI + a real 95% CI + calibration error per tier/pick-type together) —
+// not a new look: restricted to exactly the frozen pre-cutoff population
+// (kickoff < 2026-08-11T09:00:00Z, the same cutoff WEEKLY_RETRAIN_DATE_SPLIT_
+// CUTOFFS uses for both leagues) and adds no fitted parameter. Anything at/
+// after that cutoff has already fed the weekly retrain and is deliberately
+// excluded so it can't contaminate the single-look population.
+app.get('/api/admin/diag-l1l2-full-tier-screen', async (_req, res) => {
+  try {
+    const matched = await computeMatchedEdgeFixtures();
+    const CUTOFF = new Date('2026-08-11T09:00:00Z');
+
+    const TIERS = [
+      { label: '<35%',    min: 0,    max: 0.35 },
+      { label: '35-40%',  min: 0.35, max: 0.40 },
+      { label: '40-45%',  min: 0.40, max: 0.45 },
+      { label: '45-50%',  min: 0.45, max: 0.50 },
+      { label: '50-55%',  min: 0.50, max: 0.55 },
+      { label: '55-60%',  min: 0.55, max: 0.60 },
+      { label: '60-65%',  min: 0.60, max: 0.65 },
+      { label: '65-70%',  min: 0.65, max: 0.70 },
+      { label: '70-75%',  min: 0.70, max: 0.75 },
+      { label: '75-80%',  min: 0.75, max: 0.80 },
+      { label: '80-100%', min: 0.80, max: 1.01 },
+    ];
+
+    function pooledCi(returns) {
+      const n = returns.length;
+      if (!n) return { n: 0, roi: null, ci: [null, null] };
+      const mean = returns.reduce((s, v) => s + v, 0) / n;
+      let ciLow = null, ciHigh = null;
+      if (n > 1) {
+        const variance = returns.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1);
+        const se = Math.sqrt(variance / n);
+        ciLow  = +((mean - 1.96 * se) * 100).toFixed(1);
+        ciHigh = +((mean + 1.96 * se) * 100).toFixed(1);
+      }
+      return { n, roi: +(mean * 100).toFixed(2), ci: [ciLow, ciHigh] };
+    }
+
+    const EXPECTED = {
+      41: { roi: -2.36, posEdgeN: 2227 }, // League One, CALIBRATION_AUDIT[41]
+      42: { roi: 3.1,   posEdgeN: 2346 }, // League Two, CALIBRATION_AUDIT[42]
+    };
+
+    const byLeague = {};
+    for (const leagueId of [41, 42]) {
+      const pool = matched.filter(f => parseInt(f.leagueId, 10) === leagueId && new Date(f.date) < CUTOFF);
+      const cells = [];
+      for (const pickType of ['home', 'away', 'draw']) {
+        const picks = pool.filter(f => f.topOutcome === pickType);
+        for (const t of TIERS) {
+          const inTier = picks.filter(f => f.modelProb >= t.min && f.modelProb < t.max);
+          const n = inTier.length;
+          if (n < 20) continue; // too thin to say anything, don't even report it
+          const avgPred = inTier.reduce((s, f) => s + f.modelProb, 0) / n;
+          const actualWinRate = inTier.reduce((s, f) => s + (f.won ? 1 : 0), 0) / n;
+          const calibErrPp = +((avgPred - actualWinRate) * 100).toFixed(1);
+          const pos = inTier.filter(f => f.edge >= 0.05);
+          const returns = pos.map(f => f.won ? (f.pinnacleOdds - 1) : -1);
+          const ci = pooledCi(returns);
+          cells.push({
+            tier: t.label, pickType, n, posEdgeN: pos.length,
+            calibErrPp, wellCalibrated: Math.abs(calibErrPp) < 3,
+            roi: ci.roi, ci: ci.ci,
+            ciExcludesZero: ci.ci?.[0] !== null && ci.ci?.[0] > 0,
+            ciConfirmedNegative: ci.ci?.[1] !== null && ci.ci?.[1] < 0,
+          });
+        }
+      }
+      cells.sort((a, b) => (b.roi ?? -Infinity) - (a.roi ?? -Infinity));
+
+      const allPos = pool.filter(f => f.edge >= 0.05);
+      const overall = pooledCi(allPos.map(f => f.won ? (f.pinnacleOdds - 1) : -1));
+
+      byLeague[leagueId] = {
+        leagueName: leagueId === 41 ? 'League One' : 'League Two',
+        poolSize: pool.length,
+        overallPooled: overall,
+        expectedFromCalibrationAudit: EXPECTED[leagueId],
+        totalCells: cells.length,
+        cells,
+      };
+    }
+
+    res.json({
+      note: 'TEMP diagnostic — League One (41) and League Two (42), frozen pre-cutoff population only (kickoff < 2026-08-11T09:00:00Z), every (tier, pick-type) cell with n>=20, ROI + 95% CI + calibration error together — bringing these two up to the same screening depth as the original 9 + Europa League (Addendum 33) and Championship (Addendum 34). wellCalibrated = |calibErrPp| < 3pp. overallPooled should closely match expectedFromCalibrationAudit — a large mismatch would mean this reconstruction isn\'t faithful. Cross-reference calibErrPp before trusting any high-ROI row. Delete this endpoint once read.',
+      byLeague,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
 // One-time historical correction (2026-08-29): replaces every PAPER bet's
 // actualOdds with a genuine Pinnacle closing price and recomputes pnl for
 // resolved bets (stake and win/loss result unchanged -- only the assumed
