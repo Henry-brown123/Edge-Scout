@@ -7929,14 +7929,32 @@ app.get('/api/admin/diag-domestic-pool-date-span', async (_req, res) => {
       return { edgeFloor: `>=${(minEdge * 100).toFixed(0)}%`, posEdgeN, avgPerActiveWeek: +(posEdgeN / activeWeeks.size).toFixed(2) };
     });
 
+    // Blended average above is diluted by 2020-2024, when most rule-9 leagues'
+    // test sets hadn't started yet (only League One/Two/Championship existed
+    // in the pool that early) -- re-cut to the window where all 11 leagues
+    // genuinely overlap, starting from the LATEST individual testFrom cutoff
+    // (Serie A, 2024-09-16), for a realistic full-coverage weekly estimate.
+    const domesticTestFroms = Object.entries(VALIDATED_SPLITS)
+      .filter(([lid]) => DOMESTIC.has(parseInt(lid, 10)))
+      .map(([, split]) => new Date(split.testFrom).getTime());
+    const latestTestFrom = new Date(Math.max(...domesticTestFroms));
+    const concurrentPool = pool.filter(f => new Date(f.date) >= latestTestFrom);
+    const concurrentActiveWeeks = new Set(concurrentPool.map(f => isoWeekKey(new Date(f.date))));
+    const concurrentPerWeekAtEdge = EDGE_LEVELS.map(minEdge => {
+      const posEdgeN = concurrentPool.filter(f => f.edge >= minEdge).length;
+      return { edgeFloor: `>=${(minEdge * 100).toFixed(0)}%`, posEdgeN, avgPerActiveWeek: +(posEdgeN / concurrentActiveWeeks.size).toFixed(2) };
+    });
+
     res.json({
-      note: 'TEMP diagnostic — date span of the same domestic-only pool used in the edge-threshold sweep. earliestDate/latestDate overall and per-league; activeWeeks = distinct ISO weeks with >=1 matched fixture (excludes summer close-season, so avgPerActiveWeek approximates real in-season weekly volume, not a calendar-year average). rule9 populations (VALIDATED_SPLITS) grow every week going forward as new fixtures are played; rule12 populations (League One/Two/Championship) are fixed historical windows that do not grow. Delete this endpoint once read.',
+      note: 'TEMP diagnostic — date span of the same domestic-only pool used in the edge-threshold sweep. earliestDate/latestDate overall and per-league; activeWeeks = distinct ISO weeks with >=1 matched fixture (excludes summer close-season, so avgPerActiveWeek approximates real in-season weekly volume, not a calendar-year average). rule9 populations (VALIDATED_SPLITS) grow every week going forward as new fixtures are played; rule12 populations (League One/Two/Championship) are fixed historical windows that do not grow. concurrentWindow/concurrentPerWeekAtEdge restrict to the period from the LATEST individual league testFrom cutoff onward, i.e. only when all 11 leagues genuinely overlap -- a more realistic full-coverage weekly estimate than the blended perWeekAtEdge above, which is diluted by years when several leagues weren\'t in the pool yet. Delete this endpoint once read.',
       overallEarliestDate: dates[0]?.toISOString().slice(0, 10) || null,
       overallLatestDate: dates[dates.length - 1]?.toISOString().slice(0, 10) || null,
       totalPoolSize: pool.length,
       activeWeekCount: activeWeeks.size,
       byLeague,
       perWeekAtEdge,
+      concurrentWindow: { from: latestTestFrom.toISOString().slice(0, 10), n: concurrentPool.length, activeWeekCount: concurrentActiveWeeks.size },
+      concurrentPerWeekAtEdge,
     });
   } catch (e) {
     res.status(500).json({ error: e.message, stack: e.stack });
