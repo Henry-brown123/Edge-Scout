@@ -7866,6 +7866,71 @@ app.get('/api/correction-layer-backtests', (_req, res) => {
   });
 });
 
+// TEMP DIAGNOSTIC — remove after use. User question: the live posEdge>=5%
+// filter is a fixed analytical convention (docs/continuous-roi-methodology.md),
+// never itself tuned -- the one prior sensitivity sweep (Addendum 14
+// Extension 2, 1/2/3/5% edge) is explicitly documented stale (frozen on a
+// one-off pre-2024-08-07 proxy model, never covering League One/Two/
+// Championship/Europa/Conference). This re-asks the same question with the
+// CURRENT live model against every league's own genuinely-protected held-out
+// population (VALIDATED_SPLITS testFrom for the original 9 + Europa +
+// Conference, WEEKLY_RETRAIN_DATE_SPLIT_CUTOFFS pre-cutoff for League One/
+// Two/Championship/Carabao Cup -- the same per-league population every
+// other addendum this session uses), pooled across every one of them, at a
+// sweep of edge thresholds. Purely descriptive re-slicing of already-scored
+// fixtures at a different threshold -- no new fitted parameter, no change
+// to the live threshold itself. FIFA World Cup excluded (no calibration
+// population exists for it at all, see Addendum 35/CALIBRATION_AUDIT[1]).
+app.get('/api/admin/diag-edge-threshold-sweep', async (_req, res) => {
+  try {
+    const matched = await computeMatchedEdgeFixtures();
+    const DATE_SPLIT_CUTOFFS = {
+      41: '2026-08-11T09:00:00Z', 42: '2026-08-11T09:00:00Z',
+      40: '2026-08-19T22:00:00Z', 48: '2026-08-24T16:00:00Z',
+    };
+
+    const pool = matched.filter(f => {
+      const lid = parseInt(f.leagueId, 10);
+      if (lid === 1) return false; // FIFA World Cup — no genuine population
+      const dsCutoff = DATE_SPLIT_CUTOFFS[lid];
+      if (dsCutoff) return new Date(f.date) < new Date(dsCutoff);
+      const split = VALIDATED_SPLITS[lid];
+      if (!split) return false; // no protected population defined for this league at all
+      return new Date(f.date) >= new Date(split.testFrom);
+    });
+
+    function pooledCi(returns) {
+      const n = returns.length;
+      if (!n) return { n: 0, roi: null, ci: [null, null] };
+      const mean = returns.reduce((s, v) => s + v, 0) / n;
+      let ciLow = null, ciHigh = null;
+      if (n > 1) {
+        const variance = returns.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1);
+        const se = Math.sqrt(variance / n);
+        ciLow  = +((mean - 1.96 * se) * 100).toFixed(1);
+        ciHigh = +((mean + 1.96 * se) * 100).toFixed(1);
+      }
+      return { n, roi: +(mean * 100).toFixed(2), ci: [ciLow, ciHigh] };
+    }
+
+    const EDGE_LEVELS = [0, 0.01, 0.02, 0.03, 0.05, 0.08, 0.10, 0.15, 0.20];
+    const byEdge = EDGE_LEVELS.map(minEdge => {
+      const atLevel = pool.filter(f => f.edge >= minEdge);
+      const returns = atLevel.map(f => f.won ? (f.pinnacleOdds - 1) : -1);
+      const ci = pooledCi(returns);
+      return { edgeFloor: `>=${(minEdge * 100).toFixed(0)}%`, ...ci };
+    });
+
+    res.json({
+      note: 'TEMP diagnostic — pools every league with a genuinely-protected held-out population (all leagues except FIFA World Cup), current live model, at a sweep of edge floors. Each league restricted to its own already-established test-only/pre-cutoff population — same populations every other addendum this session uses. Descriptive re-slice only, not a new statistical test, not a basis for changing the live 5% convention on its own — n shrinks fast at higher floors, check that column before reading too much into a high-ROI/low-n row. Delete this endpoint once read.',
+      totalPoolSize: pool.length,
+      byEdge,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
 // One-time historical correction (2026-08-29): replaces every PAPER bet's
 // actualOdds with a genuine Pinnacle closing price and recomputes pnl for
 // resolved bets (stake and win/loss result unchanged -- only the assumed
