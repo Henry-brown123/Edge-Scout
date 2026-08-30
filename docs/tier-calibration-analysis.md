@@ -5984,3 +5984,114 @@ endpoint built and removed as part of this addendum's work
 data become available. No settings, weights, `CALIBRATION_AUDIT`, or
 green-flag state changed — this is a data-integrity correction to the bet
 log and its supporting pipeline, not a calibration or tuning exercise.
+
+## Addendum 36 — League One/Two full tier × pick-type screen: coverage now matches every other league, one confirmed negative corroborated, no new candidates
+
+Follow-up to a direct coverage audit: every league had been checked to a
+different depth. The original 9 + Europa League (Addendum 33) and
+Championship (Addendum 34) all had a full (tier × pick-type) grid with
+ROI, a real 95% CI, and calibration error per cell. League One (41) and
+League Two (42) — despite being the two largest matched-odds populations
+in the whole project — only had a single pooled overall figure in
+`CALIBRATION_AUDIT`, plus a couple of individually spot-checked tiers
+(40-45% in Addendum 32, 50-55% in Addendum 22/31). This closes that gap.
+
+### Method
+
+Temporary diagnostic (`GET /api/admin/diag-l1l2-full-tier-screen`, removed
+after this addendum), reading the SAME already-banked population every
+prior League One/Two figure comes from — restricted strictly to kickoffs
+before the 2026-08-11T09:00:00Z rule-12 date-split cutoff, so nothing that
+has since fed the weekly retrain leaks in. `overallPooled` reproduced
+`CALIBRATION_AUDIT`'s stored figures almost exactly (League One: -2.36%
+both; League Two: 3.07% vs the stored 3.1%, rounding only) — confirms the
+reconstruction is faithful, not a new test.
+
+### Result — League One (41), 15 cells at n≥20
+
+**One confirmed negative, corroborating the existing finding at full-grid
+resolution**: 50-55% home — n=367, posEdgeN=255 (clears the decision-grade
+floor), ROI **-16.3%**, 95% CI **[-29.4%, -3.2%]** (excludes zero), real
+overconfidence (5.2pp). This is the same cell Addendum 31 already confirmed
+negative across 4 walk-forward blocks; seeing it reconfirmed here, at this
+resolution, on the same frozen population, is a consistency check passing,
+not a new finding.
+
+**One promising-but-thin positive**: 75-80% home — n=31, posEdgeN=31, ROI
++21.6%, CI [1.6%, 41.7%] nominally excludes zero, but n=31 is far below
+the decision-grade floor and it's real-overconfident underneath (-6.4pp) —
+a thin-cell trap in the same shape as several original-9 cells Addendum 33
+flagged, not a candidate.
+
+**Two large, clean, decision-grade-volume cells with no confirmed
+edge**: 45-50% home (n=451, posEdgeN=290, ROI +6.2%, CI spans zero,
+well-calibrated) and 40-45% home (n=505, posEdgeN=294, ROI -6.5%, CI spans
+zero, well-calibrated). Both genuinely clean reads — real volume, good
+calibration, simply no edge either direction.
+
+**Two large-effect negatives just short of confirming**: 50-55% away
+(n=114, ROI -22.7%, CI [-45.9%, +0.4%] — upper bound a hair's breadth from
+excluding zero) and 35-40% away (n=273, ROI -23.1%, CI [-47.3%, +1.1%]).
+Neither clears the 95% bar, but both are large-effect, decent-volume, and
+worth remembering alongside the confirmed 50-55% home negative — three of
+four home/away pairs in the 35-55% probability range now lean negative for
+this league.
+
+Everything else (60-65% both pick types, 55-60% both, 70-75% home, 45-50%
+away, 40-45% away) spans zero at moderate-to-thin volume, no confirmed
+direction.
+
+### Result — League Two (42), 13 cells at n≥20
+
+**No confirmed edge in either direction anywhere** — the closest calls:
+
+- **40-45% home** (n=577, posEdgeN=337 — the largest cell in either
+  league): ROI +10.8%, 95% CI **[-3.7%, +25.3%]** — nearly excludes zero
+  on the downside, well-calibrated (-1.9pp). The single most credible
+  positive read in this screen — real volume, clean calibration, CI close
+  to confirming — but doesn't clear the bar. Worth tracking as live
+  evidence accumulates, same treatment as Championship's 65-70% home in
+  Addendum 34.
+- **50-55% home** and **55-60% home** (n=397/260, ROI +8.0%/+10.2%): both
+  look positive on ROI alone, but both carry real overconfidence
+  (5.1-5.2pp) — exactly the "riding on overconfidence, not a real
+  candidate" pattern Addendum 22 established for this league's own
+  green-flagged cells. Flagged, not counted as promising.
+- **60-65% home** (n=183, ROI -4.5%, badly overconfident at 13.2pp) and
+  **70-75% home** (n=45, ROI -12.3%, severely overconfident at 27.6pp):
+  negative-leaning with real, substantial miscalibration underneath, but
+  neither clears decision-grade volume or a confirming CI yet.
+
+**45-50% home** (n=529, the largest well-calibrated cell, ROI +6.6%, CI
+spans zero) is another clean, high-volume, no-edge read alongside League
+One's equivalent tier.
+
+### Verdict
+
+**No new green-flag candidates for either league.** The one confirmed
+finding (League One 50-55% home, negative) was already known — this
+exercise corroborates it at full resolution rather than discovering it.
+The most interesting unconfirmed reads worth tracking going forward:
+League One's two large-effect away-side negatives (50-55%, 35-40%) sitting
+just short of confirming, and League Two's 40-45% home sitting just short
+of confirming positive. All three should be watched as live evidence
+accumulates rather than re-tested against this frozen population, per
+rule 3.
+
+**Coverage-wise, this closes the gap identified in the prior audit.**
+League One and League Two now have the same (tier × pick-type) screening
+depth as every other league with a genuine banked population. Conference
+League and Carabao Cup remain deliberately shallower (population too thin
+for a meaningful further cut — Addendum 20's judgment call, not an
+oversight), and FIFA World Cup remains permanently unauditable (no
+calibration population exists and the tournament has concluded) — both
+documented, neither an inconsistency.
+
+### Compliance
+
+One temporary diagnostic endpoint built and removed as part of this
+addendum's commit. No settings, weights, `CALIBRATION_AUDIT`, or
+green-flag state changed. No new API-Sports or Odds API calls; all figures
+from `computeMatchedEdgeFixtures()` against the same already-collected,
+already-frozen matched-odds population every prior League One/Two figure
+comes from, strictly pre-cutoff.
