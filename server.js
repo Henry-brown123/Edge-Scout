@@ -7866,6 +7866,83 @@ app.get('/api/correction-layer-backtests', (_req, res) => {
   });
 });
 
+// TEMP DIAGNOSTIC — remove after use. Follow-up to the domestic-only edge-
+// threshold sweep: user wants to convert the n figures into a rough weekly
+// in-season betting volume, which needs the actual date span of the
+// underlying population (varies per league — VALIDATED_SPLITS test sets run
+// from their testFrom cutoff to today; League One/Two/Championship's rule-12
+// populations are a fixed historical window up to their own cutoff and don't
+// grow). Reports overall + per-league date range, plus distinct in-season
+// weeks (ISO year-week with >=1 matched fixture) so summer close-seasons
+// don't dilute the "per week" figure into something misleadingly low.
+app.get('/api/admin/diag-domestic-pool-date-span', async (_req, res) => {
+  try {
+    const matched = await computeMatchedEdgeFixtures();
+    const DOMESTIC = new Set([39, 140, 135, 78, 61, 179, 88, 94, 41, 42, 40]);
+    const DATE_SPLIT_CUTOFFS = { 41: '2026-08-11T09:00:00Z', 42: '2026-08-11T09:00:00Z', 40: '2026-08-19T22:00:00Z' };
+
+    const pool = matched.filter(f => {
+      const lid = parseInt(f.leagueId, 10);
+      if (!DOMESTIC.has(lid)) return false;
+      const dsCutoff = DATE_SPLIT_CUTOFFS[lid];
+      if (dsCutoff) return new Date(f.date) < new Date(dsCutoff);
+      const split = VALIDATED_SPLITS[lid];
+      if (!split) return false;
+      return new Date(f.date) >= new Date(split.testFrom);
+    });
+
+    function isoWeekKey(d) {
+      const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+      const dayNum = (date.getUTCDay() + 6) % 7;
+      date.setUTCDate(date.getUTCDate() - dayNum + 3);
+      const firstThursday = new Date(Date.UTC(date.getUTCFullYear(), 0, 4));
+      const week = 1 + Math.round(((date - firstThursday) / 86400000 - 3 + ((firstThursday.getUTCDay() + 6) % 7)) / 7);
+      return `${date.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+    }
+
+    const activeWeeks = new Set(pool.map(f => isoWeekKey(new Date(f.date))));
+    const dates = pool.map(f => new Date(f.date)).sort((a, b) => a - b);
+
+    const byLeague = {};
+    for (const leagueId of DOMESTIC) {
+      const sub = matched.filter(f => {
+        if (parseInt(f.leagueId, 10) !== leagueId) return false;
+        const dsCutoff = DATE_SPLIT_CUTOFFS[leagueId];
+        if (dsCutoff) return new Date(f.date) < new Date(dsCutoff);
+        const split = VALIDATED_SPLITS[leagueId];
+        if (!split) return false;
+        return new Date(f.date) >= new Date(split.testFrom);
+      });
+      if (!sub.length) continue;
+      const subDates = sub.map(f => new Date(f.date)).sort((a, b) => a - b);
+      byLeague[leagueId] = {
+        n: sub.length,
+        earliestDate: subDates[0].toISOString().slice(0, 10),
+        latestDate: subDates[subDates.length - 1].toISOString().slice(0, 10),
+        populationType: DATE_SPLIT_CUTOFFS[leagueId] ? 'fixed_historical_window_rule12' : 'growing_test_set_rule9',
+      };
+    }
+
+    const EDGE_LEVELS = [0, 0.01, 0.02, 0.03, 0.05, 0.08, 0.10, 0.15, 0.20];
+    const perWeekAtEdge = EDGE_LEVELS.map(minEdge => {
+      const posEdgeN = pool.filter(f => f.edge >= minEdge).length;
+      return { edgeFloor: `>=${(minEdge * 100).toFixed(0)}%`, posEdgeN, avgPerActiveWeek: +(posEdgeN / activeWeeks.size).toFixed(2) };
+    });
+
+    res.json({
+      note: 'TEMP diagnostic — date span of the same domestic-only pool used in the edge-threshold sweep. earliestDate/latestDate overall and per-league; activeWeeks = distinct ISO weeks with >=1 matched fixture (excludes summer close-season, so avgPerActiveWeek approximates real in-season weekly volume, not a calendar-year average). rule9 populations (VALIDATED_SPLITS) grow every week going forward as new fixtures are played; rule12 populations (League One/Two/Championship) are fixed historical windows that do not grow. Delete this endpoint once read.',
+      overallEarliestDate: dates[0]?.toISOString().slice(0, 10) || null,
+      overallLatestDate: dates[dates.length - 1]?.toISOString().slice(0, 10) || null,
+      totalPoolSize: pool.length,
+      activeWeekCount: activeWeeks.size,
+      byLeague,
+      perWeekAtEdge,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
 // One-time historical correction (2026-08-29): replaces every PAPER bet's
 // actualOdds with a genuine Pinnacle closing price and recomputes pnl for
 // resolved bets (stake and win/loss result unchanged -- only the assumed
