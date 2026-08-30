@@ -7884,14 +7884,20 @@ app.get('/api/correction-layer-backtests', (_req, res) => {
 app.get('/api/admin/diag-edge-threshold-sweep', async (_req, res) => {
   try {
     const matched = await computeMatchedEdgeFixtures();
+    // Restricted to genuine domestic league football, no cups/tournaments —
+    // same DOMESTIC_LEAGUE_IDS_FOR_BLEND set used elsewhere (scoring.js), at
+    // the user's request: Champions/Europa/Conference League, Carabao Cup,
+    // and FIFA World Cup are all thinner, noisier populations that shouldn't
+    // be pooled in with continuous domestic league play.
+    const DOMESTIC = new Set([39, 140, 135, 78, 61, 179, 88, 94, 41, 42, 40]);
     const DATE_SPLIT_CUTOFFS = {
       41: '2026-08-11T09:00:00Z', 42: '2026-08-11T09:00:00Z',
-      40: '2026-08-19T22:00:00Z', 48: '2026-08-24T16:00:00Z',
+      40: '2026-08-19T22:00:00Z',
     };
 
     const pool = matched.filter(f => {
       const lid = parseInt(f.leagueId, 10);
-      if (lid === 1) return false; // FIFA World Cup — no genuine population
+      if (!DOMESTIC.has(lid)) return false;
       const dsCutoff = DATE_SPLIT_CUTOFFS[lid];
       if (dsCutoff) return new Date(f.date) < new Date(dsCutoff);
       const split = VALIDATED_SPLITS[lid];
@@ -7922,7 +7928,7 @@ app.get('/api/admin/diag-edge-threshold-sweep', async (_req, res) => {
     });
 
     res.json({
-      note: 'TEMP diagnostic — pools every league with a genuinely-protected held-out population (all leagues except FIFA World Cup), current live model, at a sweep of edge floors. Each league restricted to its own already-established test-only/pre-cutoff population — same populations every other addendum this session uses. Descriptive re-slice only, not a new statistical test, not a basis for changing the live 5% convention on its own — n shrinks fast at higher floors, check that column before reading too much into a high-ROI/low-n row. Delete this endpoint once read.',
+      note: 'TEMP diagnostic — pools every genuine domestic league (no cups/tournaments — Champions/Europa/Conference League, Carabao Cup, and FIFA World Cup all excluded as thinner/noisier populations), current live model, at a sweep of edge floors. Each league restricted to its own already-established test-only/pre-cutoff population — same populations every other addendum this session uses. Descriptive re-slice only, not a new statistical test, not a basis for changing the live 5% convention on its own — n shrinks fast at higher floors, check that column before reading too much into a high-ROI/low-n row. Delete this endpoint once read.',
       totalPoolSize: pool.length,
       byEdge,
     });
