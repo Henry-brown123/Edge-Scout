@@ -8043,6 +8043,98 @@ app.get('/api/admin/diag-walkforward-robustness-scan', async (_req, res) => {
   }
 });
 
+// TEMP DIAGNOSTIC — remove after use. ROI% alone doesn't say which candidate
+// combo actually makes more money -- a high-ROI combo on thin n can produce
+// less absolute profit than a lower-ROI combo with much greater volume. This
+// walks the SAME concurrent-coverage domestic population chronologically for
+// each candidate (edge, prob) combo, staking real fractional Kelly (the exact
+// kelly() function from scoring.js, realKellyFraction=0.25 default matching
+// live real-money sizing) against a compounding running bankroll, and reports
+// final bankroll, total profit, and max drawdown -- not just a static
+// ROI x n multiplication, which wouldn't capture compounding or sequencing.
+// Simplification flagged explicitly: bets are settled strictly in date order
+// (bankroll updates fixture-by-fixture), so same-day fixtures are staked
+// slightly more precisely than reality (real same-day bets would all draw
+// against the SAME pre-any-resolution bankroll, not a sequentially-updated
+// one) -- a modest effect at this pool's volume (~1-6 qualifying bets/day),
+// not a material distortion of the comparison between combos.
+app.get('/api/admin/diag-bankroll-simulation', async (req, res) => {
+  try {
+    const { kelly } = require('./scoring');
+    const matched = await computeMatchedEdgeFixtures();
+    const DOMESTIC = new Set([39, 140, 135, 78, 61, 179, 88, 94, 41, 42, 40]);
+    const DATE_SPLIT_CUTOFFS = { 41: '2026-08-11T09:00:00Z', 42: '2026-08-11T09:00:00Z', 40: '2026-08-19T22:00:00Z' };
+
+    const pool = matched.filter(f => {
+      const lid = parseInt(f.leagueId, 10);
+      if (!DOMESTIC.has(lid)) return false;
+      const dsCutoff = DATE_SPLIT_CUTOFFS[lid];
+      if (dsCutoff) return new Date(f.date) < new Date(dsCutoff);
+      const split = VALIDATED_SPLITS[lid];
+      if (!split) return false;
+      return new Date(f.date) >= new Date(split.testFrom);
+    });
+
+    const domesticTestFroms = Object.entries(VALIDATED_SPLITS)
+      .filter(([lid]) => DOMESTIC.has(parseInt(lid, 10)))
+      .map(([, split]) => new Date(split.testFrom).getTime());
+    const concurrentFrom = new Date(Math.max(...domesticTestFroms));
+    const concurrentPool = pool.filter(f => new Date(f.date) >= concurrentFrom)
+      .sort((a, b) => new Date(a.date) - new Date(b.date));
+
+    const startingBankroll = parseFloat(req.query.bankroll) || 5000;
+    const kellyFraction = parseFloat(req.query.kellyFraction) || 0.25;
+
+    const CANDIDATES = [
+      { edgeFloor: 10, probFloor: 0.45 }, { edgeFloor: 12, probFloor: 0.45 },
+      { edgeFloor: 15, probFloor: 0.45 }, { edgeFloor: 15, probFloor: 0.50 },
+      { edgeFloor: 18, probFloor: 0.45 }, { edgeFloor: 20, probFloor: 0.45 },
+      { edgeFloor: 20, probFloor: 0.50 },
+    ];
+
+    const results = CANDIDATES.map(c => {
+      const fixtures = concurrentPool.filter(f => f.edge >= c.edgeFloor / 100 && f.modelProb >= c.probFloor);
+      let bankroll = startingBankroll;
+      let peak = startingBankroll;
+      let maxDrawdownPct = 0;
+      let totalStaked = 0, betsPlaced = 0, betsSkippedInsufficientFunds = 0;
+      for (const f of fixtures) {
+        const k = kelly(f.calProb, f.pinnacleOdds, kellyFraction, bankroll);
+        let stake = k.stake;
+        if (stake <= 0) continue;
+        stake = Math.min(stake, bankroll); // safety clamp — never stake more than available
+        if (bankroll <= 0) { betsSkippedInsufficientFunds++; continue; }
+        totalStaked += stake;
+        betsPlaced++;
+        bankroll += f.won ? stake * (f.pinnacleOdds - 1) : -stake;
+        peak = Math.max(peak, bankroll);
+        const drawdownPct = peak > 0 ? ((peak - bankroll) / peak) * 100 : 0;
+        maxDrawdownPct = Math.max(maxDrawdownPct, drawdownPct);
+      }
+      return {
+        edgeFloor: `>=${c.edgeFloor}%`, probFloor: `>=${(c.probFloor * 100).toFixed(0)}%`,
+        betsPlaced, betsSkippedInsufficientFunds,
+        finalBankroll: +bankroll.toFixed(2),
+        totalProfit: +(bankroll - startingBankroll).toFixed(2),
+        growthMultiple: +(bankroll / startingBankroll).toFixed(3),
+        totalStaked: +totalStaked.toFixed(2),
+        avgStake: betsPlaced ? +(totalStaked / betsPlaced).toFixed(2) : 0,
+        maxDrawdownPct: +maxDrawdownPct.toFixed(1),
+      };
+    });
+    results.sort((a, b) => b.growthMultiple - a.growthMultiple);
+
+    res.json({
+      note: `TEMP diagnostic — bankroll simulation. Starting bankroll £${startingBankroll}, real fractional Kelly (fraction=${kellyFraction}, matching scoring.js's kelly() function), walked chronologically through the same concurrent-coverage domestic population, one candidate (edge, prob) combo at a time. growthMultiple (final/starting) is scale-independent — use it to compare combos regardless of what actual bankroll you'd start with. finalBankroll/totalProfit assume the £${startingBankroll} starting point specifically. Pass ?bankroll=X&kellyFraction=Y to rerun with different assumptions. maxDrawdownPct is the worst peak-to-trough decline seen during the simulation — a real risk/withdrawal-planning signal, not just a return figure. Sorted by growthMultiple descending. Delete this endpoint once read.`,
+      startingBankroll, kellyFraction,
+      concurrentFrom: concurrentFrom.toISOString().slice(0, 10),
+      results,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
 // One-time historical correction (2026-08-29): replaces every PAPER bet's
 // actualOdds with a genuine Pinnacle closing price and recomputes pnl for
 // resolved bets (stake and win/loss result unchanged -- only the assumed
