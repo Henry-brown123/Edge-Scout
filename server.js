@@ -7866,14 +7866,14 @@ app.get('/api/correction-layer-backtests', (_req, res) => {
   });
 });
 
-// TEMP DIAGNOSTIC — remove after use. Fine-grained (1% steps, 8-20%) version
+// TEMP DIAGNOSTIC — remove after use. Fine-grained (1% steps, 10-20%) version
 // of the domestic-only edge sweep, restricted to the concurrent-coverage
 // window (from the latest individual league's testFrom cutoff onward, i.e.
-// only when all 11 domestic leagues genuinely overlap — the same window
-// diag-domestic-pool-date-span established as the realistic basis for a
-// weekly-volume estimate, rather than the blended 6-year population).
-// n/ROI/CI/avgPerActiveWeek all computed against that same consistent
-// population so the four columns are directly comparable to each other.
+// only when all 11 domestic leagues genuinely overlap). Overlays a second
+// dimension — a modelProb floor (none, >=40%, >=45%, >=50%) on top of each
+// edge floor — to see whether trimming the low-probability tail changes the
+// edge-floor pattern already found. n/ROI/CI/avgPerActiveWeek all computed
+// against the same consistent population for direct comparability.
 app.get('/api/admin/diag-edge-threshold-fine-grained', async (_req, res) => {
   try {
     const matched = await computeMatchedEdgeFixtures();
@@ -7920,20 +7920,28 @@ app.get('/api/admin/diag-edge-threshold-fine-grained', async (_req, res) => {
       return { n, roi: +(mean * 100).toFixed(2), ci: [ciLow, ciHigh] };
     }
 
+    const PROB_FLOORS = [
+      { label: 'no floor', min: 0 },
+      { label: '>=40%', min: 0.40 },
+      { label: '>=45%', min: 0.45 },
+      { label: '>=50%', min: 0.50 },
+    ];
+
     const rows = [];
-    for (let pct = 8; pct <= 20; pct++) {
+    for (let pct = 10; pct <= 20; pct++) {
       const minEdge = pct / 100;
-      const atLevel = concurrentPool.filter(f => f.edge >= minEdge);
-      const returns = atLevel.map(f => f.won ? (f.pinnacleOdds - 1) : -1);
-      const ci = pooledCi(returns);
-      rows.push({
-        edgeFloor: `>=${pct}%`, n: ci.n, roi: ci.roi, ci: ci.ci,
-        avgPerActiveWeek: +(ci.n / activeWeekCount).toFixed(2),
-      });
+      const row = { edgeFloor: `>=${pct}%` };
+      for (const pf of PROB_FLOORS) {
+        const atLevel = concurrentPool.filter(f => f.edge >= minEdge && f.modelProb >= pf.min);
+        const returns = atLevel.map(f => f.won ? (f.pinnacleOdds - 1) : -1);
+        const ci = pooledCi(returns);
+        row[pf.label] = { n: ci.n, roi: ci.roi, ci: ci.ci, avgPerActiveWeek: +(ci.n / activeWeekCount).toFixed(2) };
+      }
+      rows.push(row);
     }
 
     res.json({
-      note: 'TEMP diagnostic — domestic leagues only, restricted to the concurrent-coverage window (from ' + concurrentFrom.toISOString().slice(0, 10) + ' onward, when all 11 leagues genuinely overlap), 1% edge-floor increments from 8% to 20%. n/ROI/CI/avgPerActiveWeek all computed against this same population for direct comparability. Descriptive re-slice only, not a new statistical test. Delete this endpoint once read.',
+      note: 'TEMP diagnostic — domestic leagues only, concurrent-coverage window (from ' + concurrentFrom.toISOString().slice(0, 10) + ' onward, when all 11 leagues genuinely overlap), 1% edge-floor increments from 10% to 20%, each overlaid with a modelProb floor (none, >=40%, >=45%, >=50%). n/ROI/CI/avgPerActiveWeek all computed against the same consistent population. Descriptive re-slice only, not a new statistical test. Delete this endpoint once read.',
       concurrentFrom: concurrentFrom.toISOString().slice(0, 10),
       activeWeekCount,
       rows,
