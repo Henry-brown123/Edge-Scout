@@ -7866,16 +7866,15 @@ app.get('/api/correction-layer-backtests', (_req, res) => {
   });
 });
 
-// TEMP DIAGNOSTIC — remove after use. Follow-up to the domestic-only edge-
-// threshold sweep: user wants to convert the n figures into a rough weekly
-// in-season betting volume, which needs the actual date span of the
-// underlying population (varies per league — VALIDATED_SPLITS test sets run
-// from their testFrom cutoff to today; League One/Two/Championship's rule-12
-// populations are a fixed historical window up to their own cutoff and don't
-// grow). Reports overall + per-league date range, plus distinct in-season
-// weeks (ISO year-week with >=1 matched fixture) so summer close-seasons
-// don't dilute the "per week" figure into something misleadingly low.
-app.get('/api/admin/diag-domestic-pool-date-span', async (_req, res) => {
+// TEMP DIAGNOSTIC — remove after use. Fine-grained (1% steps, 8-20%) version
+// of the domestic-only edge sweep, restricted to the concurrent-coverage
+// window (from the latest individual league's testFrom cutoff onward, i.e.
+// only when all 11 domestic leagues genuinely overlap — the same window
+// diag-domestic-pool-date-span established as the realistic basis for a
+// weekly-volume estimate, rather than the blended 6-year population).
+// n/ROI/CI/avgPerActiveWeek all computed against that same consistent
+// population so the four columns are directly comparable to each other.
+app.get('/api/admin/diag-edge-threshold-fine-grained', async (_req, res) => {
   try {
     const matched = await computeMatchedEdgeFixtures();
     const DOMESTIC = new Set([39, 140, 135, 78, 61, 179, 88, 94, 41, 42, 40]);
@@ -7891,6 +7890,12 @@ app.get('/api/admin/diag-domestic-pool-date-span', async (_req, res) => {
       return new Date(f.date) >= new Date(split.testFrom);
     });
 
+    const domesticTestFroms = Object.entries(VALIDATED_SPLITS)
+      .filter(([lid]) => DOMESTIC.has(parseInt(lid, 10)))
+      .map(([, split]) => new Date(split.testFrom).getTime());
+    const concurrentFrom = new Date(Math.max(...domesticTestFroms));
+    const concurrentPool = pool.filter(f => new Date(f.date) >= concurrentFrom);
+
     function isoWeekKey(d) {
       const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
       const dayNum = (date.getUTCDay() + 6) % 7;
@@ -7899,62 +7904,39 @@ app.get('/api/admin/diag-domestic-pool-date-span', async (_req, res) => {
       const week = 1 + Math.round(((date - firstThursday) / 86400000 - 3 + ((firstThursday.getUTCDay() + 6) % 7)) / 7);
       return `${date.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
     }
+    const activeWeekCount = new Set(concurrentPool.map(f => isoWeekKey(new Date(f.date)))).size;
 
-    const activeWeeks = new Set(pool.map(f => isoWeekKey(new Date(f.date))));
-    const dates = pool.map(f => new Date(f.date)).sort((a, b) => a - b);
-
-    const byLeague = {};
-    for (const leagueId of DOMESTIC) {
-      const sub = matched.filter(f => {
-        if (parseInt(f.leagueId, 10) !== leagueId) return false;
-        const dsCutoff = DATE_SPLIT_CUTOFFS[leagueId];
-        if (dsCutoff) return new Date(f.date) < new Date(dsCutoff);
-        const split = VALIDATED_SPLITS[leagueId];
-        if (!split) return false;
-        return new Date(f.date) >= new Date(split.testFrom);
-      });
-      if (!sub.length) continue;
-      const subDates = sub.map(f => new Date(f.date)).sort((a, b) => a - b);
-      byLeague[leagueId] = {
-        n: sub.length,
-        earliestDate: subDates[0].toISOString().slice(0, 10),
-        latestDate: subDates[subDates.length - 1].toISOString().slice(0, 10),
-        populationType: DATE_SPLIT_CUTOFFS[leagueId] ? 'fixed_historical_window_rule12' : 'growing_test_set_rule9',
-      };
+    function pooledCi(returns) {
+      const n = returns.length;
+      if (!n) return { n: 0, roi: null, ci: [null, null] };
+      const mean = returns.reduce((s, v) => s + v, 0) / n;
+      let ciLow = null, ciHigh = null;
+      if (n > 1) {
+        const variance = returns.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1);
+        const se = Math.sqrt(variance / n);
+        ciLow  = +((mean - 1.96 * se) * 100).toFixed(1);
+        ciHigh = +((mean + 1.96 * se) * 100).toFixed(1);
+      }
+      return { n, roi: +(mean * 100).toFixed(2), ci: [ciLow, ciHigh] };
     }
 
-    const EDGE_LEVELS = [0, 0.01, 0.02, 0.03, 0.05, 0.08, 0.10, 0.15, 0.20];
-    const perWeekAtEdge = EDGE_LEVELS.map(minEdge => {
-      const posEdgeN = pool.filter(f => f.edge >= minEdge).length;
-      return { edgeFloor: `>=${(minEdge * 100).toFixed(0)}%`, posEdgeN, avgPerActiveWeek: +(posEdgeN / activeWeeks.size).toFixed(2) };
-    });
-
-    // Blended average above is diluted by 2020-2024, when most rule-9 leagues'
-    // test sets hadn't started yet (only League One/Two/Championship existed
-    // in the pool that early) -- re-cut to the window where all 11 leagues
-    // genuinely overlap, starting from the LATEST individual testFrom cutoff
-    // (Serie A, 2024-09-16), for a realistic full-coverage weekly estimate.
-    const domesticTestFroms = Object.entries(VALIDATED_SPLITS)
-      .filter(([lid]) => DOMESTIC.has(parseInt(lid, 10)))
-      .map(([, split]) => new Date(split.testFrom).getTime());
-    const latestTestFrom = new Date(Math.max(...domesticTestFroms));
-    const concurrentPool = pool.filter(f => new Date(f.date) >= latestTestFrom);
-    const concurrentActiveWeeks = new Set(concurrentPool.map(f => isoWeekKey(new Date(f.date))));
-    const concurrentPerWeekAtEdge = EDGE_LEVELS.map(minEdge => {
-      const posEdgeN = concurrentPool.filter(f => f.edge >= minEdge).length;
-      return { edgeFloor: `>=${(minEdge * 100).toFixed(0)}%`, posEdgeN, avgPerActiveWeek: +(posEdgeN / concurrentActiveWeeks.size).toFixed(2) };
-    });
+    const rows = [];
+    for (let pct = 8; pct <= 20; pct++) {
+      const minEdge = pct / 100;
+      const atLevel = concurrentPool.filter(f => f.edge >= minEdge);
+      const returns = atLevel.map(f => f.won ? (f.pinnacleOdds - 1) : -1);
+      const ci = pooledCi(returns);
+      rows.push({
+        edgeFloor: `>=${pct}%`, n: ci.n, roi: ci.roi, ci: ci.ci,
+        avgPerActiveWeek: +(ci.n / activeWeekCount).toFixed(2),
+      });
+    }
 
     res.json({
-      note: 'TEMP diagnostic — date span of the same domestic-only pool used in the edge-threshold sweep. earliestDate/latestDate overall and per-league; activeWeeks = distinct ISO weeks with >=1 matched fixture (excludes summer close-season, so avgPerActiveWeek approximates real in-season weekly volume, not a calendar-year average). rule9 populations (VALIDATED_SPLITS) grow every week going forward as new fixtures are played; rule12 populations (League One/Two/Championship) are fixed historical windows that do not grow. concurrentWindow/concurrentPerWeekAtEdge restrict to the period from the LATEST individual league testFrom cutoff onward, i.e. only when all 11 leagues genuinely overlap -- a more realistic full-coverage weekly estimate than the blended perWeekAtEdge above, which is diluted by years when several leagues weren\'t in the pool yet. Delete this endpoint once read.',
-      overallEarliestDate: dates[0]?.toISOString().slice(0, 10) || null,
-      overallLatestDate: dates[dates.length - 1]?.toISOString().slice(0, 10) || null,
-      totalPoolSize: pool.length,
-      activeWeekCount: activeWeeks.size,
-      byLeague,
-      perWeekAtEdge,
-      concurrentWindow: { from: latestTestFrom.toISOString().slice(0, 10), n: concurrentPool.length, activeWeekCount: concurrentActiveWeeks.size },
-      concurrentPerWeekAtEdge,
+      note: 'TEMP diagnostic — domestic leagues only, restricted to the concurrent-coverage window (from ' + concurrentFrom.toISOString().slice(0, 10) + ' onward, when all 11 leagues genuinely overlap), 1% edge-floor increments from 8% to 20%. n/ROI/CI/avgPerActiveWeek all computed against this same population for direct comparability. Descriptive re-slice only, not a new statistical test. Delete this endpoint once read.',
+      concurrentFrom: concurrentFrom.toISOString().slice(0, 10),
+      activeWeekCount,
+      rows,
     });
   } catch (e) {
     res.status(500).json({ error: e.message, stack: e.stack });
