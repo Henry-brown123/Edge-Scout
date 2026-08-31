@@ -7866,6 +7866,72 @@ app.get('/api/correction-layer-backtests', (_req, res) => {
   });
 });
 
+// TEMP DIAGNOSTIC — remove after use. Due-diligence check before treating
+// edge>=15% AND modelProb>=45% (the cell the user is considering building a
+// real-money rule around) as a genuine broad effect rather than a couple of
+// leagues propping up the pooled average. Same concurrent-coverage domestic
+// population as the edge x prob-floor overlay table, broken down per league.
+app.get('/api/admin/diag-proposed-cell-league-breakdown', async (_req, res) => {
+  try {
+    const matched = await computeMatchedEdgeFixtures();
+    const DOMESTIC = new Set([39, 140, 135, 78, 61, 179, 88, 94, 41, 42, 40]);
+    const DATE_SPLIT_CUTOFFS = { 41: '2026-08-11T09:00:00Z', 42: '2026-08-11T09:00:00Z', 40: '2026-08-19T22:00:00Z' };
+    const LEAGUE_NAMES = { 39: 'Premier League', 140: 'La Liga', 135: 'Serie A', 78: 'Bundesliga', 61: 'Ligue 1', 179: 'Scottish Premiership', 88: 'Eredivisie', 94: 'Primeira Liga', 41: 'League One', 42: 'League Two', 40: 'Championship' };
+
+    const pool = matched.filter(f => {
+      const lid = parseInt(f.leagueId, 10);
+      if (!DOMESTIC.has(lid)) return false;
+      const dsCutoff = DATE_SPLIT_CUTOFFS[lid];
+      if (dsCutoff) return new Date(f.date) < new Date(dsCutoff);
+      const split = VALIDATED_SPLITS[lid];
+      if (!split) return false;
+      return new Date(f.date) >= new Date(split.testFrom);
+    });
+
+    const domesticTestFroms = Object.entries(VALIDATED_SPLITS)
+      .filter(([lid]) => DOMESTIC.has(parseInt(lid, 10)))
+      .map(([, split]) => new Date(split.testFrom).getTime());
+    const concurrentFrom = new Date(Math.max(...domesticTestFroms));
+    const concurrentPool = pool.filter(f => new Date(f.date) >= concurrentFrom);
+
+    const cell = concurrentPool.filter(f => f.edge >= 0.15 && f.modelProb >= 0.45);
+
+    function pooledCi(returns) {
+      const n = returns.length;
+      if (!n) return { n: 0, roi: null, ci: [null, null] };
+      const mean = returns.reduce((s, v) => s + v, 0) / n;
+      let ciLow = null, ciHigh = null;
+      if (n > 1) {
+        const variance = returns.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1);
+        const se = Math.sqrt(variance / n);
+        ciLow  = +((mean - 1.96 * se) * 100).toFixed(1);
+        ciHigh = +((mean + 1.96 * se) * 100).toFixed(1);
+      }
+      return { n, roi: +(mean * 100).toFixed(2), ci: [ciLow, ciHigh] };
+    }
+
+    const byLeague = {};
+    for (const leagueId of DOMESTIC) {
+      const sub = cell.filter(f => parseInt(f.leagueId, 10) === leagueId);
+      if (!sub.length) { byLeague[leagueId] = { leagueName: LEAGUE_NAMES[leagueId], n: 0 }; continue; }
+      const returns = sub.map(f => f.won ? (f.pinnacleOdds - 1) : -1);
+      const ci = pooledCi(returns);
+      const wins = sub.filter(f => f.won).length;
+      byLeague[leagueId] = { leagueName: LEAGUE_NAMES[leagueId], n: ci.n, wins, roi: ci.roi, ci: ci.ci };
+    }
+
+    const overall = pooledCi(cell.map(f => f.won ? (f.pinnacleOdds - 1) : -1));
+
+    res.json({
+      note: 'TEMP diagnostic — per-league composition of the edge>=15% AND modelProb>=45% cell, same concurrent-coverage domestic population as the overlay table. Checks whether the pooled positive result is broad-based across leagues or concentrated in one/two of them. Delete this endpoint once read.',
+      overallCell: overall,
+      byLeague: Object.values(byLeague).sort((a, b) => (b.n || 0) - (a.n || 0)),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
 // One-time historical correction (2026-08-29): replaces every PAPER bet's
 // actualOdds with a genuine Pinnacle closing price and recomputes pnl for
 // resolved bets (stake and win/loss result unchanged -- only the assumed
