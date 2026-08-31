@@ -7932,6 +7932,117 @@ app.get('/api/admin/diag-proposed-cell-league-breakdown', async (_req, res) => {
   }
 });
 
+// TEMP DIAGNOSTIC — remove after use. Rather than picking the single
+// best-looking cell from a table built by scanning many (edge, prob) combos
+// — the overfitting risk flagged on the overlay table — this splits the same
+// concurrent-coverage domestic population into 4 sequential, non-overlapping
+// time blocks (the same walk-forward standard this project already treats as
+// a stronger evidentiary bar than a single pooled look — see the
+// correction-layer "-walkforward" entries) and checks which (edge floor,
+// prob floor) combos are POSITIVE in every single block, not just positive
+// on average. A combo that only looks good pooled but flips negative in one
+// or more blocks is exactly the overfitting signature; a combo that's
+// positive in all 4 independent slices is real evidence of robustness, not
+// proof of a permanent edge. Also reports, per candidate combo, which
+// leagues are negative in every block (categorically bad) vs mixed.
+app.get('/api/admin/diag-walkforward-robustness-scan', async (_req, res) => {
+  try {
+    const matched = await computeMatchedEdgeFixtures();
+    const DOMESTIC = new Set([39, 140, 135, 78, 61, 179, 88, 94, 41, 42, 40]);
+    const DATE_SPLIT_CUTOFFS = { 41: '2026-08-11T09:00:00Z', 42: '2026-08-11T09:00:00Z', 40: '2026-08-19T22:00:00Z' };
+    const LEAGUE_NAMES = { 39: 'Premier League', 140: 'La Liga', 135: 'Serie A', 78: 'Bundesliga', 61: 'Ligue 1', 179: 'Scottish Premiership', 88: 'Eredivisie', 94: 'Primeira Liga', 41: 'League One', 42: 'League Two', 40: 'Championship' };
+
+    const pool = matched.filter(f => {
+      const lid = parseInt(f.leagueId, 10);
+      if (!DOMESTIC.has(lid)) return false;
+      const dsCutoff = DATE_SPLIT_CUTOFFS[lid];
+      if (dsCutoff) return new Date(f.date) < new Date(dsCutoff);
+      const split = VALIDATED_SPLITS[lid];
+      if (!split) return false;
+      return new Date(f.date) >= new Date(split.testFrom);
+    });
+
+    const domesticTestFroms = Object.entries(VALIDATED_SPLITS)
+      .filter(([lid]) => DOMESTIC.has(parseInt(lid, 10)))
+      .map(([, split]) => new Date(split.testFrom).getTime());
+    const concurrentFrom = new Date(Math.max(...domesticTestFroms));
+    const concurrentPool = pool.filter(f => new Date(f.date) >= concurrentFrom)
+      .sort((a, b) => new Date(a.date) - new Date(b.date));
+
+    // 4 equal-COUNT blocks (not equal-calendar-time), so each block carries
+    // comparable statistical weight regardless of fixture density.
+    const blockSize = Math.ceil(concurrentPool.length / 4);
+    const blocks = [0, 1, 2, 3].map(i => concurrentPool.slice(i * blockSize, (i + 1) * blockSize));
+    const blockRanges = blocks.map(b => b.length ? `${b[0].date.slice(0, 10)} to ${b[b.length - 1].date.slice(0, 10)}` : 'empty');
+
+    function pooledCi(returns) {
+      const n = returns.length;
+      if (!n) return { n: 0, roi: null, ci: [null, null] };
+      const mean = returns.reduce((s, v) => s + v, 0) / n;
+      let ciLow = null, ciHigh = null;
+      if (n > 1) {
+        const variance = returns.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1);
+        const se = Math.sqrt(variance / n);
+        ciLow  = +((mean - 1.96 * se) * 100).toFixed(1);
+        ciHigh = +((mean + 1.96 * se) * 100).toFixed(1);
+      }
+      return { n, roi: +(mean * 100).toFixed(2), ci: [ciLow, ciHigh] };
+    }
+    function roiOf(fixtures) {
+      return pooledCi(fixtures.map(f => f.won ? (f.pinnacleOdds - 1) : -1));
+    }
+
+    const EDGE_LEVELS = [8, 10, 12, 15, 18, 20];
+    const PROB_FLOORS = [{ label: 'none', min: 0 }, { label: '>=40%', min: 0.40 }, { label: '>=45%', min: 0.45 }, { label: '>=50%', min: 0.50 }];
+
+    const grid = [];
+    for (const pct of EDGE_LEVELS) {
+      for (const pf of PROB_FLOORS) {
+        const minEdge = pct / 100;
+        const perBlock = blocks.map(b => roiOf(b.filter(f => f.edge >= minEdge && f.modelProb >= pf.min)));
+        const pooled = roiOf(concurrentPool.filter(f => f.edge >= minEdge && f.modelProb >= pf.min));
+        const positiveBlocks = perBlock.filter(b => b.roi != null && b.roi > 0).length;
+        const validBlocks = perBlock.filter(b => b.n >= 20).length; // too thin to count either way
+        grid.push({
+          edgeFloor: `>=${pct}%`, probFloor: pf.label,
+          pooledN: pooled.n, pooledRoi: pooled.roi, pooledCi: pooled.ci,
+          perBlockRoi: perBlock.map(b => ({ n: b.n, roi: b.roi })),
+          positiveBlocks, validBlocks,
+          robust: validBlocks === 4 && positiveBlocks === 4,
+        });
+      }
+    }
+    grid.sort((a, b) => (b.robust - a.robust) || ((b.pooledRoi ?? -999) - (a.pooledRoi ?? -999)));
+
+    // For the single most robust combo found (or the pooled-best if none are
+    // robust in all 4 blocks), check per-league consistency: which leagues
+    // are negative in every block they have volume in.
+    const best = grid.find(g => g.robust) || grid[0];
+    const bestMinEdge = parseInt(best.edgeFloor.replace('>=', '').replace('%', ''), 10) / 100;
+    const bestMinProb = PROB_FLOORS.find(pf => pf.label === best.probFloor).min;
+    const perLeague = {};
+    for (const leagueId of DOMESTIC) {
+      const leagueBlocks = blocks.map(b => roiOf(b.filter(f => parseInt(f.leagueId, 10) === leagueId && f.edge >= bestMinEdge && f.modelProb >= bestMinProb)));
+      const validLeagueBlocks = leagueBlocks.filter(b => b.n >= 10);
+      if (!validLeagueBlocks.length) continue;
+      const negBlocks = validLeagueBlocks.filter(b => b.roi < 0).length;
+      perLeague[leagueId] = {
+        leagueName: LEAGUE_NAMES[leagueId], perBlockRoi: leagueBlocks.map(b => ({ n: b.n, roi: b.roi })),
+        negativeInAllValidBlocks: validLeagueBlocks.length > 0 && negBlocks === validLeagueBlocks.length,
+      };
+    }
+
+    res.json({
+      note: 'TEMP diagnostic — walk-forward robustness scan. Splits the concurrent-coverage domestic population into 4 sequential, equal-count blocks (blockRanges below) and checks which (edge floor, prob floor) combos are positive in ALL 4 independent blocks (robust: true), not just positive pooled. grid sorted robust-first, then pooled ROI. bestCombo section drills into per-league consistency for whichever combo came out on top, flagging leagues that are negative in every block they have volume in (categorically bad, not just noisy). Delete this endpoint once read.',
+      concurrentFrom: concurrentFrom.toISOString().slice(0, 10), blockRanges,
+      grid,
+      bestCombo: { edgeFloor: best.edgeFloor, probFloor: best.probFloor, perLeagueConsistency: Object.values(perLeague) },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
 // One-time historical correction (2026-08-29): replaces every PAPER bet's
 // actualOdds with a genuine Pinnacle closing price and recomputes pnl for
 // resolved bets (stake and win/loss result unchanged -- only the assumed
