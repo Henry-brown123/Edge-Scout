@@ -8102,16 +8102,24 @@ app.get('/api/admin/diag-bankroll-simulation', async (req, res) => {
       { edgeFloor: 20, probFloor: 0.50 },
     ];
 
+    // No real-world liquidity/execution cap by default (maxStake=0 means
+    // unlimited) — pass ?maxStake=X for an absolute-£ ceiling per bet,
+    // reflecting what a real bookmaker/exchange would actually let you get
+    // matched at the quoted price on a given market, independent of how
+    // large the simulated bankroll has grown.
+    const maxStake = parseFloat(req.query.maxStake) || 0;
+
     const results = CANDIDATES.map(c => {
       const fixtures = concurrentPool.filter(f => f.edge >= c.edgeFloor / 100 && f.modelProb >= c.probFloor);
       let bankroll = startingBankroll;
       let peak = startingBankroll;
       let maxDrawdownPct = 0;
-      let totalStaked = 0, betsPlaced = 0, betsSkippedInsufficientFunds = 0;
+      let totalStaked = 0, betsPlaced = 0, betsSkippedInsufficientFunds = 0, betsCappedByLiquidity = 0;
       for (const f of fixtures) {
         const k = kelly(f.calProb, f.pinnacleOdds, kellyFraction, bankroll);
         let stake = k.stake;
         if (stake <= 0) continue;
+        if (maxStake > 0 && stake > maxStake) { stake = maxStake; betsCappedByLiquidity++; }
         stake = Math.min(stake, bankroll); // safety clamp — never stake more than available
         if (bankroll <= 0) { betsSkippedInsufficientFunds++; continue; }
         totalStaked += stake;
@@ -8123,7 +8131,7 @@ app.get('/api/admin/diag-bankroll-simulation', async (req, res) => {
       }
       return {
         edgeFloor: `>=${c.edgeFloor}%`, probFloor: `>=${(c.probFloor * 100).toFixed(0)}%`,
-        betsPlaced, betsSkippedInsufficientFunds,
+        betsPlaced, betsSkippedInsufficientFunds, betsCappedByLiquidity,
         avgPerActiveWeek: +(fixtures.length / activeWeekCount).toFixed(2),
         finalBankroll: +bankroll.toFixed(2),
         totalProfit: +(bankroll - startingBankroll).toFixed(2),
@@ -8136,8 +8144,8 @@ app.get('/api/admin/diag-bankroll-simulation', async (req, res) => {
     results.sort((a, b) => b.growthMultiple - a.growthMultiple);
 
     res.json({
-      note: `TEMP diagnostic — bankroll simulation. Starting bankroll £${startingBankroll}, real fractional Kelly (fraction=${kellyFraction}, matching scoring.js's kelly() function), walked chronologically through the same concurrent-coverage domestic population, one candidate (edge, prob) combo at a time. avgPerActiveWeek is the same in-season weekly volume figure from the earlier date-span diagnostic, computed fresh for each combo. growthMultiple (final/starting) is scale-independent — use it to compare combos regardless of what actual bankroll you'd start with. finalBankroll/totalProfit assume the £${startingBankroll} starting point specifically. Pass ?bankroll=X&kellyFraction=Y to rerun with different assumptions. maxDrawdownPct is the worst peak-to-trough decline seen during the simulation — a real risk/withdrawal-planning signal, not just a return figure. Sorted by growthMultiple descending. Delete this endpoint once read.`,
-      startingBankroll, kellyFraction,
+      note: `TEMP diagnostic — bankroll simulation. Starting bankroll £${startingBankroll}, real fractional Kelly (fraction=${kellyFraction}, matching scoring.js's kelly() function), walked chronologically through the same concurrent-coverage domestic population, one candidate (edge, prob) combo at a time.${maxStake > 0 ? ` Stakes capped at £${maxStake} per bet regardless of bankroll size (betsCappedByLiquidity shows how often that cap actually bound) — a real-world execution-liquidity ceiling, since no bookmaker/exchange lets you get matched at the quoted price for unlimited size, especially on thinner lower-league markets.` : ' No stake cap applied (maxStake=0) — uncapped Kelly against an uncapped bankroll produces figures that are NOT realistic once the simulated bankroll grows large, since real liquidity/execution limits would bind long before stake sizes reach the levels uncapped Kelly implies. Pass ?maxStake=X for a realistic ceiling.'} avgPerActiveWeek is the same in-season weekly volume figure from the earlier date-span diagnostic, computed fresh for each combo. growthMultiple (final/starting) is scale-independent — use it to compare combos regardless of what actual bankroll you'd start with. finalBankroll/totalProfit assume the £${startingBankroll} starting point specifically. Pass ?bankroll=X&kellyFraction=Y&maxStake=Z to rerun with different assumptions. maxDrawdownPct is the worst peak-to-trough decline seen during the simulation — a real risk/withdrawal-planning signal, not just a return figure. Sorted by growthMultiple descending. Delete this endpoint once read.`,
+      startingBankroll, kellyFraction, maxStake,
       concurrentFrom: concurrentFrom.toISOString().slice(0, 10),
       results,
     });
