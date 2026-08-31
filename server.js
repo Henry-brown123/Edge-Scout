@@ -8085,6 +8085,16 @@ app.get('/api/admin/diag-bankroll-simulation', async (req, res) => {
     const startingBankroll = parseFloat(req.query.bankroll) || 5000;
     const kellyFraction = parseFloat(req.query.kellyFraction) || 0.25;
 
+    function isoWeekKey(d) {
+      const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+      const dayNum = (date.getUTCDay() + 6) % 7;
+      date.setUTCDate(date.getUTCDate() - dayNum + 3);
+      const firstThursday = new Date(Date.UTC(date.getUTCFullYear(), 0, 4));
+      const week = 1 + Math.round(((date - firstThursday) / 86400000 - 3 + ((firstThursday.getUTCDay() + 6) % 7)) / 7);
+      return `${date.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+    }
+    const activeWeekCount = new Set(concurrentPool.map(f => isoWeekKey(new Date(f.date)))).size;
+
     const CANDIDATES = [
       { edgeFloor: 10, probFloor: 0.45 }, { edgeFloor: 12, probFloor: 0.45 },
       { edgeFloor: 15, probFloor: 0.45 }, { edgeFloor: 15, probFloor: 0.50 },
@@ -8114,6 +8124,7 @@ app.get('/api/admin/diag-bankroll-simulation', async (req, res) => {
       return {
         edgeFloor: `>=${c.edgeFloor}%`, probFloor: `>=${(c.probFloor * 100).toFixed(0)}%`,
         betsPlaced, betsSkippedInsufficientFunds,
+        avgPerActiveWeek: +(fixtures.length / activeWeekCount).toFixed(2),
         finalBankroll: +bankroll.toFixed(2),
         totalProfit: +(bankroll - startingBankroll).toFixed(2),
         growthMultiple: +(bankroll / startingBankroll).toFixed(3),
@@ -8125,7 +8136,7 @@ app.get('/api/admin/diag-bankroll-simulation', async (req, res) => {
     results.sort((a, b) => b.growthMultiple - a.growthMultiple);
 
     res.json({
-      note: `TEMP diagnostic — bankroll simulation. Starting bankroll £${startingBankroll}, real fractional Kelly (fraction=${kellyFraction}, matching scoring.js's kelly() function), walked chronologically through the same concurrent-coverage domestic population, one candidate (edge, prob) combo at a time. growthMultiple (final/starting) is scale-independent — use it to compare combos regardless of what actual bankroll you'd start with. finalBankroll/totalProfit assume the £${startingBankroll} starting point specifically. Pass ?bankroll=X&kellyFraction=Y to rerun with different assumptions. maxDrawdownPct is the worst peak-to-trough decline seen during the simulation — a real risk/withdrawal-planning signal, not just a return figure. Sorted by growthMultiple descending. Delete this endpoint once read.`,
+      note: `TEMP diagnostic — bankroll simulation. Starting bankroll £${startingBankroll}, real fractional Kelly (fraction=${kellyFraction}, matching scoring.js's kelly() function), walked chronologically through the same concurrent-coverage domestic population, one candidate (edge, prob) combo at a time. avgPerActiveWeek is the same in-season weekly volume figure from the earlier date-span diagnostic, computed fresh for each combo. growthMultiple (final/starting) is scale-independent — use it to compare combos regardless of what actual bankroll you'd start with. finalBankroll/totalProfit assume the £${startingBankroll} starting point specifically. Pass ?bankroll=X&kellyFraction=Y to rerun with different assumptions. maxDrawdownPct is the worst peak-to-trough decline seen during the simulation — a real risk/withdrawal-planning signal, not just a return figure. Sorted by growthMultiple descending. Delete this endpoint once read.`,
       startingBankroll, kellyFraction,
       concurrentFrom: concurrentFrom.toISOString().slice(0, 10),
       results,
