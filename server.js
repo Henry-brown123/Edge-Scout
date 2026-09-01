@@ -22,8 +22,9 @@ const {
   reloadXgStore, getXgStore, lookupXg,
   scoreGoalsMarkets,
   stalenessMultiplier, applyStalenessPull,
-  CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND, DOMESTIC_LEAGUE_IDS_FOR_BLEND,
+  CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND, DOMESTIC_LEAGUE_IDS_FOR_BLEND, TOURNAMENT_LEAGUE_IDS,
   UEFA_SINGLE_PHASE_SEASON_FLOOR, EURO_COMPETITION_PHASE_GAMES_FLOOR, rankToProxyScore, lookupStandingScore,
+  pickTopCandidateByProbability,
 } = require('./scoring');
 
 const model = require('./models/interface');
@@ -513,13 +514,16 @@ function isFixtureTrainingHoldout(leagueId, kickoffIso) {
   return false;
 }
 
-// Of those three (48/41/42), League One/Two also had real staking blocked via
-// paperTradeOnly — a second, unrelated concern (funded-account/go-live
-// gating) riding on the same flag as the holdout protection. Decoupled below:
-// real Kelly stakes now size normally for these two. Carabao Cup keeps its
-// existing paperTradeOnly stake-zeroing untouched. Independent of, and
-// unaffected by, the rule-12 date split above.
-const STAKE_ZEROING_EXEMPT_LEAGUE_IDS = new Set([41, 42]);
+// Three-tier betting redesign (2026-08-31): domestic-league stake eligibility
+// is now rule-driven (this threshold pair), not paperTradeOnly/EV-calibration-
+// driven — replaces the old STAKE_ZEROING_EXEMPT_LEAGUE_IDS mechanism entirely.
+// See scoreOneFixture's isFakeMoney/meetsPaperMoneyRule computation and
+// runPreMatchScan's stake formula. Validated this session (domestic-only
+// backtest, walk-forward robust across 4 independent time blocks, per-league
+// composition checked) as the population the user will review for real-money
+// promotion — not a permanent, unchangeable pair of numbers.
+const PAPER_MONEY_EDGE_MIN = 0.18;
+const PAPER_MONEY_PROB_MIN = 0.45;
 
 // Sum of funded bookmaker accounts — used only for the canGoLive() "3+ funded accounts"
 // gate and the admin bookmaker-breakdown view. NOT the real-money bankroll used for Kelly
@@ -1043,7 +1047,13 @@ function persistOddsSnapshot(fix, scored, sport, stage, leagueId, leagueName, se
   try {
     const threshold = settings?.successThreshold || 40;
     const results   = scored.results || [];
-    const best      = results.reduce((a, b) => a.successScore > b.successScore ? a : b, results[0]);
+    // Three-tier redesign: for classified leagues, this should reflect the same
+    // probability-picked candidate the actual tier/gate logic uses (tierCandidate),
+    // not a separate successScore-based pick — keeps this audit log consistent
+    // with what runPreMatchScan actually does, rather than silently disagreeing.
+    const best      = scored.isClassifiedLeague
+      ? scored.tierCandidate
+      : results.reduce((a, b) => a.successScore > b.successScore ? a : b, results[0]);
     const get       = label => results.find(r => r.bet === label);
     const hw = get('Home Win'), dr = get('Draw'), aw = get('Away Win');
 
@@ -1678,9 +1688,43 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   if (teamIntel.home) teamIntel.home.keyPlayers = wowyToKeyPlayers(homeId, true);
   if (teamIntel.away) teamIntel.away.keyPlayers = wowyToKeyPlayers(awayId, false);
 
+  // Three-tier betting redesign (2026-08-31). Domestic leagues: counts as real
+  // paper money only if the model's own favourite (picked by raw probability,
+  // matching computeMatchedEdgeFixtures()'s backtest selection method, NOT
+  // successScore — see pickTopCandidateByProbability in scoring.js) clears
+  // edge>=18%/modelProb>=45%. Tournament/cup leagues: always no-stake/
+  // observation, regardless of score, until individually promoted by future
+  // testing. Unclassified leagues (none currently — every tracked league is in
+  // one of the two sets) fall through to the legacy successScore-gated path,
+  // kept only as a safety net for a hypothetical future 17th league.
+  const lidNum = parseInt(leagueId, 10);
+  const isDomesticTierLeague   = DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(lidNum);
+  const isTournamentTierLeague = TOURNAMENT_LEAGUE_IDS.has(lidNum);
+  const isClassifiedLeague     = isDomesticTierLeague || isTournamentTierLeague;
+
+  const tierCandidate = pickTopCandidateByProbability(results);
+
+  const meetsPaperMoneyRule = isDomesticTierLeague
+    && tierCandidate.hasRealOdds
+    && tierCandidate.edge != null
+    && tierCandidate.edge >= PAPER_MONEY_EDGE_MIN
+    && tierCandidate.modelProb >= PAPER_MONEY_PROB_MIN;
+
+  // A real market exists on the model's own favourite, but it either fails the
+  // domestic paper-money rule, or belongs to a tournament/cup league (always
+  // no-stake by design, regardless of ROI — see runEvCalibration()'s guard).
+  const isFakeMoney = isClassifiedLeague && tierCandidate.hasRealOdds
+    && !(isDomesticTierLeague && meetsPaperMoneyRule);
+
   const leagueMode  = getLeagueMode(leagueId);
+  // paperTradeOnly now means ONLY "hard real-money block via leagueModes" — the
+  // old EV-calibration-array half of this (settings.paperTradeOnly[]) no longer
+  // applies to classified leagues (runEvCalibration() skips managing it for
+  // them now that stake-eligibility is rule-driven, not ROI-driven), but the
+  // array can still gate an unclassified future league via getLeagueMode's own
+  // 'paper_only' merge, so this stays a general OR, not narrowed to leagueMode alone.
   const paperTradeOnly = leagueMode === 'paper_only'
-    || (settings.paperTradeOnly || []).includes(parseInt(leagueId, 10));
+    || (settings.paperTradeOnly || []).includes(lidNum);
   const isTrainingHoldout = isFixtureTrainingHoldout(leagueId, fix.fixture?.date);
   const betMode = leagueMode === 'real' ? 'real' : 'paper';
 
@@ -1697,6 +1741,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     homeDataConf, awayDataConf, dataConf,
     homeFormCount, awayFormCount, minFormCount, tierThreshold,
     teamIntel, paperTradeOnly, isTrainingHoldout, betMode,
+    isClassifiedLeague, tierCandidate, meetsPaperMoneyRule, isFakeMoney,
     goalsCandidates, modelVersion, correctionVersion, domesticBlendFixtures,
   };
 }
@@ -1829,21 +1874,32 @@ async function runMorningScan(leagueIds) {
 
           // A fixture with no real market anywhere (hasRealOdds:false on all three
           // candidates) always scores 0 — that's correct for locking (no price means
-          // no edge means no bet, see the successScore < threshold gate in
-          // runPreMatchScan) but it used to also mean the fixture never appeared in
-          // WATCHING at all, silently. The model still has a view on the outcome even
-          // with no price to size a bet against, so surface it as an info-only
-          // WATCHING card instead of dropping it — never eligible to lock regardless
-          // (that gate is untouched), just visible with value fields explicitly N/A.
+          // no edge means no bet) but it used to also mean the fixture never appeared
+          // in WATCHING at all, silently. The model still has a view on the outcome
+          // even with no price to size a bet against, so surface it as an info-only
+          // WATCHING card instead of dropping it — never eligible to lock regardless,
+          // just visible with value fields explicitly N/A.
+          //
+          // Three-tier redesign (2026-08-31): for classified leagues (domestic +
+          // tournament), the gate is now "does the model's own favourite have a real
+          // price at all" (scored.tierCandidate.hasRealOdds), not successScore>=20 —
+          // the T-60 cron only ever processes fixtures already in getWatching(), so
+          // if this gate doesn't loosen too, comprehensive bet-log logging at lock
+          // time (runPreMatchScan) would silently never get a chance to run for
+          // anything that used to score under 20. Unclassified leagues keep the old
+          // successScore-based gate as a safety net.
           const noMarketData = scored.results.every(r => r.hasRealOdds === false);
-          if (best.successScore >= 20 || noMarketData) { // low threshold for WATCHING
+          const shouldSurface = scored.isClassifiedLeague
+            ? (scored.tierCandidate.hasRealOdds || noMarketData)
+            : (best.successScore >= 20 || noMarketData);
+          if (shouldSurface) {
             // successScore ties at 0 across all three candidates when noMarketData —
             // `best` would arbitrarily be whichever candidate is first in the array,
             // not the model's actual favourite. Pick by raw probability instead so the
             // pick shown here reflects what the model actually thinks.
             const displayPick = noMarketData
               ? scored.results.reduce((a, b) => (b.calibratedProb ?? b.modelProb ?? 0) > (a.calibratedProb ?? a.modelProb ?? 0) ? b : a)
-              : best;
+              : scored.isClassifiedLeague ? scored.tierCandidate : best;
             watching.push({
               id: uuidv4(),
               fixtureId:  fix.fixture.id,
@@ -1854,6 +1910,8 @@ async function runMorningScan(leagueIds) {
               stage:      'WATCHING',
               scoredAt:   new Date().toISOString(),
               noMarketData,
+              isFakeMoney:         scored.isFakeMoney,
+              meetsPaperMoneyRule: scored.meetsPaperMoneyRule,
               projectedScore:  noMarketData ? null : displayPick.successScore,
               projectedBet:    displayPick.bet,
               modelProb:       displayPick.modelProb,
@@ -1881,7 +1939,7 @@ async function runMorningScan(leagueIds) {
               paperTradeOnly:   scored.paperTradeOnly,
               isTrainingHoldout: scored.isTrainingHoldout,
             });
-            console.log(`  [WATCHING] ${scored.homeName} vs ${scored.awayName} — ${noMarketData ? 'no market data (info only)' : `score ${displayPick.successScore}`}`);
+            console.log(`  [WATCHING] ${scored.homeName} vs ${scored.awayName} — ${noMarketData ? 'no market data (info only)' : scored.isFakeMoney ? `no stake (score ${displayPick.successScore})` : `score ${displayPick.successScore}`}`);
           }
         } catch (e) { console.error(`  [MorningScan] score error ${fix.fixture?.id}: ${e.message}`); }
       }
@@ -2024,7 +2082,8 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
     const { oddsMap, totalsMap } = await fetchOddsForLeague(meta.sport || 'soccer_epl', QUALIFICATION_SPORT_FALLBACK[String(leagueId)]);
 
     const scored = await scoreOneFixture(fix, enrichedFormFixtures, standings, statsCache, oddsMap, settings, totalsMap);
-    const best   = scored.results.reduce((a, b) => a.successScore > b.successScore ? a : b);
+    const best   = scored.isClassifiedLeague ? scored.tierCandidate
+      : scored.results.reduce((a, b) => a.successScore > b.successScore ? a : b);
     persistOddsSnapshot(fix, scored, meta.sport || 'soccer_epl', 'pre_match_lock', leagueId, meta.name, settings);
 
     // On any drop below, return structured detail (not bare null) — a manual lock-modal
@@ -2033,15 +2092,34 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
     // (e.g. lineup just confirmed, odds moved) and a missed toast could otherwise leave
     // someone thinking a real-money bet was logged when nothing was.
     const fixtureLabel = `${scored.homeName} vs ${scored.awayName}`;
-    if (best.successScore < threshold) {
-      // Distinguish "no real market data anywhere" (all 3 candidates hasRealOdds:false,
-      // forced to score 0) from a genuinely-scored-but-weak pick — same threshold gate,
-      // different reason, worth telling apart in logs when auditing why a fixture never
-      // locked (was it actually a bad price, or did nobody ever price it?).
-      const noMarketData = scored.results.every(r => r.hasRealOdds === false);
-      console.log(`[PreMatch] ${fixtureLabel} DROPPED (score ${best.successScore} < ${threshold})${noMarketData ? ' — no real market odds available' : ''}`);
-      return { dropped: true, reason: noMarketData ? 'no_market_data' : 'score_below_threshold', fixture: fixtureLabel,
-        successScore: best.successScore, threshold };
+    if (scored.isClassifiedLeague) {
+      // Three-tier redesign (2026-08-31): the creation gate is now "does the
+      // model's own favourite have a real price at all" — successScore no
+      // longer gates creation for domestic/tournament leagues. Whether this
+      // becomes real paper money (meetsPaperMoneyRule) or a zero-stake
+      // observation record (isFakeMoney) is decided by the stake formula
+      // below, not here — comprehensive logging means almost everything with
+      // a real price now creates SOME record.
+      if (!best.hasRealOdds) {
+        console.log(`[PreMatch] ${fixtureLabel} DROPPED — no real market odds on the model's favoured outcome`);
+        return { dropped: true, reason: 'no_market_data', fixture: fixtureLabel,
+          successScore: best.successScore, threshold };
+      }
+    } else {
+      // Legacy path — safety net only. Every currently-tracked league is in
+      // DOMESTIC_LEAGUE_IDS_FOR_BLEND or TOURNAMENT_LEAGUE_IDS, so this branch
+      // should never actually run today; kept for a hypothetical future,
+      // not-yet-classified 17th league.
+      if (best.successScore < threshold) {
+        // Distinguish "no real market data anywhere" (all 3 candidates hasRealOdds:false,
+        // forced to score 0) from a genuinely-scored-but-weak pick — same threshold gate,
+        // different reason, worth telling apart in logs when auditing why a fixture never
+        // locked (was it actually a bad price, or did nobody ever price it?).
+        const noMarketData = scored.results.every(r => r.hasRealOdds === false);
+        console.log(`[PreMatch] ${fixtureLabel} DROPPED (score ${best.successScore} < ${threshold})${noMarketData ? ' — no real market odds available' : ''}`);
+        return { dropped: true, reason: noMarketData ? 'no_market_data' : 'score_below_threshold', fixture: fixtureLabel,
+          successScore: best.successScore, threshold };
+      }
     }
     if (scored.lowConfidence) {
       console.log(`[PreMatch] ${fixtureLabel} DROPPED — low confidence: ${scored.lowConfidenceReason} (max gap ${Math.round(scored.maxModelBookGap * 100)}pp)`);
@@ -2095,7 +2173,7 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
     const br    = getBankroll();
     const betId = uuidv4();
     const routingOddsEntry = _lookupOddsEntry(oddsMap, scored.homeName, scored.awayName);
-    const computedStake = (scored.paperTradeOnly && !STAKE_ZEROING_EXEMPT_LEAGUE_IDS.has(parseInt(leagueId, 10))) ? 0
+    const computedStake = scored.isFakeMoney ? 0
       : isReal ? roundStake(realKelly.stake) : roundStake(best.kelly.stake);
     const bet   = {
       id:           betId,
@@ -2139,6 +2217,7 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
       ev:           best.ev,
       mode:          betMode,
       paperTradeOnly: scored.paperTradeOnly,
+      isFakeMoney:   scored.isFakeMoney,
       isTrainingHoldout: scored.isTrainingHoldout,
       kellyFraction: kellyFrac,
       kellStake:     computedStake,
@@ -2302,7 +2381,7 @@ async function runHourlyRescan() {
           } catch {}
 
           const scored = await scoreOneFixture(fix, enrichedFormFixtures, standings, statsCache, oddsMap, settings, totalsMap);
-          const best   = scored.results.reduce((a, b) => a.successScore > b.successScore ? a : b);
+          const best   = scored.isClassifiedLeague ? scored.tierCandidate : scored.results.reduce((a, b) => a.successScore > b.successScore ? a : b);
           persistOddsSnapshot(fix, scored, meta.sport || 'soccer_epl', 'hourly_rescan', leagueId, meta.name, settings);
 
           // Same noMarketData handling as runMorningScan's WATCHING creation — keep
@@ -2317,6 +2396,8 @@ async function runHourlyRescan() {
 
           Object.assign(w, {
             noMarketData,
+            isFakeMoney:         scored.isFakeMoney,
+            meetsPaperMoneyRule: scored.meetsPaperMoneyRule,
             projectedScore:   noMarketData ? null : displayPick.successScore,
             projectedBet:     displayPick.bet,
             modelProb:        displayPick.modelProb,
@@ -4494,6 +4575,7 @@ app.get('/api/clv-report', (req, res) => {
   // All placed bets where CLV has been computed (closingOdds fetched, not necessarily resolved)
   const withClv = bets.filter(b => {
     if (mode === 'paper' && b.mode === 'real') return false;
+    if (mode === 'paper' && b.isFakeMoney) return false;
     if (mode === 'real'  && b.mode !== 'real') return false;
     if (!((b.placementStatus === 'placed' || b.placementConfirmed) && b.clv != null)) return false;
     if (fromTs || toTs) {
@@ -4609,6 +4691,7 @@ app.get('/api/bookmaker-performance', (req, res) => {
   // Only count placed bets (placed or old placementConfirmed)
   const placed = bets.filter(b => {
     if (mode === 'paper' && b.mode === 'real') return false;
+    if (mode === 'paper' && b.isFakeMoney) return false;
     if (mode === 'real'  && b.mode !== 'real') return false;
     if (!(b.placementStatus === 'placed' || b.placementConfirmed)) return false;
     if (fromTs || toTs) {
@@ -4676,6 +4759,7 @@ app.get('/api/league-performance', (req, res) => {
 
   const placed = getBets().filter(b => {
     if (mode === 'paper' && b.mode === 'real') return false;
+    if (mode === 'paper' && b.isFakeMoney) return false;
     if (mode === 'real'  && b.mode !== 'real') return false;
     if (!(b.placementStatus === 'placed' || b.placementConfirmed)) return false;
     if (fromTs || toTs) {
@@ -4810,6 +4894,7 @@ app.get('/api/tier-performance', (req, res) => {
   const settings = getSettings();
   const allResolved = getBets().filter(b => {
     if (mode === 'paper' && b.mode === 'real') return false;
+    if (mode === 'paper' && b.isFakeMoney) return false;
     if (mode === 'real'  && b.mode !== 'real') return false;
     if (!(b.placementStatus === 'placed' || b.placementConfirmed)) return false;
     return b.result === 'win' || b.result === 'loss';
@@ -6960,6 +7045,7 @@ app.post('/api/bets/:id/convert-to-real', (req, res) => {
   const bet  = bets.find(b => b.id === req.params.id);
   if (!bet) return res.status(404).json({ error: 'Not found' });
   if (bet.mode === 'real') return res.status(400).json({ error: 'Already real' });
+  if (bet.isFakeMoney) return res.status(400).json({ error: 'Observation-tier bet cannot be converted to real money' });
   if (bet.result) return res.status(400).json({ error: 'Bet already resolved — mode cannot change' });
 
   const { bookmakerId, bookmakerName, actualOdds, actualStake } = req.body;
@@ -8239,6 +8325,7 @@ async function runEvCalibration() {
       return getBets().filter(b =>
         parseInt(b.leagueId, 10) === leagueId &&
         b.mode === 'paper' &&
+        !b.isFakeMoney &&
         b.lockedAt && new Date(b.lockedAt) >= CURRENT_SEASON_START
       ).length;
     }
@@ -8249,6 +8336,10 @@ async function runEvCalibration() {
     for (const l of byLeague) {
       const lid = leagueIdByName[l.league];
       if (!lid || l.roi === null) continue;
+      // Domestic/tournament stake-eligibility is now rule-driven (PAPER_MONEY_EDGE_MIN/
+      // PAPER_MONEY_PROB_MIN, scoreOneFixture's isFakeMoney) or unconditionally no-stake
+      // (tournaments) — this auto-management loop no longer has a say over either.
+      if (DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(lid) || TOURNAMENT_LEAGUE_IDS.has(lid)) continue;
       if (l.roi < 0 && l.posEdgeN >= 30 && !PROTECT_FROM_AUTO_ADD.has(lid)) existingPaper.add(lid);
       const meetsCalibrationStandard = l.n >= MIN_CALIBRATION_FIXTURES;
       const hasLivePaperTrades = getLivePaperTradeCount(lid) >= MIN_LIVE_PAPER_TRADES;

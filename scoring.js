@@ -67,6 +67,15 @@ const CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND = new Set([48, 2, 3, 848]); // Carabao C
 // LEAGUES (an untracked league contributes nothing, same limit the international
 // blend already has for non-backfilled competitions).
 const DOMESTIC_LEAGUE_IDS_FOR_BLEND = new Set([39, 140, 135, 78, 61, 179, 88, 94, 41, 42, 40]);
+// Betting-tier classification (three-tier redesign, 2026-08-31) — distinct from
+// CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND above: that set is about SCORING methodology
+// (which fixtures borrow domestic form data) and deliberately excludes the World
+// Cup (WC has its own international-pool blend, not the domestic one). This set
+// is about BETTING-TIER assignment (which leagues are "always no-stake/observation
+// if priced, never real paper money until individually promoted") and deliberately
+// DOES include the World Cup. The two sets overlap but are not the same thing —
+// do not merge them.
+const TOURNAMENT_LEAGUE_IDS = new Set([1, 2, 3, 48, 848]); // FIFA World Cup, Champions League, Europa League, Carabao Cup, Conference League
 // UEFA's competition reform (Champions League, Europa League, Conference League all
 // moved from group-of-4 stages to a single 36-team league-phase table) took effect
 // the 2024-25 season — API-Sports' own `season` field uses the year a season starts,
@@ -667,6 +676,24 @@ function computeUnifiedEdge(modelProb, rawOdds, topOutcome, { applyCalFactor = t
   return { calProb, stripped, edge };
 }
 
+// Picks the model's actual favourite by raw probability — the exact selection
+// method computeMatchedEdgeFixtures() (server.js) uses to build the backtest
+// population the domestic paper-money rule (edge>=18%, modelProb>=45%) was
+// validated against. Deliberately NOT successScore (a different, largely
+// uncorrelated composite used for display/legacy gating) and deliberately raw
+// modelProb, not calibratedProb — using calibratedProb here would silently
+// diverge live tier selection from what was actually backtested. `results` is
+// scoreOneFixture's 3-candidate array, each with `bet` in {'Home Win','Draw',
+// 'Away Win'} and a `modelProb` field.
+function pickTopCandidateByProbability(results) {
+  const home = results.find(r => r.bet === 'Home Win');
+  const draw = results.find(r => r.bet === 'Draw');
+  const away = results.find(r => r.bet === 'Away Win');
+  if (home.modelProb >= draw.modelProb && home.modelProb >= away.modelProb) return home;
+  if (away.modelProb >= draw.modelProb) return away;
+  return draw;
+}
+
 // ─── SUCCESS SCORE ────────────────────────────────────────────────────────────
 // 0-99: win probability (0-35) + value/edge (0-45) + confidence/data (0-19)
 // dataConf multiplier suppresses scores when historical data is thin.
@@ -938,6 +965,7 @@ module.exports = {
   LEAGUE_CONFIG,
   DEFAULT_WEIGHTS,
   CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND, DOMESTIC_LEAGUE_IDS_FOR_BLEND, UEFA_SINGLE_PHASE_SEASON_FLOOR,
+  TOURNAMENT_LEAGUE_IDS,
   EURO_COMPETITION_PHASE_GAMES_FLOOR,
   recencyAvg, outcomePoints,
   formScore, homeAdvScore, xgScore, defenseScore,
@@ -949,7 +977,7 @@ module.exports = {
   computeModelProb, applyLeagueBiasCorrection, computeXGProxy, classifyCompetitionPhase,
   CORRECTION_LAYER_RULES, applyVariableCorrectionLayer,
   kelly, computeSuccessScore,
-  computeDataConf, marginStrippedImplied, computeUnifiedEdge,
+  computeDataConf, marginStrippedImplied, computeUnifiedEdge, pickTopCandidateByProbability,
   historicalWeight, weatherModifier,
   reloadXgStore, getXgStore, lookupXg,
   scoreGoalsMarkets,

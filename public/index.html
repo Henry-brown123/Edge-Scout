@@ -2759,12 +2759,16 @@ function recommendedCard(b) {
   // for Carabao (stake still zeroed there) but League One/Two now size real stakes
   // normally, so the old blanket "Zero real-money stake" text would be wrong for them.
   const isGenericPaperOnly = b.paperTradeOnly && !isTrainingHoldout;
+  const isFakeMoney = !!b.isFakeMoney;
   const modeClass   = isReal ? 'real-money' : 'paper-trade';
   const modeBadge   = isReal
     ? `<span class="badge badge-real">REAL £</span>`
     : isGenericPaperOnly
-      ? `<span class="badge badge-paper-only" title="EV calibration negative — paper only">PAPER ONLY</span>`
+      ? `<span class="badge badge-paper-only" title="Zero real-money stake — a manual per-league lock or legacy EV-calibration flag (classified domestic/tournament leagues are now rule-driven, see NO STAKE badge instead).">PAPER ONLY</span>`
       : `<span class="badge badge-paper">PAPER</span>`;
+  const fakeMoneyBadge = isFakeMoney
+    ? `<span class="badge" style="background:rgba(148,163,184,.15);border:1px solid rgba(148,163,184,.35);color:var(--muted)" title="No stake — either a domestic fixture that missed the 18% edge / 45% probability paper-money rule, or a tournament/cup fixture (always no-stake until it earns promotion). Still scored and logged to build evidence for future review.">NO STAKE</span>`
+    : '';
   // Carabao Cup (48) is permanently, wholly training-excluded; League One/Two (41/42)
   // are date-split (calibration-rules.md rule 12) — isTrainingHoldout is per-fixture
   // there (true only for fixtures that kicked off before the cutoff), so the copy
@@ -2783,7 +2787,8 @@ function recommendedCard(b) {
     : 'Kelly · paper';
   return `
     <div class="fixture-card recommended ${modeClass}" style="flex-direction:column;align-items:stretch;padding-bottom:12px;cursor:pointer" onclick="openBetDrawerById('${b.id}')">
-      ${isGenericPaperOnly ? `<div style="background:rgba(255,170,0,0.12);border-bottom:1px solid rgba(255,170,0,0.3);padding:6px 14px;font-size:11px;font-weight:700;color:#ffaa00;border-radius:8px 8px 0 0;margin:-12px -12px 10px">⚠ PAPER ONLY — EV calibration negative. Zero real-money stake.</div>` : ''}
+      ${isGenericPaperOnly ? `<div style="background:rgba(255,170,0,0.12);border-bottom:1px solid rgba(255,170,0,0.3);padding:6px 14px;font-size:11px;font-weight:700;color:#ffaa00;border-radius:8px 8px 0 0;margin:-12px -12px 10px">⚠ PAPER ONLY — zero real-money stake (manual lock or calibration flag).</div>` : ''}
+      ${isFakeMoney ? `<div style="background:rgba(148,163,184,0.1);border-bottom:1px solid rgba(148,163,184,0.28);padding:6px 14px;font-size:11px;font-weight:700;color:var(--muted);border-radius:8px 8px 0 0;margin:-12px -12px 10px">NO STAKE — observation only. Logged for future review, excluded from Paper P&L.</div>` : ''}
       ${isTrainingHoldout ? `<div style="background:rgba(122,162,255,0.1);border-bottom:1px solid rgba(122,162,255,0.28);padding:6px 14px;font-size:11px;font-weight:700;color:#7aa2ff;border-radius:8px 8px 0 0;margin:-12px -12px 10px">${isDateSplitLeague ? 'Training-excluded fixture — kicked off before the cutoff, so this result stays permanently out of the model by design (not pending).' : 'Training-excluded league — results kept permanently clean for backtesting by design (not pending).'} ${stakeIsZeroed ? 'Paper only (zero real-money stake).' : 'Real betting fully enabled.'}</div>` : ''}
       ${isReal ? `<div style="background:rgba(255,209,102,0.08);border-bottom:1px solid rgba(255,209,102,0.2);padding:5px 14px;font-size:10px;font-weight:700;color:var(--amber);border-radius:8px 8px 0 0;margin:-12px -12px 8px;letter-spacing:.04em">REAL MONEY BET</div>` : ''}
       <div style="display:flex;align-items:flex-start;gap:10px">
@@ -2796,6 +2801,7 @@ function recommendedCard(b) {
             <span class="badge badge-cyan">${betLabel}</span>
             ${modeBadge}
             ${holdoutBadge}
+            ${fakeMoneyBadge}
             <span style="color:var(--cyan)">+${edgePct}% edge</span>
             <span>@${b.bookOdds.toFixed(2)}</span>
             ${b.weather ? `<span title="Weather">🌧 ${b.weather.precipProb}% rain, ${b.weather.windSpeed?.toFixed(0)}km/h</span>` : ''}
@@ -2808,7 +2814,7 @@ function recommendedCard(b) {
             <div class="stake-amount" style="color:${stakeColor}">£${(b.actualStake ?? b.displayStake ?? b.suggestedStake).toFixed(2)}</div>
             <div class="stake-label">${kellyLabel}</div>
           </div>
-          ${(!isReal && !b.result) ? `<button class="btn btn-ghost btn-sm" title="Preview only — does not convert or commit anything" onclick="event.stopPropagation();previewRealStake('${b.fixture.replace(/'/g, "\\'")}', ${b.modelProb ?? 'null'}, ${b.bookOdds ?? 'null'})" style="color:var(--amber);border-color:var(--amber);font-size:10px;padding:2px 8px">Real: £?</button>` : ''}
+          ${(!isReal && !b.result && !isFakeMoney) ? `<button class="btn btn-ghost btn-sm" title="Preview only — does not convert or commit anything" onclick="event.stopPropagation();previewRealStake('${b.fixture.replace(/'/g, "\\'")}', ${b.modelProb ?? 'null'}, ${b.bookOdds ?? 'null'})" style="color:var(--amber);border-color:var(--amber);font-size:10px;padding:2px 8px">Real: £?</button>` : ''}
           <span class="stage-tag tag-recommended" style="background:${(b.placementStatus||'pending_placement')==='placed'?'rgba(0,255,135,.15)':'rgba(245,166,35,.15)'};color:${(b.placementStatus||'pending_placement')==='placed'?'var(--green)':'#f5a623'}">${(b.placementStatus||'pending_placement')==='placed'?'Placed':'Locked'}</span>
           ${(b.placementStatus||'pending_placement')==='placed' ? (
             kickoffPassed(b.kickoff)
@@ -2853,11 +2859,15 @@ function watchingCard(w) {
     : w.projectedBet;
   const wMode = w.betMode || 'paper';
   const wIsTrainingHoldout = !!w.isTrainingHoldout;
+  const wIsFakeMoney = !!w.isFakeMoney;
   const wModeTag = wMode === 'real'
     ? `<span class="badge badge-real">REAL £</span>`
     : (w.paperTradeOnly && !wIsTrainingHoldout)
-      ? `<span class="badge badge-paper-only" title="EV calibration negative — paper only">PAPER ONLY</span>`
+      ? `<span class="badge badge-paper-only" title="Zero real-money stake — a manual per-league lock or legacy EV-calibration flag (classified domestic/tournament leagues are now rule-driven, see NO STAKE badge instead).">PAPER ONLY</span>`
       : `<span class="badge badge-paper">PAPER</span>`;
+  const wFakeMoneyBadge = wIsFakeMoney
+    ? `<span class="badge" style="background:rgba(148,163,184,.15);border:1px solid rgba(148,163,184,.35);color:var(--muted)" title="No stake — either a domestic fixture that missed the 18% edge / 45% probability paper-money rule, or a tournament/cup fixture (always no-stake until it earns promotion). Will still be scored and logged to build evidence for future review.">NO STAKE</span>`
+    : '';
   const wIsDateSplitLeague = [41, 42].includes(parseInt(w.leagueId, 10));
   const wHoldoutTooltip = wIsDateSplitLeague
     ? 'This fixture kicked off before the training cutoff, so its result stays permanently out of the model — a deliberate, standing design choice, not a pending state. Fixtures from this league at/after the cutoff do feed the weekly retrain.'
@@ -2884,11 +2894,12 @@ function watchingCard(w) {
         <span class="stage-tag tag-watching">WATCHING</span>
         ${wModeTag}
         ${wHoldoutBadge}
+        ${wFakeMoneyBadge}
         ${contextBadge(w.context)}
         ${weatherBadge(w.weatherCondition)}
         ${w.lowConfidence ? '<span class="badge badge-red" title="Model diverges from bookmaker beyond data-confidence threshold — will not auto-lock">LOW CONF</span>' : ''}
         ${w.noMarketData ? '<span class="badge" style="background:rgba(148,163,184,.15);border:1px solid rgba(148,163,184,.35);color:var(--muted)" title="No bookmaker has priced this fixture anywhere — shown for information only. Cannot be locked, paper or real, at any score.">NO MARKET</span>' : ''}
-        ${w.noMarketData ? '' : `<button class="btn btn-ghost btn-sm" title="Preview only — does not lock or commit anything" onclick="event.stopPropagation();previewRealStake('${w.fixture.replace(/'/g, "\\'")}', ${w.modelProb ?? 'null'}, ${w.bookOdds ?? 'null'}, 'based on the current watching-card reading — the actual lock re-scores fresh and may differ')">Preview real stake</button>`}
+        ${(w.noMarketData || wIsFakeMoney) ? '' : `<button class="btn btn-ghost btn-sm" title="Preview only — does not lock or commit anything" onclick="event.stopPropagation();previewRealStake('${w.fixture.replace(/'/g, "\\'")}', ${w.modelProb ?? 'null'}, ${w.bookOdds ?? 'null'}, 'based on the current watching-card reading — the actual lock re-scores fresh and may differ')">Preview real stake</button>`}
         ${w.noMarketData
           ? `<button class="btn btn-ghost btn-sm" disabled title="No real price exists for this fixture — cannot be locked" style="opacity:.45;cursor:not-allowed">Lock now</button>`
           : `<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openLockModal('${w.id}')">Lock now</button>`}
@@ -3155,7 +3166,7 @@ async function renderPerfMode(mode) {
 
   // Mode-filtered, deduplicated bet set (fixtureId+mode, since combined can hold the
   // same fixtureId once under paper and once under real — both are legitimate rows).
-  const modeBets = bets.filter(b => mode === 'paper' ? (!b.mode || b.mode === 'paper') : mode === 'real' ? b.mode === 'real' : true);
+  const modeBets = bets.filter(b => mode === 'paper' ? ((!b.mode || b.mode === 'paper') && !b.isFakeMoney) : mode === 'real' ? b.mode === 'real' : true);
   const seen = new Set();
   // Was `b.suggestedStake > 0` only — excluded any bet whose auto-computed
   // suggestion happened to be zero (e.g. locked in a paperTradeOnly-zeroed
@@ -3310,7 +3321,7 @@ async function renderPerfMode(mode) {
       </td>
       <td>${resultBadge}${cashOutBadge}</td>
       <td style="white-space:nowrap">
-        ${(b.mode !== 'real' && !b.result) ? `<button class="btn btn-ghost btn-sm" title="Preview only — does not convert or commit anything" onclick="previewRealStake('${b.fixture.replace(/'/g, "\\'")}', ${b.modelProb ?? 'null'}, ${b.bookOdds ?? 'null'})" style="padding:2px 8px;color:var(--amber)">£?</button>` : ''}
+        ${(b.mode !== 'real' && !b.isFakeMoney && !b.result) ? `<button class="btn btn-ghost btn-sm" title="Preview only — does not convert or commit anything" onclick="previewRealStake('${b.fixture.replace(/'/g, "\\'")}', ${b.modelProb ?? 'null'}, ${b.bookOdds ?? 'null'})" style="padding:2px 8px;color:var(--amber)">£?</button>` : ''}
         <button class="btn btn-ghost btn-sm" onclick="editBet('${b.id}')" title="Edit stake/odds/result" style="padding:2px 8px;color:var(--muted)">✎</button>
         ${cashOutBtn}
         <button class="btn btn-ghost btn-sm" onclick="deleteBet('${b.id}')" style="padding:2px 8px;color:var(--muted)">✕</button>
@@ -4906,7 +4917,7 @@ async function cashOutBet(id) {
 }
 
 function exportCSV(mode = 'paper') {
-  const bets = STATE.bets.filter(b => mode === 'paper' ? (!b.mode || b.mode === 'paper') : mode === 'real' ? b.mode === 'real' : true);
+  const bets = STATE.bets.filter(b => mode === 'paper' ? ((!b.mode || b.mode === 'paper') && !b.isFakeMoney) : mode === 'real' ? b.mode === 'real' : true);
   // KellySuggestedStake and ActualStake logged separately (not just one "Stake"
   // column) so past sizing decisions are reviewable — actual may differ from
   // suggested if manually adjusted at placement time.
@@ -6011,7 +6022,7 @@ function openBetDrawer(b) {
     ${routingHTML}
 
     <div class="drawer-actions">
-      ${(b.mode !== 'real' && !b.result) ? `<button class="btn btn-sm" style="background:var(--amber);color:#000;border:none;font-weight:700" onclick="closeDrawer();openBmPanel('${b.id}')">Convert to Real…</button>` : ''}
+      ${(b.mode !== 'real' && !b.isFakeMoney && !b.result) ? `<button class="btn btn-sm" style="background:var(--amber);color:#000;border:none;font-weight:700" onclick="closeDrawer();openBmPanel('${b.id}')">Convert to Real…</button>` : ''}
       ${(b.mode === 'real' && !b.result) ? `<button class="btn btn-ghost btn-sm" style="border-color:var(--amber);color:var(--amber)" onclick="editBet('${b.id}')">Edit stake/odds/bookmaker…</button>` : ''}
       ${(b.mode === 'real' && b.result && b.result !== 'void' && !b.cashedOut) ? `<button class="btn btn-ghost btn-sm" style="border-color:var(--amber);color:var(--amber)" onclick="cashOutBet('${b.id}')">💰 Log Cash Out…</button>` : ''}
       <button class="btn btn-ghost btn-sm" onclick="closeDrawer()">Close</button>
@@ -6351,7 +6362,7 @@ async function openBmPanel(betId) {
   const bet = STATE.bets.find(b => b.id === betId);
   if (!bet) return;
 
-  const convertingFromPaper = bet.mode !== 'real';
+  const convertingFromPaper = bet.mode !== 'real' && !bet.isFakeMoney;
   document.getElementById('bmp-title').textContent    = convertingFromPaper ? `${bet.fixture} — Convert to Real` : bet.fixture;
   document.getElementById('bmp-subtitle').textContent = convertingFromPaper
     ? `${bet.bet} · score ${bet.successScore} · book odds ${bet.bookOdds?.toFixed(2)} · enter the exact odds and stake you actually placed on the exchange below (leave stake blank to fall back to a fresh real-Kelly suggestion)`
@@ -6640,7 +6651,7 @@ async function confirmPlacement() {
   if (!odds || odds <= 1) { toast('Enter valid odds', 'error'); return; }
 
   const bet = (STATE.bets || []).find(b => b.id === _bmPanelBetId);
-  const convertingFromPaper = bet && bet.mode !== 'real';
+  const convertingFromPaper = bet && bet.mode !== 'real' && !bet.isFakeMoney;
 
   // Converting a paper bet to real: this panel's exchange workflow places the bet
   // on Betfair FIRST (at whatever stake the market's liquidity actually allows),
