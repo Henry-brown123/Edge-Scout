@@ -2934,6 +2934,7 @@ function showLockDropped(result) {
     score_below_threshold: `Re-scored just now at lock time: the score came back ${result.successScore} (below the ${result.threshold} lock threshold). It read higher a moment ago on the watching card, but that reading is now stale.`,
     low_confidence: `Re-scored just now at lock time: the model diverges too far from the market to trust${result.detail ? ` — ${result.detail}` : ''}${result.maxGapPct != null ? ` (${result.maxGapPct}pp gap)` : ''}.`,
     insufficient_data: `Re-scored just now at lock time: not enough data for either team (confidence home ${result.homeDataConf?.toFixed(2) ?? '?'}, away ${result.awayDataConf?.toFixed(2) ?? '?'}).`,
+    no_market_data: `Re-scored just now at lock time: no real bookmaker has priced the model's favoured outcome right now. This can be transient (a book pulled the market momentarily) — try again shortly, or check the odds provider directly if it persists.`,
     error: result.detail || 'The lock request failed.',
   };
   document.getElementById('lmp-dropped-text').textContent =

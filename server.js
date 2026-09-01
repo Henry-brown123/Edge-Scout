@@ -8232,6 +8232,27 @@ const VALIDATED_SPLITS = {
 // over the full population is a standing crash risk every time those load.
 // Same yield treatment as the other full-population loops fixed today.
 
+// ─── TEMP DIAGNOSTIC (2026-09-02): why did Birmingham vs Southampton (Championship, ───
+// leagueId 40) drop as no_market_data 29 minutes before kickoff? sport key
+// (soccer_efl_champ) and teamsMatch() were both previously validated clean for this
+// league, so this pulls the actual live Odds API response right now to see directly
+// whether the fixture is present under a different name, missing entirely, or has an
+// incomplete price set. Remove once answered.
+app.get('/api/admin/odds-debug-championship', async (_req, res) => {
+  try {
+    const { oddsMap } = await fetchOddsForLeague('soccer_efl_champ');
+    const events = Object.keys(oddsMap).map(k => {
+      const sep = k.indexOf('|');
+      return { home: k.slice(0, sep), away: k.slice(sep + 1), hasAllThree: !!(oddsMap[k].home && oddsMap[k].draw && oddsMap[k].away) };
+    });
+    const birminghamMatch = events.filter(e => teamsMatch(e.home, 'Birmingham') || teamsMatch(e.away, 'Birmingham'));
+    const southamptonMatch = events.filter(e => teamsMatch(e.home, 'Southampton') || teamsMatch(e.away, 'Southampton'));
+    res.json({ totalEvents: events.length, events, birminghamMatch, southamptonMatch });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 async function computeMatchedEdgeFixtures() {
   const historical     = readHistoricalCached() || {};
   const scoredRecords  = historical.scoredRecords || [];
