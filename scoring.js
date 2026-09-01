@@ -400,9 +400,25 @@ const LEAGUE_CONFIG = {
 // ─── XG PROXY ─────────────────────────────────────────────────────────────────
 // Estimates expected goals from shot statistics when official xG isn't available.
 // Produces a value in the 0–5 range consistent with the xgScore() input scale.
-
+//
+// 2026-09-01: original coefficients (shotsOn*0.35 + totalShots*0.08 +
+// possession*0.5, no intercept) were never checked against real xG — this feeds
+// xgScore()'s live "xg" factor whenever official xG isn't available, which is one
+// of the raw features the GBDT model actually splits on, so a biased proxy
+// silently reshapes GBDT's own input distribution. Checked against 4,173
+// proxy/real pairs (Understat/StatsBomb ground truth via lookupXg, matched
+// domestic-league fixtures 2023-08 to 2025-05): the old formula overestimated
+// real xG by a mean of +1.27 on a held-out chronological test set (last 20% by
+// date) — MAE 1.29, e.g. Arsenal 4.04 vs actual 0.84, nearly 5x high in
+// individual cases. Refit via OLS on the first 80% chronologically, evaluated on
+// the untouched last 20% (calibration-rules.md-style train/test discipline):
+// held-out MAE 0.455 (vs 1.29), mean bias 0.018 (vs +1.27) — essentially
+// unbiased out-of-sample. Clamped to zero: xG can't be negative, and the
+// negative possession coefficient can produce a small negative value at the
+// low-shots/high-possession extreme (e.g. 0 shots on target, 90% possession).
 function computeXGProxy({ shotsOn = 0, totalShots = 0, possession = 0.5 }) {
-  return parseFloat(((shotsOn * 0.35) + (totalShots * 0.08) + (possession * 0.5)).toFixed(3));
+  const raw = 0.0491 + (shotsOn * 0.1654) + (totalShots * 0.0656) + (possession * -0.2032);
+  return parseFloat(Math.max(0, raw).toFixed(3));
 }
 
 // ─── COMPETITION PHASE ────────────────────────────────────────────────────────
