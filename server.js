@@ -2392,6 +2392,42 @@ async function runHourlyRescan() {
         if (s) statsCache[f.fixture.id] = s;
       }
 
+      // 2026-09-02: T-60 (runPreMatchScan) actively fetches missing stats for the
+      // 15 most recent form fixtures before scoring; this function previously only
+      // used whatever was already cached on disk from the separate stats-backfill
+      // cron. That gap — not just unconfirmed lineups — was part of why a fixture's
+      // WATCHING-stage score could swing hard by lock time: recent-form/xG factor
+      // inputs could genuinely be incomplete at the hourly pass and only get filled
+      // in at T-60. Batched once per league (shared across all its fixtures this
+      // pass), matching the existing form/standings/odds sharing above — same
+      // per-fixture cap (15) T-60 uses, so worst case this adds well under 1% of
+      // the daily API-Sports quota even across every league in a busy hour.
+      const statsToSave = {};
+      for (const f of formFixtures.slice(0, 15)) {
+        if (statsCache[f.fixture.id]) continue;
+        try {
+          const { data: st } = await apiSports.get('/fixtures/statistics', { params: { fixture: f.fixture.id } });
+          if (st?.response?.length >= 2) {
+            const find = (ts, t) => ts.statistics?.find(s => s.type === t)?.value;
+            const parseOne = ts => {
+              const xgRaw = find(ts, 'expected_goals') ?? find(ts, 'Expected Goals');
+              const shotsOn = parseInt(find(ts, 'Shots on Goal') ?? 0) || 0;
+              const totalShots = parseInt(find(ts, 'Total Shots') ?? 0) || 0;
+              const possession = parseFloat(String(find(ts, 'Ball Possession') ?? '50%').replace('%', '')) / 100;
+              const xg = xgRaw != null ? parseFloat(xgRaw) || null
+                : (shotsOn || totalShots) ? computeXGProxy({ shotsOn, totalShots, possession }, leagueId) : null;
+              return { xg, shotsOn, totalShots, possession };
+            };
+            const entry = { home: parseOne(st.response[0]), away: parseOne(st.response[1]) };
+            statsCache[f.fixture.id] = entry;
+            statsToSave[f.fixture.id] = entry;
+          }
+        } catch {}
+      }
+      if (Object.keys(statsToSave).length > 0) {
+        saveFixtureStats({ ...fixtureStatsDb, ...statsToSave });
+      }
+
       const { data: sd } = await apiSports.get('/standings', { params: { league: leagueId, season: meta.season } });
       const standings = sd?.response?.[0]?.league?.standings || [];
       const { oddsMap, totalsMap } = await fetchOddsForLeague(meta.sport || 'soccer_epl', QUALIFICATION_SPORT_FALLBACK[String(leagueId)]);
