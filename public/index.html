@@ -107,8 +107,6 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
 .btn-ghost { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
 .btn-ghost:hover { border-color: var(--cyan); color: var(--cyan); }
 .btn-sm { padding: 5px 12px; font-size: 11px; }
-#league-select { background: var(--surface2); color: var(--text1); border: 1px solid var(--border); border-radius: 8px; padding: 4px; }
-#league-select option { background: var(--surface2); color: var(--text1); }
 .btn:disabled { opacity: .4; cursor: not-allowed; }
 
 /* ── Grids ── */
@@ -493,59 +491,18 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     </div>
   </div>
 
-  <!-- Scan controls -->
+  <!-- Scan status — 2026-09-02: manual Refresh/Run Scan Now buttons removed (user
+       request). Neither ever re-fetched the page's own JS, only data, which was a
+       standing source of confusion about whether a given view was current; scanning
+       itself already runs fully on its own schedule (07:00 morning scan, hourly
+       rescan, T-60 pre-match — see setupScheduler in server.js). This is now a
+       pure status display, kept in sync by the visible-tab auto-refresh below
+       (every 60s) and by a plain page reload. -->
   <div class="card">
     <div class="card-header">
-      <span class="card-title">Morning Scan</span>
-      <div style="display:flex;gap:8px">
-        <button class="btn btn-ghost btn-sm" onclick="loadState()">Refresh</button>
-        <button class="btn btn-cyan btn-sm" id="scan-btn" onclick="triggerMorningScan()">Run Scan Now</button>
-      </div>
+      <span class="card-title">Scan Status</span>
     </div>
-    <div class="scan-controls">
-      <div class="field">
-        <label>Leagues</label>
-        <select id="league-select" multiple size="4" style="min-width:160px">
-          <!-- 2026-08-23: this list only ever had the original 7 leagues and was never
-               extended as new leagues were added to LEAGUES/activeLeagues over time —
-               a manual "Run Scan Now" silently only covered whatever's selected here,
-               which meant Championship/Carabao Cup/League One/League Two/Scottish
-               Premiership/Eredivisie/Primeira Liga/Europa League/Conference League were
-               never included. Combined with runMorningScan's watching.json overwrite
-               (see server.js), this wiped a real, currently-watching Championship
-               fixture the model had never actually re-rejected — it just wasn't
-               scanned. Now lists every league in LEAGUES, all selected by default, so
-               "Run Scan Now" with no changes behaves the same as the full automatic
-               scan (see server.js). -->
-          <option value="1"   selected>🏆 World Cup 2026</option>
-          <option value="39"  selected>🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League</option>
-          <option value="140" selected>🇪🇸 La Liga</option>
-          <option value="78"  selected>🇩🇪 Bundesliga</option>
-          <option value="135" selected>🇮🇹 Serie A</option>
-          <option value="61"  selected>🇫🇷 Ligue 1</option>
-          <option value="2"   selected>⭐ Champions League</option>
-          <option value="179" selected>🏴󠁧󠁢󠁳󠁣󠁴󠁿 Scottish Premiership</option>
-          <option value="88"  selected>🇳🇱 Eredivisie</option>
-          <option value="94"  selected>🇵🇹 Primeira Liga</option>
-          <option value="3"   selected>🌍 Europa League</option>
-          <option value="848" selected>🌍 Conference League</option>
-          <option value="48"  selected>🏴󠁧󠁢󠁥󠁮󠁧󠁿 Carabao Cup</option>
-          <option value="41"  selected>🏴󠁧󠁢󠁥󠁮󠁧󠁿 League One</option>
-          <option value="42"  selected>🏴󠁧󠁢󠁥󠁮󠁧󠁿 League Two</option>
-          <option value="40"  selected>🏴󠁧󠁢󠁥󠁮󠁧󠁿 Championship</option>
-        </select>
-      </div>
-      <div class="field">
-        <label>Success threshold</label>
-        <input type="number" id="threshold-input" value="40" min="20" max="90" style="width:70px">
-      </div>
-      <div class="field">
-        <label>Paper bankroll (£)</label>
-        <input type="number" id="bankroll-input" value="1000" min="100" style="width:110px">
-      </div>
-    </div>
-    <div id="scan-log" class="log-box" style="display:none"></div>
-    <div id="scan-status" style="font-size:12px;color:var(--muted);margin-top:8px"></div>
+    <div id="scan-status" style="font-size:12px;color:var(--muted)"></div>
   </div>
 
   <!-- Stats row -->
@@ -2402,9 +2359,6 @@ async function loadState() {
     renderScout();
     renderBankrollPanel();
     syncRerouteInterval();
-    // Keep bankroll input in Morning Scan in sync with actual bankroll
-    const brInput = document.getElementById('bankroll-input');
-    if (brInput) brInput.value = Math.round(s.bankroll?.current ?? 1000);
 
     // Phase 2 readiness banner
     const p2banner = document.getElementById('phase2-banner');
@@ -2915,68 +2869,10 @@ function watchingCard(w) {
 }
 
 // ─── SCAN ─────────────────────────────────────────────────────────────────────
-function scanLog(msg, type = 'info') {
-  const el = document.getElementById('scan-log');
-  el.style.display = 'block';
-  const d = document.createElement('div');
-  d.className = 'log-' + type;
-  d.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
-  el.appendChild(d);
-  el.scrollTop = el.scrollHeight;
-}
-
-async function triggerMorningScan() {
-  const btn = document.getElementById('scan-btn');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> Scanning…';
-  document.getElementById('scan-log').innerHTML = '';
-  scanLog('Triggering morning scan on server…', 'info');
-
-  const leagues = Array.from(document.getElementById('league-select').selectedOptions).map(o => o.value);
-  try {
-    await apiFetch('/api/scan/morning', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ leagues }),
-    });
-    scanLog('Scan started server-side. Waiting for it to finish…', 'found');
-    // 2026-08-23: was a fixed 15s setTimeout before refreshing — worked while the
-    // dropdown only covered 7 leagues, but scanning all 16 now genuinely takes
-    // longer (18s+ observed), so the auto-refresh was firing before the scan had
-    // actually finished writing watching.json. Confirmed live: a real Championship
-    // fixture (score 40) was sitting in watching.json the whole time, just not
-    // visible yet because loadState() ran too early and never ran again. Poll
-    // scan-meta.json's completedAt (already written by the backend) instead of
-    // guessing a duration.
-    const requestedAt = new Date().toISOString();
-    const deadline = Date.now() + 90000; // safety cap — don't poll forever
-    const poll = async () => {
-      let meta = {};
-      try { meta = await apiFetch('/api/scan-meta'); } catch { /* transient — keep polling */ }
-      if (meta?.completedAt && meta.completedAt > requestedAt) {
-        await loadState();
-        const today = new Date().toISOString().split('T')[0];
-        const todayWatching = (STATE.watching || []).filter(w => w.kickoff?.startsWith(today)).length;
-        scanLog(`Done. ${todayWatching} fixtures watching today, ${STATE.bets.filter(b=>b.stage==='RECOMMENDED').length} locked.`, 'found');
-        btn.disabled = false;
-        btn.textContent = 'Run Scan Now';
-        return;
-      }
-      if (Date.now() > deadline) {
-        scanLog('Still running server-side — hit Refresh in a moment to check.', 'info');
-        btn.disabled = false;
-        btn.textContent = 'Run Scan Now';
-        return;
-      }
-      setTimeout(poll, 2000);
-    };
-    setTimeout(poll, 2000);
-  } catch(e) {
-    scanLog('Error: ' + e.message, 'error');
-    btn.disabled = false;
-    btn.textContent = 'Run Scan Now';
-  }
-}
+// Manual scan trigger + logging removed 2026-09-02 (user request) — scanning runs
+// entirely on its own schedule now (see setupScheduler in server.js); loadState()
+// (called on page load and by the 60s auto-refresh below) is the only thing that
+// still touches #scan-status.
 
 // mode: 'paper' | 'real'. Called only from the lock-mode-panel flow below — the modal
 // stays open until the outcome is known, and a drop shows a blocking in-modal warning
@@ -5214,8 +5110,6 @@ function renderSettings() {
   if (prefExChk) prefExChk.checked = s.preferExchange ?? true;
   const prefExBuf = document.getElementById('prefer-exchange-buffer-input');
   if (prefExBuf) prefExBuf.value = s.preferExchangeBuffer ?? 5;
-  const brInput = document.getElementById('bankroll-input');
-  if (brInput) brInput.value = Math.round(STATE.bankroll?.current ?? 1000);
   loadDataCoverage();
   renderBettingModes();
 }
@@ -5563,7 +5457,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // watching-card scores changed underneath (morning scan, hourly rescan, T-60 lock
   // re-score). Skips the fetch while the tab isn't visible, so a background tab
   // doesn't keep polling a server that's already had a rough night.
-  setInterval(() => { if (document.visibilityState === 'visible') loadState(); }, 120000);
+  setInterval(() => { if (document.visibilityState === 'visible') loadState(); }, 60000);
 });
 
 // ─── DETAIL DRAWER ────────────────────────────────────────────────────────────
