@@ -8210,6 +8210,69 @@ async function computeMatchedEdgeFixtures() {
   return matched;
 }
 
+// ─── TEMP DIAGNOSTIC (2026-09-01, round 4): is calibrationFactor=1.08 still the right ───
+// correction under GBDT? Fit 2026-06-16 ("corrects the observed ~5pp positive bias...
+// across 7,464 historical fixtures") against the OLD linear model, never re-measured
+// since GBDT (which already does its own Platt scaling) took over 2026-07-25. Uses
+// Brier score (mean squared error between predicted probability and actual outcome) —
+// deliberately a pure calibration-accuracy metric, not an ROI sweep, to avoid retuning
+// a parameter by chasing backtest ROI (exactly what calibration-rules.md exists to
+// prevent). `matched[i].modelProb` is already the raw, pre-calibration probability, so
+// this reuses computeMatchedEdgeFixtures()'s one (expensive) GBDT inference pass and
+// just re-applies candidate factors in plain JS. Remove once answered.
+async function computeCalibrationFactorSweep() {
+  const matched = await computeMatchedEdgeFixtures();
+
+  function brierAt(factor) {
+    let sumSq = 0;
+    for (const f of matched) {
+      const p = Math.min(0.97, f.modelProb * factor);
+      sumSq += (p - (f.won ? 1 : 0)) ** 2;
+    }
+    return sumSq / matched.length;
+  }
+
+  const sweep = [];
+  for (let factor = 0.90; factor <= 1.20 + 1e-9; factor += 0.02) {
+    sweep.push({ factor: +factor.toFixed(2), brier: +brierAt(factor).toFixed(5) });
+  }
+  const best = sweep.reduce((a, b) => (b.brier < a.brier ? b : a), sweep[0]);
+
+  const BIN_EDGES = [0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 1.01];
+  function reliabilityTable(factor) {
+    const table = [];
+    for (let i = 0; i < BIN_EDGES.length - 1; i++) {
+      const lo = BIN_EDGES[i], hi = BIN_EDGES[i + 1];
+      const inBin = matched.filter(f => {
+        const p = Math.min(0.97, f.modelProb * factor);
+        return p >= lo && p < hi;
+      });
+      if (!inBin.length) continue;
+      const avgPredicted = inBin.reduce((s, f) => s + Math.min(0.97, f.modelProb * factor), 0) / inBin.length;
+      const actualWinRate = inBin.filter(f => f.won).length / inBin.length;
+      table.push({ bin: `${Math.round(lo * 100)}-${Math.round(hi * 100)}%`, n: inBin.length,
+        avgPredicted: +(avgPredicted * 100).toFixed(1), actualWinRate: +(actualWinRate * 100).toFixed(1) });
+    }
+    return table;
+  }
+
+  return {
+    n: matched.length,
+    sweep,
+    bestFactor: best.factor,
+    currentFactor: 1.08,
+    currentBrier: +brierAt(1.08).toFixed(5),
+    uncalibratedBrier: +brierAt(1.00).toFixed(5),
+    reliabilityAtNoCalibration: reliabilityTable(1.00),
+    reliabilityAtCurrent: reliabilityTable(1.08),
+    reliabilityAtBest: reliabilityTable(best.factor),
+  };
+}
+app.get('/api/admin/calfactor-sweep', async (_req, res) => {
+  try { res.json(await computeCalibrationFactorSweep()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Extracted so the weekly cron (setupScheduler) can refresh ev-calibration.json
 // without going through HTTP — see the '0 6 * * 1' schedule below.
 async function runEvCalibration() {
