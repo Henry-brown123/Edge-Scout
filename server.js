@@ -8210,38 +8210,6 @@ async function computeMatchedEdgeFixtures() {
   return matched;
 }
 
-// ─── TEMP DIAGNOSTIC (2026-09-01, round 3): is PL's exemption from applyEdgeCap ───
-// (scoring.js:704-708) still justified under GBDT? Fit 2026-07-23 on the OLD linear
-// model ("+18.46% ROI confirmed on 147 PL fixtures" vs "~0% ROI for everyone else at
-// 20%+ edge"), 2 days before the GBDT switch, never re-checked since. Unlike the last
-// two, this one needs no formCount proxy — computeMatchedEdgeFixtures() already
-// produces the exact same `edge` value applyEdgeCap consumes. Remove once answered.
-async function computeEdgeCapOverlayCheck() {
-  const { DOMESTIC_LEAGUE_IDS_FOR_BLEND } = require('./scoring');
-  const matched = await computeMatchedEdgeFixtures();
-  const highEdge = matched.filter(f => f.edge >= 0.20 && DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(parseInt(f.leagueId, 10)));
-
-  function summarise(group) {
-    const n = group.length;
-    if (!n) return { n: 0, roi: null, ci95: null };
-    const returns = group.map(r => r.won ? (r.pinnacleOdds - 1) : -1);
-    const mean = returns.reduce((s, r) => s + r, 0) / n;
-    const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / n;
-    const se = Math.sqrt(variance / n);
-    return { n, roi: +(mean * 100).toFixed(1),
-      ci95: [+((mean - 1.96 * se) * 100).toFixed(1), +((mean + 1.96 * se) * 100).toFixed(1)] };
-  }
-
-  return {
-    premierLeague: summarise(highEdge.filter(f => parseInt(f.leagueId, 10) === 39)),
-    allOtherDomesticLeagues: summarise(highEdge.filter(f => parseInt(f.leagueId, 10) !== 39)),
-  };
-}
-app.get('/api/admin/edgecap-overlay-check', async (_req, res) => {
-  try { res.json(await computeEdgeCapOverlayCheck()); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
-
 // Extracted so the weekly cron (setupScheduler) can refresh ev-calibration.json
 // without going through HTTP — see the '0 6 * * 1' schedule below.
 async function runEvCalibration() {
