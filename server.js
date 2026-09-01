@@ -1616,6 +1616,17 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     const pinnacleRawForOutcome = bookOdds._pinnacleRaw?.[teamKey];
     const ukPriceForOutcome     = bookOdds[teamKey];
     const hasRealOdds = pinnacleRawForOutcome > 1 || ukPriceForOutcome > 1;
+    // 2026-09-02: Birmingham vs Southampton (Championship) dropped as no_market_data
+    // 29 minutes before kickoff despite the fixture genuinely being priced by several
+    // books (confirmed via a live odds pull) and teamsMatch() correctly finding it —
+    // couldn't pin the exact cause under time pressure without this. Logs only the
+    // specific "a market exists for this fixture overall, but not for this exact
+    // outcome/teamKey" pattern (pinnStripped truthy = the 3-way market resolved fine
+    // for at least one outcome), not genuine full-fixture data absence, to stay quiet
+    // for the common, expected case (tournament qualifiers etc. with no market at all).
+    if (!hasRealOdds && pinnStripped && bookOdds && Object.keys(bookOdds).length) {
+      console.log(`[OddsDebug] ${c.label} hasRealOdds=false but a market exists for this fixture — teamKey="${teamKey}", bookOdds keys=[${Object.keys(bookOdds).filter(k => !k.startsWith('_')).join(', ')}], _pinnacleRaw keys=[${Object.keys(bookOdds._pinnacleRaw || {}).join(', ')}]`);
+    }
     const realOdds    = pinnacleRawForOutcome > 1 ? pinnacleRawForOutcome : ukPriceForOutcome;
     // Internal-only divide-by-zero guard for impliedP below when there's truly no
     // real price anywhere — never stored on the entry, never surfaced to the UI
@@ -8231,27 +8242,6 @@ const VALIDATED_SPLITS = {
 // /api/ev-calibration), not just background jobs, so a single unyielded pass
 // over the full population is a standing crash risk every time those load.
 // Same yield treatment as the other full-population loops fixed today.
-
-// ─── TEMP DIAGNOSTIC (2026-09-02): why did Birmingham vs Southampton (Championship, ───
-// leagueId 40) drop as no_market_data 29 minutes before kickoff? sport key
-// (soccer_efl_champ) and teamsMatch() were both previously validated clean for this
-// league, so this pulls the actual live Odds API response right now to see directly
-// whether the fixture is present under a different name, missing entirely, or has an
-// incomplete price set. Remove once answered.
-app.get('/api/admin/odds-debug-championship', async (_req, res) => {
-  try {
-    const { oddsMap } = await fetchOddsForLeague('soccer_efl_champ');
-    const events = Object.keys(oddsMap).map(k => {
-      const sep = k.indexOf('|');
-      return { home: k.slice(0, sep), away: k.slice(sep + 1), hasAllThree: !!(oddsMap[k].home && oddsMap[k].draw && oddsMap[k].away) };
-    });
-    const birminghamMatch = events.filter(e => teamsMatch(e.home, 'Birmingham') || teamsMatch(e.away, 'Birmingham'));
-    const southamptonMatch = events.filter(e => teamsMatch(e.home, 'Southampton') || teamsMatch(e.away, 'Southampton'));
-    res.json({ totalEvents: events.length, events, birminghamMatch, southamptonMatch });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
 
 async function computeMatchedEdgeFixtures() {
   const historical     = readHistoricalCached() || {};
