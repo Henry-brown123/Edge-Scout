@@ -134,7 +134,13 @@ const CONTEXT_CONFIG = {
   },
   club_european: {
     awayMult:      0.92,
-    rankScale:     0.003,
+    // 2026-09-01: was 0.003. Multi-class Brier score on the actual affected
+    // population (dataConf<1, n=6954) showed the FIFA-rank blend measurably
+    // worse than pure GBDT output (blended 0.6394 vs unblended 0.6113) — same
+    // pattern as club_domestic already had (rankScale:0 there), just never
+    // checked here. homeBase/awayBase kept for reference even though inert at
+    // scale=0, matching club_domestic's existing convention.
+    rankScale:     0,
     homeBase:      0.35,
     awayBase:      0.40,
     dataConfMin:   0.3,
@@ -142,7 +148,11 @@ const CONTEXT_CONFIG = {
   },
   international: {
     awayMult:      0.97,   // near-neutral venues, minimal home advantage
-    rankScale:     0.018,  // raised from 0.010 — anchor guaranteed 30% weight so needs more differentiation
+    // 2026-09-01: was 0.018 (raised from 0.010 pre-GBDT). Same overlay check
+    // (n=2293) showed blended Brier 0.6171 vs unblended 0.589 — worse, same
+    // direction and similar magnitude as club_european. Disabled for the same
+    // reason.
+    rankScale:     0,
     homeBase:      0.30,
     awayBase:      0.45,
     dataConfMin:   0.0,    // no min data requirement — use stricter gap threshold
