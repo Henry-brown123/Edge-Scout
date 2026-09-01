@@ -8199,6 +8199,143 @@ async function computeMatchedEdgeFixtures() {
   return matched;
 }
 
+// ─── TEMP DIAGNOSTIC (2026-09-01): does the live lowConfidence gate quietly cut  ───
+// into the 18%/45% domestic paper-money population the walk-forward scan validated?
+// computeMatchedEdgeFixtures() above never touches lowConfidence/dataConf/formCount
+// at all (confirmed by reading it — it's a pure model.predict()+edge reconstruction),
+// so every table this session (including the walk-forward robustness scan that led
+// to picking 18%/45%) was built WITHOUT that gate applied. Live scoreOneFixture DOES
+// apply it before a bet record is even created. This reconstructs, for the same
+// domestic-only edge>=18%/modelProb>=45% population, whether each fixture would have
+// tripped lowConfidence, and reports n + ROI split both ways — remove once answered,
+// same as every other one-off diagnostic this session.
+//
+// Caveat, stated up front rather than buried: minFormCount here is a PROXY, not a
+// byte-exact replica of live's scoringPool (which is fetched live via the API as
+// "last 60 fixtures per season across N formSeasons" per team). It's reconstructed
+// from historical.fixtures — the same ~2-season dataset backing scoredRecords —
+// by counting each team's prior appearances in that dataset before the fixture's
+// own date, scoped to the same league. Same underlying "how much history exists on
+// this team" concept the real gate uses, but not guaranteed to match its exact
+// count on every fixture. maxModelBookGap, by contrast, IS an exact reconstruction
+// — it reuses the same probs/marginStrippedImplied computeMatchedEdgeFixtures
+// already computes, just extended to all 3 outcomes instead of only topOutcome.
+async function computeLowConfOverlayCheck() {
+  const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG, marginStrippedImplied,
+    DOMESTIC_LEAGUE_IDS_FOR_BLEND } = require('./scoring');
+  const historical    = readHistoricalCached() || {};
+  const scoredRecords = historical.scoredRecords || [];
+  const rawFixtures   = historical.fixtures || [];
+  const optWeights    = historical.optimisedWeights || {};
+  const closingOdds   = readJSON('closing-odds.json') || {};
+  const settings      = getSettings();
+  const calFactor     = settings.calibrationFactor ?? 1.08;
+
+  // Index: `${leagueId}:${teamId}` -> sorted array of kickoff timestamps (ms),
+  // for the binary-search prior-appearance count below.
+  const byLeagueTeam = new Map();
+  for (const f of rawFixtures) {
+    const lid = f.league?.id;
+    const dateMs = f.fixture?.date ? new Date(f.fixture.date).getTime() : null;
+    if (!lid || !dateMs) continue;
+    const hId = f.teams?.home?.id, aId = f.teams?.away?.id;
+    if (hId) { const k = `${lid}:${hId}`; if (!byLeagueTeam.has(k)) byLeagueTeam.set(k, []); byLeagueTeam.get(k).push(dateMs); }
+    if (aId) { const k = `${lid}:${aId}`; if (!byLeagueTeam.has(k)) byLeagueTeam.set(k, []); byLeagueTeam.get(k).push(dateMs); }
+  }
+  for (const arr of byLeagueTeam.values()) arr.sort((a, b) => a - b);
+  function formCountAsOf(leagueId, teamId, dateMs) {
+    const arr = byLeagueTeam.get(`${leagueId}:${teamId}`);
+    if (!arr) return 0;
+    let lo = 0, hi = arr.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (arr[mid] < dateMs) lo = mid + 1; else hi = mid; }
+    return lo;
+  }
+
+  const rows = [];
+  let sinceYield = 0;
+  for (const rec of scoredRecords) {
+    if (++sinceYield >= 50) { sinceYield = 0; await new Promise(r => setImmediate(r)); }
+    const leagueId = parseInt(rec.leagueId, 10);
+    if (!DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(leagueId)) continue; // domestic-only, matching the 18/45 rule's own scope
+
+    const co = closingOdds[rec.fixtureId] || closingOdds[String(rec.fixtureId)];
+    if (!co || !co.homeOdds || !co.awayOdds || !co.drawOdds) continue;
+    if (!rec.actualOutcome || !rec.homeFactors || !rec.awayFactors) continue;
+
+    const context = rec.context || classifyFixture(rec.leagueId);
+    const weights = optWeights[context] || optWeights.club_domestic;
+    if (!weights) continue;
+
+    const rawProbs = model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]);
+    const probs    = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
+
+    let topOutcome, modelProb, pinnacleOdds;
+    if (probs.home >= probs.draw && probs.home >= probs.away) { topOutcome = 'home'; modelProb = probs.home; pinnacleOdds = co.homeOdds; }
+    else if (probs.away >= probs.draw)                        { topOutcome = 'away'; modelProb = probs.away; pinnacleOdds = co.awayOdds; }
+    else                                                       { topOutcome = 'draw'; modelProb = probs.draw; pinnacleOdds = co.drawOdds; }
+    if (!pinnacleOdds || pinnacleOdds <= 1) continue;
+
+    const calProb  = Math.min(0.97, modelProb * calFactor);
+    const stripped = marginStrippedImplied(co);
+    const edge     = calProb - stripped[topOutcome];
+
+    // Matches the live 18%/45% rule exactly: edge on calibrated prob, floor on RAW
+    // modelProb (meetsPaperMoneyRule/pickTopCandidateByProbability both use raw c.prob).
+    if (edge < 0.18 || modelProb < 0.45) continue;
+
+    const maxModelBookGap = Math.max(
+      Math.abs(probs.home - stripped.home),
+      Math.abs(probs.draw - stripped.draw),
+      Math.abs(probs.away - stripped.away),
+    );
+    const dateMs = new Date(rec.date).getTime();
+    const homeFormCount = formCountAsOf(leagueId, rec.homeTeamId, dateMs);
+    const awayFormCount = formCountAsOf(leagueId, rec.awayTeamId, dateMs);
+    const minFormCount  = Math.min(homeFormCount, awayFormCount);
+    const dataConf      = Math.min(homeFormCount / 15, 1, awayFormCount / 15, 1);
+    const gapThreshold   = Math.max(0, 0.25 - (1 - dataConf) * 0.15); // club_domestic gapThresholdBase
+    const tierThreshold  = minFormCount < 20 ? 0.08 : minFormCount < 35 ? 0.12 : 0.18;
+    const lowConfidenceProxy = maxModelBookGap > gapThreshold || maxModelBookGap > tierThreshold;
+
+    const won = rec.actualOutcome === topOutcome;
+    rows.push({ fixtureId: rec.fixtureId, leagueId, date: rec.date, edge, modelProb,
+      pinnacleOdds, won, minFormCount, maxModelBookGap, lowConfidenceProxy });
+  }
+
+  function summarise(group) {
+    const n = group.length;
+    if (!n) return { n: 0, roi: null, ci95: null, weeks: 0, perActiveWeek: null };
+    const returns = group.map(r => r.won ? (r.pinnacleOdds - 1) : -1);
+    const mean = returns.reduce((s, r) => s + r, 0) / n;
+    const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / n;
+    const se = Math.sqrt(variance / n);
+    const dates = group.map(r => new Date(r.date).getTime()).sort((a, b) => a - b);
+    const spanWeeks = Math.max(1, (dates[dates.length - 1] - dates[0]) / (7 * 24 * 3600 * 1000));
+    // Active weeks (has >=1 fixture), not calendar span — matches this session's
+    // earlier "avg per active week" convention rather than diluting across off-season gaps.
+    const activeWeeks = new Set(dates.map(d => Math.floor(d / (7 * 24 * 3600 * 1000)))).size;
+    return {
+      n, roi: +(mean * 100).toFixed(1),
+      ci95: [+((mean - 1.96 * se) * 100).toFixed(1), +((mean + 1.96 * se) * 100).toFixed(1)],
+      spanWeeks: +spanWeeks.toFixed(1), activeWeeks, perActiveWeek: +(n / activeWeeks).toFixed(1),
+    };
+  }
+
+  const lowConf    = rows.filter(r => r.lowConfidenceProxy);
+  const notLowConf = rows.filter(r => !r.lowConfidenceProxy);
+  return {
+    caveat: 'minFormCount is a reconstructed proxy (see comment above computeLowConfOverlayCheck) — maxModelBookGap is exact.',
+    overall: summarise(rows),
+    wouldSurviveLiveGate: summarise(notLowConf),
+    wouldBeDroppedByLowConf: summarise(lowConf),
+    droppedFraction: rows.length ? +((lowConf.length / rows.length) * 100).toFixed(1) : null,
+  };
+}
+app.get('/api/admin/lowconf-overlay-check', async (_req, res) => {
+  try { res.json(await computeLowConfOverlayCheck()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Extracted so the weekly cron (setupScheduler) can refresh ev-calibration.json
 // without going through HTTP — see the '0 6 * * 1' schedule below.
 async function runEvCalibration() {
