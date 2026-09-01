@@ -2393,6 +2393,20 @@ async function runHourlyRescan() {
   const byLeague = {};
   toRefresh.forEach(w => { (byLeague[w.leagueId] = byLeague[w.leagueId] || []).push(w); });
 
+  // 2026-09-02: real race condition found while investigating a fixture stuck
+  // showing "Lock overdue" indefinitely. This function reads `watching` once at
+  // the top, then (now slower, since the missing-stats backfill above was added)
+  // can run for several minutes — while the independent per-minute T-60 cron
+  // keeps reading/writing watching.json concurrently, removing any fixture whose
+  // lock window has closed. The old code below saved this function's OWN stale
+  // start-of-run snapshot at the end (`saveWatching(watching, ...)`), silently
+  // overwriting and resurrecting any fixture the T-60 cron had legitimately
+  // removed in the meantime, if that removal happened while this was still
+  // running. Now collects updates by id instead of mutating in place, and
+  // applies them onto a FRESH read of watching.json at save time — a fixture
+  // removed elsewhere during this run simply won't be in that fresh read, so its
+  // stale update here is correctly dropped rather than resurrecting it.
+  const updatesById = {};
   let refreshed = 0;
   for (const [leagueId, entries] of Object.entries(byLeague)) {
     const meta = LEAGUES[leagueId];
@@ -2494,7 +2508,7 @@ async function runHourlyRescan() {
             ? scored.results.reduce((a, b) => (b.calibratedProb ?? b.modelProb ?? 0) > (a.calibratedProb ?? a.modelProb ?? 0) ? b : a)
             : best;
 
-          Object.assign(w, {
+          updatesById[w.id] = {
             noMarketData,
             isFakeMoney:         scored.isFakeMoney,
             meetsPaperMoneyRule: scored.meetsPaperMoneyRule,
@@ -2524,7 +2538,7 @@ async function runHourlyRescan() {
             weatherCondition: scored.weatherCondition,
             paperTradeOnly:   scored.paperTradeOnly,
             isTrainingHoldout: scored.isTrainingHoldout,
-          });
+          };
           refreshed++;
         } catch (e) {
           console.error(`[Cron:HourlyRescan] fixture ${w.fixtureId} error: ${e.message}`);
@@ -2534,7 +2548,16 @@ async function runHourlyRescan() {
       console.error(`[Cron:HourlyRescan] league ${leagueId} error: ${e.message}`);
     }
   }
-  saveWatching(watching, { allowEmpty: true });
+  // Re-read fresh rather than saving the stale start-of-run `watching` snapshot —
+  // see the comment above updatesById's declaration. Anything already removed
+  // elsewhere (e.g. the T-60 cron dropping a fixture past its lock window while
+  // this was still running) simply won't be in this fresh read, so its update
+  // here is correctly discarded instead of resurrecting it.
+  const freshWatching = getWatching();
+  for (const fw of freshWatching) {
+    if (updatesById[fw.id]) Object.assign(fw, updatesById[fw.id]);
+  }
+  saveWatching(freshWatching, { allowEmpty: true });
   console.log(`[Cron:HourlyRescan] Complete — refreshed ${refreshed}/${toRefresh.length} fixture(s)`);
   recordHourlyRescanMeta({ lastHourlyRescanRefreshed: refreshed });
   return { refreshed, skipped: watching.length - toRefresh.length };
