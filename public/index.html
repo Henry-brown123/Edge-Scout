@@ -482,25 +482,19 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     </div>
   </div>
 
-  <!-- Phase 2 readiness banner (hidden until 50+ resolved calibration entries) -->
-  <div id="phase2-banner" style="display:none;align-items:center;gap:12px;background:rgba(76,201,240,.1);border:1px solid rgba(76,201,240,.3);border-radius:8px;padding:12px 16px;margin-bottom:16px">
-    <span style="font-size:1.4rem">🚀</span>
-    <div>
-      <div style="font-weight:700;color:var(--cyan);font-size:.9rem">Model ready for Phase 2</div>
-      <div style="font-size:.78rem;color:var(--text2)">50+ resolved calibration entries reached. Return to your Edge Scout Claude conversation to begin Phase 2 weight optimisation.</div>
-    </div>
-  </div>
-
-  <!-- Scan status — 2026-09-02: manual Refresh/Run Scan Now buttons removed (user
-       request). Neither ever re-fetched the page's own JS, only data, which was a
-       standing source of confusion about whether a given view was current; scanning
-       itself already runs fully on its own schedule (07:00 morning scan, hourly
-       rescan, T-60 pre-match — see setupScheduler in server.js). This is now a
-       pure status display, kept in sync by the visible-tab auto-refresh below
-       (every 60s) and by a plain page reload. -->
+  <!-- Scan status — 2026-09-02: the old manual Refresh/Run Scan Now buttons (tied
+       to the league-select/threshold/bankroll controls and runMorningScan) were
+       removed since neither ever re-fetched the page's own JS, only data — a
+       standing source of confusion. Re-added a single "Run Full Re-scan" button
+       per user request, for the case of wanting fresh data mid-hour rather than
+       waiting for the next automatic pass. Deliberately calls the SAME endpoint
+       the hourly cron uses (/api/scan/hourly-rescan → runHourlyRescan, full
+       pipeline: form/standings/odds/lineups/injuries/stats, no league-selector
+       footgun) rather than resurrecting the old morning-scan trigger. -->
   <div class="card">
     <div class="card-header">
       <span class="card-title">Scan Status</span>
+      <button class="btn btn-cyan btn-sm" id="rescan-btn" onclick="triggerFullRescan()">Run Full Re-scan</button>
     </div>
     <div id="scan-status" style="font-size:12px;color:var(--muted)"></div>
   </div>
@@ -2360,26 +2354,32 @@ async function loadState() {
     renderBankrollPanel();
     syncRerouteInterval();
 
-    // Phase 2 readiness banner
-    const p2banner = document.getElementById('phase2-banner');
-    if (p2banner) p2banner.style.display = s.phase2Ready ? 'flex' : 'none';
-
     const el = document.getElementById('scan-status');
-    if (el && meta?.completedAt) {
-      const d     = new Date(meta.completedAt);
-      const today = new Date().toISOString().split('T')[0];
-      const isToday = meta.date === today;
-      const label = isToday
-        ? `Last scan: today at ${d.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' })} · ${meta.count} watching`
-        : `⚠ Last scan: ${meta.date} (${meta.count} watching) — today's scan not yet run`;
-      el.textContent = label;
-      el.style.color = isToday ? 'var(--muted)' : 'var(--amber)';
-    } else if (el && meta?.startedAt && !meta?.completedAt) {
-      el.textContent = 'Scan in progress…';
-      el.style.color = 'var(--cyan)';
-    } else if (el) {
-      el.textContent = 'No scan run yet today';
-      el.style.color = 'var(--amber)';
+    if (el) {
+      // 2026-09-02: was morning-scan-only (meta.completedAt) — stayed frozen at
+      // whenever runMorningScan (or the since-removed manual trigger) last ran,
+      // blind to the hourly rescan that's actually been refreshing data every
+      // hour since. Shows whichever of the two genuinely happened most recently.
+      const morningAt = meta?.completedAt ? new Date(meta.completedAt) : null;
+      const hourlyAt  = meta?.lastHourlyRescanAt ? new Date(meta.lastHourlyRescanAt) : null;
+      const mostRecent = [morningAt, hourlyAt].filter(Boolean).sort((a, b) => b - a)[0];
+      if (mostRecent) {
+        const today = new Date().toISOString().split('T')[0];
+        const isToday = mostRecent.toISOString().split('T')[0] === today;
+        const kind = (hourlyAt && mostRecent.getTime() === hourlyAt.getTime()) ? 'hourly rescan' : 'morning scan';
+        const watchingCount = (STATE.watching || []).length;
+        const label = isToday
+          ? `Last updated: today at ${mostRecent.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' })} (${kind}) · ${watchingCount} watching`
+          : `⚠ Last updated: ${mostRecent.toLocaleDateString('en-GB')} (${kind}) — nothing run yet today`;
+        el.textContent = label;
+        el.style.color = isToday ? 'var(--muted)' : 'var(--amber)';
+      } else if (meta?.startedAt && !meta?.completedAt) {
+        el.textContent = 'Scan in progress…';
+        el.style.color = 'var(--cyan)';
+      } else {
+        el.textContent = 'No scan run yet today';
+        el.style.color = 'var(--amber)';
+      }
     }
   } catch(e) { toast('Failed to load state: ' + e.message, 'error'); }
 }
@@ -2869,10 +2869,30 @@ function watchingCard(w) {
 }
 
 // ─── SCAN ─────────────────────────────────────────────────────────────────────
-// Manual scan trigger + logging removed 2026-09-02 (user request) — scanning runs
-// entirely on its own schedule now (see setupScheduler in server.js); loadState()
-// (called on page load and by the 60s auto-refresh below) is the only thing that
-// still touches #scan-status.
+// Re-added 2026-09-02 for on-demand mid-hour refreshes — calls the same endpoint
+// the hourly cron uses (full pipeline: form/standings/odds/lineups/injuries/stats),
+// not the old morning-scan trigger. That endpoint awaits runHourlyRescan() before
+// responding, so no separate scan-meta polling loop is needed here — just wait for
+// the response, then loadState() to pick up whatever changed.
+async function triggerFullRescan() {
+  const btn = document.getElementById('rescan-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Scanning…';
+  try {
+    const result = await apiFetch('/api/scan/hourly-rescan', { method: 'POST' });
+    if (result.started === false) {
+      toast(result.message || 'Already running — try again shortly', 'info');
+    } else {
+      await loadState();
+      toast(`Rescanned — ${result.refreshed ?? 0} fixture(s) refreshed`, 'success');
+    }
+  } catch (e) {
+    toast('Rescan failed: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Run Full Re-scan';
+  }
+}
 
 // mode: 'paper' | 'real'. Called only from the lock-mode-panel flow below — the modal
 // stays open until the outcome is known, and a drop shows a blocking in-modal warning

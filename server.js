@@ -2349,14 +2349,27 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
 // runPreMatchScan) rather than refactoring that lock-critical path to be
 // reused here — this is a genuinely separate, lower-stakes concern and
 // shouldn't risk a regression in the code that creates real bets.
+// 2026-09-02: scan-meta.json's completedAt/count were morning-scan-only — the Scout
+// tab's "Last scan" line stayed frozen at whenever runMorningScan (or a since-removed
+// manual trigger) last ran, completely blind to the hourly rescan that's actually
+// been refreshing data every hour since. Real confusion this caused: a screenshot
+// showed "Last scan: today at 13:33" at 16:10, well after at least two automatic
+// hourly passes had genuinely run. Records the hourly rescan's own completion
+// separately so the frontend can show whichever of the two actually happened most
+// recently, instead of silently favouring morning scan.
+function recordHourlyRescanMeta(result) {
+  const meta = readJSON('scan-meta.json') || {};
+  writeJSON('scan-meta.json', { ...meta, lastHourlyRescanAt: new Date().toISOString(), ...result });
+}
+
 async function runHourlyRescan() {
   const watching = getWatching();
-  if (!watching.length) return { refreshed: 0 };
+  if (!watching.length) { recordHourlyRescanMeta({ lastHourlyRescanRefreshed: 0 }); return { refreshed: 0 }; }
 
   const now = Date.now();
   // Skip anything already inside the T-60 (±15min) window — let that cron own it.
   const toRefresh = watching.filter(w => (new Date(w.kickoff).getTime() - now) / 60000 > 65);
-  if (!toRefresh.length) return { refreshed: 0 };
+  if (!toRefresh.length) { recordHourlyRescanMeta({ lastHourlyRescanRefreshed: 0 }); return { refreshed: 0 }; }
 
   const settings = getSettings();
   const backfillData = readHistoricalCached() || { fixtures: [] };
@@ -2512,6 +2525,7 @@ async function runHourlyRescan() {
   }
   saveWatching(watching, { allowEmpty: true });
   console.log(`[Cron:HourlyRescan] Complete — refreshed ${refreshed}/${toRefresh.length} fixture(s)`);
+  recordHourlyRescanMeta({ lastHourlyRescanRefreshed: refreshed });
   return { refreshed, skipped: watching.length - toRefresh.length };
 }
 
