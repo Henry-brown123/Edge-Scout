@@ -2250,13 +2250,13 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
          with a bookmaker on the strength of the earlier watching-card reading. -->
     <div id="lmp-dropped" style="display:none">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-        <span style="font-size:28px;line-height:1">⚠️</span>
-        <div style="font-size:15px;font-weight:800;color:var(--red)">NOT LOCKED</div>
+        <span id="lmp-dropped-icon" style="font-size:28px;line-height:1">⚠️</span>
+        <div id="lmp-dropped-title" style="font-size:15px;font-weight:800;color:var(--red)">NOT LOCKED</div>
       </div>
       <div id="lmp-dropped-text" style="font-size:13px;color:var(--text1);margin-bottom:10px;line-height:1.5"></div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:18px">Nothing was placed or logged. Do not place this bet with a bookmaker based on the earlier reading — re-check the fixture if you still want to act on it.</div>
+      <div id="lmp-dropped-footer" style="font-size:12px;color:var(--muted);margin-bottom:18px">Nothing was placed or logged. Do not place this bet with a bookmaker based on the earlier reading — re-check the fixture if you still want to act on it.</div>
       <div style="display:flex;justify-content:flex-end">
-        <button class="btn btn-sm" style="background:var(--red);color:#fff;border:none;min-height:44px;padding:0 22px;font-weight:700" onclick="closeLockModal()">OK, understood</button>
+        <button id="lmp-dropped-btn" class="btn btn-sm" style="background:var(--red);color:#fff;border:none;min-height:44px;padding:0 22px;font-weight:700" onclick="closeLockModal()">OK, understood</button>
       </div>
     </div>
   </div>
@@ -2935,10 +2935,24 @@ function showLockDropped(result) {
     low_confidence: `Re-scored just now at lock time: the model diverges too far from the market to trust${result.detail ? ` — ${result.detail}` : ''}${result.maxGapPct != null ? ` (${result.maxGapPct}pp gap)` : ''}.`,
     insufficient_data: `Re-scored just now at lock time: not enough data for either team (confidence home ${result.homeDataConf?.toFixed(2) ?? '?'}, away ${result.awayDataConf?.toFixed(2) ?? '?'}).`,
     no_market_data: `Re-scored just now at lock time: no real bookmaker has priced the model's favoured outcome right now. This can be transient (a book pulled the market momentarily) — try again shortly, or check the odds provider directly if it persists.`,
+    already_locked: `This fixture already has a bet logged (fixture: ${result.fixture || 'unknown'}) — nothing more to do here. It's likely still showing in the WATCHING list because of a display sync issue, not because anything's wrong with the bet itself.`,
     error: result.detail || 'The lock request failed.',
   };
   document.getElementById('lmp-dropped-text').textContent =
     REASON_TEXT[result.reason] || 'This fixture no longer qualifies to lock.';
+  // 2026-09-02: already_locked is genuinely good news (a real bet exists), not a
+  // warning — the red "NOT LOCKED" treatment actively misled here. Swap to a
+  // green, reassuring style for that one reason; every other reason keeps the
+  // original loud/blocking red treatment (deliberate — see the comment above
+  // this modal's markup).
+  const isGood = result.reason === 'already_locked';
+  document.getElementById('lmp-dropped-icon').textContent = isGood ? '✅' : '⚠️';
+  const title = document.getElementById('lmp-dropped-title');
+  title.textContent = isGood ? 'ALREADY LOCKED' : 'NOT LOCKED';
+  title.style.color = isGood ? 'var(--green)' : 'var(--red)';
+  document.getElementById('lmp-dropped-footer').style.display = isGood ? 'none' : 'block';
+  const btn = document.getElementById('lmp-dropped-btn');
+  btn.style.background = isGood ? 'var(--green)' : 'var(--red)';
   document.getElementById('lmp-choice').style.display = 'none';
   document.getElementById('lmp-dropped').style.display = 'block';
 }

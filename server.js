@@ -2007,7 +2007,11 @@ async function runMorningScan(leagueIds) {
   const scannedLeagueIds = new Set(leagueIds.map(String));
   const preserved = existingWatching.filter(w => !scannedLeagueIds.has(String(w.leagueId)));
   const merged = [...preserved, ...watching];
-  saveWatching(merged);
+  // allowEmpty:true — same reasoning as the T-60 cron and hourly rescan fixes
+  // today: a genuinely quiet day (no fixtures anywhere qualify) is a legitimate
+  // zero, not a bug, and writeJSON's accidental-data-loss guard can't tell the
+  // difference without this.
+  saveWatching(merged, { allowEmpty: true });
   writeJSON('scan-meta.json', { date: today, startedAt: scanStart, completedAt: new Date().toISOString(), count: merged.length });
   console.log(`[MorningScan] Done. ${watching.length} fixture(s) (re)scanned, ${preserved.length} preserved from unscanned leagues, ${merged.length} total watching.`);
   return watching;
@@ -2321,7 +2325,12 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
     const bets = getBets();
     if (bets.some(b => b.fixtureId === fix.fixture.id)) {
       console.log(`[PreMatch] Bet already exists for fixture ${fix.fixture.id} (${scored.homeName} vs ${scored.awayName}) — skipping duplicate`);
-      return null;
+      // 2026-09-02: was a bare `return null` — the manual lock endpoint turns that
+      // into `{dropped: true}` with no reason, so the modal fell through to the
+      // same generic "no longer qualifies" message as every other drop reason.
+      // That's actively misleading here: nothing failed, the fixture is already
+      // locked (a real bet exists) — genuinely good news, not a warning.
+      return { dropped: true, reason: 'already_locked', fixture: `${scored.homeName} vs ${scored.awayName}` };
     }
     bets.unshift(bet);
     saveBets(bets);
@@ -2938,15 +2947,26 @@ function setupScheduler() {
     // moment could sit in Watching indefinitely despite already being scanned
     // (or needing to be) earlier -- the "Lock overdue" state surfaced on the
     // Scout tab. Confirmed live 2026-08-25 (Plymouth vs Coventry).
+    //
+    // 2026-09-02: found the actual mechanism behind a fixture staying stuck
+    // "Lock overdue" all evening despite the logic above being correct — late
+    // in the evening, once every remaining watching fixture has passed its own
+    // window, `locked` legitimately computes to `[]`. writeJSON's empty-data
+    // guard (meant to catch accidental data loss from a bug) can't distinguish
+    // that from an actual bug, and silently refused to persist it — logged
+    // every single minute as "refused — would overwrite Nb file with empty
+    // structure", freezing watching.json at whatever it was before the guard
+    // first kicked in. allowEmpty:true on both saves here, matching the same
+    // fix already applied to runHourlyRescan's save for the identical reason.
     if (!toScan.length) {
-      if (locked.length !== watching.length) saveWatching(locked);
+      if (locked.length !== watching.length) saveWatching(locked, { allowEmpty: true });
       return;
     }
     _cronRunning.preMatch = true;
     console.log(`[Cron:PreMatch] ${toScan.length} fixture(s) entering pre-match lock (T-60 ±15 min variation)`);
     try {
       await Promise.all(toScan.map(w => runPreMatchScan(w)));
-      saveWatching(locked);
+      saveWatching(locked, { allowEmpty: true });
     } catch (e) {
       console.error(`[Cron:PreMatch] Error: ${e.message}`);
     } finally {
