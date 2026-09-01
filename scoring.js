@@ -424,19 +424,28 @@ const LEAGUE_CONFIG = {
 // xgScore()'s live "xg" factor whenever official xG isn't available, which is one
 // of the raw features the GBDT model actually splits on, so a biased proxy
 // silently reshapes GBDT's own input distribution. Checked against 4,173
-// proxy/real pairs (Understat/StatsBomb ground truth via lookupXg, matched
-// domestic-league fixtures 2023-08 to 2025-05): the old formula overestimated
-// real xG by a mean of +1.27 on a held-out chronological test set (last 20% by
-// date) — MAE 1.29, e.g. Arsenal 4.04 vs actual 0.84, nearly 5x high in
-// individual cases. Refit via OLS on the first 80% chronologically, evaluated on
-// the untouched last 20% (calibration-rules.md-style train/test discipline):
-// held-out MAE 0.455 (vs 1.29), mean bias 0.018 (vs +1.27) — essentially
-// unbiased out-of-sample. Clamped to zero: xG can't be negative, and the
-// negative possession coefficient can produce a small negative value at the
-// low-shots/high-possession extreme (e.g. 0 shots on target, 90% possession).
-function computeXGProxy({ shotsOn = 0, totalShots = 0, possession = 0.5 }) {
-  const raw = 0.0491 + (shotsOn * 0.1654) + (totalShots * 0.0656) + (possession * -0.2032);
-  return parseFloat(Math.max(0, raw).toFixed(3));
+// proxy/real pairs (Understat/StatsBomb ground truth via lookupXg) — turned out
+// to be domestic-only (PL/La Liga/Serie A/Bundesliga) purely because that's what
+// Understat happens to cover, not by deliberate scoping. The old formula
+// overestimated real xG by a mean of +1.27 on a held-out chronological test set
+// (last 20% by date) — MAE 1.29, e.g. Arsenal 4.04 vs actual 0.84, nearly 5x high
+// in individual cases. Refit via OLS on the first 80% chronologically, evaluated
+// on the untouched last 20% (calibration-rules.md-style train/test discipline):
+// held-out MAE 0.455, mean bias 0.018 — essentially unbiased out-of-sample.
+//
+// Domestic and tournament football are treated as separate populations by
+// standing rule (never test on one, apply to the other) — checked whether the
+// same validation was possible for tournament leagues (Champions League/Europa/
+// Conference/Carabao): 385 tournament fixtures had shot stats, 0 matched to real
+// xG. Zero evidence either way there, so tournament/international/unclassified
+// fixtures keep the original, unvalidated-but-unchanged formula rather than
+// inheriting a fix that was only ever checked against domestic data.
+function computeXGProxy({ shotsOn = 0, totalShots = 0, possession = 0.5 }, leagueId = null) {
+  if (DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(parseInt(leagueId, 10))) {
+    const raw = 0.0491 + (shotsOn * 0.1654) + (totalShots * 0.0656) + (possession * -0.2032);
+    return parseFloat(Math.max(0, raw).toFixed(3));
+  }
+  return parseFloat(((shotsOn * 0.35) + (totalShots * 0.08) + (possession * 0.5)).toFixed(3));
 }
 
 // ─── COMPETITION PHASE ────────────────────────────────────────────────────────

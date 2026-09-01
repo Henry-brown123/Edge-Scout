@@ -2041,7 +2041,7 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
       const totalShots = parseInt(find('Total Shots') ?? 0) || 0;
       const possession = parseFloat(String(find('Ball Possession') ?? '50%').replace('%', '')) / 100;
       const xg = xgRaw != null ? parseFloat(xgRaw) || null
-        : (shotsOn || totalShots) ? computeXGProxy({ shotsOn, totalShots, possession }) : null;
+        : (shotsOn || totalShots) ? computeXGProxy({ shotsOn, totalShots, possession }, leagueId) : null;
       return { xg, shotsOn, totalShots, possession };
     };
 
@@ -6114,14 +6114,17 @@ app.post('/api/backfill/fixture-stats', async (req, res) => {
     }
 
     const statsDb    = getFixtureStats();
-    const parseStats = ts => {
+    // Spans multiple leagues per run (byLeague2/targets above interleaves them), so
+    // unlike the single-league call sites, leagueId must be passed per-fixture rather
+    // than closed over — computeXGProxy treats domestic and tournament differently.
+    const parseStats = (ts, leagueId) => {
       const find   = t => ts.statistics?.find(s => s.type === t)?.value;
       const xgRaw  = find('expected_goals') ?? find('Expected Goals');
       const shotsOn    = parseInt(find('Shots on Goal') ?? 0) || 0;
       const totalShots = parseInt(find('Total Shots') ?? 0) || 0;
       const possession = parseFloat(String(find('Ball Possession') ?? '50%').replace('%', '')) / 100;
       const xg = xgRaw != null ? parseFloat(xgRaw) || null
-        : (shotsOn || totalShots) ? computeXGProxy({ shotsOn, totalShots, possession }) : null;
+        : (shotsOn || totalShots) ? computeXGProxy({ shotsOn, totalShots, possession }, leagueId) : null;
       return { xg, shotsOn, totalShots, possession };
     };
 
@@ -6132,7 +6135,7 @@ app.post('/api/backfill/fixture-stats', async (req, res) => {
       try {
         const { data } = await apiSports.get('/fixtures/statistics', { params: { fixture: fid } });
         if (data?.response?.length >= 2) {
-          statsDb[fid] = { home: parseStats(data.response[0]), away: parseStats(data.response[1]) };
+          statsDb[fid] = { home: parseStats(data.response[0], fix.league?.id), away: parseStats(data.response[1], fix.league?.id) };
           fetched++;
         }
       } catch { errors++; }
@@ -7518,7 +7521,7 @@ async function runFixtureStatsBackfillFn({ budget = 2000 } = {}) {
           const totalShots = parseInt(find('Total Shots') ?? 0) || 0;
           const possession = parseFloat(String(find('Ball Possession') ?? '50%').replace('%','')) / 100;
           const xg = xgRaw != null ? parseFloat(xgRaw) || null
-            : (shotsOn || totalShots) ? computeXGProxy({ shotsOn, totalShots, possession }) : null;
+            : (shotsOn || totalShots) ? computeXGProxy({ shotsOn, totalShots, possession }, fix.league?.id) : null;
           return { xg, shotsOn, totalShots, possession };
         };
         fixtureStatsDb[fid] = { home: parseStats(data.response[0]), away: parseStats(data.response[1]) };
@@ -8217,6 +8220,62 @@ async function computeMatchedEdgeFixtures() {
   }
   return matched;
 }
+
+// ─── TEMP DIAGNOSTIC (2026-09-01, round 6): was the calibrationFactor sweep muddied ───
+// by pooling tournament/international fixtures in with domestic ones? Fair question —
+// computeMatchedEdgeFixtures() pools every tracked league, no domestic filter, unlike
+// the xG proxy refit (which turned out domestic-only anyway, by accident of which
+// leagues understat/StatsBomb happen to cover). calibrationFactor itself is one single
+// global settings value (no per-league split exists in the code today), so this checks
+// whether restricting the same Brier sweep to domestic-only changes the conclusion —
+// if the domestic-only curve looks materially different from the pooled one, that's a
+// sign the single global factor is a compromise across differently-behaved
+// populations, not that either number was wrong per se. Remove once answered.
+async function computeCalFactorPoolingCheck() {
+  const { DOMESTIC_LEAGUE_IDS_FOR_BLEND, TOURNAMENT_LEAGUE_IDS } = require('./scoring');
+  const matched = await computeMatchedEdgeFixtures();
+
+  const byLeague = {};
+  for (const f of matched) {
+    const lid = parseInt(f.leagueId, 10);
+    byLeague[lid] = (byLeague[lid] || 0) + 1;
+  }
+  const composition = Object.entries(byLeague).map(([lid, n]) => ({
+    leagueId: parseInt(lid, 10), n,
+    tag: DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(parseInt(lid, 10)) ? 'domestic'
+      : TOURNAMENT_LEAGUE_IDS.has(parseInt(lid, 10)) ? 'tournament' : 'other',
+  })).sort((a, b) => b.n - a.n);
+
+  function brierAt(group, factor) {
+    let sumSq = 0;
+    for (const f of group) sumSq += (Math.min(0.97, f.modelProb * factor) - (f.won ? 1 : 0)) ** 2;
+    return sumSq / group.length;
+  }
+  function sweepFor(group) {
+    const sweep = [];
+    for (let factor = 0.90; factor <= 1.20 + 1e-9; factor += 0.02) {
+      sweep.push({ factor: +factor.toFixed(2), brier: +brierAt(group, factor).toFixed(5) });
+    }
+    const best = sweep.reduce((a, b) => (b.brier < a.brier ? b : a), sweep[0]);
+    return { n: group.length, sweep, bestFactor: best.factor,
+      brierAt100: +brierAt(group, 1.00).toFixed(5), brierAt102: +brierAt(group, 1.02).toFixed(5),
+      brierAt108: +brierAt(group, 1.08).toFixed(5) };
+  }
+
+  const domestic   = matched.filter(f => DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(parseInt(f.leagueId, 10)));
+  const tournament = matched.filter(f => TOURNAMENT_LEAGUE_IDS.has(parseInt(f.leagueId, 10)));
+
+  return {
+    composition,
+    pooledAll: sweepFor(matched),
+    domesticOnly: sweepFor(domestic),
+    tournamentOnly: sweepFor(tournament),
+  };
+}
+app.get('/api/admin/calfactor-pooling-check', async (_req, res) => {
+  try { res.json(await computeCalFactorPoolingCheck()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // Extracted so the weekly cron (setupScheduler) can refresh ev-calibration.json
 // without going through HTTP — see the '0 6 * * 1' schedule below.
