@@ -83,7 +83,7 @@ console.log(`[Data] process.env.DATA_DIR=${process.env.DATA_DIR ?? '(unset)'} �
   // Seed settings.json with safe defaults if missing
   const settingsDest = path.join(DATA_DIR, 'settings.json');
   if (!fs.existsSync(settingsDest)) {
-    const defaults = { calibrationFactor: 1.11, wowyActive: true,
+    const defaults = { calibrationFactor: 1.02, wowyActive: true,
       activeLeagues: ['1','39','140','78','135','61','2','179','88','94','3','848','48','41','42','40'], successThreshold: 40,
       decay: 0.05, formWindow: 6, h2hWindow: 5, kellyFraction: 0.5,
       weights: { form:18, homeAdv:12, xg:16, h2h:10, defense:14, momentum:10, injuries:8, standings:12 } };
@@ -198,7 +198,15 @@ const SETTINGS_DEFAULTS = {
   // looking anomalous) without touching the cron schedule itself.
   weeklyRetrainPaused: false,
   activeLeagues: ['1','39','140','78','135','61','2','179','88','94','3','848','48','41','42','40'], successThreshold: 40,
-  calibrationFactor: 1.08,
+  // 2026-09-01: was 1.08, fit 2026-06-16 against the old linear model's ~5pp bias,
+  // never re-measured since GBDT (own Platt scaling) took over 2026-07-25. Brier-score
+  // sweep (temp diagnostic, since removed) showed 1.08 is measurably worse-calibrated
+  // than neutral — reliability tables showed a systematic ~3-4pp overconfidence bias
+  // across the 40-70% probability band (the bulk of live betting activity) at 1.08,
+  // which is corrected at ~1.00-1.02. 1.02 is the sweep's actual Brier-minimizing
+  // point; the curve is flat enough near there that this isn't precise to the second
+  // decimal, but it's unambiguously far from 1.08.
+  calibrationFactor: 1.02,
   // Correction layer deployment (calibration-rules.md rules 13/14; scoring.js's
   // CORRECTION_LAYER_RULES, validated in docs/tier-calibration-analysis.md
   // Addendum 26). deployedCorrectionRuleIds is the live gate — only rule IDs
@@ -1559,7 +1567,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   // Calibration correction: model consistently underpredicts top-pick outcomes by ~5pp.
   // Scale probs by calFactor for edge/EV/kelly/score calculations only.
   // Raw probs are preserved in modelProb for display.
-  const calFactor = settings.calibrationFactor ?? 1.08;
+  const calFactor = settings.calibrationFactor ?? 1.02;
   // Market efficiency: less efficient markets (Ligue 1 0.88) get a slight score boost vs
   // highly efficient markets (CL 0.96). Applied as 1/efficiency so range is ×1.04–×1.14.
   const effMult = 1 / (leagueConfig?.marketEfficiency ?? 1.0);
@@ -2179,7 +2187,7 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
     const realBr    = isReal ? getRealBankrollAccount().current : null;
     const kellyFrac = isReal ? (settings.realKellyFraction ?? 0.25) : (settings.paperKellyFraction ?? 0.5);
     const bankrollForKelly = getAvailableBankroll(isReal ? 'real' : 'paper');
-    const realKelly = kelly(best.modelProb * (settings.calibrationFactor ?? 1.08),
+    const realKelly = kelly(best.modelProb * (settings.calibrationFactor ?? 1.02),
                             best.bookOdds, kellyFrac, bankrollForKelly);
     const br    = getBankroll();
     const betId = uuidv4();
@@ -7067,7 +7075,7 @@ app.post('/api/bets/:id/convert-to-real', (req, res) => {
   const settings          = getSettings();
   const realBr            = getRealBankrollAccount().current;
   const kellyFrac          = settings.realKellyFraction ?? 0.25;
-  const calibrationFactor = settings.calibrationFactor ?? 1.08;
+  const calibrationFactor = settings.calibrationFactor ?? 1.02;
   // If a real stake is provided (the amount actually placed on the exchange, e.g.
   // liquidity-constrained or manually sized differently from the Kelly suggestion),
   // trust it as the authoritative record — this is a place for logging what really
@@ -8156,7 +8164,7 @@ async function computeMatchedEdgeFixtures() {
 
   const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG, computeUnifiedEdge } = require('./scoring');
   const settings = getSettings();
-  const calFactor = settings.calibrationFactor ?? 1.08;
+  const calFactor = settings.calibrationFactor ?? 1.02;
 
   const matched = [];
   let sinceYield = 0;
@@ -8209,69 +8217,6 @@ async function computeMatchedEdgeFixtures() {
   }
   return matched;
 }
-
-// ─── TEMP DIAGNOSTIC (2026-09-01, round 4): is calibrationFactor=1.08 still the right ───
-// correction under GBDT? Fit 2026-06-16 ("corrects the observed ~5pp positive bias...
-// across 7,464 historical fixtures") against the OLD linear model, never re-measured
-// since GBDT (which already does its own Platt scaling) took over 2026-07-25. Uses
-// Brier score (mean squared error between predicted probability and actual outcome) —
-// deliberately a pure calibration-accuracy metric, not an ROI sweep, to avoid retuning
-// a parameter by chasing backtest ROI (exactly what calibration-rules.md exists to
-// prevent). `matched[i].modelProb` is already the raw, pre-calibration probability, so
-// this reuses computeMatchedEdgeFixtures()'s one (expensive) GBDT inference pass and
-// just re-applies candidate factors in plain JS. Remove once answered.
-async function computeCalibrationFactorSweep() {
-  const matched = await computeMatchedEdgeFixtures();
-
-  function brierAt(factor) {
-    let sumSq = 0;
-    for (const f of matched) {
-      const p = Math.min(0.97, f.modelProb * factor);
-      sumSq += (p - (f.won ? 1 : 0)) ** 2;
-    }
-    return sumSq / matched.length;
-  }
-
-  const sweep = [];
-  for (let factor = 0.90; factor <= 1.20 + 1e-9; factor += 0.02) {
-    sweep.push({ factor: +factor.toFixed(2), brier: +brierAt(factor).toFixed(5) });
-  }
-  const best = sweep.reduce((a, b) => (b.brier < a.brier ? b : a), sweep[0]);
-
-  const BIN_EDGES = [0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 1.01];
-  function reliabilityTable(factor) {
-    const table = [];
-    for (let i = 0; i < BIN_EDGES.length - 1; i++) {
-      const lo = BIN_EDGES[i], hi = BIN_EDGES[i + 1];
-      const inBin = matched.filter(f => {
-        const p = Math.min(0.97, f.modelProb * factor);
-        return p >= lo && p < hi;
-      });
-      if (!inBin.length) continue;
-      const avgPredicted = inBin.reduce((s, f) => s + Math.min(0.97, f.modelProb * factor), 0) / inBin.length;
-      const actualWinRate = inBin.filter(f => f.won).length / inBin.length;
-      table.push({ bin: `${Math.round(lo * 100)}-${Math.round(hi * 100)}%`, n: inBin.length,
-        avgPredicted: +(avgPredicted * 100).toFixed(1), actualWinRate: +(actualWinRate * 100).toFixed(1) });
-    }
-    return table;
-  }
-
-  return {
-    n: matched.length,
-    sweep,
-    bestFactor: best.factor,
-    currentFactor: 1.08,
-    currentBrier: +brierAt(1.08).toFixed(5),
-    uncalibratedBrier: +brierAt(1.00).toFixed(5),
-    reliabilityAtNoCalibration: reliabilityTable(1.00),
-    reliabilityAtCurrent: reliabilityTable(1.08),
-    reliabilityAtBest: reliabilityTable(best.factor),
-  };
-}
-app.get('/api/admin/calfactor-sweep', async (_req, res) => {
-  try { res.json(await computeCalibrationFactorSweep()); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
 
 // Extracted so the weekly cron (setupScheduler) can refresh ev-calibration.json
 // without going through HTTP — see the '0 6 * * 1' schedule below.
