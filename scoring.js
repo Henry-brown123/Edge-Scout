@@ -356,6 +356,14 @@ const LEAGUE_CONFIG = {
   78:  { name: 'Bundesliga',       avgHomeWinRate: 0.454, avgDrawRate: 0.234, avgAwayWinRate: 0.312, avgGoalsPerGame: 3.02, marketEfficiency: 0.92, drawBaseWeight: 0.96, homeAdvBaseWeight: 1.00 },
   61:  { name: 'Ligue 1',          avgHomeWinRate: 0.409, avgDrawRate: 0.258, avgAwayWinRate: 0.333, avgGoalsPerGame: 2.52, marketEfficiency: 0.88, drawBaseWeight: 1.06, homeAdvBaseWeight: 0.96 },
   2:   { name: 'Champions League',      avgHomeWinRate: 0.451, avgDrawRate: 0.205, avgAwayWinRate: 0.345, avgGoalsPerGame: 2.87, marketEfficiency: 0.96, drawBaseWeight: 1.01, homeAdvBaseWeight: 0.94 },
+  // 2026-09-01 audit flag: fit 2026-06-17 (pre-GBDT), the one league row never
+  // re-tuned post-switch — every other row here got touched between 2026-08-01
+  // and 2026-08-24. No forward action today: WC 2026 has concluded (per
+  // CALIBRATION_AUDIT[1], no further data will accumulate), so nothing currently
+  // live reads this row. BUT: API-Sports reuses leagueId=1 across WC editions
+  // (differentiated only by `season`), so this exact stale row will silently
+  // apply again to WC 2030 fixtures unless someone re-validates it first —
+  // re-check this before that tournament, not after.
   1:   { name: 'World Cup',             avgHomeWinRate: 0.390, avgDrawRate: 0.224, avgAwayWinRate: 0.386, avgGoalsPerGame: 2.64, marketEfficiency: 0.94, drawBaseWeight: 0.92, homeAdvBaseWeight: 0.80 },
   179: { name: 'Scottish Premiership',  avgHomeWinRate: 0.4449, avgDrawRate: 0.2396, avgAwayWinRate: 0.3154, avgGoalsPerGame: 2.71, marketEfficiency: 0.78, drawBaseWeight: 1.07, homeAdvBaseWeight: 1.35 },
   88:  { name: 'Eredivisie',            avgHomeWinRate: 0.4344, avgDrawRate: 0.2382, avgAwayWinRate: 0.3274, avgGoalsPerGame: 3.12, marketEfficiency: 0.80, drawBaseWeight: 1.00, homeAdvBaseWeight: 1.00 },
