@@ -8242,6 +8242,91 @@ async function computeMatchedEdgeFixtures() {
   return matched;
 }
 
+// ─── TEMP DIAGNOSTIC (2026-09-01, round 8): re-run the edge/prob floor exploration ───
+// now that calibrationFactor is fixed (1.11→1.02, domestic). edge = calProb - impliedP
+// and calProb = modelProb * calFactor, so every fixture's edge shrinks under the
+// corrected, less-inflated factor — the 18%/45% combination was picked against the OLD,
+// systematically-overconfident edge values. computeMatchedEdgeFixtures() already reads
+// the live settings.calibrationFactor per fixture (getCalFactorForLeague), so this
+// automatically reflects the fix, no manual override needed. Domestic-only (never mix
+// with tournament, per standing rule). Reports: (1) a pooled edge-floor sweep with a
+// 45% prob floor already applied (matching the original table's shape), (2) the same
+// crossed with 40/45/50% prob floors, (3) a 4-independent-time-block walk-forward
+// check on the same grid, so a combination isn't judged on pooled ROI alone. Remove
+// once answered.
+async function computeEdgeFloorResweep() {
+  const { DOMESTIC_LEAGUE_IDS_FOR_BLEND } = require('./scoring');
+  const matched = await computeMatchedEdgeFixtures();
+  const domestic = matched.filter(f => DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(parseInt(f.leagueId, 10)));
+
+  function summarise(group) {
+    const n = group.length;
+    if (!n) return { n: 0, roi: null, ci95: null, activeWeeks: 0, perActiveWeek: null };
+    const returns = group.map(r => r.won ? (r.pinnacleOdds - 1) : -1);
+    const mean = returns.reduce((s, r) => s + r, 0) / n;
+    const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / n;
+    const se = Math.sqrt(variance / n);
+    const dates = group.map(r => new Date(r.date).getTime());
+    const activeWeeks = new Set(dates.map(d => Math.floor(d / (7 * 24 * 3600 * 1000)))).size;
+    return {
+      n, roi: +(mean * 100).toFixed(1),
+      ci95: [+((mean - 1.96 * se) * 100).toFixed(1), +((mean + 1.96 * se) * 100).toFixed(1)],
+      activeWeeks, perActiveWeek: activeWeeks ? +(n / activeWeeks).toFixed(1) : null,
+    };
+  }
+
+  const EDGE_FLOORS = [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
+  const edgeFloorAt45 = EDGE_FLOORS.map(e => ({
+    edgeFloor: e,
+    ...summarise(domestic.filter(f => f.edge >= e / 100 && f.modelProb >= 0.45)),
+  }));
+
+  const PROB_FLOORS = [0.40, 0.45, 0.50];
+  const EDGE_FLOORS_GRID = [10, 12, 14, 16, 18, 20, 22, 24];
+  const grid = EDGE_FLOORS_GRID.map(e => ({
+    edgeFloor: e,
+    byProbFloor: PROB_FLOORS.map(p => ({
+      probFloor: Math.round(p * 100),
+      ...summarise(domestic.filter(f => f.edge >= e / 100 && f.modelProb >= p)),
+    })),
+  }));
+
+  // 4 independent, equal-time chronological blocks — same discipline as the original
+  // walk-forward robustness scan (distinguishing real signal from backtest-mining).
+  const dates = domestic.map(f => new Date(f.date).getTime()).sort((a, b) => a - b);
+  const minD = dates[0], maxD = dates[dates.length - 1];
+  const blockMs = (maxD - minD) / 4;
+  const blockBounds = [0, 1, 2, 3].map(i => [minD + i * blockMs, minD + (i + 1) * blockMs + (i === 3 ? 1 : 0)]);
+  function blockOf(dateMs) { return blockBounds.findIndex(([lo, hi]) => dateMs >= lo && dateMs < hi); }
+
+  const walkForward = EDGE_FLOORS_GRID.map(e => ({
+    edgeFloor: e,
+    byProbFloor: PROB_FLOORS.map(p => {
+      const cell = domestic.filter(f => f.edge >= e / 100 && f.modelProb >= p);
+      const blocks = [0, 1, 2, 3].map(bi => summarise(cell.filter(f => blockOf(new Date(f.date).getTime()) === bi)));
+      return {
+        probFloor: Math.round(p * 100),
+        pooled: summarise(cell),
+        blocks,
+        allBlocksPositive: blocks.every(b => b.n > 0 && b.roi > 0),
+        blocksWithConfirmedEdge: blocks.filter(b => b.n > 0 && b.ci95 && b.ci95[0] > 0).length,
+      };
+    }),
+  }));
+
+  return {
+    n: domestic.length,
+    dateRange: [new Date(minD).toISOString().slice(0, 10), new Date(maxD).toISOString().slice(0, 10)],
+    edgeFloorAt45,
+    grid,
+    walkForward,
+  };
+}
+app.get('/api/admin/edge-floor-resweep', async (_req, res) => {
+  try { res.json(await computeEdgeFloorResweep()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Extracted so the weekly cron (setupScheduler) can refresh ev-calibration.json
 // without going through HTTP — see the '0 6 * * 1' schedule below.
 async function runEvCalibration() {
