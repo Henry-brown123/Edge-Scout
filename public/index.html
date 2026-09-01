@@ -2360,17 +2360,20 @@ async function loadState() {
       // whenever runMorningScan (or the since-removed manual trigger) last ran,
       // blind to the hourly rescan that's actually been refreshing data every
       // hour since. Shows whichever of the two genuinely happened most recently.
+      // No "(morning scan)"/"(hourly rescan)" label — both fields get written by
+      // either a scheduled cron tick or a manual button (Run Full Re-scan calls
+      // the same function the hourly cron does), so the label can't actually tell
+      // automatic apart from manual; just the timestamp is honest.
       const morningAt = meta?.completedAt ? new Date(meta.completedAt) : null;
       const hourlyAt  = meta?.lastHourlyRescanAt ? new Date(meta.lastHourlyRescanAt) : null;
       const mostRecent = [morningAt, hourlyAt].filter(Boolean).sort((a, b) => b - a)[0];
       if (mostRecent) {
         const today = new Date().toISOString().split('T')[0];
         const isToday = mostRecent.toISOString().split('T')[0] === today;
-        const kind = (hourlyAt && mostRecent.getTime() === hourlyAt.getTime()) ? 'hourly rescan' : 'morning scan';
         const watchingCount = (STATE.watching || []).length;
         const label = isToday
-          ? `Last updated: today at ${mostRecent.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' })} (${kind}) · ${watchingCount} watching`
-          : `⚠ Last updated: ${mostRecent.toLocaleDateString('en-GB')} (${kind}) — nothing run yet today`;
+          ? `Last updated: today at ${mostRecent.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' })} · ${watchingCount} watching`
+          : `⚠ Last updated: ${mostRecent.toLocaleDateString('en-GB')} — nothing run yet today`;
         el.textContent = label;
         el.style.color = isToday ? 'var(--muted)' : 'var(--amber)';
       } else if (meta?.startedAt && !meta?.completedAt) {
