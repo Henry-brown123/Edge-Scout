@@ -2904,7 +2904,7 @@ function watchingCard(w) {
         ${wFakeMoneyBadge}
         ${contextBadge(w.context)}
         ${weatherBadge(w.weatherCondition)}
-        ${w.lowConfidence ? `<span class="badge badge-red" title="Model diverges from bookmaker beyond data-confidence threshold.${w.isDomesticTierLeague ? ' No longer blocks domestic locking (2026-09-01) — shown for awareness only.' : ' Will not auto-lock.'}">LOW CONF</span>` : ''}
+        ${(w.lowConfidence && !w.isDomesticTierLeague) ? '<span class="badge badge-red" title="Model diverges from bookmaker beyond data-confidence threshold — will not auto-lock">LOW CONF</span>' : ''}
         ${w.noMarketData ? '<span class="badge" style="background:rgba(148,163,184,.15);border:1px solid rgba(148,163,184,.35);color:var(--muted)" title="No bookmaker has priced this fixture anywhere — shown for information only. Cannot be locked, paper or real, at any score.">NO MARKET</span>' : ''}
         ${(w.noMarketData || wIsFakeMoney) ? '' : `<button class="btn btn-ghost btn-sm" title="Preview only — does not lock or commit anything" onclick="event.stopPropagation();previewRealStake('${w.fixture.replace(/'/g, "\\'")}', ${w.modelProb ?? 'null'}, ${w.bookOdds ?? 'null'}, 'based on the current watching-card reading — the actual lock re-scores fresh and may differ')">Preview real stake</button>`}
         ${w.noMarketData
@@ -5852,7 +5852,7 @@ function openDrawer(w) {
     <button class="drawer-close" onclick="closeDrawer()">✕</button>
     <div class="drawer-title">${w.fixture}</div>
     <div class="drawer-sub">${w.leagueName} · 🇬🇧 KO ${kickoff}${minsOut != null ? ` · <span style="color:var(--amber)">T-${minsOut}m</span>` : ''}${drawerLockLabel}</div>
-    ${w.lowConfidence ? `<div style="background:rgba(255,82,82,.12);border:1px solid rgba(255,82,82,.3);border-radius:6px;padding:8px 12px;margin:8px 0;font-size:.78rem;color:var(--red)">⚠ <strong>Low confidence</strong> — ${w.lowConfidenceReason || 'model/market divergence'}${w.maxModelBookGap != null ? ` (model diverges ${Math.round(w.maxModelBookGap * 100)}pp from bookmaker on at least one outcome)` : ''}. ${w.isDomesticTierLeague ? 'No longer blocks domestic locking (2026-09-01 fix) — shown for awareness, review manually before placing.' : 'This fixture will not auto-lock. Review manually before placing.'}</div>` : ''}
+    ${(w.lowConfidence && !w.isDomesticTierLeague) ? `<div style="background:rgba(255,82,82,.12);border:1px solid rgba(255,82,82,.3);border-radius:6px;padding:8px 12px;margin:8px 0;font-size:.78rem;color:var(--red)">⚠ <strong>Low confidence</strong> — ${w.lowConfidenceReason || 'model/market divergence'}${w.maxModelBookGap != null ? ` (model diverges ${Math.round(w.maxModelBookGap * 100)}pp from bookmaker on at least one outcome)` : ''}. This fixture will not auto-lock. Review manually before placing.</div>` : ''}
 
     <div class="drawer-section">
       <h4>Model Probabilities</h4>
