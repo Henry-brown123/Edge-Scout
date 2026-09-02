@@ -500,7 +500,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
   </div>
 
   <!-- Stats row -->
-  <div class="grid-4" id="scout-stats" style="margin-bottom:16px">
+  <div class="grid-4" id="scout-stats" style="margin-bottom:12px">
     <div class="stat-tile">
       <div class="stat-label">Paper Bankroll</div>
       <div class="stat-value c-cyan" id="s-bankroll">£1,000</div>
@@ -523,11 +523,25 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     </div>
   </div>
 
-  <!-- LOCKED BETS — two sub-sections -->
+  <!-- Green-flagged (18%+ edge / 45%+ prob domestic paper-money rule) subset — dedicated tiles -->
+  <div class="grid-2" id="scout-stats-paper" style="margin-bottom:16px">
+    <div class="stat-tile" style="background:rgba(0,255,135,.06);border:1px solid rgba(0,255,135,.25)">
+      <div class="stat-label" style="color:var(--green)">Paper-Money Watching</div>
+      <div class="stat-value c-green" id="s-watching-paper">0</div>
+      <div class="stat-sub">clears 18%+ edge / 45%+ prob</div>
+    </div>
+    <div class="stat-tile" style="background:rgba(0,255,135,.06);border:1px solid rgba(0,255,135,.25)">
+      <div class="stat-label" style="color:var(--green)">Paper-Money Locked</div>
+      <div class="stat-value c-green" id="s-locked-paper">0</div>
+      <div class="stat-sub">real Kelly stake, under review</div>
+    </div>
+  </div>
+
+  <!-- LOCKED — PAPER BETS (carries a real Kelly stake) -->
   <div class="card" id="recommended-card">
     <div class="card-header">
-      <span class="card-title">Locked Bets — Recommended</span>
-      <span style="font-size:11px;color:var(--muted)">Score 40+ · Confirmed lineups · Live odds</span>
+      <span class="card-title">Locked Bets — Paper (Staked)</span>
+      <span style="font-size:11px;color:var(--muted)">18%+ edge · 45%+ prob · Live odds</span>
     </div>
     <!-- Pending Placement sub-section -->
     <div id="pending-section" style="display:none">
@@ -549,12 +563,24 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     </div>
     <!-- Empty state (shown when both sections empty) -->
     <div id="recommended-empty" style="padding:32px 16px">
-      <div class="empty"><div class="empty-icon">🔒</div><p>No locked bets yet. Pre-match scans fire automatically at T-60.</p></div>
+      <div class="empty"><div class="empty-icon">🔒</div><p>No locked paper bets yet. Pre-match scans fire automatically at T-60.</p></div>
+    </div>
+  </div>
+
+  <!-- LOCKED — ZERO-STAKE (observation only) -->
+  <div class="card" id="zerostake-card" style="margin-top:16px">
+    <div class="card-header">
+      <span class="card-title">Locked Bets — No Stake (Observation)</span>
+      <span style="font-size:11px;color:var(--muted)">Logged for model training · excluded from Paper P&L</span>
+    </div>
+    <div id="zerostake-list"></div>
+    <div id="zerostake-empty" style="padding:32px 16px">
+      <div class="empty"><div class="empty-icon">📋</div><p>No zero-stake observation bets locked yet.</p></div>
     </div>
   </div>
 
   <!-- WATCHING fixtures -->
-  <div class="card" id="watching-card">
+  <div class="card" id="watching-card" style="margin-top:16px">
     <div class="card-header">
       <span class="card-title">Watching — Early Flags</span>
       <span style="font-size:11px;color:var(--muted)">Projected scores · Not yet locked</span>
@@ -2629,11 +2655,17 @@ function renderScout() {
   document.getElementById('s-winrate').textContent  = resolved.length ? `${((wins/(wins+losses||1))*100).toFixed(0)}%` : '—';
   document.getElementById('s-record').textContent   = `${wins}W ${losses}L`;
 
-  // Split locked bets into pending/placed sub-sections
+  // Green-flagged (18%+ edge / 45%+ prob domestic paper-money rule) subset, dedicated tiles
+  const lockedPaper = locked.filter(b => !b.isFakeMoney);
+  const lockedZero  = locked.filter(b => b.isFakeMoney);
+  document.getElementById('s-watching-paper').textContent = todayW.filter(w => w.meetsPaperMoneyRule).length;
+  document.getElementById('s-locked-paper').textContent   = lockedPaper.length;
+
+  // Split locked PAPER bets into pending/placed sub-sections
   // Backward compat: treat placementConfirmed=true as 'placed', else 'pending_placement'
   const getStatus = b => b.placementStatus || (b.placementConfirmed ? 'placed' : 'pending_placement');
-  const pendingBets = locked.filter(b => getStatus(b) === 'pending_placement');
-  const placedBets  = locked.filter(b => getStatus(b) === 'placed');
+  const pendingBets = lockedPaper.filter(b => getStatus(b) === 'pending_placement');
+  const placedBets  = lockedPaper.filter(b => getStatus(b) === 'placed');
 
   const pendingSection = document.getElementById('pending-section');
   const placedSection  = document.getElementById('placed-section');
@@ -2653,7 +2685,18 @@ function renderScout() {
   } else {
     placedSection.style.display = 'none';
   }
-  emptyEl.style.display = locked.length ? 'none' : 'block';
+  emptyEl.style.display = lockedPaper.length ? 'none' : 'block';
+
+  // Locked ZERO-STAKE bets (observation only)
+  const zeroList  = document.getElementById('zerostake-list');
+  const zeroEmpty = document.getElementById('zerostake-empty');
+  if (lockedZero.length) {
+    zeroList.innerHTML = lockedZero.map(b => recommendedCard(b)).join('');
+    zeroEmpty.style.display = 'none';
+  } else {
+    zeroList.innerHTML = '';
+    zeroEmpty.style.display = 'block';
+  }
 
   // Watching
   const watEl  = document.getElementById('watching-list');
