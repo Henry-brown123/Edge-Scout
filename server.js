@@ -2984,8 +2984,19 @@ function setupScheduler() {
     _cronRunning.preMatch = true;
     console.log(`[Cron:PreMatch] ${toScan.length} fixture(s) entering pre-match lock (T-60 ±15 min variation)`);
     try {
-      await Promise.all(toScan.map(w => runPreMatchScan(w)));
-      saveWatching(locked, { allowEmpty: true });
+      const results = await Promise.all(toScan.map(w => runPreMatchScan(w)));
+      // `locked` (the keep-set) is time-filtered only, so it still includes every
+      // toScan fixture during the tick it's actually processed — a fixture that
+      // just became a real bet stayed visible in Watching for up to the rest of
+      // its 5-minute toScan window (confirmed live 2026-09-02: Kilmarnock/Burton
+      // Albion showing in both Locked Bets and Watching for several minutes after
+      // locking). Only remove fixtures that actually locked here — dropped/null
+      // outcomes keep their existing behavior (another look on a later tick
+      // within the same window), since that isn't the reported bug and may be
+      // deliberate resilience against a fixture priced/confirmed late.
+      const lockedIds = new Set(toScan.filter((w, i) => results[i] && !results[i].dropped).map(w => w.id));
+      const survivors = locked.filter(w => !lockedIds.has(w.id));
+      saveWatching(survivors, { allowEmpty: true });
     } catch (e) {
       console.error(`[Cron:PreMatch] Error: ${e.message}`);
     } finally {
