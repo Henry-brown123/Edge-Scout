@@ -2633,6 +2633,24 @@ async function checkAndResolve() {
         continue;
       }
 
+      // In-play — capture the live score so locked bets can show "on track" while
+      // the game is running, rather than only learning the outcome at full time.
+      const LIVE_STATUSES = ['1H', 'HT', '2H', 'ET', 'BT', 'P', 'SUSP', 'INT', 'LIVE'];
+      if (LIVE_STATUSES.includes(status)) {
+        const matchingLive = pendingBets.filter(b => b.fixtureId === fid);
+        if (matchingLive.length) {
+          const liveScore = {
+            home: fix.goals?.home ?? 0,
+            away: fix.goals?.away ?? 0,
+            elapsed: fix.fixture?.status?.elapsed ?? null,
+            status,
+          };
+          matchingLive.forEach(b => { b.liveScore = liveScore; });
+          betsChanged = true;
+        }
+        continue;
+      }
+
       if (!['FT', 'AET', 'PEN', 'AWD', 'WO'].includes(status)) continue;
 
       // h2h market settles on 90-minute FT result — use score.fulltime, not goals
@@ -2676,6 +2694,7 @@ async function checkAndResolve() {
           b.stage      = 'RESOLVED';
           b.resolvedAt = resolvedAt;
           b.finalScore = finalScore;
+          delete b.liveScore;
         });
         betsChanged = true;
         const dupNote = matchingBets.length > 1 ? ` (${matchingBets.length - 1} duplicates voided)` : '';

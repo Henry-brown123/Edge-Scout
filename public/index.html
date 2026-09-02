@@ -2791,6 +2791,17 @@ function recommendedCard(b) {
   const kellyLabel  = isReal
     ? `${kellyFractionLabel(b.kellyFraction)}-Kelly · real`
     : 'Kelly · paper';
+  // Live score — populated by checkAndResolve's existing 5-min fixture poll
+  // whenever the game is in-play; cleared once the bet resolves.
+  const live = (!b.result && b.liveScore) ? b.liveScore : null;
+  let liveBadge = '';
+  if (live) {
+    const liveOutcome  = live.home > live.away ? 'Home Win' : live.home < live.away ? 'Away Win' : 'Draw';
+    const onTrack      = liveOutcome === b.bet;
+    const statusLabel  = live.status === 'HT' ? 'HT' : (live.elapsed != null ? `${live.elapsed}'` : live.status);
+    const liveColor    = onTrack ? 'var(--green)' : 'var(--red)';
+    liveBadge = `<span class="badge" style="background:${onTrack ? 'rgba(0,255,135,.15)' : 'rgba(255,77,109,.15)'};border:1px solid ${onTrack ? 'rgba(0,255,135,.4)' : 'rgba(255,77,109,.4)'};color:${liveColor};font-weight:800" title="Live score, updates roughly every 5 minutes">🔴 LIVE ${live.home}-${live.away} · ${statusLabel} · ${onTrack ? '✓ on track' : '✗ not on track'}</span>`;
+  }
   return `
     <div class="fixture-card recommended ${modeClass}" style="flex-direction:column;align-items:stretch;padding-bottom:12px;cursor:pointer" onclick="openBetDrawerById('${b.id}')">
       ${isGenericPaperOnly ? `<div style="background:rgba(255,170,0,0.12);border-bottom:1px solid rgba(255,170,0,0.3);padding:6px 14px;font-size:11px;font-weight:700;color:#ffaa00;border-radius:8px 8px 0 0;margin:-12px -12px 10px">⚠ PAPER ONLY — zero real-money stake (manual lock or calibration flag).</div>` : ''}
@@ -2808,6 +2819,7 @@ function recommendedCard(b) {
             ${modeBadge}
             ${holdoutBadge}
             ${fakeMoneyBadge}
+            ${liveBadge}
             <span style="color:var(--cyan)">+${edgePct}% edge</span>
             <span>@${b.bookOdds.toFixed(2)}</span>
             ${b.weather ? `<span title="Weather">🌧 ${b.weather.precipProb}% rain, ${b.weather.windSpeed?.toFixed(0)}km/h</span>` : ''}
