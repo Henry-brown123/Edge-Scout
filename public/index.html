@@ -2711,11 +2711,13 @@ function routingHTML(b) {
   const status = b.placementStatus || (b.placementConfirmed ? 'placed' : 'pending_placement');
 
   if (status === 'placed') {
+    const profit = (b.actualOdds != null && b.actualStake) ? (b.actualOdds - 1) * b.actualStake : null;
     return `<div style="margin-top:10px;padding:10px 14px;background:rgba(0,255,135,.06);border:1px solid rgba(0,255,135,.18);border-radius:8px;font-size:12px;display:flex;align-items:center;gap:10px">
       <span style="color:var(--green);font-size:14px">✓</span>
       <div>
         <span style="color:var(--green);font-weight:600">Placed</span>
         <span style="color:var(--muted);margin-left:8px">${b.bookmakerUsed || 'Paper'} @ ${b.actualOdds?.toFixed(2)} · £${b.actualStake?.toFixed(2)}</span>
+        ${profit != null ? `<span style="color:var(--green);margin-left:8px" title="Profit if this bet wins, at the locked odds/stake — excludes any exchange commission">+£${profit.toFixed(2)} if it lands</span>` : ''}
         ${b.placedAt ? `<span style="color:var(--muted);margin-left:8px;font-size:11px">${new Date(b.placedAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}</span>` : ''}
       </div>
     </div>`;
