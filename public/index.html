@@ -2908,7 +2908,7 @@ function watchingCard(w) {
           ${lockLabel || ''}
           ${scoredLabel ? `<span style="color:var(--muted)" title="Most recent of: 07:00 morning scan, hourly rescan, or T-60 lock">${scoredLabel}</span>` : ''}
           <span class="badge badge-amber">Projected: ${projLabel}</span>
-          ${w.edge != null ? `<span style="color:var(--cyan)">+${(w.edge * 100).toFixed(1)}% edge</span>` : ''}
+          ${w.edge != null ? `<span style="color:var(--cyan)">${w.edge >= 0 ? '+' : ''}${(w.edge * 100).toFixed(1)}% edge</span>` : ''}
         </div>
         ${scoutTierBlock(w.modelProb, w.leagueId, pickTypeOfBetKey(w.projectedBet))}
       </div>
