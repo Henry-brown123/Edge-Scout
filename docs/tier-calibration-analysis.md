@@ -7282,3 +7282,195 @@ Display and grouping only; no reading changed.
 Temp endpoint `/api/admin/diag-top8-calibration` removed after use (commit
 `2ad34c8`). `GET /api/admin/calibration-factors` remains as the permanent
 rule-17 sharing record.
+
+## Addendum 42 — Phase 1 league scoping: candidate lower divisions for the staked EFL cohort (data-quality only, no edge/ROI assessment)
+
+Brief: identify second/third-tier divisions in established football
+nations that could plausibly join the Championship / League One / League
+Two staked cohort, and rank them on **verified** data quality (API-Sports
+depth, Odds API / Pinnacle depth, team-name matching) — nothing else.
+Phase 2 (separate brief) applies the full calibration-rules methodology to
+whatever clears this stage. No backtest, calibration or edge figure appears
+here by design.
+
+Method (2026-09-04 18:40–18:55 UTC, all live calls through the production
+proxy routes from an authenticated session, same discipline as the
+Championship addition in commit `fdab315`): `/api/odds/sports?all=true` for
+the sport-key gate; `/api/leagues?country=` for IDs, season lists and
+coverage flags; `/api/fixtures?league=&season=` for 2022–2026 fixture and
+FT counts; `/api/odds/events?sport=` for the live Pinnacle sample (raw
+provider response, bypassing this system's matching); a temporary
+`/api/admin/diag-candidate-odds-history` endpoint (commit `e5ea6e0`,
+removed in `39973c1`, 404 confirmed logged in) hitting the Odds API
+historical snapshot endpoint the closing-odds backfill uses, at five Friday
+18:00Z snapshots (Oct 2025, Mar 2025, Oct 2024, Oct 2023, Oct 2022), region
+`eu`, 10 credits each; and `teamsMatch()` / `_lookupOddsEntry()` logic
+replayed verbatim against both live feeds. ~400 Odds API credits used of
+4.997M; ~60 API-Sports calls (one per-minute rate-limit response on the
+first burst, `setRateLimited()` not tripped — confirmed `limited:false`).
+
+### Part A — The sport-key gate (decisive)
+
+The Odds API carries exactly seven second/third-tier soccer keys:
+
+| Candidate | API-Sports id | Odds API key | Active |
+|---|---|---|---|
+| 2. Bundesliga | 79 | `soccer_germany_bundesliga2` | yes |
+| 3. Liga | 80 | `soccer_germany_liga3` | yes |
+| Segunda División | 141 | `soccer_spain_segunda_division` | yes |
+| Serie B | 136 | `soccer_italy_serie_b` | yes |
+| Ligue 2 | 62 | `soccer_france_ligue_two` | yes |
+| Superettan | 114 | `soccer_sweden_superettan` | yes |
+| Brazil Série B | 72 | `soccer_brazil_serie_b` | yes |
+
+**Excluded at this gate — no Odds API key exists at all**, so no real
+market price can ever reach `hasRealOdds`: Scottish Championship (180),
+Scottish League One (183) and League Two (184), Eerste Divisie (89), Liga
+Portugal 2 / Segunda Liga (95), Challenger Pro League (145), Turkish 1. Lig
+(204), English National League (43), Primera Federación (435/436), Serie C
+(138/942/943), French National, and the Austrian, Swiss, Danish,
+Norwegian, Polish, Greek and Czech second tiers, J2, USL Championship and
+Primera Nacional. API-Sports IDs were confirmed for the first nine; the
+rest were not looked up because the gate already fails. The 66-key soccer
+list also contains a number of *less-followed top divisions* (Belgium,
+Austria, Switzerland, Denmark, Norway, Sweden, Poland, Greece, Turkey,
+Ireland, Finland) — outside this brief's second/third-tier scope, noted
+only as a possible later brief.
+
+### Part B — API-Sports coverage (all seven pass)
+
+| League | Seasons | Fixtures/season (FT) | 2026 so far | Teams | Coverage flags |
+|---|---|---|---|---|---|
+| 2. Bundesliga 79 | 2011–2026 (16) | 308 | 306 sched / 29 FT | 18 | events, lineups, stats, standings; injuries no |
+| 3. Liga 80 | 2011–2026 (16) | 380 | 380 / 30 FT | 20 | same |
+| Segunda División 141 | 2016–2026 (11) | 468 (incl. play-offs) | 462 / 33 FT | 22 | same |
+| Serie B 136 | 2016–2026 (11) | 390 | 380 / 20 FT | 20 | same |
+| Ligue 2 62 | 2010–2026 (17) | 380 (2022–23), 310 (2024–25, 18 teams) | 306 / 36 FT | 18 | same |
+| Superettan 114 | 2016–2026 (11) | 244 | 240 / 168 FT (Apr–Nov) | 16 | same |
+| Brazil Série B 72 | 2012–2026 (15) | 380 | 380 / 251 FT (Mar–Nov) | 20 | same |
+
+Full-season FT counts are consistent year on year for every league (no
+partial seasons). `injuries:false` matches League One/Two's own flag, so it
+is not a blocker. Superettan and Brazil Série B run calendar-year seasons
+(Apr/Mar–Nov), a different seasonality from the EFL cohort; Brazil kicks
+off at 22:30–00:30 UTC, which interacts with the 07:00 UTC morning-scan /
+T-60 cycle and would need checking before any live use.
+
+### Part C — Odds API / Pinnacle depth, with the fabrication-risk check
+
+Context: Addendum 35's fabrication bug was internal — a price invented from
+the model's own probability when no real book price existed — and is fixed
+(`hasRealOdds`). For a *new* league the residual risk is that a thin market
+produces many no-Pinnacle fixtures near lock. Those now become
+`hasRealOdds=false` skips, not bets, but a suspiciously high real-odds rate
+in a thin league would be the tell that a fallback had crept back. The
+checks below therefore read Pinnacle straight from the provider, and test
+the prices themselves for the signature a fabricated price would carry
+(a constant margin; identical prices across books).
+
+**Live sample, 2026-09-04 18:44 UTC** (imminent round = events within ~72h;
+Pinnacle does not price the following round in any league, including the
+EFL reference: League One 12/12 imminent and 0/2 midweek, Championship 12/12
+and 0/9, League Two 12/12):
+
+| League | Imminent round with Pinnacle | Books (imminent) | Pinnacle overround | Following round |
+|---|---|---|---|---|
+| 2. Bundesliga | 7/7 | 37–38 | 3.8–5.9% | 0/2 (26–27 books) |
+| 3. Liga | 8/10 — misses: Ingolstadt v Aachen (in-play at fetch, 6 books) and **SV Meppen v 1. FC Saarbrücken (Sat 12:00, 28 books, no Pinnacle — a genuine gap)** | 18–30 | 5.5–6.7% | 0/9, **each with a single book (Tipico)** |
+| Segunda División | 11/11 | 32–37 | 3.9–6.0% | 0/1 (13 books) |
+| Serie B | 10/10 | 34–38 | 3.8–5.5% | — |
+| Ligue 2 | 9/9 (5 in-play) | 32–39 | 4.6–7.4% | — |
+| Superettan | 7/8 — miss: Östers v Nordic United (in-play, 24 books) | 27–33 | 5.3–8.4% | 0/8 (10–23 Nordic/UK retail books) |
+| Brazil Série B | 9/9 | 20–33 | 3.7–6.4%, one outlier 10.8% (Ponte Preta v São Bernardo, 20 books) | 0/10 (7 books each) |
+
+**Historical snapshots** (events kicking off within 72h of each Friday
+18:00Z snapshot, Pinnacle present / total):
+
+| League | Oct 2025 | Mar 2025 | Oct 2024 | Oct 2023 | Oct 2022 |
+|---|---|---|---|---|---|
+| 2. Bundesliga | 9/9 | 9/9 | 9/9 | 8/9 (Elversberg v Braunschweig already in play) | 9/9 |
+| 3. Liga | 10/10 | 10/10 | 10/10 | 10/10 | **0 events** — also 0 in Dec 2022 and Aug 2022; 10/10 in Mar 2023. History for this key begins between Dec 2022 and Mar 2023 |
+| Segunda División | 10/10 | 10/10 | 10/10 | 10/10 | 10/10 |
+| Serie B | 10/10 | 10/10 | 10/10 | 9/9 | 8/9 (Ternana v Genoa, 7 books) |
+| Ligue 2 | 8/8 | 9/9 | 8/8 | 9/9 | 9/9 |
+| Superettan | 8/8 | pre-season (0 within 72h; 8 events at 3 books) | 7/7 | 6/6 | 6/6 |
+| Brazil Série B | 9/9 | off-season (snapshot fell back to Nov 2024) | 8/8 | 7/8 (Sport Recife v Chapecoense, 6 books) | 7/7 |
+
+Pinnacle overrounds in the historical snapshots run 2.7–3.5% in 2022–23
+and 3.8–6% from 2024 on for the four large leagues, 3.2–9.6% for 3. Liga
+and 4.4–8.6% for Superettan.
+
+**Fabrication-risk verdict:** none of the seven shows the fabrication
+signature. Overrounds vary event by event rather than sitting on a fixed
+margin, every Pinnacle-priced event carries at least seven distinct home
+prices across books, and the no-Pinnacle events are exactly where a thin
+market would be expected (in-play, the following round, one genuine
+Saturday gap in 3. Liga). The two spots worth watching, because they are
+where a fallback would first show up as a too-good real-odds rate, are
+3. Liga's single-book following round and Superettan's 10-book following
+round. Historical depth for Phase 2 backtesting (closing-odds backfill
+uses this same endpoint) is intact from Oct 2022 for six leagues and from
+~Mar 2023 for 3. Liga.
+
+### Part D — Team-name matching
+
+Three checks per league against the live feeds: (1) team level — each
+Odds API name against every API-Sports team in the league; (2) fixture
+level — same kickoff ±90 min and both sides `teamsMatch()`; (3) a verbatim
+replay of `_lookupOddsEntry()` (exact key first, else the *first* event
+where both sides fuzzy-match, with no kickoff constraint) over the 10-day
+API-Sports fixture window.
+
+| League | Team misses | Shared-token ambiguities | Fixture level | Lookup replay |
+|---|---|---|---|---|
+| 2. Bundesliga | 0 | none | 9/9 | 9/9 correct, 0 wrong |
+| 3. Liga | 0 | "Fortuna" (Fortuna Köln ↔ Fortuna Düsseldorf), "Köln" (Viktoria Köln ↔ Fortuna Köln) | 20/20 | 20/20 correct, 0 wrong |
+| Segunda División | 0 | "Real" (Real Valladolid CF ↔ Real Sociedad II) | 12/12 | 12/12 correct, 0 wrong (0 exact-key hits — every match is fuzzy) |
+| Serie B | 0 | "Virtus" (Virtus Entella ↔ Vicenza Virtus) | 10/10 | 10/10 correct |
+| Ligue 2 | 0 | none | 10/10 | 10/10 correct |
+| Superettan | 0 | "BoIS" (Varbergs BoIS ↔ Landskrona BoIS) | 16/16 | 16/16 correct **plus one wrong pick**: Norrby IF v Varbergs BoIS (14 Sep, not yet in feed) resolved to Norrby IF v Landskrona BoIS (5 Sep) |
+| Brazil Série B | **3**: CRB ↔ "Clube de Regatas Brasil"; Operario-PR ↔ "Operario PR" and Botafogo SP ↔ "Botafogo-SP" (the hyphen strip collapses "operariopr" ≠ "operario pr") | "Recife" (Sport Recife ↔ Nautico Recife) | **15/19** | 15 correct, 4 unmatched (the three clubs above) |
+
+Unmatched entries in the replay whose event is simply beyond the feed's
+horizon (~7 days) are not counted as misses. Accent and suffix variants
+("Südtirol"/"Sudtirol", "Real Valladolid CF"/"Valladolid", "Pau FC"/"PAU",
+"Helsingborgs IF"/"Helsingborg", "IK Brage"/"IK brage") all resolve through
+`normaliseTeam()`; no new alias is required for the four large leagues.
+The shared-token ambiguities are the standing weakness of the ≥4-char
+token rule: harmless while only one such fixture is in the feed, and shown
+to mis-resolve in Superettan the moment two are. Hardening
+`_lookupOddsEntry()` to prefer a same-kickoff event before any fuzzy hit
+would remove the whole class and is recommended before any Phase 2 league
+goes live; it is not needed for the Phase 2 analysis itself.
+
+### Part E — Ranking and recommended Phase 2 shortlist
+
+Ranked on verified data quality only:
+
+1. **Serie B (136)** — 10/10 live, 47/48 historical, 34–38 books, 390
+   fixtures/season, matching 10/10 with one benign ambiguity.
+2. **Segunda División (141)** — 11/11 live, 50/50 historical, the largest
+   volume (468/season, 22 teams), matching 12/12.
+3. **2. Bundesliga (79)** — 7/7 live, 44/45 historical, deepest API-Sports
+   history (2011), zero matching ambiguities; 308/season.
+4. **Ligue 2 (62)** — clean on every check, but the league shrank to 18
+   teams in 2024 (380 → 310 fixtures), so the post-boundary sample builds
+   more slowly.
+5. **3. Liga (80)** — one genuine Saturday no-Pinnacle gap with 28 books
+   listed, single-book following round, wider margins (5.5–6.7%), Odds API
+   history only from ~Mar 2023, two in-league token ambiguities.
+6. **Superettan (114)** — 244 fixtures/season with 16 teams, calendar-year
+   season, Pinnacle only ~2 days out, 5.3–8.4% margins, and the one
+   confirmed wrong-event pick.
+7. **Brazil Série B (72)** — three unmatched clubs today (21% of the round),
+   calendar season, 22:30–00:30 UTC kick-offs, widest margin outlier.
+
+**Recommended shortlist for Phase 2: Serie B, Segunda División and
+2. Bundesliga** — three leagues, mirroring the size of the EFL trio, each
+with Pinnacle on essentially every imminent-round fixture back to 2022 and
+clean matching. Ligue 2 is the reserve if one of the three falls out in
+Phase 2. 3. Liga, Superettan and Brazil Série B are excluded on data
+quality regardless of the underlying hypothesis. Nothing here says
+anything about edge or ROI in any of these leagues; that is Phase 2's
+job, under the calibration-rules train/test discipline, with tournaments
+kept separate as always.
