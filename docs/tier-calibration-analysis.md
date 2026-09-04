@@ -7139,9 +7139,9 @@ evaluated once, per rule 3.
 **What adopting 13%/45% means mechanically** (not done here — needs the
 go-ahead): set the rule-12 edge floor to 0.13 and let the gate read the live
 edge for these leagues, retiring `PAPER_RULE_EDGE_SCALE_FACTOR` for them.
-The 8 top divisions are on the observation tier per Addendum 38, so the 18%
-floor at 1.02 becomes moot for stake purposes, but it must stay defined for
-their observation logging and any future re-entry. One constant, one
+The 8 top divisions remain paper-with-stake at 18%/45% on their 1.02 scale
+(Addendum 38's narrowing is a recommendation, not implemented), so that floor
+stays live and defined. One constant, one
 condition, the UI strings, and a re-verification that the Scout tab's
 paper-money counters match a live scan.
 
@@ -7151,8 +7151,9 @@ One/League Two; retire the 1.02 shim"): `PAPER_MONEY_EDGE_MIN_RULE12 = 0.13`,
 `getPaperMoneyEdgeMin()` selects it for ids 40/41/42, the gate reads the live
 edge, `PAPER_RULE_EDGE_SCALE_FACTOR` / `edgeOnPaperRuleScale` / `paperRuleEdge`
 are removed, and the Scout tab's rule labels and no-stake tooltips state the
-per-group floors. The 18% floor stays defined for the top divisions on their
-1.02 scale. First live exercise of the new floor is the next scan that
+per-group floors. The 18% floor stays live for the top divisions on their 1.02
+scale (they remain paper-with-stake; Addendum 38's narrowing is not
+implemented). First live exercise of the new floor is the next scan that
 contains a Championship / League One / League Two fixture.
 
 **What this does not change:** the eight top divisions (Addendum 38), the
