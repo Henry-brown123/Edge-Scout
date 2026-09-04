@@ -7266,6 +7266,19 @@ Rule-12 leagues (0.93 / 13%) and the tournament factor untouched. The same
 endpoint now also derives calibration/staking cohorts from the resolved
 per-league configuration, which the Performance tab's cohort tables read.
 
+### Part E — Cohort tables on the Performance tab (2026-09-04, commit `838733e`)
+
+With two domestic calibration/staking cohorts live, the Calibration Tier
+Performance grid now renders one table per cohort, derived from the same
+per-league configuration rule 17 tracks (see `docs/model-versioning.md`,
+"Cohort tables"). Verified live on the Paper, Real Money and Combined views:
+EFL lower divisions (×0.93 · edge ≥13% · prob ≥45% · PAPER-STAKED, 3 leagues,
+green-flag cells clickable), Top divisions (×1.06 · edge ≥20% · prob ≥45% ·
+OBSERVATION ONLY, 8 leagues, read-only), Tournaments & cups (×1.06 · no
+paper-money rule · OBSERVATION ONLY, 4 grid leagues, read-only). The third
+table is the structural proof that a further cohort needs no UI change.
+Display and grouping only; no reading changed.
+
 Temp endpoint `/api/admin/diag-top8-calibration` removed after use (commit
 `2ad34c8`). `GET /api/admin/calibration-factors` remains as the permanent
 rule-17 sharing record.

@@ -387,6 +387,19 @@ full history was used to train the current live model:
   distinguishing "no backtest exists for this competition" from an ordinary
   empty cell within an audited one.
 
+**Cohort tables (2026-09-04).** The grid renders one table per calibration/
+staking cohort — EFL lower divisions (×0.93, edge ≥13%, prob ≥45%, paper-
+staked), Top divisions (×1.06, edge ≥20%, prob ≥45%, observation only),
+Tournaments & cups (×1.06, no paper rule, observation only) as of writing.
+Cohorts are derived server-side by `getCalibrationCohorts()` from each
+league's resolved factor source/value, floor, probability floor and stake
+eligibility (rule 17's sharing record), exposed as `scope.cohorts` on
+`/api/league-tier-matrix` and on `/api/admin/calibration-factors`. There is
+no league or cohort list in the UI: adding a league to an existing constant
+set, or creating a new factor/floor set, produces the right table without a
+UI change. Green-flagging is only offered in paper-staked cohorts. Every
+reading below is unchanged by this — it is grouping and labelling only.
+
 **Live** — real, resolved bets, filtered to `modelVersion === ` the current
 live model's version and `resolvedAt >= ` that version's own `trainedAt`. For
 GBDT, `getVersion()` *is* the `trainedAt` ISO string, so in practice these are
