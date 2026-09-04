@@ -4599,6 +4599,22 @@ app.get('/api/admin/diag-phase2-status', async (_req, res) => {
     res.json({ memory: { rssMB: +(mem.rss / 1048576).toFixed(0), heapUsedMB: +(mem.heapUsed / 1048576).toFixed(0), heapLimitMB: +(heap.heap_size_limit / 1048576).toFixed(0) }, population: { fixtures: existing.fixtures.length, scored: existing.scoredRecords.length, closingKeys: Object.keys(closing).length }, historicalStatus: _historicalBackfillRunning ? { running: true, ..._historicalBackfillStatus } : (readJSON('backfill-historical-meta.json') || null), closingStatus: _closingOddsStatus, leagues: out, oddsCredits: _lastKnownOddsCredits });
   } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
 });
+// TEMP (2026-09-04, Thread A backlog scope) — how much of tonight's 6,209
+// existing-league "new fixtures" is the 24 Aug–4 Sep window vs older backlog.
+// Per league-season: pool count now vs API-Sports' own FT count today, and the
+// pool's fixture count dated inside the freeze window. Read-only.
+app.get('/api/admin/diag-backlog-scope', async (_req, res) => {
+  try {
+    const existing = readHistoricalCached();
+    const FREEZE_FROM = new Date('2026-08-24T00:00:00Z'), FREEZE_TO = new Date('2026-09-04T23:59:59Z');
+    const byLS = {};
+    for (const f of existing.fixtures) { const lid = String(f.league?.id); if (PHASE2_LEAGUES.includes(parseInt(lid, 10))) continue; const sn = f.league?.season; const k = `${lid}_${sn}`; if (!byLS[k]) byLS[k] = { leagueId: lid, name: LEAGUE_NAMES_MAP[lid] || lid, season: sn, pool: 0, inFreezeWindow: 0, latest: null }; byLS[k].pool++; const d = new Date(f.fixture?.date); if (d >= FREEZE_FROM && d <= FREEZE_TO) byLS[k].inFreezeWindow++; if (!byLS[k].latest || f.fixture?.date > byLS[k].latest) byLS[k].latest = f.fixture?.date; }
+    const rows = Object.values(byLS).filter(r => r.season >= 2024).sort((a, b) => a.leagueId.localeCompare(b.leagueId) || a.season - b.season);
+    for (const r of rows) { try { const { data } = await apiSports.get('/fixtures', { params: { league: r.leagueId, season: r.season, status: 'FT' } }); r.apiFT = data?.results ?? null; r.apiError = data?.errors && Object.keys(data.errors).length ? data.errors : undefined; } catch (e) { r.apiError = e.message; } await new Promise(x => setTimeout(x, 250)); }
+    const totalFreeze = rows.reduce((a, r) => a + r.inFreezeWindow, 0);
+    res.json({ note: 'TEMP — backlog scope. Remove after use.', freezeWindow: '2026-08-24..2026-09-04', existingLeagueFixturesInFreezeWindow: totalFreeze, tonightNewExistingLeagueFixtures: 6209, impliedPreFreezeBacklog: 6209 - totalFreeze, rows });
+  } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
+});
 app.get('/api/admin/diag-phase2-boundary', (_req, res) => {
   try {
     const PARTNER = { 136: [135], 141: [140], 79: [78] };
