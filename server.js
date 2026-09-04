@@ -9228,6 +9228,43 @@ app.get('/api/admin/diag-rule12-full-grid', async (_req, res) => {
   }
 });
 
+// ─── TEMP DIAGNOSTIC (2026-09-04, calFactor re-check) — remove after use ────────
+// Same method as commit 3415075's Brier sweep (top-pick calProb = min(0.97,
+// modelProb × factor) vs outcome; pure calibration metric, not ROI), re-run on the
+// populations the 2026-09-01 sweep never separated: (1) rule-12 leagues over their
+// whole tree-clean history, (2) rule-12 leagues on the 23-month window, (3) rule-9
+// domestic leagues test-only AND after the live model's tree boundary (rule 16),
+// (4) the original pooled all-domestic population for reference. Step 0.01.
+app.get('/api/admin/diag-calfactor-recheck', async (_req, res) => {
+  try {
+    const { DOMESTIC_LEAGUE_IDS_FOR_BLEND, LEAGUE_CONFIG } = require('./scoring');
+    const RULE12 = { 41: '2026-08-11T09:00:00Z', 42: '2026-08-11T09:00:00Z', 40: '2026-08-19T22:00:00Z' };
+    const matched = await computeMatchedEdgeFixtures();
+    const lid = f => parseInt(f.leagueId, 10);
+    const domestic = matched.filter(f => DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(lid(f)));
+    const rule12 = domestic.filter(f => RULE12[lid(f)] && new Date(f.date) < new Date(RULE12[lid(f)]));
+    const rule12Window = rule12.filter(f => new Date(f.date) >= new Date('2024-09-16T00:00:00Z'));
+    const rule9Clean = domestic.filter(f => !RULE12[lid(f)] && VALIDATED_SPLITS[lid(f)] && new Date(f.date) >= new Date(VALIDATED_SPLITS[lid(f)].testFrom) && f.preTreeBoundary === false);
+    const brier = (arr, factor) => arr.reduce((s, f) => s + (Math.min(0.97, f.modelProb * factor) - (f.won ? 1 : 0)) ** 2, 0) / arr.length;
+    const sweep = arr => { const rows = []; for (let k = 90; k <= 120; k++) { const factor = k / 100; rows.push({ factor, brier: +brier(arr, factor).toFixed(5) }); } const best = rows.reduce((a, b) => b.brier < a.brier ? b : a, rows[0]); return { n: arr.length, best: best.factor, brierAtBest: best.brier, brierAt100: +brier(arr, 1.00).toFixed(5), brierAt102: +brier(arr, 1.02).toFixed(5), brierAt111: +brier(arr, 1.11).toFixed(5), curve: rows.filter(r => r.factor * 100 % 2 === 0 || r.factor === best.factor) }; };
+    const BIN = [0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 1.01];
+    const reliability = (arr, factor) => { const t = []; for (let i = 0; i < BIN.length - 1; i++) { const inBin = arr.filter(f => { const p = Math.min(0.97, f.modelProb * factor); return p >= BIN[i] && p < BIN[i + 1]; }); if (!inBin.length) continue; t.push({ bin: `${Math.round(BIN[i] * 100)}-${Math.round(BIN[i + 1] * 100)}%`, n: inBin.length, avgPredicted: +(100 * inBin.reduce((s, f) => s + Math.min(0.97, f.modelProb * factor), 0) / inBin.length).toFixed(1), actual: +(100 * inBin.filter(f => f.won).length / inBin.length).toFixed(1) }); } return t; };
+    const name = f => LEAGUE_CONFIG[lid(f)]?.name || String(f.leagueId);
+    res.json({
+      note: 'TEMP — calibration factor re-check (Brier). Remove after use.',
+      method: 'identical to commit 3415075: Brier of top-pick calProb = min(0.97, modelProb×factor) against outcome, factor 0.90-1.20 step 0.01; lower is better',
+      rule12_allHistory_treeClean: sweep(rule12),
+      rule12_byLeague: Object.fromEntries(['Championship', 'League One', 'League Two'].map(L => [L, sweep(rule12.filter(f => name(f) === L))])),
+      rule12_window23m: sweep(rule12Window),
+      rule9_testOnly_postBoundary: sweep(rule9Clean),
+      allDomestic_asOn2026_09_01: sweep(domestic),
+      reliability_rule12: { at100: reliability(rule12, 1.00), at102: reliability(rule12, 1.02), atBest: reliability(rule12, sweep(rule12).best) },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
 // Pools all 4 blocks' raw bet outcomes per (league, tier) — n, ROI, 95% CI via
 // normal approximation on per-bet returns (same method used for the Europa
 // League/Conference League splits, Addendum 20). Writes walk-forward-pooled.json,
