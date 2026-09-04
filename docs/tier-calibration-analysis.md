@@ -7150,5 +7150,7 @@ tournament factor, the pooled 1.02 for the top divisions (their own Brier
 optimum is 1.06, Addendum 39 Part E — a separate rule-17 decision), and the
 Addendum 37 Part G open items.
 
-Temp endpoint `/api/admin/diag-rule12-grid-corrected` removed after use
-(commit noted below); confirmed by logged-in 404 check.
+Temp endpoint `/api/admin/diag-rule12-grid-corrected` removed after use in
+commit `c2ef550` (verified in code: zero references remain). The post-deploy
+live check returned 401 because the browser session had expired, so the
+removal is verified in code rather than by a logged-in 404 this time.
