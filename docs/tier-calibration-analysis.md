@@ -7759,3 +7759,19 @@ odds) + ~50 (live samples); API-Sports ~140 calls (backfill fetch of 38
 new league-seasons, active-season refresh, backlog diagnostic). Temp
 endpoints `diag-phase2-{status,boundary,backtest,brier,grid}` and
 `diag-backlog-scope` removed in the same commit as the Part 3 factor.
+
+### Part 6 — Weekly retrain paused pending the top-division re-check (2026-09-04 20:47 UTC)
+
+`settings.weeklyRetrainPaused = true` via `PUT /api/admin/weekly-retrain-pause`
+(confirmed `paused: true` on `/api/admin/weekly-retrain-log`; next slot Mondays
+05:15 UTC, so 2026-09-07 is skipped and logged `skipped_paused`). Reason: the
+nightly-chain stall (Part 1) means Addendum 41's top-division factor/floor and
+the Eredivisie re-check counter were computed on a pool missing the 2026
+opening rounds; a new model version would move the rule-16 boundary under every
+Historical reading before those re-checks are done. Preconditions to resume:
+(1) a closing-odds backfill for the eight top divisions covering 24 Aug–4 Sep
+2026 (the pool refresh alone leaves those fixtures unmatched); (2) the
+Addendum 41 Brier/floor re-check and the Eredivisie counter re-read on the
+completed population; then `paused: false` through the same endpoint.
+`retrainPending` (the old every-500-record trigger) is informational only —
+`autoRetrainEnabled` remains false.
