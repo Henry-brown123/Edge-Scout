@@ -2839,7 +2839,7 @@ function recommendedCard(b) {
             <div class="stake-amount" style="color:${stakeColor}">£${(b.actualStake ?? b.displayStake ?? b.suggestedStake).toFixed(2)}</div>
             <div class="stake-label">${kellyLabel}</div>
           </div>
-          ${(!isReal && !b.result && !isFakeMoney) ? `<button class="btn btn-ghost btn-sm" title="Preview only — does not convert or commit anything" onclick="event.stopPropagation();previewRealStake('${b.fixture.replace(/'/g, "\\'")}', ${b.modelProb ?? 'null'}, ${b.bookOdds ?? 'null'})" style="color:var(--amber);border-color:var(--amber);font-size:10px;padding:2px 8px">Real: £?</button>` : ''}
+          ${(!isReal && !b.result && !isFakeMoney) ? `<button class="btn btn-ghost btn-sm" title="Preview only — does not convert or commit anything" onclick="event.stopPropagation();previewRealStake('${b.fixture.replace(/'/g, "\\'")}', ${b.modelProb ?? 'null'}, ${b.bookOdds ?? 'null'}, ${b.leagueId ?? 'null'})" style="color:var(--amber);border-color:var(--amber);font-size:10px;padding:2px 8px">Real: £?</button>` : ''}
           <span class="stage-tag tag-recommended" style="background:${(b.placementStatus||'pending_placement')==='placed'?'rgba(0,255,135,.15)':'rgba(245,166,35,.15)'};color:${(b.placementStatus||'pending_placement')==='placed'?'var(--green)':'#f5a623'}">${(b.placementStatus||'pending_placement')==='placed'?'Placed':'Locked'}</span>
           ${(b.placementStatus||'pending_placement')==='placed' ? (
             kickoffPassed(b.kickoff)
@@ -2926,7 +2926,7 @@ function watchingCard(w) {
         ${weatherBadge(w.weatherCondition)}
         ${(w.lowConfidence && !w.isDomesticTierLeague) ? '<span class="badge badge-red" title="Model diverges from bookmaker beyond data-confidence threshold — will not auto-lock">LOW CONF</span>' : ''}
         ${w.noMarketData ? '<span class="badge" style="background:rgba(148,163,184,.15);border:1px solid rgba(148,163,184,.35);color:var(--muted)" title="No bookmaker has priced this fixture anywhere — shown for information only. Cannot be locked, paper or real, at any score.">NO MARKET</span>' : ''}
-        ${(w.noMarketData || wIsFakeMoney) ? '' : `<button class="btn btn-ghost btn-sm" title="Preview only — does not lock or commit anything" onclick="event.stopPropagation();previewRealStake('${w.fixture.replace(/'/g, "\\'")}', ${w.modelProb ?? 'null'}, ${w.bookOdds ?? 'null'}, 'based on the current watching-card reading — the actual lock re-scores fresh and may differ')">Preview real stake</button>`}
+        ${(w.noMarketData || wIsFakeMoney) ? '' : `<button class="btn btn-ghost btn-sm" title="Preview only — does not lock or commit anything" onclick="event.stopPropagation();previewRealStake('${w.fixture.replace(/'/g, "\\'")}', ${w.modelProb ?? 'null'}, ${w.bookOdds ?? 'null'}, 'based on the current watching-card reading — the actual lock re-scores fresh and may differ', ${w.leagueId ?? 'null'})">Preview real stake</button>`}
         ${w.noMarketData
           ? `<button class="btn btn-ghost btn-sm" disabled title="No real price exists for this fixture — cannot be locked" style="opacity:.45;cursor:not-allowed">Lock now</button>`
           : `<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openLockModal('${w.id}')">Lock now</button>`}
@@ -3325,7 +3325,7 @@ async function renderPerfMode(mode) {
       </td>
       <td>${resultBadge}${cashOutBadge}</td>
       <td style="white-space:nowrap">
-        ${(b.mode !== 'real' && !b.isFakeMoney && !b.result) ? `<button class="btn btn-ghost btn-sm" title="Preview only — does not convert or commit anything" onclick="previewRealStake('${b.fixture.replace(/'/g, "\\'")}', ${b.modelProb ?? 'null'}, ${b.bookOdds ?? 'null'})" style="padding:2px 8px;color:var(--amber)">£?</button>` : ''}
+        ${(b.mode !== 'real' && !b.isFakeMoney && !b.result) ? `<button class="btn btn-ghost btn-sm" title="Preview only — does not convert or commit anything" onclick="previewRealStake('${b.fixture.replace(/'/g, "\\'")}', ${b.modelProb ?? 'null'}, ${b.bookOdds ?? 'null'}, ${b.leagueId ?? 'null'})" style="padding:2px 8px;color:var(--amber)">£?</button>` : ''}
         <button class="btn btn-ghost btn-sm" onclick="editBet('${b.id}')" title="Edit stake/odds/result" style="padding:2px 8px;color:var(--muted)">✎</button>
         ${cashOutBtn}
         <button class="btn btn-ghost btn-sm" onclick="deleteBet('${b.id}')" style="padding:2px 8px;color:var(--muted)">✕</button>
@@ -6430,12 +6430,18 @@ function _bmOddsForOutcome(bm, bet) {
 // but omits calibrationFactor, so the two can legitimately show slightly
 // different numbers for the same fixture; this one is the accurate one since
 // it's meant to answer "what would I actually get".
-function previewRealStake(label, modelProb, bookOdds, caveat) {
+function previewRealStake(label, modelProb, bookOdds, caveat, leagueId) {
   if (!modelProb || !bookOdds || bookOdds <= 1) {
     toast(`${label}: not enough data yet to preview a real stake`, 'error');
     return;
   }
-  const calFactor  = STATE.settings?.calibrationFactor ?? 1.08;
+  // Mirrors server.js getCalFactorForLeague (tournament 1.06 / rule-12 0.93 /
+  // pooled setting) — previously read the pooled setting for every league with a
+  // stale 1.08 fallback. Display-only preview, commits nothing (2026-09-04, Addendum 40).
+  const lid = parseInt(leagueId, 10);
+  const calFactor  = [1, 2, 3, 48, 848].includes(lid) ? 1.06
+    : [40, 41, 42].includes(lid) ? 0.93
+    : (STATE.settings?.calibrationFactor ?? 1.02);
   const realFrac   = STATE.settings?.realKellyFraction ?? 0.25;
   const realBr     = STATE.realBankroll?.current ?? 0;
   const calProb    = modelProb * calFactor;
