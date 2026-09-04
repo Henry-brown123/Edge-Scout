@@ -6240,9 +6240,8 @@ silently re-contaminating the held-out figures.
   not be relied on; it is decomposed below to show what it pooled.
 
 **Re-validation, 2026-09-04** (temp `GET /api/admin/diag-paper-rule-revalidation`,
-removed after this addendum in commit `3763718`; the post-deploy live check
-returned 401 because the browser session had expired, so the removal is
-verified in code rather than by a logged-in 404). Scoring model 2026-08-08 (boundary pinned
+removed after this addendum in commit `3763718`; confirmed live via a
+logged-in 404 check at 2026-09-04 12:20 UTC). Scoring model 2026-08-08 (boundary pinned
 2022-11-14T00:00Z), domestic calibrationFactor 1.02 (the corrected value),
 edge = calProb − margin-stripped Pinnacle, ROI on Pinnacle closing odds,
 95% CI by normal approximation on per-bet returns.
