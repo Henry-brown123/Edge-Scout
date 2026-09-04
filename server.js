@@ -4479,42 +4479,6 @@ app.get('/api/odds/events', async (req, res) => {
   } catch (e) { res.status(e.response?.status || 500).json({ error: e.message }); }
 });
 
-// TEMP DIAGNOSTIC (Phase 1 league scoping, 2026-09-04) — remove after use.
-// Historical Pinnacle coverage spot-check for candidate lower-division sport
-// keys: hits Odds API's historical snapshot endpoint (the same one the
-// closing-odds backfill uses) at a handful of past matchday timestamps and
-// reports, per event, whether Pinnacle carried a 3-way price. Bypasses this
-// system's team-name matching entirely. Region 'eu' only (Pinnacle's region)
-// to keep cost at 10 credits per call.
-app.get('/api/admin/diag-candidate-odds-history', async (req, res) => {
-  try {
-    const sports = String(req.query.sports || '').split(',').filter(Boolean);
-    const dates = String(req.query.dates || '').split(',').filter(Boolean);
-    const out = []; let creditsUsed = 0; let remaining = null;
-    for (const sport of sports) for (const date of dates) {
-      try {
-        const resp = await oddsApi.get(`/historical/sports/${sport}/odds`, {
-          params: { apiKey: ODDS_API_KEY, regions: 'eu', markets: 'h2h', oddsFormat: 'decimal', date },
-        });
-        creditsUsed += parseInt(resp.headers['x-requests-last'] || '0', 10);
-        remaining = parseInt(resp.headers['x-requests-remaining'] || '0', 10);
-        const snap = resp.data?.timestamp || null;
-        const events = resp.data?.data || [];
-        out.push({ sport, date, snapshot: snap, eventCount: events.length, events: events.map(ev => {
-          const bms = ev.bookmakers || [];
-          const pin = bms.find(b => b.title === 'Pinnacle');
-          const h2h = pin?.markets?.find(m => m.key === 'h2h')?.outcomes || null;
-          const over = h2h && h2h.length === 3 ? +(h2h.reduce((a, o) => a + 1 / o.price, 0) - 1).toFixed(4) : null;
-          return { home: ev.home_team, away: ev.away_team, ko: ev.commence_time, nBooks: bms.length, hasPinnacle: !!pin, pinOverround: over };
-        }) });
-      } catch (e) {
-        out.push({ sport, date, error: e.message, status: e.response?.status, apiError: e.response?.data });
-      }
-    }
-    res.json({ note: 'TEMP diagnostic — delete after use', creditsUsed, remaining, results: out });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
 // ── App state API ─────────────────────────────────────────────────────────────
 
 // GET divergence report — fixtures where model and market disagree by >8pp
