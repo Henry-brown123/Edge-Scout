@@ -7474,3 +7474,51 @@ quality regardless of the underlying hypothesis. Nothing here says
 anything about edge or ROI in any of these leagues; that is Phase 2's
 job, under the calibration-rules train/test discipline, with tournaments
 kept separate as always.
+
+### Part F — Fix for the kickoff-blind odds lookup (2026-09-04, commit `dcd2d77`)
+
+`_lookupOddsEntry()` and `_buildBookmakerMarket()` now collect every fuzzy
+candidate and, when the caller passes the fixture kickoff (all five call
+sites now do: `scoreOneFixture`, bet creation and `oddsSnapshot` in
+`runPreMatchScan`, `persistOddsSnapshot`, `/api/bets/:id/reroute`), take the
+candidate nearest that kickoff within a 3-hour tolerance. A lone candidate
+on a different day is rejected and the fixture falls through to
+`hasRealOdds=false` (a skip, never a wrong price). Ties at the same kickoff
+break on name-match strength (exact normalised > substring > shared token).
+Without a kickoff the old single-candidate acceptance stands, but two or
+more candidates are now ambiguous rather than first-wins. The exact
+`"Home|Away"` key still wins outright — deliberately kickoff-blind, because
+providers can disagree on an unconfirmed kickoff by more than a day (Serie
+A, Torino v Roma and Como v Parma, API-Sports 14 Sep 16:30 vs Odds API 13
+Sep) and an identical name pair is the same fixture. The totals map is
+exact-key only and untouched.
+
+**Verification.** Synthetic harness on the original case: with only the 5
+Sep Landskrona event in the feed the lookup now returns nothing (old:
+wrong event); with both BoIS fixtures listed it returns the 14 Sep Varbergs
+event; a same-kickoff tie resolves on name strength; the no-kickoff
+single-candidate path is unchanged; a 1-hour kickoff shift still matches.
+
+Live replay (19:05 UTC, deployed build, old vs new logic against the real
+Odds API feed and the 10-day API-Sports window for every tracked league
+plus Superettan and the Phase 2 shortlist): **zero regressions** — every
+fixture the old logic matched correctly is still matched correctly (EPL
+20/20, La Liga 20/20, Bundesliga 18/18, Serie A 18/18, Ligue 1 17/17, CL
+18/18, SPL 6/6, Eredivisie 20/20, Primeira 10/10, Carabao 6/6, League One
+14/14, League Two 12/12, Championship 21/21, Superettan 16/16, Serie B
+10/10, Segunda 12/12, 2. Bundesliga 9/9). The original Superettan case is
+resolved. The same replay found the old logic mis-picking in **three
+currently tracked leagues**, all eliminated by the fix:
+
+- La Liga: Real Sociedad v Atlético Madrid (13 Sep) → Real Betis v Real
+  Madrid (4 Sep), via "real".
+- League One: Cambridge United v Reading (12 Sep) → Oxford United v Reading
+  (8 Sep), via "united".
+- Championship: Southampton v Bristol City (12 Sep) → Southampton v Swansea
+  City (8 Sep), via "city".
+
+Those three arise when the target fixture is not yet in the feed, so in
+production they would have bitten only when a shared-token fixture was
+listed in the same window as the one being scored — infrequent, but
+squarely in the staked cohort. First unattended exercise of the deployed
+path is the 07:00 UTC morning scan on 2026-09-05.
