@@ -6329,6 +6329,64 @@ n=2,299, median −3.4%, p90 +10.9%, p95 +15.0%, p99 +21.5%, max +45.4%;
 60 fixtures at ≥18%. Characterisation only — not a validation of any other
 threshold.
 
+### Part D2 — Reconciliation: why the 2026-08-31 scan showed n=601 and this addendum shows n=273
+
+Raised 2026-09-04 as a discrepancy ("the original had n in the thousands").
+Traced from primary sources, not memory: the committed code of every
+temporary diagnostic from 2026-08-30/31 and the original session's own
+transcript output, then reproduced by a temp endpoint
+(`GET /api/admin/diag-population-trace`, removed after this note).
+
+**What the 2026-08-31 scan (commit `a3795b9`) actually measured.** Its
+population is exactly this addendum's: 11 domestic leagues, test-only per
+league, concurrent window from 2024-09-16, four equal-count blocks. That
+window holds **7,214** matched fixtures (unchanged since: 0 added after
+2026-08-31). The transcript shows the figures reported that night —
+edge-only ≥8% n=3,025 (the "thousands"), edge-only ≥18% n=873, 15%/45%
+n=880, 18%/40% n=767, **18%/45% n=601, ROI +24.79%, CI [+9.1, +40.5]**,
+18%/50% n=461, 20%/45% n=451 (the grid's top cell by ROI), 20%/50% n=360.
+
+**What changed.** One thing: the domestic calibration factor was 1.11 that
+night (commit `37a967f`'s own comment: "now that calibrationFactor is fixed
+(1.11→1.02)") and is 1.02 now (`3be309c`, 2026-09-01, Brier-score sweep).
+Because edge = min(0.97, modelProb × calFactor) − margin-stripped Pinnacle,
+the change lowers every fixture's edge by 0.09 × modelProb, roughly 4-6
+points in the 45-65% band. The mean edge across the window fell from +5.6%
+to +1.2%.
+
+**Measured reproduction on the identical 7,214-fixture window**, edge
+reconstructed under 1.11 from each record's stored figures:
+
+| Cell | Under 1.11 (as on 2026-08-31) | Under 1.02 (now) |
+|---|---|---|
+| edge ≥8%, any prob | 3,025 | 1,914 |
+| edge ≥18%, any prob | 873 | 381 |
+| 15% / 45% | 880 | 457 |
+| 18% / 40% | 767 | 332 |
+| **18% / 45%** | **601 — +24.79%, CI [+9.1, +40.5], blocks +22.1 / +40.6 / +22.7 / +19.0** | **273 — +45.65%, CI [+15.4, +75.9], blocks +49.1 / +75.2 / +37.3 / +34.5** |
+| 18% / 50% | 461 | 220 |
+| 20% / 45% | 451 | 187 |
+
+The 1.11 column reproduces the 2026-08-31 transcript to the fixture
+(601 / 24.79 / [9.11, 40.46] / block-1 n=132 at +22.13%). So the answer to
+"why 273" is **(d)**: not a scoping error, not the tree-boundary
+restriction (0 fixtures in this window predate it), not contamination
+removal — the deployed rule's *effective* strictness moved on 2026-09-01
+when the calibration factor was corrected, and nobody re-counted. 18%
+under 1.02 corresponds to roughly 22-24% under 1.11. The 273 bets are a
+strict subset of the 601.
+
+**Consequence.** Two figures are both "true" and must be labelled by
+calibration factor from now on. The rule as *selected* (1.11) produced 601
+bets over 23 months at +24.8%; the rule as *deployed* (1.02) produces 273
+at +45.7% — higher ROI, half the volume, all four blocks positive in both
+cases. The 2026-09-01 re-sweep that was supposed to re-select under 1.02
+ran on the wrong population (Part D), so the deployed rule's threshold was
+never re-chosen under the corrected calibration on the intended window.
+Addendum 38 and 39 do that for the rule-12 leagues on a train/test basis.
+Whether 18% under 1.02 or a lower floor that restores the original volume is
+the better deployed rule is a decision, not a correction — see Part G.
+
 ### Part E — Fix applied: rule 16 and tree-boundary persistence
 
 - `gbdt-train.js` now persists `treeBoundary.{firstTestFixtureDate,
