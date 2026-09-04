@@ -9175,6 +9175,54 @@ app.get('/api/admin/walkforward-raw-bets', (_req, res) => {
   res.json({ totalN: bets.length, byBlock: bets.reduce((acc, b) => { acc[b.blockLabel] = (acc[b.blockLabel]||0)+1; return acc; }, {}) });
 });
 
+// ─── TEMP DIAGNOSTIC (2026-09-04, population trace) — remove after use ─────────
+// Reproduces commit a3795b9's population (the 2026-08-31 18%/45% validation) with
+// a count at every filter stage, and evaluates the 18/45 cell under BOTH the
+// calibration factor in force on 2026-08-31 (1.11, per commit 37a967f's own
+// comment) and today's 1.02. The 1.11 edge is reconstructed exactly from each
+// record: computeUnifiedEdge gives calProb = min(0.97, modelProb*cf) and edge =
+// calProb - stripped, so stripped = calProb_now - edge_now, and edge_111 =
+// min(0.97, modelProb*1.11) - stripped. No date restriction beyond a3795b9's own.
+app.get('/api/admin/diag-population-trace', async (_req, res) => {
+  try {
+    const { LEAGUE_CONFIG } = require('./scoring');
+    const DOMESTIC = new Set([39, 140, 135, 78, 61, 179, 88, 94, 41, 42, 40]);
+    const RULE12 = { 41: '2026-08-11T09:00:00Z', 42: '2026-08-11T09:00:00Z', 40: '2026-08-19T22:00:00Z' };
+    const settings = getSettings();
+    const cfNow = getCalFactorForLeague(settings, 39);
+    const matched = await computeMatchedEdgeFixtures();
+    const domesticAll = matched.filter(f => DOMESTIC.has(parseInt(f.leagueId, 10)));
+    const testOnly = domesticAll.filter(f => {
+      const lid = parseInt(f.leagueId, 10);
+      if (RULE12[lid]) return new Date(f.date) < new Date(RULE12[lid]);
+      const split = VALIDATED_SPLITS[lid];
+      return split ? new Date(f.date) >= new Date(split.testFrom) : false;
+    });
+    const concurrentFrom = new Date(Math.max(...Object.entries(VALIDATED_SPLITS).filter(([lid]) => DOMESTIC.has(parseInt(lid, 10))).map(([, sp]) => new Date(sp.testFrom).getTime())));
+    const concurrent = testOnly.filter(f => new Date(f.date) >= concurrentFrom).sort((a, b) => new Date(a.date) - new Date(b.date));
+    const withEdge111 = concurrent.map(f => { const calNow = Math.min(0.97, f.modelProb * cfNow); const stripped = calNow - f.edge; return { ...f, edge111: Math.min(0.97, f.modelProb * 1.11) - stripped }; });
+    const stats = arr => { const n = arr.length; if (!n) return { n: 0 }; const rets = arr.map(f => f.won ? f.pinnacleOdds - 1 : -1); const mean = rets.reduce((a, v) => a + v, 0) / n; const sd = n > 1 ? Math.sqrt(rets.reduce((a, v) => a + (v - mean) ** 2, 0) / (n - 1)) : 0; const h = 1.96 * sd / Math.sqrt(n); return { n, wins: arr.filter(f => f.won).length, roi: +(mean * 100).toFixed(2), ci95: [+((mean - h) * 100).toFixed(2), +((mean + h) * 100).toFixed(2)], absReturn: +(rets.reduce((a, v) => a + v, 0)).toFixed(1) }; };
+    const blocksOf = arr => { const size = Math.ceil(arr.length / 4); return [0, 1, 2, 3].map(i => arr.slice(i * size, (i + 1) * size)); };
+    const name = f => LEAGUE_CONFIG[parseInt(f.leagueId, 10)]?.name || String(f.leagueId);
+    const cell = (arr, edgeKey, e, p) => arr.filter(f => f[edgeKey] >= e && f.modelProb >= p);
+    const blocks = blocksOf(withEdge111);
+    const evalCell = (edgeKey, e, p) => ({ pooled: stats(cell(withEdge111, edgeKey, e, p)), perBlock: blocks.map(b => { const c = cell(b, edgeKey, e, p); const st = stats(c); return { range: b.length ? `${b[0].date.slice(0, 10)} to ${b[b.length - 1].date.slice(0, 10)}` : 'empty', n: st.n, roi: st.roi }; }),
+      byLeague: Object.fromEntries(Object.entries(cell(withEdge111, edgeKey, e, p).reduce((m, f) => { (m[name(f)] = m[name(f)] || []).push(f); return m; }, {})).sort().map(([k, v]) => [k, stats(v).n])) });
+    const gridN = edgeKey => [8, 10, 12, 15, 18, 20].map(e => ({ edge: e, byProbFloor: Object.fromEntries([['none', 0], ['>=40%', 0.40], ['>=45%', 0.45], ['>=50%', 0.50]].map(([k, p]) => [k, cell(withEdge111, edgeKey, e / 100, p).length])) }));
+    res.json({
+      note: 'TEMP — population trace for the 2026-08-31 validation vs tonight. Remove after use.',
+      calFactorNow: cfNow, calFactorOn2026_08_31: 1.11,
+      stages: { allMatchedEveryLeague: matched.length, domestic11: domesticAll.length, testOnlyPerLeague: testOnly.length, concurrentFrom: concurrentFrom.toISOString().slice(0, 10), concurrentWindow: { n: concurrent.length, from: concurrent[0]?.date.slice(0, 10), to: concurrent[concurrent.length - 1]?.date.slice(0, 10), addedSince2026_08_31: concurrent.filter(f => f.date > '2026-08-31').length,
+        byLeague: Object.fromEntries(Object.entries(concurrent.reduce((m, f) => { m[name(f)] = (m[name(f)] || 0) + 1; return m; }, {})).sort()) } },
+      cell18_45: { underCalFactor111_asOn2026_08_31: evalCell('edge111', 0.18, 0.45), underCalFactor102_today: evalCell('edge', 0.18, 0.45) },
+      gridCellCounts: { underCalFactor111: gridN('edge111'), underCalFactor102: gridN('edge') },
+      edgeShiftCheck: { meanEdgeNow: +(withEdge111.reduce((a, f) => a + f.edge, 0) / withEdge111.length).toFixed(4), meanEdge111: +(withEdge111.reduce((a, f) => a + f.edge111, 0) / withEdge111.length).toFixed(4) },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
 // Pools all 4 blocks' raw bet outcomes per (league, tier) — n, ROI, 95% CI via
 // normal approximation on per-bet returns (same method used for the Europa
 // League/Conference League splits, Addendum 20). Writes walk-forward-pooled.json,
