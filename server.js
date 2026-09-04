@@ -5028,7 +5028,9 @@ app.get('/api/league-performance', (req, res) => {
 // in-sample read, not a genuine held-out one, and the "confirmed negative"
 // 40-45% row — cited as a no-exceptions rule in
 // docs/real-money-strategy-proposal.md — inherits that caveat. Left unchanged
-// for the record; the walk-forward proxy grid is the clean per-league source.
+// for the record; the walk-forward proxy grid is free of this tree leakage
+// (each block trains strictly before its window) but see Addendum 37 Part G
+// item 7 for a separate defect in its current stored run.
 const HISTORICAL_TIER_BASELINE = {
   '<35%':   { n: 1,   roi: 2.61,   decisionGrade: false },
   '35-40%': { n: 249, roi: -0.134, decisionGrade: false },
@@ -9171,111 +9173,6 @@ app.get('/api/admin/walkforward-log', (_req, res) => {
 app.get('/api/admin/walkforward-raw-bets', (_req, res) => {
   const bets = readJSON('walk-forward-raw-bets.json') || [];
   res.json({ totalN: bets.length, byBlock: bets.reduce((acc, b) => { acc[b.blockLabel] = (acc[b.blockLabel]||0)+1; return acc; }, {}) });
-});
-
-// ─── TEMP DIAGNOSTIC (2026-09-04, Addendum 37) — remove after use ──────────────
-// Re-validates the 18%/45% domestic paper-money rule on the population that
-// actually validated it on 2026-08-31 (commit a3795b9's walk-forward robustness
-// scan): the 11 domestic leagues, test-only per league (VALIDATED_SPLITS testFrom
-// for the 8 rule-9 leagues, pre-cutoff for the 3 rule-12 leagues), restricted to
-// the concurrent-coverage window from the latest domestic testFrom (Serie A,
-// 2024-09-16) onward, 4 equal-COUNT chronological blocks. Scored by the current
-// live weights, so it also reports how many of those fixtures predate the scoring
-// model's tree boundary (rule 16) — expected 0 for the 2026-08-08 version. For
-// contrast it reproduces the 2026-09-01 re-sweep's population (commit 37a967f:
-// every matched domestic fixture with NO test-only or tree-boundary restriction)
-// split at the tree boundary, and adds a walk-forward-block read from
-// walk-forward-raw-bets.json (per-block proxy models, genuinely out-of-sample,
-// but a different calibration: no calFactor, per-block Platt).
-app.get('/api/admin/diag-paper-rule-revalidation', async (_req, res) => {
-  try {
-    const { DOMESTIC_LEAGUE_IDS_FOR_BLEND, LEAGUE_CONFIG } = require('./scoring');
-    const RULE12 = { 41: '2026-08-11T09:00:00Z', 42: '2026-08-11T09:00:00Z', 40: '2026-08-19T22:00:00Z' };
-    const tb = getModelTreeBoundary();
-    const matched = await computeMatchedEdgeFixtures();
-    const domesticAll = matched.filter(f => DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(parseInt(f.leagueId, 10)));
-    const testOnly = domesticAll.filter(f => {
-      const lid = parseInt(f.leagueId, 10);
-      if (RULE12[lid]) return new Date(f.date) < new Date(RULE12[lid]);
-      const split = VALIDATED_SPLITS[lid];
-      return split ? new Date(f.date) >= new Date(split.testFrom) : false;
-    });
-    const concurrentFrom = new Date(Math.max(...Object.entries(VALIDATED_SPLITS)
-      .filter(([lid]) => DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(parseInt(lid, 10)))
-      .map(([, sp]) => new Date(sp.testFrom).getTime())));
-    const concurrent = testOnly.filter(f => new Date(f.date) >= concurrentFrom).sort((a, b) => new Date(a.date) - new Date(b.date));
-    const rule = f => f.edge >= PAPER_MONEY_EDGE_MIN && f.modelProb >= PAPER_MONEY_PROB_MIN;
-
-    const stats = arr => {
-      const n = arr.length;
-      if (!n) return { n: 0, roi: null, ci95: null };
-      const rets = arr.map(f => f.won ? f.pinnacleOdds - 1 : -1);
-      const mean = rets.reduce((s, v) => s + v, 0) / n;
-      const sd = n > 1 ? Math.sqrt(rets.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1)) : 0;
-      const half = 1.96 * sd / Math.sqrt(n);
-      const dates = arr.map(f => f.date).filter(Boolean).sort();
-      return { n, wins: arr.filter(f => f.won).length, roi: +(mean * 100).toFixed(2),
-        ci95: [+((mean - half) * 100).toFixed(2), +((mean + half) * 100).toFixed(2)],
-        avgOdds: +(arr.reduce((s, f) => s + f.pinnacleOdds, 0) / n).toFixed(2),
-        from: dates[0]?.slice(0, 10), to: dates[dates.length - 1]?.slice(0, 10) };
-    };
-    const group = (arr, keyFn) => { const m = {}; for (const f of arr) { const k = keyFn(f); (m[k] = m[k] || []).push(f); } return Object.fromEntries(Object.entries(m).sort().map(([k, v]) => [k, stats(v)])); };
-    const name = f => LEAGUE_CONFIG[parseInt(f.leagueId, 10)]?.name || String(f.leagueId);
-    const season = f => { const d = new Date(f.date); const y = d.getUTCFullYear(); return d.getUTCMonth() >= 6 ? `${y}-${String(y + 1).slice(2)}` : `${y - 1}-${String(y).slice(2)}`; };
-
-    // (1) the real 2026-08-31 validation population, current calibration
-    const cell = concurrent.filter(rule);
-    const blockSize = Math.ceil(concurrent.length / 4);
-    const blocks = [0, 1, 2, 3].map(i => concurrent.slice(i * blockSize, (i + 1) * blockSize));
-    const perBlock = blocks.map(b => ({ range: b.length ? `${b[0].date.slice(0, 10)} to ${b[b.length - 1].date.slice(0, 10)}` : 'empty', poolN: b.length, ...stats(b.filter(rule)) }));
-
-    // (2) what the 2026-09-01 re-sweep actually pooled, split at the tree boundary
-    const resweep = domesticAll.filter(rule);
-
-    // (3) walk-forward block read
-    const wf = readJSON('walk-forward-raw-bets.json') || [];
-    const WF_DOMESTIC = new Set([39, 140, 135, 78, 61, 179, 88, 94]);
-    const tierGe45 = t => !!t && !['<35%', '35-40%', '40-45%'].includes(t);
-    const wfDom = wf.filter(b => WF_DOMESTIC.has(parseInt(b.leagueId, 10)) && tierGe45(b.tier) && !b.narrowCorrected);
-    const wfRead = minEdge => { const p = wfDom.filter(b => b.edge >= minEdge); return { pooled: stats(p), byBlock: group(p, b => b.blockLabel), byLeague: group(p, b => LEAGUE_CONFIG[parseInt(b.leagueId, 10)]?.name || b.leagueId) }; };
-
-    res.json({
-      note: 'TEMP — Addendum 37 re-validation of the 18%/45% domestic rule. Remove after use.',
-      scoringModel: tb, rule: { edgeMin: PAPER_MONEY_EDGE_MIN, probMin: PAPER_MONEY_PROB_MIN },
-      calibrationFactorInUse: { domestic: getCalFactorForLeague(getSettings(), 39) },
-      original2026_08_31_population: {
-        definition: 'domestic 11 leagues, test-only per league, concurrent window from latest domestic testFrom, 4 equal-count blocks',
-        concurrentFrom: concurrentFrom.toISOString().slice(0, 10), poolN: concurrent.length,
-        poolPreTreeBoundary: concurrent.filter(f => f.preTreeBoundary === true).length,
-        poolBoundaryUnknown: concurrent.filter(f => f.preTreeBoundary === null).length,
-        rule18_45: { pooled: stats(cell), perBlock, allBlocksPositive: perBlock.every(b => b.n > 0 && b.roi > 0),
-          byLeague: group(cell, name), bySeason: group(cell, season),
-          rule12LeaguesShare: stats(cell.filter(f => RULE12[parseInt(f.leagueId, 10)])), rule9LeaguesShare: stats(cell.filter(f => !RULE12[parseInt(f.leagueId, 10)])) },
-      },
-      resweep2026_09_01_population: {
-        definition: 'every matched domestic fixture, no test-only or tree-boundary restriction (commit 37a967f)',
-        poolN: domesticAll.length, rule18_45_all: stats(resweep),
-        preTreeBoundary_inSample: stats(resweep.filter(f => f.preTreeBoundary === true)),
-        postTreeBoundary: stats(resweep.filter(f => f.preTreeBoundary === false)),
-        postBoundary_butBeforeTestFrom_tuningTrain: stats(resweep.filter(f => f.preTreeBoundary === false && !testOnly.includes(f))),
-        postBoundary_testOnly_preConcurrent: stats(resweep.filter(f => f.preTreeBoundary === false && testOnly.includes(f) && new Date(f.date) < concurrentFrom)),
-      },
-      walkForwardBlocks: { definition: 'walk-forward-raw-bets.json, 8 rule-9 domestic leagues (rule-12 leagues were never in the blocks), tier>=45%, per-block proxy models; edge here has NO calFactor and per-block Platt, so 0.17 is shown as the rough calFactor-equivalent of the live 0.18', totalWfBets: wf.length, domesticTierGe45: wfDom.length, atEdge018: wfRead(0.18), atEdge017: wfRead(0.17),
-        // Why the two reads above are empty: the edge distribution of the same
-        // walk-forward bets, next to the live model's on the like-for-like
-        // population (8 rule-9 leagues, tier>=45%, test-only, concurrent window).
-        // Characterisation only — NOT a validation of any other threshold.
-        edgeDistribution: (() => {
-          const dist = arr => { const e = arr.map(b => Number(b.edge)).filter(Number.isFinite).sort((a, b) => a - b); const q = p => e.length ? +e[Math.min(e.length - 1, Math.floor(p * e.length))].toFixed(4) : null; return { n: e.length, nonNumericEdges: arr.length - e.length, max: e.length ? +e[e.length - 1].toFixed(4) : null, p99: q(0.99), p95: q(0.95), p90: q(0.90), median: q(0.5), countGe010: e.filter(v => v >= 0.10).length, countGe012: e.filter(v => v >= 0.12).length, countGe015: e.filter(v => v >= 0.15).length, countGe017: e.filter(v => v >= 0.17).length, countGe018: e.filter(v => v >= 0.18).length }; };
-          const wfByBlock = {}; for (const b of wfDom) (wfByBlock[b.blockLabel] = wfByBlock[b.blockLabel] || []).push(b);
-          const liveLike = concurrent.filter(f => WF_DOMESTIC.has(parseInt(f.leagueId, 10)) && f.modelProb >= 0.45 && f.edge >= 0.05);
-          const liveLikeAll = concurrent.filter(f => WF_DOMESTIC.has(parseInt(f.leagueId, 10)) && f.modelProb >= 0.45);
-          return { walkForward_tierGe45_posEdge5: dist(wfDom), walkForwardByBlock: Object.fromEntries(Object.entries(wfByBlock).sort().map(([k, v]) => [k, dist(v)])), live_sameLeagues_tierGe45_posEdge5_concurrent: dist(liveLike), live_sameLeagues_tierGe45_allEdges_concurrent: dist(liveLikeAll), narrowCorrectedBetsExcluded: wf.filter(b => b.narrowCorrected).length };
-        })() },
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message, stack: e.stack });
-  }
 });
 
 // Pools all 4 blocks' raw bet outcomes per (league, tier) — n, ROI, 95% CI via

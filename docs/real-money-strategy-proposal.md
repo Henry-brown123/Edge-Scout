@@ -124,9 +124,10 @@ diagnostic write-ups.
   decision-grade. *Caveat added 2026-09-04 (Addendum 37): that n=430 figure comes from
   `HISTORICAL_TIER_BASELINE`, scored by the 2026-07-25 model whose tree-training slice
   contained 24-60% of PL/La Liga/Bundesliga/Ligue 1/Serie A's test windows — a partly
-  in-sample read. The direction is corroborated by the clean walk-forward proxy (Addendum 21)
-  and the later tier screens, but the "decision-grade" label rests on a contaminated sample and
-  should be re-established on a clean one before being treated as settled.* This should be a structural exclusion in the betting logic, not a matter of not
+  in-sample read. The direction is corroborated by Addendum 21's published walk-forward figures
+  and the later tier screens (the currently *stored* walk-forward run has its own defect, Addendum 37
+  Part G item 7), but the "decision-grade" label rests on a contaminated sample and should be
+  re-established on a clean one before being treated as settled.* This should be a structural exclusion in the betting logic, not a matter of not
   green-flagging it — a future paper-trading run or an unreviewed model update could otherwise
   silently start recommending into it again.
 - **League One's remaining four green-flagged cells beyond 45-50%** (60-65%) and **League Two's

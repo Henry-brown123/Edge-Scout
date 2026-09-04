@@ -6138,3 +6138,253 @@ green-flag state changed. No new API-Sports or Odds API calls; all figures
 from `computeMatchedEdgeFixtures()` against the same already-collected,
 already-frozen matched-odds population every prior League One/Two figure
 comes from, strictly pre-cutoff.
+
+## Addendum 37 — Tree-boundary leakage audit: which "held-out" figures were actually held out, and the 18%/45% rule re-validated on its real population
+
+Triggered 2026-09-04 by the question "does the weekly retrain contaminate the
+rule-9 `VALIDATED_SPLITS` test windows?" The honest answer turned out to be
+"not yet, but something earlier did, and one re-validation was run on the
+wrong population." Investigation first, fixes second, everything scoped to
+the 11 domestic real-money-focus leagues; tournament competitions are noted
+in Part F and deliberately not actioned.
+
+### Part A — Mechanism (code-level)
+
+1. `models/gbdt.js` `predict()` names its weights argument `_weights` and
+   never reads it. It calls `loadModel()`, which reads the single file
+   `DATA_DIR/gbdt-weights.json` and reloads on mtime change. So
+   `computeMatchedEdgeFixtures()` — and every diagnostic built on it — scores
+   every historical fixture with **whatever weights are live at that moment**.
+   The `historical.optimisedWeights` it passes survive only as a
+   skip-if-missing guard and for the linear fallback.
+2. `models/gbdt-train.js` writes to that same path, overwriting. No version
+   archive exists anywhere. Nothing pins a historical fixture to the model
+   version that existed when it was played.
+3. The trainer's `splitData()` sorts by date and builds trees on the earliest
+   80%. The latest 20% fits Platt scaling (six parameters) and the quality
+   gates. The trainer has no notion of `VALIDATED_SPLITS`; its only
+   league-level exclusions are the four rule-12 date cutoffs (Championship,
+   League One, League Two, Carabao Cup).
+
+Consequence: a league's `testFrom` says nothing about whether the model
+*scoring* that window was trained on it. That depends entirely on where the
+scoring model's own tree boundary sits.
+
+### Part B — What actually leaked, by model version
+
+**2026-07-25 model** (live 2026-07-25 → 2026-08-08, i.e. while Addenda 5, 6,
+12 and 13 were computed). Trained on the checked-in 8,316-record snapshot
+(Addendum 9 Part B's arithmetic); its chronological 80% boundary is
+**2024-11-19** — inside every `testFrom` window. Overlap measured directly
+on that file:
+
+| League | Test-window fixtures in snapshot | In that model's tree-training slice |
+|---|---|---|
+| Ligue 1 | 526 | 318 (60%) |
+| La Liga | 570 | 317 (56%) |
+| Premier League | 571 | 301 (53%) |
+| Bundesliga | 463 | 245 (53%) |
+| Serie A | 342 | 81 (24%) |
+| Scottish Premiership, Eredivisie, Primeira Liga | 0 | 0 — leagues absent from the snapshot |
+
+So those addenda's figures for the five affected leagues were partly
+in-sample. Addendum 9 Part B's closing claim to the contrary was wrong for
+them and now carries a correction. Base-rate tuning discipline (train-only
+observed rates) was real throughout; the *scoring model* was not clean.
+
+**2026-08-08 model** (live now). Trained on the production pool (50,253
+records); tree boundary **2022-11-13** (Addendum 14 reproduced the trainer's
+split). Every `testFrom` is after 2023-11-03, so every test window sits in
+this model's reserved 20%: never used to build trees, used for the Platt fit
+and gates. Under today's weights the only contamination of any rule-9
+held-out figure is that Platt-level exposure.
+
+**Weekly retrains: zero deployed.** All four cycles since (2026-08-11, -17,
+-24, -31) trained a candidate on the growing pool and were rejected by the
+improvement gate (`versionChanged: false` each time). The gate compares the
+candidate's log-loss on its own newer test slice with the deployed model's
+figure on its old slice — not like-for-like, and the reason nothing has
+passed. The first candidate that does pass will have a boundary roughly one
+season later (train slice 40,202 → 43,418 records), i.e. into late 2023 —
+at or past Ligue 1's `testFrom`, approaching the Premier League's — and the
+boundary then moves later every week. Rule 16 (Part E) is what stops that
+silently re-contaminating the held-out figures.
+
+### Part C — Which reported figures are affected
+
+| Reading | Scored by | Status |
+|---|---|---|
+| Addenda 5, 6, 12, 13 per-league/tier figures | 2026-07-25 model | Partly in-sample for PL/La Liga/Bundesliga/Ligue 1/Serie A — caveated in place, figures unchanged |
+| `HISTORICAL_TIER_BASELINE` (Performance tab pooled Historical row; the "decision-grade 40-45% confirmed negative" cited by `real-money-strategy-proposal.md`) | 2026-07-25 model | Same caveat, in code and in the tab's scope note and in the proposal |
+| `CALIBRATION_AUDIT` "validated" notes for the 9 leagues | 2026-07-25 model | Split discipline described is real; the scoring caveat above applies |
+| Walk-forward proxy grid (Addendum 21) — the Performance tab's per-league Historical for the 10 in-sample leagues | per-block models trained strictly before each block | Free of tree leakage by construction — but its current stored run has a separate defect (no 5% edge threshold applied, see Part D / Part G item 7) |
+| `ev-calibration.json` per-league test-only figures | current live weights | Now rule-16 restricted (Part E); 0 fixtures dropped under the 2026-08-08 model |
+| 2026-09-01 audit diagnostics (lowConfidence A/B → `cd09bd2`; calibrationFactor Brier sweep → `3be309c`; PL edge-cap check; dataConfMin check) | 2026-08-08 model over the full matched population from 2020-06 | Populations straddle the 2022-11-13 boundary, so partly in-sample. **Not re-run here** — listed as an open item in Part G |
+
+### Part D — The 18%/45% rule: which population validated it, and re-validation
+
+**Trace (from git, not memory).** Two different runs exist:
+
+- **2026-08-31, commit `a3795b9`** (`diag-walkforward-robustness-scan`), the
+  run the rule was chosen on: 11 domestic leagues, test-only per league
+  (rule-9 leagues from their own `testFrom`, rule-12 leagues pre-cutoff),
+  cut to the concurrent-coverage window from the latest domestic `testFrom`
+  (Serie A, 2024-09-16), 4 equal-count chronological blocks. **Entirely
+  after the 2022-11-13 boundary — clean of tree contamination.**
+- **2026-09-01, commit `37a967f`** (`edge-floor-resweep`), the run that
+  reported n=986 / +33.1% / CI [18.1, 48.0] as "18/45 confirmed under the
+  corrected calibration": every matched domestic fixture from the 2020-06
+  closing-odds floor onward, **no** test-only, rule-12 or boundary
+  restriction, equal-time blocks. That mixed in fixtures the scoring model
+  had trained on and the base-rate tuning train portions. Its figure should
+  not be relied on; it is decomposed below to show what it pooled.
+
+**Re-validation, 2026-09-04** (temp `GET /api/admin/diag-paper-rule-revalidation`,
+removed after this addendum). Scoring model 2026-08-08 (boundary pinned
+2022-11-14T00:00Z), domestic calibrationFactor 1.02 (the corrected value),
+edge = calProb − margin-stripped Pinnacle, ROI on Pinnacle closing odds,
+95% CI by normal approximation on per-bet returns.
+
+*Population exactly as 2026-08-31.* Concurrent window from 2024-09-16, pool
+n=7,214, **0 fixtures before the tree boundary, 0 with unknown boundary.**
+
+| Read | n | wins | ROI | 95% CI |
+|---|---|---|---|---|
+| Pooled, edge ≥18% and modelProb ≥45% | 273 | 124 | **+45.7%** | [+15.4, +75.9] |
+| Block 1 (2024-09-16 → 2025-01-18) | 54 | 25 | +49.1% | [−21.2, +119.4] |
+| Block 2 (2025-01-18 → 2025-05-11) | 49 | 22 | +75.2% | [−28.9, +179.3] |
+| Block 3 (2025-05-11 → 2026-01-01) | 95 | 46 | +37.3% | [+4.9, +69.7] |
+| Block 4 (2026-01-01 → 2026-08-17) | 75 | 31 | +34.5% | [−23.4, +92.3] |
+| Season 2024-25 | 112 | 51 | +60.7% | [+2.8, +118.6] |
+| Season 2025-26 | 160 | 73 | +36.0% | [+4.1, +67.9] |
+| Rule-12 leagues only (Championship, League One, League Two) | 213 | 99 | +31.5% | [+3.7, +59.3] |
+| Rule-9 leagues only (the 8 top divisions) | 60 | 25 | +95.9% | [+0.4, +191.3] |
+
+All four blocks positive; pooled CI excludes zero. **The rule survives on its
+real, clean population under the corrected calibration.** Two things the
+pooled figure hides, both relevant to real money:
+
+- **Support is three-quarters lower-league.** 213 of 273 bets are
+  Championship (77, +20.8%), League Two (75, +57.4%) and League One
+  (61, +13.2%). The eight top divisions contribute 60 bets between them —
+  Premier League 15, La Liga 13, Ligue 1 8, Scottish Premiership 8,
+  Bundesliga 5, Serie A 5, Eredivisie 3, Primeira Liga 3 — with per-league
+  CIs that are all uninformative and a pooled CI whose lower bound is
+  +0.4%. The rule is well evidenced for the three rule-12 leagues and thinly
+  evidenced for every top division individually.
+- **Average odds are long** (3.13 pooled; 4.04 in the top divisions), so the
+  wide CIs are structural, not a data problem.
+
+*What the 2026-09-01 re-sweep pooled* (reproduced exactly: n=986, +33.08%,
+CI [18.13, 48.02] — confirming the reconstruction is faithful):
+
+| Slice | n | ROI | 95% CI |
+|---|---|---|---|
+| Before the tree boundary (in-sample for the scoring model), 2020-06 → 2022-11-12 | 479 | +19.7% | [+0.7, +38.7] |
+| After the boundary, all | 507 | +45.7% | [+22.9, +68.5] |
+| — of which after boundary but before the league's `testFrom` (tuning train) | 44 | +90.2% | [−35.6, +216.0] |
+| — of which test-only but before the concurrent window | 190 | +35.5% | [+4.2, +66.9] |
+| — of which the concurrent window (= the clean read above) | 273 | +45.7% | [+15.4, +75.9] |
+
+The in-sample half was *weaker*, not stronger — the contamination did not
+flatter the rule — but it was contamination all the same, and the +33.1%
+figure is retired in favour of the +45.7% / n=273 read above.
+
+*Walk-forward block read (genuinely out-of-sample, different calibration).*
+Bets from `walk-forward-raw-bets.json` (Addendum 21's four per-block proxy
+models, 2023-06 → 2025-06, 8 rule-9 domestic leagues; rule-12 leagues were
+never in the blocks), tier ≥45%, no calFactor, per-block Platt. **Zero of
+the 2,527 qualifying bets reach a 17% edge, let alone 18%.**
+
+**Why: the stored walk-forward bets have no usable edge at all.** Every one
+of the 6,108 records in `walk-forward-raw-bets.json` carries `edge: null`
+(the distribution check reported max/median/p99 all zero after numeric
+coercion, 0 non-numeric — i.e. every value is `null`, which `Number()` maps
+to 0). `walk-forward-log.json` shows why: all four blocks were run on
+2026-08-14 between 21:04 and 22:10 UTC — after Track A (`a18886f`,
+16:17 UTC that day) routed the block scorer through `computeUnifiedEdge`,
+and four days before the field-name bug in it was fixed (`a8a0cde`,
+2026-08-18, Addendum 24). With `edge` NaN, the scorer's `edge < 0.05`
+gate never fired, so every matched fixture was stored as a "posEdge" bet:
+the log's `posEdgeN` equals `matchedN` for every block (1,476 / 1,521 /
+1,564 / 1,547) instead of the 509 / 450 / 519 / 480 Addendum 21's table
+reports from the original 2026-08-11/12 run. `walk-forward-pooled.json`
+(built from this file by `POST /api/admin/walkforward-pool`, which applies
+no edge filter of its own) therefore pools **all** matched bets, and the
+per-league Historical cells it feeds sum to n=5,831 across the 10 reported
+leagues, not Addendum 21's 1,842. **The live "Historical (walk-forward
+proxy)" grid and Scout-card readings are currently a no-threshold reading
+mislabelled as a posEdge≥5% one.** Addendum 24 fixed the live scorer but
+did not re-run the blocks. Untouched here — it needs a full 4-block re-run
+(~20 minutes of training each, sequential) and is logged as Part G item 7.
+The walk-forward corroboration of 18%/45% is therefore **not available**
+from stored data; the clean live-model read above stands on its own.
+
+For scale, the live model's own edge distribution on the like-for-like
+population (8 rule-9 leagues, tier ≥45%, test-only, concurrent window):
+n=2,299, median −3.4%, p90 +10.9%, p95 +15.0%, p99 +21.5%, max +45.4%;
+60 fixtures at ≥18%. Characterisation only — not a validation of any other
+threshold.
+
+### Part E — Fix applied: rule 16 and tree-boundary persistence
+
+- `gbdt-train.js` now persists `treeBoundary.{firstTestFixtureDate,
+  lastTrainFixtureDate, trainPoolN}` in every weights file it writes.
+- `server.js` `getModelTreeBoundary()` reads it; the 2026-08-08 version,
+  which predates the field, is pinned in `KNOWN_TREE_BOUNDARIES` from
+  Addendum 14's reproduction (2022-11-14T00:00Z so "strictly after" holds).
+  Unknown version → `boundary: null`, which readers must surface.
+- `computeMatchedEdgeFixtures()` tags each record `preTreeBoundary`.
+- `runEvCalibration()` drops pre-boundary (or unknown-boundary) fixtures from
+  every `VALIDATED_SPLITS` held-out figure, reports `heldOutFrom` per league
+  and a `treeBoundary` block in `ev-calibration.json`.
+- `calibration-rules.md` rule 16; `model-versioning.md` "Tree boundary".
+
+Verified live 2026-09-04 11:57 UTC: `treeBoundary: { boundary:
+2022-11-14T00:00Z, source: pinned-addendum-14, droppedFromValidatedLeagues:
+0 }`; each rule-9 league's `heldOutFrom` equals its own `testFrom` (all
+later than the boundary); rule-12 leagues report `null` (their protection is
+the training cutoff, not this rule).
+
+### Part F — Tournament competitions (noted, not actioned)
+
+Champions League shows the same 2026-07-25-model overlap (170 of 283
+test-window fixtures, 60%); Europa League and Conference League were absent
+from that snapshot and are clean there. They share every code path in Part A
+and are covered by rule 16 mechanically, but no tournament-specific
+re-validation or fix was done or bundled here, per the standing
+domestic/tournament separation rule.
+
+### Part G — Open decisions (for a separate conversation)
+
+1. **Version archiving** (score historical fixtures with the version that
+   predates them): the 2026-07-25 weights survive in the repo's
+   `models/gbdt-weights.json`; the 2026-08-08 version exists only on the
+   Render disk. Nothing archives future versions yet.
+2. **Reversing the merge decision** (adding the ten `testFrom` dates to the
+   trainer's cutoff map): would permanently protect the windows at the cost
+   of several thousand recent training fixtures, and contradicts
+   `model-versioning.md`'s documented choice. Rule 16 makes this less urgent
+   than it looked — the windows are honestly labelled even as the boundary
+   moves.
+3. **The 2026-09-01 audit diagnostics** (Part C, last row) fed live changes
+   and were scored partly in-sample. Re-run each on the post-boundary
+   population before treating them as settled.
+4. **The improvement gate** rejects every candidate on a not-like-for-like
+   comparison; if that is unintended, the live model is frozen at
+   2026-08-08 indefinitely.
+5. **Thin top-division support for 18%/45%** — the rule is carried by the
+   three rule-12 leagues; the Live tier should be watched per league, not
+   pooled, before any top-division real-money promotion.
+6. **Walk-forward vs live edge scale** — cannot be compared until item 7 is
+   done, since the stored walk-forward edges are all null.
+7. **Re-run the four walk-forward blocks** (post-`a8a0cde`) and re-pool. The
+   current `walk-forward-raw-bets.json` / `walk-forward-pooled.json` were
+   produced inside the Addendum 24 NaN window: every stored edge is null,
+   no posEdge≥5% threshold was applied, and the live "Historical
+   (walk-forward proxy)" grid pools n=5,831 bets where Addendum 21 reported
+   1,842. Until then that grid is a no-threshold reading wearing a
+   posEdge≥5% label — rule 14 territory — and Addendum 21's published
+   figures are the last valid walk-forward read. Domestic and tournament
+   blocks share one pooled model per block, so a re-run is inherently
+   shared-path; the domestic/tournament reporting split happens at pooling.
