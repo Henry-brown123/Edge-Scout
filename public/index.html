@@ -2780,7 +2780,7 @@ function recommendedCard(b) {
       ? `<span class="badge badge-paper-only" title="Zero real-money stake — a manual per-league lock or legacy EV-calibration flag (classified domestic/tournament leagues are now rule-driven, see NO STAKE badge instead).">PAPER ONLY</span>`
       : `<span class="badge badge-paper">PAPER</span>`;
   const fakeMoneyBadge = isFakeMoney
-    ? `<span class="badge" style="background:rgba(148,163,184,.15);border:1px solid rgba(148,163,184,.35);color:var(--muted)" title="No stake — either a domestic fixture that missed the paper-money rule (edge ≥13% for Championship/League One/League Two on their own 0.93 calibration, ≥18% for the top divisions; 45%+ probability), a top-division fixture (observation tier until the Addendum 38 graduation trigger is met — the rule is still evaluated and logged), or a tournament/cup fixture (always no-stake until it earns promotion). Still scored and logged to build evidence for future review.">NO STAKE</span>`
+    ? `<span class="badge" style="background:rgba(148,163,184,.15);border:1px solid rgba(148,163,184,.35);color:var(--muted)" title="No stake — either a domestic fixture that missed the paper-money rule (edge ≥13% for Championship/League One/League Two on their own 0.93 calibration, ≥20% for the top divisions on their 1.06 calibration; 45%+ probability), a top-division fixture (observation tier until the Addendum 38 graduation trigger is met — the rule is still evaluated and logged), or a tournament/cup fixture (always no-stake until it earns promotion). Still scored and logged to build evidence for future review.">NO STAKE</span>`
     : '';
   // Carabao Cup (48) is permanently, wholly training-excluded; League One/Two (41/42)
   // are date-split (calibration-rules.md rule 12) — isTrainingHoldout is per-fixture
@@ -2891,7 +2891,7 @@ function watchingCard(w) {
       ? `<span class="badge badge-paper-only" title="Zero real-money stake — a manual per-league lock or legacy EV-calibration flag (classified domestic/tournament leagues are now rule-driven, see NO STAKE badge instead).">PAPER ONLY</span>`
       : `<span class="badge badge-paper">PAPER</span>`;
   const wFakeMoneyBadge = wIsFakeMoney
-    ? `<span class="badge" style="background:rgba(148,163,184,.15);border:1px solid rgba(148,163,184,.35);color:var(--muted)" title="No stake — either a domestic fixture that missed the paper-money rule (edge ≥13% for Championship/League One/League Two on their own 0.93 calibration, ≥18% for the top divisions; 45%+ probability), a top-division fixture (observation tier until the Addendum 38 graduation trigger is met — the rule is still evaluated and logged), or a tournament/cup fixture (always no-stake until it earns promotion). Will still be scored and logged to build evidence for future review.">NO STAKE</span>`
+    ? `<span class="badge" style="background:rgba(148,163,184,.15);border:1px solid rgba(148,163,184,.35);color:var(--muted)" title="No stake — either a domestic fixture that missed the paper-money rule (edge ≥13% for Championship/League One/League Two on their own 0.93 calibration, ≥20% for the top divisions on their 1.06 calibration; 45%+ probability), a top-division fixture (observation tier until the Addendum 38 graduation trigger is met — the rule is still evaluated and logged), or a tournament/cup fixture (always no-stake until it earns promotion). Will still be scored and logged to build evidence for future review.">NO STAKE</span>`
     : '';
   const wIsDateSplitLeague = [41, 42].includes(parseInt(w.leagueId, 10));
   const wHoldoutTooltip = wIsDateSplitLeague
@@ -6441,6 +6441,7 @@ function previewRealStake(label, modelProb, bookOdds, caveat, leagueId) {
   const lid = parseInt(leagueId, 10);
   const calFactor  = [1, 2, 3, 48, 848].includes(lid) ? 1.06
     : [40, 41, 42].includes(lid) ? 0.93
+    : [39, 140, 135, 78, 61, 179, 88, 94].includes(lid) ? 1.06
     : (STATE.settings?.calibrationFactor ?? 1.02);
   const realFrac   = STATE.settings?.realKellyFraction ?? 0.25;
   const realBr     = STATE.realBankroll?.current ?? 0;

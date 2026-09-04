@@ -7251,6 +7251,21 @@ is the same shape as the lower-league decision (one shared value inside the
 flat region), and it does not spend a per-league factor on the thinnest
 population in the set.
 
+### Part D — Adopted 2026-09-04 on explicit go-ahead: option 1
+
+Commit "Top-division calibration factor 1.06 and floor 20%/45% (Addendum 41,
+option 1)": `TOP_DIVISION_CALIBRATION_FACTOR = 1.06` as an explicit branch in
+`getCalFactorForLeague()` for ids 39/140/135/78/61/179/88/94, and
+`PAPER_MONEY_EDGE_MIN_TOP = 0.20` in `getPaperMoneyEdgeMin()` — factor and
+floor in one commit (rule 17). `settings.calibrationFactor` is now only the
+unclassified-league fallback. Eredivisie is pre-registered in
+`CALIBRATION_RECHECK_TRIGGERS` (individual factor/floor re-check when its
+rule-16-clean test-only population reaches 750; `GET
+/api/admin/calibration-factors` reports the live count and flags it due).
+Rule-12 leagues (0.93 / 13%) and the tournament factor untouched. The same
+endpoint now also derives calibration/staking cohorts from the resolved
+per-league configuration, which the Performance tab's cohort tables read.
+
 Temp endpoint `/api/admin/diag-top8-calibration` removed after use (commit
-below). `GET /api/admin/calibration-factors` remains as the permanent
+`2ad34c8`). `GET /api/admin/calibration-factors` remains as the permanent
 rule-17 sharing record.

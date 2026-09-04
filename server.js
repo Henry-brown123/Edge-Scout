@@ -530,7 +530,8 @@ function isFixtureTrainingHoldout(leagueId, kickoffIso) {
 // backtest, walk-forward robust across 4 independent time blocks, per-league
 // composition checked) as the population the user will review for real-money
 // promotion — not a permanent, unchangeable pair of numbers.
-const PAPER_MONEY_EDGE_MIN = 0.18;          // top-division domestic leagues, on their live 1.02 scale
+const PAPER_MONEY_EDGE_MIN = 0.18;          // unclassified domestic fallback, on the pooled settings scale (1.02)
+const PAPER_MONEY_EDGE_MIN_TOP = 0.20;      // the eight top divisions, on their live 1.06 scale (Addendum 41: same fixtures as 18% at 1.02, Jaccard 0.95)
 const PAPER_MONEY_EDGE_MIN_RULE12 = 0.13;   // Championship / League One / League Two, on their live 0.93 scale
 const PAPER_MONEY_PROB_MIN = 0.45;
 // 2026-09-04 (Addendum 40, adopted): the edge floor is expressed on each league
@@ -542,7 +543,10 @@ const PAPER_MONEY_PROB_MIN = 0.45;
 // the gate reads the live edge with a per-group floor. Rule 17: if either group's
 // factor changes again, its floor is re-expressed in the same step.
 function getPaperMoneyEdgeMin(leagueId) {
-  return RULE12_CALIBRATION_LEAGUE_IDS.has(parseInt(leagueId, 10)) ? PAPER_MONEY_EDGE_MIN_RULE12 : PAPER_MONEY_EDGE_MIN;
+  const lid = parseInt(leagueId, 10);
+  if (RULE12_CALIBRATION_LEAGUE_IDS.has(lid)) return PAPER_MONEY_EDGE_MIN_RULE12;
+  if (TOP_DIVISION_CALIBRATION_LEAGUE_IDS.has(lid)) return PAPER_MONEY_EDGE_MIN_TOP;
+  return PAPER_MONEY_EDGE_MIN;
 }
 // 2026-09-04 (Addendum 38, adopted): paper-with-stake is limited to the leagues
 // whose backtest support actually carries the rule — Championship / League One /
@@ -604,11 +608,41 @@ const TOURNAMENT_CALIBRATION_FACTOR = 1.06;
 // move together (rule 17).
 const RULE12_CALIBRATION_LEAGUE_IDS = new Set([40, 41, 42]);
 const RULE12_CALIBRATION_FACTOR = 0.93;
+// 2026-09-04 (Addendum 41, adopted): the eight top divisions get their own
+// explicit factor. Per-league Brier optima on their rule-16-clean populations:
+// Bundesliga 1.03, PL 1.04, La Liga 1.04, Ligue 1 1.05, SPL 1.06, Serie A 1.08,
+// Primeira Liga 1.09, Eredivisie 1.13; pooled 1.06 (n=5,497). Seven of the eight
+// sit within 0.00022 Brier of a shared 1.06 — the flat bottom of their curves —
+// so one shared value, same reasoning as the rule-12 group. Eredivisie is the
+// outlier (own optimum 1.13; 1.06 costs it 0.0011 but still beats the old 1.02
+// by 0.0017) and is pre-registered for an individual re-check — see
+// CALIBRATION_RECHECK_TRIGGERS. The pooled settings.calibrationFactor is now
+// only the fallback for an unclassified league. Sharing record per rule 17:
+// 39/140/135/78/61/179/88/94 share 1.06, each checked individually 2026-09-04.
+// Their edge floor is expressed on this scale — PAPER_MONEY_EDGE_MIN_TOP (20%),
+// Addendum 41 Part B — so the two move together.
+const TOP_DIVISION_CALIBRATION_LEAGUE_IDS = new Set([39, 140, 135, 78, 61, 179, 88, 94]);
+const TOP_DIVISION_CALIBRATION_FACTOR = 1.06;
+// Rule 17 tracked re-checks: an individual factor/floor re-check owed to a league
+// once its rule-16-clean test-only population (ev-calibration.json byLeague n,
+// which is exactly that population) reaches the stated size. Detection is
+// surfaced by GET /api/admin/calibration-factors; the action is manual.
+const CALIBRATION_RECHECK_TRIGGERS = [
+  { leagueId: 88, league: 'Eredivisie', reason: 'Addendum 41: own Brier optimum 1.13 vs shared 1.06 (cost 0.0011) on a 463-fixture basis', triggerMetric: 'ev-calibration byLeague n (rule-16-clean test-only)', triggerN: 750, registered: '2026-09-04' },
+];
 function getCalFactorForLeague(settings, leagueId) {
   const lid = parseInt(leagueId, 10);
   if (TOURNAMENT_LEAGUE_IDS.has(lid)) return TOURNAMENT_CALIBRATION_FACTOR;
   if (RULE12_CALIBRATION_LEAGUE_IDS.has(lid)) return RULE12_CALIBRATION_FACTOR;
+  if (TOP_DIVISION_CALIBRATION_LEAGUE_IDS.has(lid)) return TOP_DIVISION_CALIBRATION_FACTOR;
   return settings.calibrationFactor ?? 1.02;
+}
+function getCalFactorSource(leagueId) {
+  const lid = parseInt(leagueId, 10);
+  if (TOURNAMENT_LEAGUE_IDS.has(lid)) return 'TOURNAMENT_CALIBRATION_FACTOR';
+  if (RULE12_CALIBRATION_LEAGUE_IDS.has(lid)) return 'RULE12_CALIBRATION_FACTOR';
+  if (TOP_DIVISION_CALIBRATION_LEAGUE_IDS.has(lid)) return 'TOP_DIVISION_CALIBRATION_FACTOR';
+  return 'settings.calibrationFactor';
 }
 
 // Sum of funded bookmaker accounts — used only for the canGoLive() "3+ funded accounts"
@@ -9238,12 +9272,26 @@ app.get('/api/admin/calibration-factors', (_req, res) => {
     leagueId: lid, name: LEAGUE_CONFIG[id].name,
     tier: TOURNAMENT_LEAGUE_IDS.has(lid) ? 'tournament' : DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(lid) ? 'domestic' : 'unclassified',
     calibrationFactor: getCalFactorForLeague(settings, lid),
-    factorSource: TOURNAMENT_LEAGUE_IDS.has(lid) ? 'TOURNAMENT_CALIBRATION_FACTOR' : RULE12_CALIBRATION_LEAGUE_IDS.has(lid) ? 'RULE12_CALIBRATION_FACTOR' : 'settings.calibrationFactor',
+    factorSource: getCalFactorSource(lid),
     paperEdgeMin: DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(lid) ? getPaperMoneyEdgeMin(lid) : null,
     paperProbMin: DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(lid) ? PAPER_MONEY_PROB_MIN : null,
     paperStakeEligible: PAPER_STAKE_ELIGIBLE_LEAGUE_IDS.has(lid),
   }; });
-  res.json({ settingsCalibrationFactor: settings.calibrationFactor ?? null, rows });
+  // Cohorts: leagues grouped by their resolved calibration/staking configuration.
+  // Derived, never listed — a league added to an existing constant set lands in
+  // that cohort; a new factor/floor set forms a new cohort automatically.
+  const COHORT_LABELS = { RULE12_CALIBRATION_FACTOR: 'EFL lower divisions', TOP_DIVISION_CALIBRATION_FACTOR: 'Top divisions', TOURNAMENT_CALIBRATION_FACTOR: 'Tournaments & cups', 'settings.calibrationFactor': 'Unclassified (pooled setting)' };
+  const cohortMap = {};
+  for (const r of rows) {
+    const key = [r.tier, r.factorSource, r.calibrationFactor, r.paperEdgeMin, r.paperProbMin, r.paperStakeEligible].join('|');
+    if (!cohortMap[key]) cohortMap[key] = { id: key.replace(/[^a-z0-9]+/gi, '-').toLowerCase(), label: COHORT_LABELS[r.factorSource] || `${r.tier} @ ${r.calibrationFactor}`, tier: r.tier, calibrationFactor: r.calibrationFactor, factorSource: r.factorSource, paperEdgeMin: r.paperEdgeMin, paperProbMin: r.paperProbMin, paperStakeEligible: r.paperStakeEligible, leagueIds: [], leagues: [] };
+    cohortMap[key].leagueIds.push(r.leagueId); cohortMap[key].leagues.push(r.name);
+    r.cohortId = cohortMap[key].id;
+  }
+  const cohorts = Object.values(cohortMap).sort((a, b) => (b.paperStakeEligible - a.paperStakeEligible) || a.label.localeCompare(b.label));
+  const evByLeague = Object.fromEntries(((readJSON('ev-calibration.json') || {}).byLeague || []).map(l => [l.leagueId, l.n]));
+  const recheckTriggers = CALIBRATION_RECHECK_TRIGGERS.map(t => ({ ...t, currentN: evByLeague[t.leagueId] ?? null, due: (evByLeague[t.leagueId] ?? 0) >= t.triggerN }));
+  res.json({ settingsCalibrationFactor: settings.calibrationFactor ?? null, rows, cohorts, recheckTriggers });
 });
 
 // Pools all 4 blocks' raw bet outcomes per (league, tier) — n, ROI, 95% CI via
