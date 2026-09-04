@@ -6240,7 +6240,9 @@ silently re-contaminating the held-out figures.
   not be relied on; it is decomposed below to show what it pooled.
 
 **Re-validation, 2026-09-04** (temp `GET /api/admin/diag-paper-rule-revalidation`,
-removed after this addendum). Scoring model 2026-08-08 (boundary pinned
+removed after this addendum in commit `3763718`; the post-deploy live check
+returned 401 because the browser session had expired, so the removal is
+verified in code rather than by a logged-in 404). Scoring model 2026-08-08 (boundary pinned
 2022-11-14T00:00Z), domestic calibrationFactor 1.02 (the corrected value),
 edge = calProb − margin-stripped Pinnacle, ROI on Pinnacle closing odds,
 95% CI by normal approximation on per-bet returns.
@@ -6300,9 +6302,11 @@ the 2,527 qualifying bets reach a 17% edge, let alone 18%.**
 of the 6,108 records in `walk-forward-raw-bets.json` carries `edge: null`
 (the distribution check reported max/median/p99 all zero after numeric
 coercion, 0 non-numeric — i.e. every value is `null`, which `Number()` maps
-to 0). `walk-forward-log.json` shows why: all four blocks were run on
-2026-08-14 between 21:04 and 22:10 UTC — after Track A (`a18886f`,
-16:17 UTC that day) routed the block scorer through `computeUnifiedEdge`,
+to 0). `walk-forward-log.json` shows why: all four blocks were re-run on
+2026-08-14 between 21:04 and 22:10 UTC — deliberately, as a "fresh 4-block
+run" for Track A (`7ce092e` added the reset endpoint at 20:20 UTC) — after
+Track A (`a18886f`, 16:17 UTC that day) routed the block scorer through
+`computeUnifiedEdge`,
 and four days before the field-name bug in it was fixed (`a8a0cde`,
 2026-08-18, Addendum 24). With `edge` NaN, the scorer's `edge < 0.05`
 gate never fired, so every matched fixture was stored as a "posEdge" bet:
