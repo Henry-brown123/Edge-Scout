@@ -6391,3 +6391,170 @@ domestic/tournament separation rule.
    figures are the last valid walk-forward read. Domestic and tournament
    blocks share one pooled model per block, so a re-run is inherently
    shared-path; the domestic/tournament reporting split happens at pooling.
+
+## Addendum 38 — Should paper-with-stake narrow to Championship/League One/League Two, and is 18%/45% the right threshold for that population?
+
+Analysis and recommendation only (2026-09-04). No change to live scoring,
+gating or the three-tier pipeline was made. Follows directly from Addendum
+37 Part D: the re-validated 18%/45% read (n=273, +45.7%, CI [+15.4, +75.9])
+draws 213 of its 273 bets from the three rule-12 leagues; the eight top
+divisions contribute 60 between them.
+
+### Part A — Recommendation on the eight top divisions
+
+**Recommend narrowing paper-with-stake to Championship, League One and
+League Two, and moving the eight top divisions to the no-stake observation
+tier for now.** The reasoning is evidential, not a finding that the top
+divisions are bad:
+
+- The paper track record is the instrument the real-money promotion
+  decision rests on. It should contain only the population whose backtest
+  support exists. Sixty bets across eight leagues, at average odds of 4.04,
+  is a sample whose variance would dominate the paper P&L without being
+  able to settle anything.
+- Nothing is lost. Observation-tier records carry the same fields
+  (modelProb, edge, odds, result) and are excluded only from stake and
+  P&L. The per-league evidence accumulates identically either way.
+- The one real cost: observation-tier bets cannot be converted to real
+  money in the UI (`server.js` refuses it), so a top-division pick the
+  operator would have wanted to back for real would need the rule lifted
+  first. Given every bet is manually reviewed, that is a friction, not a
+  loss of information.
+
+**Mechanics, confirmed from the code, not implemented.** Stake eligibility
+is decided in `scoreOneFixture()` by `meetsPaperMoneyRule`, which requires
+`isDomesticTierLeague` (membership of `DOMESTIC_LEAGUE_IDS_FOR_BLEND`)
+plus the 18/45 test; `isFakeMoney` derives from it. The targeted change is
+a new `PAPER_STAKE_ELIGIBLE_LEAGUE_IDS = {40, 41, 42}` added as a third
+condition on `meetsPaperMoneyRule`. `DOMESTIC_LEAGUE_IDS_FOR_BLEND` itself
+must not change: it drives the domestic blend, the xG-proxy coefficients,
+the domestic calibration factor and the lowConfidence bypass
+(`server.js` ~2193), none of which should move. The Scout tab's
+"PAPER-MONEY WATCHING/LOCKED" counts and the green card highlight already
+key off `meetsPaperMoneyRule`, so they follow automatically; three UI
+strings need rewording (the "clears 18%+ edge / 45%+ prob" stat label and
+the two no-stake badge tooltips). Roughly ten lines of code plus a doc
+note.
+
+**Graduation trigger.** The honest problem is volume. At 18%/45% the
+concurrent window (2024-09-20 → 2026-05-24, about 1.7 seasons) produced:
+
+| League | Bets | Per season | Seasons to n=100 |
+|---|---|---|---|
+| Premier League | 15 | ~9 | ~11 |
+| La Liga | 13 | ~8 | ~13 |
+| Ligue 1 | 8 | ~5 | ~21 |
+| Scottish Premiership | 8 | ~5 | ~21 |
+| Bundesliga | 5 | ~3 | ~34 |
+| Serie A | 5 | ~3 | ~34 |
+| Eredivisie | 3 | ~2 | ~57 |
+| Primeira Liga | 3 | ~2 | ~57 |
+| **All eight pooled** | **60** | **~35** | **~3** |
+
+A per-league trigger at a decision-grade sample is therefore not reachable
+on live data for anything but the Premier League and La Liga, and even
+those take a decade. Proposed rule, in two tiers, evaluated once per
+season per rule 3:
+
+1. **Group trigger (realistic):** the eight leagues re-enter paper-with-
+   stake together when their pooled rule-16-clean, test-only population at
+   18%/45% reaches n ≥ 100 with the 95% CI lower bound above zero and no
+   season block negative — about three seasons from now — *and* no single
+   league is individually negative at n ≥ 30. Counting the backtest
+   population rather than live-scanner bets is deliberate: it is the same
+   fixtures (every priced fixture is scored either way) and it is the same
+   standard that admitted the rule-12 leagues.
+2. **Individual trigger:** a league may re-enter alone once its own
+   rule-16-clean population at 18%/45% reaches n ≥ 100 with CI lower bound
+   above zero. This mirrors how League Two's own figure was accepted
+   (Addendum 19: a single disciplined look at its full population), scaled
+   to what this rule's selectivity can produce.
+
+**Alternative, stated fairly:** keep the eight staked and review per
+league. Their pooled figure is positive, not negative (CI lower bound
++0.4%), and paper money is not real money. The recommendation above is
+still to narrow, because the paper record is what the real-money case is
+built on, and a positive-but-uninformative sample adds noise to that case
+rather than evidence.
+
+### Part B — Is 18%/45% the right threshold for the narrower population?
+
+**Design** (temp `GET /api/admin/diag-rule12-threshold-search`, removed
+after this addendum). Population: every matched Championship / League One /
+League Two fixture before each league's rule-12 cutoff (n=10,142). All
+three were excluded wholesale from the live model's 2026-08-08 training
+(League One/Two under rule 10 at the time; Championship not yet ingested),
+so the whole window is tree-clean; the date-only rule-16 tag marks 4,131
+of them pre-boundary and overstates exposure for these leagues
+specifically. Scoring model 2026-08-08, calibration factor 1.02.
+
+- **Train:** 2020-06-18 → 2024-09-15, n=6,984. A 9 × 4 grid (edge floors
+  10-24%, probability floors none/40/45/50%) was evaluated on train only,
+  each cell in four equal-count chronological blocks.
+- **Selection rule, fixed in code before any test figure existed:**
+  robust (all four train blocks positive at n ≥ 20) and train n ≥ 100,
+  maximise absolute return, ties to the higher edge floor; fallback if
+  nothing is robust: ≥ 3 positive blocks.
+- **Test:** 2024-09-16 → cutoff, n=3,158. The endpoint computed test
+  figures for exactly two cells — the train-selected one and the incumbent
+  — and never built a test grid.
+
+**Train result: nothing is robust, and the reason is a regime, not a
+threshold.** All 36 cells are negative in train block 1 (2020-06 → ~2021-
+08); 33 of 36 are negative in block 2; 33 are positive in block 3 and 35 in
+block 4. Whatever the floor, the rule-12 leagues lose in 2020-22 and win
+from 2023 on. The raw population is flat throughout (train all-fixture
+ROI: Championship +0.3%, League One −2.1%, League Two −0.3%).
+
+| Train cell | n | ROI | 95% CI | Blocks | Abs. return |
+|---|---|---|---|---|---|
+| 18% / 45% (incumbent) | 498 | +6.2% | [−7.1, +19.6] | −12.7, −2.5, +17.7, +31.5 | +31.0 |
+| 20% / 45% | 363 | +8.3% | [−8.0, +24.7] | −21.6, −2.5, +23.6, +43.9 | +30.3 |
+| 22% / 50% | 228 | +11.4% | [−10.1, +32.8] | −9.3, −4.0, +10.0, +58.3 | +25.9 |
+| 22% / none (train-selected, fallback rule) | 262 | +8.3% | [−12.3, +28.8] | −18.1, +11.6, +3.8, +43.3 | +21.7 |
+| 18% / none | 562 | +0.4% | [−12.3, +13.1] | −14.3, −1.6, +0.8, +23.7 | +2.2 |
+| 15% / 45% | 805 | −1.4% | [−11.1, +8.3] | −18.3, −9.4, +11.7, +16.4 | −11.1 |
+
+The 45% probability floor earns its place on train (18/45 +6.2% vs 18/none
++0.4% on more bets), and 18% is where absolute return peaks; the fallback
+rule picked 22%/none only because it was the sole cell with three positive
+blocks.
+
+**Single test look:**
+
+| Test cell | n | ROI | 95% CI | Blocks | Abs. return |
+|---|---|---|---|---|---|
+| 18% / 45% (incumbent) | 213 | +31.5% | [+3.7, +59.3] | +9.1, +49.5, +57.6, +0.2 | +67.1 |
+| 22% / none (train-selected) | 112 | +35.8% | [−11.4, +83.0] | +36.0, +58.5, +61.3, −4.0 | +40.1 |
+
+Per league at 18/45 on test: Championship 77 bets +20.8%, League One 61
++13.2%, League Two 75 +57.4%. At 22/none: 38 / 38 / 36 bets, +15.3% /
++14.4% / +79.9%.
+
+**Verdict: 18%/45% stands for the narrower population.** The disciplined
+search did not find a combination that beats it: the train-selected
+alternative has half the volume, a CI that spans zero, a negative final
+block, and 40% less absolute return on test. Higher ROI on fewer bets is
+not the objective; the original exploration chose 18/45 for sitting at the
+absolute-return peak, and that is where it still sits here.
+
+Two caveats that must travel with that verdict:
+
+1. **18/45 is not clean on this test window.** It was selected on the
+   2024-09-16 → concurrent window across all 11 leagues (Addendum 37 Part
+   D). Its test figure is therefore in-sample-selected; only the 22/none
+   figure is a genuinely fresh look. The comparison is still fair in the
+   direction that matters — the fresh alternative did not win.
+2. **The rule's support in these leagues is a 2023-onward phenomenon.**
+   Its own train record is +6.2% with a CI spanning zero and two negative
+   blocks. Whether 2020-22 reflects a market regime, thinner historical
+   stats for lower-league fixtures, or something else is not established
+   here — it is the same "flat earliest block" pattern noted when the rule
+   was first chosen, now visible cell-by-cell. It argues for watching the
+   live record per season, not for a different threshold.
+
+### Part C — Not done here
+
+No code, gating or settings change. If Part A is adopted, the change is
+scoped above; it should be its own small commit with the UI strings, and
+the Scout tab's paper-money counters re-verified against a live scan.
