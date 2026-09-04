@@ -532,6 +532,19 @@ function isFixtureTrainingHoldout(leagueId, kickoffIso) {
 // promotion — not a permanent, unchangeable pair of numbers.
 const PAPER_MONEY_EDGE_MIN = 0.18;
 const PAPER_MONEY_PROB_MIN = 0.45;
+// 2026-09-04 (Addendum 40, rule 17): the 18% floor above was selected (2026-08-31,
+// under 1.11) and re-validated (Addenda 37/38/39, under 1.02) on the POOLED
+// domestic calibration scale. Championship/League One/League Two now carry their
+// own live factor (RULE12_CALIBRATION_FACTOR = 0.93), which shrinks every edge
+// there by 0.09 × modelProb — so reading "edge >= 18%" off the live scale would
+// silently tighten the rule to roughly 23% on the scale it was validated on
+// (the same trap as the 1.11→1.02 change, Addendum 37 Part D2). Until the floor
+// is re-expressed on the corrected scale, the gate evaluates the rule on this
+// fixed 1.02 scale for those leagues (scoreOneFixture computes
+// edgeOnPaperRuleScale per candidate). Kelly sizing, displayed edge, EV and the
+// historical scorer all use the live factor. Remove this and switch the gate to
+// the live edge once Addendum 40's threshold is adopted.
+const PAPER_RULE_EDGE_SCALE_FACTOR = 1.02;
 
 // Legacy zero-stake paper records (locked 2026-08-08 → 2026-08-31, before the
 // three-tier redesign): a per-league paper_only flag zeroed their Kelly stake at
@@ -560,10 +573,33 @@ function isLegacyZeroStakeBet(b) {
 // future promotion review, not any live stake; a fixed, evidence-based constant is
 // proportionate, a whole parallel UI control isn't yet.
 const TOURNAMENT_CALIBRATION_FACTOR = 1.06;
+// 2026-09-04 (Addendum 40; calibration-rules.md rule 17): Championship / League
+// One / League Two get their own factor. The Brier sweep split by population
+// (Addendum 39 Part E, same method as the 2026-09-01 sweep) found the pooled
+// domestic 1.02 measurably overconfident on these three — 4-9pp across the
+// 55-75% bands — with a group optimum of 0.93 (0.93 / 0.96 / 0.91 individually).
+// One shared 0.93 rather than three values: the individual optima sit inside the
+// flat bottom of the group's Brier curve (0.92→0.24471, 0.93→0.24467,
+// 0.94→0.24469, 0.96→0.24487 — differences of 0.0002 at n≈3,300 are noise), and
+// the three are already managed as one rule-12 group everywhere else. Constant,
+// not Settings-tab exposed, same reasoning as the tournament factor. These three
+// leagues were never in the live model's training, so the sweep was fully
+// out-of-sample. Sharing record per rule 17: 40/41/42 share 0.93, each checked
+// individually 2026-09-04; every other domestic league shares
+// settings.calibrationFactor (1.02), last checked as a pooled top-division
+// population 2026-09-04 (optimum 1.06, not yet acted on).
+//
+// The paper-money gate deliberately does NOT move with this factor — see
+// PAPER_RULE_EDGE_SCALE_FACTOR: 18%/45% was selected and re-validated on the
+// 1.02 scale, so it keeps reading that scale for these leagues until the floor
+// is re-expressed on the corrected one (Addendum 40).
+const RULE12_CALIBRATION_LEAGUE_IDS = new Set([40, 41, 42]);
+const RULE12_CALIBRATION_FACTOR = 0.93;
 function getCalFactorForLeague(settings, leagueId) {
-  return TOURNAMENT_LEAGUE_IDS.has(parseInt(leagueId, 10))
-    ? TOURNAMENT_CALIBRATION_FACTOR
-    : (settings.calibrationFactor ?? 1.02);
+  const lid = parseInt(leagueId, 10);
+  if (TOURNAMENT_LEAGUE_IDS.has(lid)) return TOURNAMENT_CALIBRATION_FACTOR;
+  if (RULE12_CALIBRATION_LEAGUE_IDS.has(lid)) return RULE12_CALIBRATION_FACTOR;
+  return settings.calibrationFactor ?? 1.02;
 }
 
 // Sum of funded bookmaker accounts — used only for the canGoLive() "3+ funded accounts"
@@ -1666,11 +1702,16 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
       ? kelly(calProb, displayOdds, settings.paperKellyFraction, getAvailableBankroll('paper'))
       : { stake: 0, fraction: 0 };
 
+    // Edge on the scale the 18%/45% paper-money rule was validated on — differs
+    // from `edge` only for leagues whose live factor is not the pooled one.
+    const edgeOnPaperRuleScale = hasRealOdds
+      ? (Math.min(0.97, c.prob * PAPER_RULE_EDGE_SCALE_FACTOR) - impliedP)
+      : null;
     const entry = {
       market: 'match_outcome',
       bet: c.label, modelProb: c.prob, calibratedProb: calProb,
       bookOdds: hasRealOdds ? displayOdds : null, impliedProb: impliedP,
-      edge, successScore: finalScore, kelly: k,
+      edge, edgeOnPaperRuleScale, successScore: finalScore, kelly: k,
       ev: hasRealOdds ? (calProb * (displayOdds - 1) - (1 - calProb)) : null,
       pinnacleAvailable: !!pinnStripped,
       hasRealOdds,
@@ -1757,10 +1798,12 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
 
   const tierCandidate = pickTopCandidateByProbability(results);
 
+  // Gate reads edgeOnPaperRuleScale, not edge — see PAPER_RULE_EDGE_SCALE_FACTOR.
+  const ruleEdge = tierCandidate.edgeOnPaperRuleScale ?? tierCandidate.edge;
   const meetsPaperMoneyRule = isDomesticTierLeague
     && tierCandidate.hasRealOdds
-    && tierCandidate.edge != null
-    && tierCandidate.edge >= PAPER_MONEY_EDGE_MIN
+    && ruleEdge != null
+    && ruleEdge >= PAPER_MONEY_EDGE_MIN
     && tierCandidate.modelProb >= PAPER_MONEY_PROB_MIN;
 
   // A real market exists on the model's own favourite, but it either fails the
@@ -1965,6 +2008,7 @@ async function runMorningScan(leagueIds) {
               noMarketData,
               isFakeMoney:         scored.isFakeMoney,
               meetsPaperMoneyRule: scored.meetsPaperMoneyRule,
+              paperRuleEdge:       scored.tierCandidate?.edgeOnPaperRuleScale ?? null,
               isDomesticTierLeague: scored.isDomesticTierLeague,
               projectedScore:  noMarketData ? null : displayPick.successScore,
               projectedBet:    displayPick.bet,
@@ -2535,6 +2579,7 @@ async function runHourlyRescan() {
             noMarketData,
             isFakeMoney:         scored.isFakeMoney,
             meetsPaperMoneyRule: scored.meetsPaperMoneyRule,
+            paperRuleEdge:       scored.tierCandidate?.edgeOnPaperRuleScale ?? null,
             isDomesticTierLeague: scored.isDomesticTierLeague,
             projectedScore:   noMarketData ? null : displayPick.successScore,
             projectedBet:     displayPick.bet,
@@ -7265,7 +7310,9 @@ app.post('/api/bets/:id/convert-to-real', (req, res) => {
   const settings          = getSettings();
   const realBr            = getRealBankrollAccount().current;
   const kellyFrac          = settings.realKellyFraction ?? 0.25;
-  const calibrationFactor = settings.calibrationFactor ?? 1.02;
+  // Per-league factor (tournament / rule-12 / pooled), never the raw setting —
+  // this is a real-money Kelly path (2026-09-04, Addendum 40).
+  const calibrationFactor = getCalFactorForLeague(settings, bet.leagueId);
   // If a real stake is provided (the amount actually placed on the exchange, e.g.
   // liquidity-constrained or manually sized differently from the Kelly suggestion),
   // trust it as the authoritative record — this is a place for logging what really
@@ -9173,6 +9220,62 @@ app.get('/api/admin/walkforward-log', (_req, res) => {
 app.get('/api/admin/walkforward-raw-bets', (_req, res) => {
   const bets = readJSON('walk-forward-raw-bets.json') || [];
   res.json({ totalN: bets.length, byBlock: bets.reduce((acc, b) => { acc[b.blockLabel] = (acc[b.blockLabel]||0)+1; return acc; }, {}) });
+});
+
+// ─── TEMP DIAGNOSTIC (2026-09-04, Addendum 40) — remove after use ───────────────
+// (a) Scope check: the factor every tracked league resolves to, plus a per-record
+// check that rule-12 records were scored at 0.93 and other domestic at the setting.
+// (b) Interim-gate check: the 18/45 population on the fixed 1.02 rule scale must be
+// unchanged (273 in the window) while the live-scale count shrinks.
+// (c) The single disciplined look at the corrected scale: the identical 806-cell
+// grid as Addendum 39 (5-30% × 35-65%), window + pre-window, same pre-registered
+// picks (max abs return n>=30; max CI lower bound n>=100).
+app.get('/api/admin/diag-rule12-grid-corrected', async (_req, res) => {
+  try {
+    const { LEAGUE_CONFIG } = require('./scoring');
+    const RULE12 = { 41: '2026-08-11T09:00:00Z', 42: '2026-08-11T09:00:00Z', 40: '2026-08-19T22:00:00Z' };
+    const WINDOW_FROM = '2024-09-16T00:00:00Z';
+    const settings = getSettings();
+    const factorsByLeague = Object.fromEntries(Object.keys(LEAGUE_CONFIG).map(id => [`${id} ${LEAGUE_CONFIG[id].name}`, getCalFactorForLeague(settings, id)]));
+    const matched = await computeMatchedEdgeFixtures();
+    const lid = f => parseInt(f.leagueId, 10);
+    let r12Mismatch = 0, r12N = 0, otherMismatch = 0, otherN = 0;
+    for (const f of matched) { const cf = getCalFactorForLeague(settings, f.leagueId); const ok = Math.abs(f.calProb - Math.min(0.97, f.modelProb * cf)) < 1e-9; if (RULE12[lid(f)]) { r12N++; if (!ok) r12Mismatch++; } else { otherN++; if (!ok) otherMismatch++; } }
+    const pop = matched.filter(f => RULE12[lid(f)] && new Date(f.date) < new Date(RULE12[lid(f)])).sort((a, b) => new Date(a.date) - new Date(b.date));
+    const win = pop.filter(f => new Date(f.date) >= new Date(WINDOW_FROM)), pre = pop.filter(f => new Date(f.date) < new Date(WINDOW_FROM));
+    const edgeAt = (f, factor) => Math.min(0.97, f.modelProb * factor) - (f.calProb - f.edge);
+    const stats = arr => { const n = arr.length; if (!n) return { n: 0, roi: null, ciLow: null, ciHigh: null, abs: 0, thin: true }; const rets = arr.map(f => f.won ? f.pinnacleOdds - 1 : -1); const mean = rets.reduce((a, v) => a + v, 0) / n; const sd = n > 1 ? Math.sqrt(rets.reduce((a, v) => a + (v - mean) ** 2, 0) / (n - 1)) : 0; const h = 1.96 * sd / Math.sqrt(n); return { n, wins: arr.filter(f => f.won).length, roi: +(mean * 100).toFixed(1), ciLow: +((mean - h) * 100).toFixed(1), ciHigh: +((mean + h) * 100).toFixed(1), abs: +(rets.reduce((a, v) => a + v, 0)).toFixed(1), avgOdds: +(arr.reduce((a, f) => a + f.pinnacleOdds, 0) / n).toFixed(2), thin: n < 30 }; };
+    const EDGES = Array.from({ length: 26 }, (_, i) => 5 + i), PROBS = Array.from({ length: 31 }, (_, i) => 35 + i);
+    const passes = (f, e, p) => f.edge >= e / 100 - 1e-12 && f.modelProb >= p / 100 - 1e-12;
+    const grid = arr => Object.fromEntries(EDGES.map(e => [e, Object.fromEntries(PROBS.map(p => [p, stats(arr.filter(f => passes(f, e, p)))]))]));
+    const gWin = grid(win), gPre = grid(pre);
+    const flat = Object.entries(gWin).flatMap(([e, row]) => Object.entries(row).map(([p, c]) => ({ e: +e, p: +p, ...c })));
+    const bestAbs = flat.filter(c => c.n >= 30).sort((a, b) => (b.abs - a.abs) || (b.e - a.e))[0];
+    const bestRisk = flat.filter(c => c.n >= 100).sort((a, b) => (b.ciLow - a.ciLow) || (b.e - a.e))[0];
+    const top = (key, minN) => flat.filter(c => c.n >= minN).sort((a, b) => b[key] - a[key]).slice(0, 10).map(c => ({ e: c.e, p: c.p, n: c.n, roi: c.roi, ciLow: c.ciLow, abs: c.abs }));
+    const blocksOf = arr => { const size = Math.ceil(arr.length / 4); return [0, 1, 2, 3].map(i => arr.slice(i * size, (i + 1) * size)); };
+    const name = f => LEAGUE_CONFIG[lid(f)]?.name || String(f.leagueId);
+    const detail = (e, p) => ({ e, p, window: stats(win.filter(f => passes(f, e, p))), preWindow: stats(pre.filter(f => passes(f, e, p))),
+      windowBlocks: blocksOf(win).map(b => { const st = stats(b.filter(f => passes(f, e, p))); return { range: `${b[0].date.slice(0, 10)}→${b[b.length - 1].date.slice(0, 10)}`, n: st.n, roi: st.roi }; }),
+      preWindowBlocks: blocksOf(pre).map(b => { const st = stats(b.filter(f => passes(f, e, p))); return { range: `${b[0].date.slice(0, 10)}→${b[b.length - 1].date.slice(0, 10)}`, n: st.n, roi: st.roi }; }),
+      windowByLeague: Object.fromEntries(['Championship', 'League One', 'League Two'].map(L => [L, stats(win.filter(f => name(f) === L && passes(f, e, p)))])) });
+    // the interim rule's population, reconstructed on the 1.02 scale
+    const interim = win.filter(f => edgeAt(f, PAPER_RULE_EDGE_SCALE_FACTOR) >= 0.18 - 1e-12 && f.modelProb >= 0.45 - 1e-12);
+    const interimSet = new Set(interim.map(f => f.fixtureId));
+    res.json({
+      note: 'TEMP — Addendum 40. Remove after use.',
+      scope: { factorsByLeague, rule12Records: r12N, rule12CalProbMismatchesVs093: r12Mismatch, otherDomesticRecords: otherN, otherMismatchesVsTheirFactor: otherMismatch, settingsCalibrationFactor: settings.calibrationFactor ?? null, scoringModel: getModelTreeBoundary() },
+      interimGate: { definition: 'edge >= 18% on the fixed 1.02 scale AND modelProb >= 45%, window', n: interim.length, stats: stats(interim), liveScale18_45_n: win.filter(f => passes(f, 18, 45)).length,
+        liveScaleCellMatchingInterimPopulation: (() => { let best = null; for (let e = 5; e <= 30; e++) { const c = win.filter(f => passes(f, e, 45)); const overlap = c.filter(f => interimSet.has(f.fixtureId)).length; const jacc = overlap / (c.length + interim.length - overlap); if (!best || jacc > best.jaccard) best = { edge: e, n: c.length, overlapWithInterim: overlap, jaccard: +jacc.toFixed(3) }; } return best; })() },
+      population: { window: { from: win[0]?.date.slice(0, 10), to: win[win.length - 1]?.date.slice(0, 10), n: win.length }, preWindow: { from: pre[0]?.date.slice(0, 10), to: pre[pre.length - 1]?.date.slice(0, 10), n: pre.length } },
+      selectionRule: 'bestAbsReturn: max absolute return, n>=30; bestRiskAdjusted: max 95% CI lower bound, n>=100; chosen on the window grid, shown with pre-window figures. Fixed before any figure was computed.',
+      picks: { bestAbsReturn: bestAbs && detail(bestAbs.e, bestAbs.p), bestRiskAdjusted: bestRisk && detail(bestRisk.e, bestRisk.p), interimRuleOnLiveScale18_45: detail(18, 45) },
+      top10ByAbsReturn: top('abs', 30), top10ByCiLow: top('ciLow', 100),
+      gridWindow: gWin, gridPreWindow: gPre,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
 });
 
 // Pools all 4 blocks' raw bet outcomes per (league, tier) — n, ROI, 95% CI via
