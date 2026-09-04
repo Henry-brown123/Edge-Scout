@@ -9260,7 +9260,18 @@ app.get('/api/admin/diag-paper-rule-revalidation', async (_req, res) => {
         postBoundary_butBeforeTestFrom_tuningTrain: stats(resweep.filter(f => f.preTreeBoundary === false && !testOnly.includes(f))),
         postBoundary_testOnly_preConcurrent: stats(resweep.filter(f => f.preTreeBoundary === false && testOnly.includes(f) && new Date(f.date) < concurrentFrom)),
       },
-      walkForwardBlocks: { definition: 'walk-forward-raw-bets.json, 8 rule-9 domestic leagues (rule-12 leagues were never in the blocks), tier>=45%, per-block proxy models; edge here has NO calFactor and per-block Platt, so 0.17 is shown as the rough calFactor-equivalent of the live 0.18', totalWfBets: wf.length, domesticTierGe45: wfDom.length, atEdge018: wfRead(0.18), atEdge017: wfRead(0.17) },
+      walkForwardBlocks: { definition: 'walk-forward-raw-bets.json, 8 rule-9 domestic leagues (rule-12 leagues were never in the blocks), tier>=45%, per-block proxy models; edge here has NO calFactor and per-block Platt, so 0.17 is shown as the rough calFactor-equivalent of the live 0.18', totalWfBets: wf.length, domesticTierGe45: wfDom.length, atEdge018: wfRead(0.18), atEdge017: wfRead(0.17),
+        // Why the two reads above are empty: the edge distribution of the same
+        // walk-forward bets, next to the live model's on the like-for-like
+        // population (8 rule-9 leagues, tier>=45%, test-only, concurrent window).
+        // Characterisation only — NOT a validation of any other threshold.
+        edgeDistribution: (() => {
+          const dist = arr => { const e = arr.map(b => b.edge).sort((a, b) => a - b); const q = p => e.length ? +e[Math.min(e.length - 1, Math.floor(p * e.length))].toFixed(4) : null; return { n: e.length, max: e.length ? +e[e.length - 1].toFixed(4) : null, p99: q(0.99), p95: q(0.95), p90: q(0.90), median: q(0.5), countGe010: e.filter(v => v >= 0.10).length, countGe012: e.filter(v => v >= 0.12).length, countGe015: e.filter(v => v >= 0.15).length, countGe017: e.filter(v => v >= 0.17).length, countGe018: e.filter(v => v >= 0.18).length }; };
+          const wfByBlock = {}; for (const b of wfDom) (wfByBlock[b.blockLabel] = wfByBlock[b.blockLabel] || []).push(b);
+          const liveLike = concurrent.filter(f => WF_DOMESTIC.has(parseInt(f.leagueId, 10)) && f.modelProb >= 0.45 && f.edge >= 0.05);
+          const liveLikeAll = concurrent.filter(f => WF_DOMESTIC.has(parseInt(f.leagueId, 10)) && f.modelProb >= 0.45);
+          return { walkForward_tierGe45_posEdge5: dist(wfDom), walkForwardByBlock: Object.fromEntries(Object.entries(wfByBlock).sort().map(([k, v]) => [k, dist(v)])), live_sameLeagues_tierGe45_posEdge5_concurrent: dist(liveLike), live_sameLeagues_tierGe45_allEdges_concurrent: dist(liveLikeAll), narrowCorrectedBetsExcluded: wf.filter(b => b.narrowCorrected).length };
+        })() },
     });
   } catch (e) {
     res.status(500).json({ error: e.message, stack: e.stack });
