@@ -1012,7 +1012,7 @@ function _buildOddsMap(events) {
     const bestExchange = allExchanges.reduce((best, ex) =>
       !best || (ex.net[home] || 0) > (best.net[home] || 0) ? ex : best, null);
     if (ukPrices) {
-      map[key] = { ...ukPrices, _pinnacleStripped: pinnStripped, _pinnacleRaw: pinnPrices, _exchangeOdds: bestExchange, _allExchangeOdds: allExchanges };
+      map[key] = { ...ukPrices, _pinnacleStripped: pinnStripped, _pinnacleRaw: pinnPrices, _exchangeOdds: bestExchange, _allExchangeOdds: allExchanges, _commenceTime: ev.commence_time || null };
     }
   });
   return map;
@@ -1023,18 +1023,61 @@ function _buildOddsMap(events) {
 // cases and previously fell through to a synthetic odds fallback derived from the
 // model's own probability — silently fabricating "market" odds instead of using real
 // ones. Fall back to fuzzy name matching (teamsMatch, defined below) before giving up.
-function _lookupOddsEntry(oddsMap, homeName, awayName) {
+// Kickoff-aware selection shared by _lookupOddsEntry and _buildBookmakerMarket.
+// Addendum 42 (2026-09-04) replayed the old "first event where both names
+// fuzzy-match" rule against live feeds and caught it picking the wrong event:
+// Norrby IF v Varbergs BoIS (14 Sep) resolved to Norrby IF v Landskrona BoIS
+// (5 Sep) through the shared "BoIS" token. The same shared-token class exists
+// in 3. Liga (Fortuna Koln / Fortuna Dusseldorf), Segunda (Real Valladolid /
+// Real Sociedad II) and Serie B (Virtus Entella / Vicenza Virtus). When the
+// caller knows the fixture's kickoff, the candidate nearest that kickoff wins,
+// and only within ODDS_KICKOFF_TOLERANCE_MS — a lone candidate on a different
+// day is the wrong event, not a lenient match, so it is rejected and the
+// fixture falls through to hasRealOdds=false (a skip, never a wrong price).
+// Without a kickoff the pre-existing single-candidate acceptance is kept, but
+// two or more candidates are now ambiguous rather than "first wins". Ties at
+// the same kickoff (two shared-token fixtures at the same time) break on name
+// match strength: exact normalised names beat substring, substring beats a
+// shared token.
+const ODDS_KICKOFF_TOLERANCE_MS = 3 * 60 * 60 * 1000;
+function _matchStrength(a, b) {
+  const na = resolveTeamAlias(normaliseTeam(a)), nb = resolveTeamAlias(normaliseTeam(b));
+  if (na === nb) return 3;
+  if (na.includes(nb) || nb.includes(na)) return 2;
+  return 1;
+}
+function _pickByKickoff(candidates, kickoffIso, getCommence, getStrength) {
+  if (!candidates.length) return null;
+  const ko = kickoffIso ? Date.parse(kickoffIso) : NaN;
+  if (Number.isFinite(ko)) {
+    let best = null, bestDelta = Infinity, bestStrength = -1;
+    for (const c of candidates) {
+      const t = Date.parse(getCommence(c) || '');
+      if (!Number.isFinite(t)) continue;
+      const d = Math.abs(t - ko), st = getStrength(c);
+      if (d < bestDelta || (d === bestDelta && st > bestStrength)) { best = c; bestDelta = d; bestStrength = st; }
+    }
+    return best && bestDelta <= ODDS_KICKOFF_TOLERANCE_MS ? best : null;
+  }
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+function _lookupOddsEntry(oddsMap, homeName, awayName, kickoffIso = null) {
   const exactKey = `${homeName}|${awayName}`;
   if (oddsMap[exactKey]) return oddsMap[exactKey];
 
-  let matchedKey = null;
+  const candidates = [];
   for (const key of Object.keys(oddsMap)) {
     const sep = key.indexOf('|');
     if (sep === -1) continue;
     const h = key.slice(0, sep), a = key.slice(sep + 1);
-    if (teamsMatch(h, homeName) && teamsMatch(a, awayName)) { matchedKey = key; break; }
+    if (teamsMatch(h, homeName) && teamsMatch(a, awayName)) candidates.push({ key, h, a, entry: oddsMap[key] });
   }
-  if (!matchedKey) return {};
+  const pick = _pickByKickoff(candidates, kickoffIso,
+    c => c.entry._commenceTime,
+    c => _matchStrength(c.h, homeName) + _matchStrength(c.a, awayName));
+  if (!pick) return {};
+  const matchedKey = pick.key;
 
   const entry = oddsMap[matchedKey];
   const sep = matchedKey.indexOf('|');
@@ -1137,13 +1180,18 @@ async function fetchOddsForLeague(sport, fallbackSport = null) {
 // keeping whichever 8 bookmakers happened to come first in Odds API's
 // response order, with nothing guaranteeing Pinnacle -- or any specific
 // book -- was among them.
-function _buildBookmakerMarket(sport, homeName, awayName) {
+function _buildBookmakerMarket(sport, homeName, awayName, kickoffIso = null) {
   const events = _oddsRawCache[sport] || [];
   // Fuzzy fallback (same teamsMatch() every other odds consumer uses) --
   // this was exact-string-only, stricter than the rest of the codebase for
-  // no reason tied to this function's purpose.
+  // no reason tied to this function's purpose. Kickoff-aware since Addendum 42
+  // (see _pickByKickoff) so this snapshot can never come from a different
+  // event than the price the bet was scored against.
   let ev = events.find(e => e.home_team === homeName && e.away_team === awayName);
-  if (!ev) ev = events.find(e => teamsMatch(e.home_team, homeName) && teamsMatch(e.away_team, awayName));
+  if (!ev) ev = _pickByKickoff(
+    events.filter(e => teamsMatch(e.home_team, homeName) && teamsMatch(e.away_team, awayName)),
+    kickoffIso, e => e.commence_time,
+    e => _matchStrength(e.home_team, homeName) + _matchStrength(e.away_team, awayName));
   if (!ev) return [];
   const allBooks = (ev.bookmakers || []).map(bm => {
     const mkt = bm.markets?.find(m => m.key === 'h2h');
@@ -1177,7 +1225,7 @@ function persistOddsSnapshot(fix, scored, sport, stage, leagueId, leagueName, se
     const get       = label => results.find(r => r.bet === label);
     const hw = get('Home Win'), dr = get('Draw'), aw = get('Away Win');
 
-    const market = _buildBookmakerMarket(sport, scored.homeName, scored.awayName);
+    const market = _buildBookmakerMarket(sport, scored.homeName, scored.awayName, fix.fixture?.date);
     const bestBook = market[0] || { homeOdds: hw?.bookOdds ?? null, drawOdds: dr?.bookOdds ?? null, awayOdds: aw?.bookOdds ?? null };
 
     const record = {
@@ -1668,7 +1716,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   // directional labels — "Panama Win" not "Home Win" when neither team is at home.
   const neutralLabels = competitionPhase === 'group_stage' || competitionPhase === 'knockout';
 
-  const bookOdds   = _lookupOddsEntry(oddsMap, homeName, awayName);
+  const bookOdds   = _lookupOddsEntry(oddsMap, homeName, awayName, fix.fixture?.date);
   const lookup     = { 'Home Win': homeName, Draw: 'Draw', 'Away Win': awayName };
   const candidates = [
     { label: 'Home Win', displayLabel: neutralLabels ? `${homeName} Win` : null, prob: probs.home },
@@ -2325,7 +2373,7 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
                             best.bookOdds, kellyFrac, bankrollForKelly);
     const br    = getBankroll();
     const betId = uuidv4();
-    const routingOddsEntry = _lookupOddsEntry(oddsMap, scored.homeName, scored.awayName);
+    const routingOddsEntry = _lookupOddsEntry(oddsMap, scored.homeName, scored.awayName, fix.fixture?.date);
     const computedStake = scored.isFakeMoney ? 0
       : isReal ? roundStake(realKelly.stake) : roundStake(best.kelly.stake);
     const bet   = {
@@ -2402,7 +2450,7 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
         settings,
       }),
       // Per-bookmaker odds snapshot at lock time (for bookmaker selection UI)
-      oddsSnapshot: _buildBookmakerMarket(meta.sport || 'soccer_epl', scored.homeName, scored.awayName),
+      oddsSnapshot: _buildBookmakerMarket(meta.sport || 'soccer_epl', scored.homeName, scored.awayName, fix.fixture?.date),
       // Three-state placement flow. Real-money bets require manual confirmation via
       // /api/bets/:id/confirm-placement (there's a real bookmaker to record). Paper bets
       // have nothing to physically place, so they auto-confirm here using the odds/stake
@@ -7286,7 +7334,7 @@ app.post('/api/bets/:id/reroute', async (req, res) => {
         }).then(r => { _oddsRawCache[meta.sport] = r.data || []; return r.data || []; });
     const oddsMap = _buildOddsMap(events);
     const [home, away] = (bet.fixture || '').split(' vs ');
-    const entry   = _lookupOddsEntry(oddsMap, home, away);
+    const entry   = _lookupOddsEntry(oddsMap, home, away, bet.kickoff);
     const outcomeName = bet.bet === 'Home Win' ? home
                       : bet.bet === 'Away Win' ? away
                       : 'Draw';
