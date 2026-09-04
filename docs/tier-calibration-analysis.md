@@ -6480,7 +6480,8 @@ rather than evidence.
 ### Part B — Is 18%/45% the right threshold for the narrower population?
 
 **Design** (temp `GET /api/admin/diag-rule12-threshold-search`, removed
-after this addendum). Population: every matched Championship / League One /
+after this addendum in commit `85ab355`; confirmed live via a logged-in 404
+check at 2026-09-04 13:07 UTC). Population: every matched Championship / League One /
 League Two fixture before each league's rule-12 cutoff (n=10,142). All
 three were excluded wholesale from the live model's 2026-08-08 training
 (League One/Two under rule 10 at the time; Championship not yet ingested),
