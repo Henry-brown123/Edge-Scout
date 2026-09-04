@@ -6617,3 +6617,295 @@ Two caveats that must travel with that verdict:
 No code, gating or settings change. If Part A is adopted, the change is
 scoped above; it should be its own small commit with the UI strings, and
 the Scout tab's paper-money counters re-verified against a live scan.
+
+## Addendum 39 — Championship / League One / League Two: full 1% edge × probability grid, layered floors, calibration re-check, and recommendation (consolidated)
+
+Analysis only, 2026-09-04. Supersedes the Stage 1–3 work started earlier the
+same day (same three leagues, same split) and folds it in. Nothing in live
+scoring, gating or settings was changed. Tournament competitions and the
+eight top divisions are excluded throughout.
+
+### Part A — Calibration confirmation (read first)
+
+Every edge in this addendum was computed with the domestic calibration factor
+**1.02**, read live at run time, not cached:
+
+- `computeMatchedEdgeFixtures()` calls `getSettings()` at entry
+  (`server.js:8347`), which reads `settings.json` from disk on every call.
+- Per record it calls `getCalFactorForLeague(settings, leagueId)`
+  (`server.js:8416`) — `settings.calibrationFactor ?? 1.02` for domestic ids.
+- The factor is applied inside `computeUnifiedEdge()` (`server.js:8434`):
+  `calProb = min(0.97, modelProb × factor)`, `edge = calProb − margin-stripped Pinnacle`.
+- The run reported `storedSettingsCalibrationFactor: 1.02`,
+  `effectiveDomesticCalFactor: 1.02`, and **0 mismatches** when every one of
+  the 10,142 records' stored `calProb` was checked against
+  `min(0.97, modelProb × 1.02)`. The only cached object in this path is the
+  raw scored-record file; no edge is ever cached.
+
+Scoring model 2026-08-08 (tree boundary 2022-11-13). All three leagues were
+excluded wholesale from that training run, so every fixture here is
+tree-clean regardless of date.
+
+**But 1.02 is not the right factor for these leagues — see Part E.** The
+grid below is therefore on the *deployed* edge scale, which is what the live
+rule uses, not on a scale that is calibrated for this population.
+
+### Part B — Population and discipline
+
+Two periods, identical filters (pre-cutoff fixtures of leagues 40/41/42 with
+Pinnacle closing odds):
+
+| Period | Range | n | Role |
+|---|---|---|---|
+| Window | 2024-09-16 → 2026-08-17 (23 months) | 3,158 | The window 18/45 was selected on (Addendum 37 D2) and the *test* window of Addendum 38 and of Part D below |
+| Pre-window | 2020-06-18 → 2024-09-15 | 6,984 | Out-of-window check for anything highlighted from the window |
+
+The grid was computed on both. The two highlighted cells in Part D were
+chosen by rules fixed in code before any figure existed (max absolute return
+at n≥30; max 95% CI lower bound at n≥100), on the window grid, and are shown
+with their pre-window figures. **Honesty note:** the window has now been
+looked at four times this week (the 2026-08-31 scan, Addendum 38, the Part D
+layered search, and this grid). Anything chosen from it is in-sample-selected;
+the pre-window column and the four equal-count blocks are the only
+out-of-selection evidence in this document. Thin cells (n<30, rule 6) are
+marked \*.
+
+Full 806-cell grid (both periods, with CIs): `docs/addendum-39-rule12-grid.csv`.
+
+### Part C — The grid (n / ROI / absolute return in units of 1 stake)
+
+**C1. Window (2024-09-16 → 2026-08-17), edge floor × probability floor:**
+
+| Edge ≥ | prob ≥35% | prob ≥40% | prob ≥45% | prob ≥50% | prob ≥55% | prob ≥60% | prob ≥65% |
+|---|---|---|---|---|---|---|---|
+| 5% | 1515 / +3.4% / +50.9 | 1299 / +5% / +65 | 981 / +7.4% / +73 | 704 / +10% / +70.3 | 448 / +5% / +22.5 | 286 / +4.4% / +12.5 | 161 / +9.6% / +15.4 |
+| 6% | 1382 / +4.2% / +57.5 | 1188 / +6.1% / +72.8 | 910 / +8.7% / +78.8 | 660 / +9.9% / +65.2 | 427 / +4.7% / +20 | 275 / +3.3% / +9 | 157 / +10.5% / +16.5 |
+| 7% | 1249 / +4.7% / +59.1 | 1080 / +6.8% / +72.9 | 830 / +10.2% / +84.6 | 613 / +11.1% / +67.8 | 400 / +6.3% / +25.4 | 261 / +3.4% / +8.9 | 149 / +9.2% / +13.7 |
+| 8% | 1120 / +4.1% / +45.8 | 976 / +7.1% / +68.9 | 756 / +11% / +82.9 | 569 / +11.9% / +67.9 | 378 / +7% / +26.6 | 250 / +4.2% / +10.4 | 143 / +9.6% / +13.7 |
+| 9% | 998 / +5.2% / +52 | 872 / +9.2% / +79.8 | 689 / +11.8% / +81.6 | 524 / +11.6% / +60.9 | 351 / +6.6% / +23.2 | 233 / +3.7% / +8.6 | 133 / +8.8% / +11.8 |
+| 10% | 881 / +3.9% / +34.7 | 777 / +7.8% / +60.3 | 616 / +10.6% / +65.2 | 469 / +11.4% / +53.5 | 320 / +6.1% / +19.6 | 208 / +4.1% / +8.5 | 118 / +10.3% / +12.1 |
+| 11% | 770 / +9.2% / +70.7 | 680 / +12.6% / +85.7 | 556 / +14.4% / +80.3 | 429 / +14.3% / +61.2 | 293 / +8.7% / +25.4 | 191 / +7.5% / +14.4 | 109 / +12.5% / +13.6 |
+| 12% | 680 / +12.9% / +88 | 604 / +15.3% / +92.3 | 503 / +16.9% / +84.9 | 391 / +16.4% / +64 | 273 / +11.7% / +31.9 | 176 / +9% / +15.8 | 100 / +16.4% / +16.4 |
+| 13% | 597 / +13.1% / +78 | 537 / +16.4% / +88.3 | 452 / +19.2% / +86.8 | 361 / +19.1% / +68.9 | 255 / +14.2% / +36.2 | 164 / +10% / +16.4 | 93 / +14.9% / +13.9 |
+| 14% | 510 / +12.8% / +65.1 | 468 / +16.3% / +76.2 | 398 / +20.9% / +83.2 | 318 / +17.9% / +57.1 | 227 / +12.6% / +28.6 | 147 / +7.1% / +10.5 | 83 / +15% / +12.5 |
+| 15% | 424 / +13% / +55.1 | 389 / +17.3% / +67.1 | 344 / +21.2% / +73 | 283 / +17.9% / +50.7 | 205 / +11.4% / +23.4 | 135 / +4.5% / +6.1 | 80 / +13.2% / +10.6 |
+| 16% | 363 / +15.6% / +56.5 | 334 / +20% / +66.9 | 298 / +23.8% / +70.8 | 249 / +20.7% / +51.6 | 179 / +15.7% / +28.2 | 121 / +6.6% / +7.9 | 72 / +14.7% / +10.6 |
+| 17% | 306 / +16.4% / +50.2 | 286 / +21.3% / +60.9 | 259 / +24.3% / +63 | 223 / +19.8% / +44.1 | 163 / +16.3% / +26.5 | 113 / +8.7% / +9.8 | 68 / +21.5% / +14.6 |
+| 18% | 246 / +21.5% / +52.9 | 234 / +25.6% / +59.9 | 213 / +31.5% / +67.1 | 186 / +24.4% / +45.4 | 134 / +20.7% / +27.7 | 96 / +8.9% / +8.5 | 59 / +19.8% / +11.7 |
+| 19% | 204 / +24.3% / +49.6 | 194 / +28.1% / +54.6 | 176 / +33.4% / +58.8 | 162 / +28.6% / +46.3 | 119 / +23.5% / +27.9 | 89 / +6.4% / +5.7 | 55 / +18.8% / +10.4 |
+| 20% | 171 / +24.3% / +41.6 | 165 / +25.8% / +42.5 | 150 / +29.2% / +43.7 | 139 / +22.8% / +31.7 | 108 / +23.2% / +25.1 | 81 / +5.7% / +4.6 | 49 / +14.8% / +7.2 |
+| 21% | 136 / +27% / +36.7 | 133 / +29.8% / +39.7 | 124 / +31.4% / +38.9 | 113 / +23.8% / +26.9 | 91 / +23.7% / +21.6 | 72 / +11.7% / +8.4 | 43 / +18.8% / +8.1 |
+| 22% | 112 / +35.8% / +40.1 | 110 / +38.3% / +42.1 | 105 / +39.8% / +41.7 | 97 / +27.6% / +26.7 | 79 / +29.9% / +23.6 | 63 / +11.9% / +7.5 | 40 / +14.3% / +5.7 |
+| 23% | 96 / +41.2% / +39.6 | 95 / +42.7% / +40.6 | 91 / +43.1% / +39.2 | 84 / +27.7% / +23.2 | 69 / +29.5% / +20.3 | 54 / +10.6% / +5.7 | 35 / +20.3% / +7.1 |
+| 24% | 76 / +52.8% / +40.1 | 76 / +52.8% / +40.1 | 73 / +51.7% / +37.7 | 70 / +25.4% / +17.8 | 60 / +35% / +21 | 48 / +12.9% / +6.2 | 32 / +19.7% / +6.3 |
+| 25% | 62 / +60% / +37.2 | 62 / +60% / +37.2 | 59 / +59.1% / +34.9 | 57 / +24.4% / +13.9 | 49 / +30.9% / +15.1 | 37 / +0.8% / +0.3 | 26 / +0.9% / +0.2 \* |
+| 26% | 49 / +66% / +32.3 | 49 / +66% / +32.3 | 46 / +65.2% / +30 | 44 / +20.4% / +9 | 38 / +39.4% / +15 | 28 / +6.1% / +1.7 \* | 19 / +10.8% / +2.1 \* |
+| 27% | 36 / +95.4% / +34.3 | 36 / +95.4% / +34.3 | 35 / +101% / +35.3 | 34 / +39.2% / +13.3 | 30 / +57.8% / +17.3 | 22 / +22.8% / +5 \* | 15 / +40.4% / +6.1 \* |
+| 28% | 30 / +102% / +30.6 | 30 / +102% / +30.6 | 30 / +102% / +30.6 | 29 / +29.6% / +8.6 \* | 25 / +50.4% / +12.6 \* | 19 / +31.1% / +5.9 \* | 14 / +35.4% / +4.9 \* |
+| 29% | 24 / +152.5% / +36.6 \* | 24 / +152.5% / +36.6 \* | 24 / +152.5% / +36.6 \* | 23 / +63.4% / +14.6 \* | 21 / +79% / +16.6 \* | 16 / +55.7% / +8.9 \* | 13 / +45.8% / +5.9 \* |
+| 30% | 22 / +160.5% / +35.3 \* | 22 / +160.5% / +35.3 \* | 22 / +160.5% / +35.3 \* | 21 / +63.4% / +13.3 \* | 19 / +80.6% / +15.3 \* | 16 / +55.7% / +8.9 \* | 13 / +45.8% / +5.9 \* |
+
+**C2. Pre-window (2020-06-18 → 2024-09-15), same cells:**
+
+| Edge ≥ | prob ≥35% | prob ≥40% | prob ≥45% | prob ≥50% | prob ≥55% | prob ≥60% | prob ≥65% |
+|---|---|---|---|---|---|---|---|
+| 5% | 3545 / 0% / +0.6 | 3018 / -2.2% / -66.7 | 2329 / -1% / -22.8 | 1651 / -2.8% / -46 | 1098 / +2% / +21.5 | 711 / -1.1% / -7.5 | 392 / -2.3% / -8.8 |
+| 6% | 3229 / -0.4% / -13.4 | 2775 / -2.7% / -76 | 2161 / -1.9% / -41.2 | 1555 / -3.7% / -57.5 | 1044 / +1.8% / +19.1 | 681 / -1.2% / -8.3 | 378 / -3.7% / -14 |
+| 7% | 2959 / 0% / +0.7 | 2562 / -2.2% / -56.7 | 2013 / -1.5% / -31.1 | 1458 / -3.2% / -47.1 | 983 / +1.9% / +18.4 | 649 / -1.6% / -10.2 | 363 / -4% / -14.6 |
+| 8% | 2637 / -0.8% / -22.1 | 2309 / -2.5% / -57.7 | 1826 / -1.2% / -22.8 | 1343 / -3.4% / -45.8 | 908 / +1.9% / +17.7 | 602 / -2.7% / -16.3 | 335 / -6.1% / -20.5 |
+| 9% | 2359 / -1.2% / -29.5 | 2080 / -2.2% / -45.3 | 1672 / -0.8% / -13.8 | 1242 / -1.7% / -21.1 | 843 / +4.6% / +38.9 | 558 / -1.5% / -8.4 | 318 / -4.8% / -15.3 |
+| 10% | 2078 / -2.2% / -45.9 | 1860 / -2.6% / -48.9 | 1512 / -1.7% / -25.9 | 1131 / -2.7% / -31 | 776 / +3.1% / +24.3 | 518 / -2.9% / -14.9 | 294 / -6.2% / -18.2 |
+| 11% | 1804 / -4.3% / -78.3 | 1628 / -4.4% / -72.1 | 1355 / -2.7% / -36.5 | 1026 / -3.1% / -31.4 | 715 / +2.6% / +18.7 | 481 / -3.4% / -16.4 | 276 / -6.8% / -18.9 |
+| 12% | 1564 / -4.3% / -67.7 | 1426 / -4.5% / -63.8 | 1218 / -1.8% / -22.2 | 934 / -3.5% / -32.7 | 660 / +2.6% / +17.4 | 441 / -3.6% / -16.1 | 254 / -5.7% / -14.4 |
+| 13% | 1340 / -4.6% / -61.1 | 1235 / -4.3% / -53 | 1072 / -2.1% / -22.2 | 847 / -3.8% / -32.3 | 605 / +2.3% / +13.9 | 406 / -2.9% / -12 | 234 / -5.9% / -13.9 |
+| 14% | 1147 / -4.7% / -54.2 | 1055 / -4.1% / -43.5 | 930 / -2% / -18.2 | 749 / -3.8% / -28.7 | 537 / +2.6% / +13.8 | 370 / -3.7% / -13.8 | 211 / -7.3% / -15.5 |
+| 15% | 968 / -4.4% / -42.9 | 901 / -4.2% / -37.5 | 805 / -1.4% / -11.1 | 660 / -3.5% / -22.8 | 487 / +3.1% / +15.3 | 333 / -4.3% / -14.2 | 190 / -7.4% / -14 |
+| 16% | 823 / -3.6% / -29.8 | 773 / -2.8% / -21.4 | 702 / +0.5% / +3.8 | 587 / -1.8% / -10.8 | 443 / +4% / +17.7 | 308 / -3.4% / -10.6 | 177 / -8.1% / -14.3 |
+| 17% | 674 / 0% / +0.2 | 637 / +0.7% / +4.6 | 582 / +4.9% / +28.4 | 494 / +1% / +4.7 | 379 / +5.3% / +20.2 | 263 / -0.4% / -1.1 | 149 / -6.3% / -9.3 |
+| 18% | 562 / +0.4% / +2.2 | 536 / +0.9% / +4.9 | 498 / +6.2% / +31 | 425 / +2.7% / +11.5 | 328 / +6.9% / +22.6 | 229 / -0.6% / -1.4 | 131 / -6.8% / -8.9 |
+| 19% | 476 / +4.2% / +20 | 457 / +3.4% / +15.7 | 433 / +8.2% / +35.6 | 374 / +4.6% / +17.2 | 290 / +9% / +26.1 | 209 / +0.5% / +1.1 | 118 / -5.9% / -7 |
+| 20% | 397 / +4.9% / +19.6 | 382 / +3% / +11.3 | 363 / +8.3% / +30.3 | 318 / +5.6% / +18 | 248 / +12.1% / +30 | 181 / +5.5% / +9.9 | 106 / -2.6% / -2.8 |
+| 21% | 321 / +8.7% / +27.9 | 312 / +6% / +18.7 | 301 / +9.9% / +29.7 | 268 / +10.5% / +28.2 | 210 / +19.1% / +40.2 | 154 / +12.4% / +19.1 | 88 / +4.9% / +4.3 |
+| 22% | 262 / +8.3% / +21.7 | 255 / +6.2% / +15.8 | 249 / +8.8% / +21.8 | 228 / +11.4% / +25.9 | 185 / +21.4% / +39.5 | 138 / +14.3% / +19.7 | 78 / +10.8% / +8.5 |
+| 23% | 230 / +11.7% / +26.8 | 225 / +11.1% / +24.9 | 222 / +12.6% / +27.9 | 205 / +13.7% / +28 | 166 / +24.5% / +40.7 | 125 / +16.3% / +20.4 | 69 / +14.7% / +10.1 |
+| 24% | 191 / +11.1% / +21.2 | 188 / +9.2% / +17.3 | 185 / +11% / +20.3 | 173 / +13.5% / +23.3 | 142 / +26.4% / +37.5 | 109 / +16.2% / +17.6 | 59 / +10.1% / +6 |
+| 25% | 156 / +19.2% / +30 | 153 / +17.1% / +26.1 | 150 / +19.4% / +29.1 | 144 / +21.2% / +30.5 | 122 / +31.9% / +38.9 | 94 / +18% / +16.9 | 52 / +8.5% / +4.4 |
+| 26% | 127 / +15.1% / +19.2 | 126 / +16% / +20.2 | 124 / +17.9% / +22.2 | 118 / +20% / +23.6 | 103 / +30.7% / +31.6 | 82 / +21.9% / +17.9 | 44 / +13.9% / +6.1 |
+| 27% | 103 / +18.9% / +19.5 | 102 / +20.1% / +20.5 | 100 / +22.5% / +22.5 | 96 / +27.6% / +26.5 | 85 / +39.8% / +33.9 | 67 / +25.7% / +17.2 | 35 / +13.8% / +4.8 |
+| 28% | 89 / +26.8% / +23.9 | 88 / +28.3% / +24.9 | 87 / +29.7% / +25.9 | 85 / +32.8% / +27.9 | 77 / +41.9% / +32.2 | 63 / +24.9% / +15.7 | 32 / +7.2% / +2.3 |
+| 29% | 72 / +27.6% / +19.9 | 71 / +29.4% / +20.9 | 71 / +29.4% / +20.9 | 70 / +31.2% / +21.9 | 65 / +41.3% / +26.9 | 54 / +23.5% / +12.7 | 27 / -7% / -1.9 \* |
+| 30% | 60 / +21.9% / +13.1 | 60 / +21.9% / +13.1 | 60 / +21.9% / +13.1 | 59 / +23.9% / +14.1 | 55 / +32.9% / +18.1 | 46 / +27.8% / +12.8 | 24 / -4.3% / -1 \* |
+
+**C3. Window, 1% probability steps at selected edge floors:**
+
+| Prob ≥ | edge ≥5% | edge ≥10% | edge ≥15% | edge ≥18% | edge ≥20% | edge ≥25% | edge ≥30% |
+|---|---|---|---|---|---|---|---|
+| 35% | 1515 / +3.4% / +50.9 | 881 / +3.9% / +34.7 | 424 / +13% / +55.1 | 246 / +21.5% / +52.9 | 171 / +24.3% / +41.6 | 62 / +60% / +37.2 | 22 / +160.5% / +35.3 \* |
+| 36% | 1506 / +3.5% / +52.9 | 879 / +4.2% / +36.7 | 424 / +13% / +55.1 | 246 / +21.5% / +52.9 | 171 / +24.3% / +41.6 | 62 / +60% / +37.2 | 22 / +160.5% / +35.3 \* |
+| 37% | 1474 / +3.5% / +51.6 | 863 / +4.1% / +35.1 | 419 / +11.1% / +46.4 | 245 / +22% / +53.9 | 171 / +24.3% / +41.6 | 62 / +60% / +37.2 | 22 / +160.5% / +35.3 \* |
+| 38% | 1417 / +3.2% / +45.9 | 838 / +4.9% / +41.2 | 409 / +13.8% / +56.4 | 239 / +25.1% / +59.9 | 168 / +26.5% / +44.6 | 62 / +60% / +37.2 | 22 / +160.5% / +35.3 \* |
+| 39% | 1344 / +4% / +54.2 | 798 / +7.4% / +58.9 | 395 / +17.8% / +70.4 | 236 / +26.7% / +62.9 | 167 / +27.3% / +45.6 | 62 / +60% / +37.2 | 22 / +160.5% / +35.3 \* |
+| 40% | 1299 / +5% / +65 | 777 / +7.8% / +60.3 | 389 / +17.3% / +67.1 | 234 / +25.6% / +59.9 | 165 / +25.8% / +42.5 | 62 / +60% / +37.2 | 22 / +160.5% / +35.3 \* |
+| 41% | 1227 / +5% / +61.6 | 743 / +7.1% / +52.7 | 384 / +17.7% / +68 | 232 / +26.7% / +61.9 | 164 / +26.5% / +43.5 | 62 / +60% / +37.2 | 22 / +160.5% / +35.3 \* |
+| 42% | 1163 / +6.1% / +70.6 | 702 / +8.2% / +57.6 | 373 / +19.2% / +71.6 | 229 / +28.3% / +64.9 | 162 / +28.1% / +45.5 | 61 / +62.7% / +38.2 | 22 / +160.5% / +35.3 \* |
+| 43% | 1112 / +7.3% / +81.6 | 685 / +8.9% / +60.6 | 368 / +18.6% / +68.6 | 226 / +28.1% / +63.5 | 160 / +27% / +43.1 | 61 / +62.7% / +38.2 | 22 / +160.5% / +35.3 \* |
+| 44% | 1036 / +7% / +72.5 | 646 / +9.2% / +59.2 | 356 / +18.1% / +64.4 | 219 / +27.9% / +61.1 | 155 / +25% / +38.7 | 59 / +59.1% / +34.9 | 22 / +160.5% / +35.3 \* |
+| 45% | 981 / +7.4% / +73 | 616 / +10.6% / +65.2 | 344 / +21.2% / +73 | 213 / +31.5% / +67.1 | 150 / +29.2% / +43.7 | 59 / +59.1% / +34.9 | 22 / +160.5% / +35.3 \* |
+| 46% | 926 / +5.1% / +47.4 | 587 / +6.9% / +40.5 | 335 / +14.4% / +48.2 | 209 / +21.4% / +44.7 | 148 / +15.4% / +22.7 | 58 / +22.2% / +12.9 | 21 / +63.4% / +13.3 \* |
+| 47% | 859 / +5.2% / +44.5 | 553 / +6.8% / +37.7 | 322 / +11.9% / +38.4 | 204 / +17.8% / +36.4 | 147 / +16.2% / +23.7 | 58 / +22.2% / +12.9 | 21 / +63.4% / +13.3 \* |
+| 48% | 805 / +7.7% / +62.4 | 526 / +9.7% / +50.8 | 310 / +14.4% / +44.6 | 197 / +22% / +43.4 | 143 / +19.4% / +27.7 | 57 / +24.4% / +13.9 | 21 / +63.4% / +13.3 \* |
+| 49% | 759 / +8.5% / +64.7 | 498 / +10.8% / +53.8 | 296 / +16.7% / +49.5 | 193 / +24.6% / +47.4 | 142 / +20.2% / +28.7 | 57 / +24.4% / +13.9 | 21 / +63.4% / +13.3 \* |
+| 50% | 704 / +10% / +70.3 | 469 / +11.4% / +53.5 | 283 / +17.9% / +50.7 | 186 / +24.4% / +45.4 | 139 / +22.8% / +31.7 | 57 / +24.4% / +13.9 | 21 / +63.4% / +13.3 \* |
+| 51% | 649 / +5.7% / +37 | 441 / +6.4% / +28 | 268 / +9.8% / +26.2 | 175 / +16% / +27.9 | 133 / +20.6% / +27.3 | 55 / +22.3% / +12.2 | 20 / +71.5% / +14.3 \* |
+| 52% | 598 / +4.6% / +27.6 | 405 / +5.2% / +21 | 250 / +8.4% / +21.1 | 163 / +15.2% / +24.7 | 127 / +18.8% / +23.8 | 55 / +22.3% / +12.2 | 20 / +71.5% / +14.3 \* |
+| 53% | 547 / +3.1% / +17.1 | 377 / +4.8% / +18.2 | 239 / +8.1% / +19.4 | 154 / +15.3% / +23.6 | 122 / +19.9% / +24.3 | 53 / +26.9% / +14.3 | 20 / +71.5% / +14.3 \* |
+| 54% | 497 / +3.5% / +17.3 | 347 / +4.9% / +17 | 220 / +9.4% / +20.6 | 141 / +16.9% / +23.8 | 115 / +18.4% / +21.2 | 52 / +29.3% / +15.3 | 20 / +71.5% / +14.3 \* |
+| 55% | 448 / +5% / +22.5 | 320 / +6.1% / +19.6 | 205 / +11.4% / +23.4 | 134 / +20.7% / +27.7 | 108 / +23.2% / +25.1 | 49 / +30.9% / +15.1 | 19 / +80.6% / +15.3 \* |
+| 56% | 419 / +4.2% / +17.7 | 299 / +4.9% / +14.5 | 191 / +7.1% / +13.6 | 125 / +18% / +22.4 | 102 / +19% / +19.4 | 47 / +28.5% / +13.4 | 18 / +69.8% / +12.6 \* |
+| 57% | 383 / +2.8% / +10.6 | 277 / +2.4% / +6.7 | 179 / +3.7% / +6.6 | 118 / +16.9% / +19.9 | 97 / +15.3% / +14.9 | 44 / +21.9% / +9.6 | 18 / +69.8% / +12.6 \* |
+| 58% | 344 / +3.4% / +11.6 | 250 / +3.7% / +9.1 | 163 / +5.2% / +8.5 | 109 / +19.8% / +21.6 | 91 / +17.5% / +15.9 | 43 / +24.8% / +10.6 | 18 / +69.8% / +12.6 \* |
+| 59% | 312 / +4.9% / +15.2 | 222 / +4.7% / +10.5 | 139 / +7.1% / +9.9 | 98 / +12.4% / +12.2 | 82 / +11.3% / +9.3 | 38 / +13.1% / +5 | 17 / +79.8% / +13.6 \* |
+| 60% | 286 / +4.4% / +12.5 | 208 / +4.1% / +8.5 | 135 / +4.5% / +6.1 | 96 / +8.9% / +8.5 | 81 / +5.7% / +4.6 | 37 / +0.8% / +0.3 | 16 / +55.7% / +8.9 \* |
+| 61% | 261 / +4.6% / +12.1 | 185 / +5.1% / +9.5 | 118 / +5.8% / +6.8 | 85 / +8.9% / +7.5 | 73 / +7% / +5.1 | 35 / -1.1% / -0.4 | 16 / +55.7% / +8.9 \* |
+| 62% | 235 / +4.1% / +9.7 | 165 / +4.9% / +8 | 107 / +3.9% / +4.2 | 78 / +11.9% / +9.2 | 67 / +8.7% / +5.8 | 32 / -1% / -0.3 | 15 / +46.5% / +7 \* |
+| 63% | 205 / +6.5% / +13.3 | 145 / +9.5% / +13.7 | 95 / +7.9% / +7.5 | 70 / +15.3% / +10.7 | 60 / +10.5% / +6.3 | 32 / -1% / -0.3 | 15 / +46.5% / +7 \* |
+| 64% | 182 / +7.7% / +14 | 131 / +7.9% / +10.3 | 86 / +7.6% / +6.5 | 63 / +12.2% / +7.7 | 53 / +6.1% / +3.3 | 27 / -2.9% / -0.8 \* | 13 / +45.8% / +5.9 \* |
+| 65% | 161 / +9.6% / +15.4 | 118 / +10.3% / +12.1 | 80 / +13.2% / +10.6 | 59 / +19.8% / +11.7 | 49 / +14.8% / +7.2 | 26 / +0.9% / +0.2 \* | 13 / +45.8% / +5.9 \* |
+
+What the grid says, read as a whole:
+
+- **The window is positive almost everywhere and the pre-window is negative
+  almost everywhere below 17% edge.** That is the regime pattern already seen
+  in Addendum 38's train blocks, now cell by cell: for edge floors 5–16% the
+  pre-window absolute return is negative in nearly every probability column,
+  and the window flips it positive. Only the 17%+ rows are positive in both
+  periods, and only weakly pre-window.
+- **The probability floor matters most in the 40–45% column.** In both
+  periods, cells that include the 40–45% band do worse than the same edge
+  floor at ≥45% (window, edge ≥18%: prob ≥40% 234 bets +25.6% vs ≥45% 213
+  bets +31.5%; pre-window +0.9% vs +6.2%). This is the same 40-45% finding the
+  project has had since Addendum 6, visible here at 1% resolution.
+- **Raising the probability floor past 50% costs volume faster than it adds
+  ROI** in the window (edge ≥18%: ≥50% 186 bets +24.4%; ≥55% 134 bets +20.7%;
+  ≥60% 96 bets +8.9%).
+- **Above ~24% edge every cell is thin or near-thin** and the ROIs are
+  unstable (window 27%/45%: 35 bets, +101%, CI [−33, +235]).
+
+### Part D — Layered floors and the two highlighted cells
+
+**D1. Layered comparison, train-only search with single test looks** (the
+Stage 2 run earlier today; train = pre-window, test = window; per floor a
+"return pick" = max train absolute return and a "safety pick" = max train CI
+lower bound, both n≥100 and ≥2 positive train blocks):
+
+| Floor | Return pick | Train | Test (single look) | Safety pick | Train | Test (single look) |
+|---|---|---|---|---|---|---|
+| ≥40% | 24% edge | 188, +9.2%, abs +17 | 76, +52.8%, CI [−13.5, +119], abs +40, blocks +43/+124/+38/+19 | 8% edge | 2,309, −2.5% | 976, +7.1%, CI [−2.1, +16.2], abs +69, one negative block |
+| ≥45% | **18% edge (incumbent)** | 498, +6.2%, abs +31 | **213, +31.5%, CI [+3.7, +59.3], abs +67, blocks +9/+49/+58/+0.2** | 8% edge | 1,826, −1.3% | 756, +11.0%, CI [+0.6, +21.3], abs +83, one negative block |
+| ≥50% | 22% edge | 228, +11.4%, abs +26 | 97, +27.6%, CI [−2.1, +57.2], abs +27, blocks +79/−28/+67/−6 | 8% edge | 1,343, −3.4% | 569, +11.9%, CI [+2.3, +21.6], abs +68, all blocks positive |
+
+The "safety" criterion degenerated: no train cell had a positive CI lower
+bound, so max-lower-bound picked the largest-n (negative-ROI) cell at every
+floor. Those 8%-edge cells then did well on test — but their train records
+are negative, so nothing supports them beyond the window itself. Between the
+three floors, ≥45% is the only one whose return pick is positive in both
+periods with every test block positive; ≥40% admits the 40-45% band; ≥50%
+halves the volume for no gain in reliability.
+
+**D2. The two highlighted cells from the full window grid, with their
+out-of-window figures:**
+
+| Cell | Window | Window blocks | Pre-window | Verdict |
+|---|---|---|---|---|
+| **Best total absolute return: 12% / 39%** | 617 bets, +15.5%, CI [+2.7, +28.3], abs **+95.6** | −7.6 / +38.1 / +24.6 / +5.9 | 1,465 bets, **−5.2%**, CI [−12.1, +1.7], abs **−76.4**, blocks −11.2 / −11.2 / +3.2 / −0.3 | Highest window return, but it is the broad population and it *loses* out-of-window. Not supportable. |
+| **Best risk-adjusted: 19% / 50%** | 162 bets, +28.6%, CI [**+6.2**, +51.0], abs +46.3 | +32.5 / +10.9 / +60.0 / +3.4 | 374 bets, +4.6%, CI [−10.7, +19.8], abs +17.2, blocks −17 / −9 / +6.7 / +49.6 | Clears zero most comfortably on the window; positive but weaker than 18/45 pre-window; 24% fewer bets. |
+| Incumbent 18% / 45% | 213 bets, +31.5%, CI [+3.7, +59.3], abs +67.1 | +9.1 / +49.4 / +57.6 / +0.2 | 498 bets, +6.2%, CI [−7.1, +19.6], abs **+31.0**, blocks −12.7 / −2.5 / +17.7 / +31.5 | Best pre-window absolute return of the three; every window block positive; more volume than 19/50. |
+
+The two framings diverge, as expected: total return points at a broad,
+low-floor cell that the pre-window rejects; risk-adjusted points at a
+near-neighbour of 18/45 with less volume. Top-10 lists by each criterion are
+in the run output summarised here: by absolute return, the top nine cells are
+all edge 6–13% / probability 35–45%; by CI lower bound, all ten are edge
+12–19% / probability 45–50%.
+
+### Part E — Is 1.02 still the best calibration factor? No, not for these leagues.
+
+Same method as the 2026-09-01 sweep (commit `3415075`: Brier score of the
+top pick's `min(0.97, modelProb × factor)` against outcome, step 0.01), run on
+the populations that sweep never separated:
+
+| Population | n | Brier-optimal factor | Brier at 1.00 | at 1.02 | at best |
+|---|---|---|---|---|---|
+| Rule-12 leagues, all tree-clean history | 10,142 | **0.93** | 0.24582 | 0.24659 | 0.24467 |
+| — Championship | 3,460 | 0.93 | 0.24650 | 0.24731 | 0.24521 |
+| — League One | 3,344 | 0.96 | 0.24343 | 0.24396 | 0.24297 |
+| — League Two | 3,338 | 0.91 | 0.24750 | 0.24846 | 0.24553 |
+| Rule-12 leagues, 23-month window only | 3,158 | 0.95 | 0.24570 | 0.24626 | 0.24515 |
+| Rule-9 top divisions, test-only and post-tree-boundary | 5,497 | **1.06** | 0.23563 | 0.23515 | 0.23476 |
+| All domestic pooled (what 2026-09-01 swept) | 25,476 | 1.02 | 0.24005 | 0.23997 | 0.23997 |
+
+The pooled 1.02 is a compromise between two populations pulling in opposite
+directions. On the three lower leagues the model is systematically
+**overconfident** at 1.02 — reliability, all history:
+
+| Predicted band (at 1.02) | n | Avg predicted | Actual win rate |
+|---|---|---|---|
+| 45–50% | 2,029 | 47.4% | 43.9% |
+| 50–55% | 1,530 | 52.4% | 48.1% |
+| 55–60% | 1,051 | 57.3% | 50.4% |
+| 60–65% | 664 | 62.4% | 53.6% |
+| 65–70% | 431 | 67.2% | 60.3% |
+| 70–75% | 243 | 72.2% | 56.8% |
+
+At 0.93 the same table is flat to within ~2pp through 65% (45–50%: 47.4 vs
+47.4; 50–55%: 52.3 vs 50.6; 60–65%: 62.3 vs 60.6). The football reading is
+plausible: the live model's trees and Platt fit were trained on top-division
+data, and lower-league outcomes are noisier, so the same features deserve
+less confidence there.
+
+Two consequences, both real-money relevant and both left for decision:
+
+1. **Kelly stakes on these leagues are currently sized off probabilities
+   4–9 points too high** in the bands where most bets sit, since staking uses
+   `calProb`.
+2. **The edge axis of this whole grid is on a scale that overstates edge for
+   these leagues.** "18% at 1.02" is roughly "13% at 0.93" for a 55% pick
+   (the shift is 0.09 × modelProb). Correcting the factor per league without
+   re-expressing the floor would silently tighten the rule again — the same
+   trap Addendum 37 D2 documented for the 1.11 → 1.02 change.
+
+A per-league factor would be a small change (`getCalFactorForLeague()`
+branching on the rule-12 ids, mirroring the existing tournament branch), but
+it moves live stakes and the effective rule, so it is a decision, not a fix
+made here.
+
+### Part F — Recommendation
+
+**Keep 18% / 45% as the deployed rule for these three leagues for now.** On
+this population it does not match the single best cell on either framing,
+but it is the only cell among the highlighted three that is positive in
+both periods, has every window block positive, and carries the largest
+out-of-window absolute return. The best-total-return cell (12%/39%) is
+rejected by the pre-window outright. The best-risk-adjusted cell (19%/50%)
+is a neighbour with less volume and a weaker pre-window record; the
+difference between it and 18/45 is within noise. Nothing in the 806-cell
+grid supports a different combination on evidence that survives leaving the
+selection window.
+
+**The threshold question is now downstream of the calibration question.**
+Before any further threshold work on these leagues, decide whether they get
+their own calibration factor (~0.93 by Brier). If they do, the rule must be
+re-expressed on the new scale — approximately 13%/45% to select the same
+fixtures — and this grid re-run once under that factor as its own single
+look. Re-tuning on the 1.02 scale first and re-calibrating second would
+repeat the 2026-09-01 sequence that produced the 601 → 273 discrepancy.
+
+**Two things this document does not do:** it does not fix the calibration
+factor, and it does not lower the floor to recover the 2026-08-31 volume.
+Both are open decisions in Addendum 37 Part G, now with the numbers to
+decide them.
+
+Temp endpoints `/api/admin/diag-rule12-full-grid`,
+`/api/admin/diag-calfactor-recheck`, `/api/admin/diag-rule12-full-threshold-review`
+and `/api/admin/diag-rule12-threshold-search` were removed after use
+(commits `c9b7747`, `c3fab24`, `85ab355`).
