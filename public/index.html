@@ -285,6 +285,14 @@ td.mono { font-family: var(--font-data); }
 .tpg-cell.tpg-clickable { cursor: pointer; transition: background .1s; }
 .tpg-cell.tpg-clickable:hover { background: rgba(0,255,135,.06); }
 .tpg-cell.tpg-flagged { background: rgba(0,255,135,.14) !important; box-shadow: inset 0 0 0 2px var(--green); }
+.tpg-cohort { margin-bottom: 18px; }
+.tpg-cohort-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+.tpg-cohort-title { font-weight: 700; font-size: 12px; color: var(--text1); }
+.tpg-cohort-meta { font-family: var(--font-data); font-size: 10px; color: var(--muted); }
+.tpg-cohort-stake { font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 6px; border: 1px solid; }
+.tpg-cohort-stake.staked { color: var(--green); border-color: rgba(0,255,135,.4); background: rgba(0,255,135,.08); }
+.tpg-cohort-stake.observation { color: var(--muted); border-color: rgba(148,163,184,.35); background: rgba(148,163,184,.1); }
+.tpg-cell.tpg-static { cursor: default; }
 
 /* ── Badge ── */
 .badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-family: var(--font-head); font-weight: 700; }
@@ -727,14 +735,9 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       see Addendum 21) · <strong style="color:var(--text1)">L</strong>ive (real resolved bets,
       current model version only) · <strong style="color:var(--text1)">X</strong> Combined (n-weighted pool of
       Historical + Live — the biggest single sample available; ⟳handoff marks a proxy-sourced reading whose Live
-      leg has cleared the 350-bet floor and is ready for manual review). Click any per-league cell to green-flag
-      it as a real-money candidate. Reference view, not a gate. (A fourth reading, Continuous, was removed from
+      leg has cleared the 350-bet floor and is ready for manual review). Click any per-league cell in a staked cohort to green-flag it as a real-money candidate; observation-only cohorts are read-only here. Reference view, not a gate. (A fourth reading, Continuous, was removed from
       this grid — stale and superseded; see <span class="mono">docs/continuous-roi-methodology.md</span>.)
     </p>
-    <div style="display:flex;gap:4px;margin-bottom:12px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:4px;width:fit-content">
-      <button class="perf-view-btn tpg-view-btn active-combined-view" id="tpg-view-league-btn" onclick="setTpgView('league')">League</button>
-      <button class="perf-view-btn tpg-view-btn" id="tpg-view-tournament-btn" onclick="setTpgView('tournament')">Tournament</button>
-    </div>
     <div style="margin-bottom:12px">
       <button class="btn btn-ghost btn-sm" id="tpg-toggle-btn" onclick="toggleTpgMethodology('')">▸ Methodology notes</button>
       <div id="tpg-methodology" style="display:none;margin-top:8px;font-family:'DM Mono',monospace;font-size:.68rem;color:var(--muted);line-height:1.5">
@@ -747,14 +750,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       </div>
     </div>
     <div class="table-wrap">
-      <table class="tpg-table">
-        <thead><tr id="tpg-header-row"></tr></thead>
-        <tbody id="tpg-body"></tbody>
-      </table>
-      <div class="empty" id="tpg-empty" style="display:none">
-        <div class="empty-icon">🎯</div>
-        <p>No resolved bets yet in the nine validated leagues.</p>
-      </div>
+      <div id="tpg-cohorts"></div>
     </div>
     <div id="tier-perf-other" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
     <div id="tier-perf-model-versions" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
@@ -980,14 +976,9 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       see Addendum 21) · <strong style="color:var(--text1)">L</strong>ive (real resolved bets,
       current model version only) · <strong style="color:var(--text1)">X</strong> Combined (n-weighted pool of
       Historical + Live — the biggest single sample available; ⟳handoff marks a proxy-sourced reading whose Live
-      leg has cleared the 350-bet floor and is ready for manual review). Click any per-league cell to green-flag
-      it as a real-money candidate. Reference view, not a gate. (A fourth reading, Continuous, was removed from
+      leg has cleared the 350-bet floor and is ready for manual review). Click any per-league cell in a staked cohort to green-flag it as a real-money candidate; observation-only cohorts are read-only here. Reference view, not a gate. (A fourth reading, Continuous, was removed from
       this grid — stale and superseded; see <span class="mono">docs/continuous-roi-methodology.md</span>.)
     </p>
-    <div style="display:flex;gap:4px;margin-bottom:12px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:4px;width:fit-content">
-      <button class="perf-view-btn tpg-view-btn active-combined-view" id="real-tpg-view-league-btn" onclick="setTpgView('league')">League</button>
-      <button class="perf-view-btn tpg-view-btn" id="real-tpg-view-tournament-btn" onclick="setTpgView('tournament')">Tournament</button>
-    </div>
     <div style="margin-bottom:12px">
       <button class="btn btn-ghost btn-sm" id="real-tpg-toggle-btn" onclick="toggleTpgMethodology('real-')">▸ Methodology notes</button>
       <div id="real-tpg-methodology" style="display:none;margin-top:8px;font-family:'DM Mono',monospace;font-size:.68rem;color:var(--muted);line-height:1.5">
@@ -1000,14 +991,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       </div>
     </div>
     <div class="table-wrap">
-      <table class="tpg-table">
-        <thead><tr id="real-tpg-header-row"></tr></thead>
-        <tbody id="real-tpg-body"></tbody>
-      </table>
-      <div class="empty" id="real-tpg-empty" style="display:none">
-        <div class="empty-icon">🎯</div>
-        <p>No resolved bets yet in the nine validated leagues.</p>
-      </div>
+      <div id="real-tpg-cohorts"></div>
     </div>
     <div id="real-tier-perf-other" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
     <div id="real-tier-perf-model-versions" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
@@ -1233,14 +1217,9 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       see Addendum 21) · <strong style="color:var(--text1)">L</strong>ive (real resolved bets,
       current model version only) · <strong style="color:var(--text1)">X</strong> Combined (n-weighted pool of
       Historical + Live — the biggest single sample available; ⟳handoff marks a proxy-sourced reading whose Live
-      leg has cleared the 350-bet floor and is ready for manual review). Click any per-league cell to green-flag
-      it as a real-money candidate. Reference view, not a gate. (A fourth reading, Continuous, was removed from
+      leg has cleared the 350-bet floor and is ready for manual review). Click any per-league cell in a staked cohort to green-flag it as a real-money candidate; observation-only cohorts are read-only here. Reference view, not a gate. (A fourth reading, Continuous, was removed from
       this grid — stale and superseded; see <span class="mono">docs/continuous-roi-methodology.md</span>.)
     </p>
-    <div style="display:flex;gap:4px;margin-bottom:12px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:4px;width:fit-content">
-      <button class="perf-view-btn tpg-view-btn active-combined-view" id="combined-tpg-view-league-btn" onclick="setTpgView('league')">League</button>
-      <button class="perf-view-btn tpg-view-btn" id="combined-tpg-view-tournament-btn" onclick="setTpgView('tournament')">Tournament</button>
-    </div>
     <div style="margin-bottom:12px">
       <button class="btn btn-ghost btn-sm" id="combined-tpg-toggle-btn" onclick="toggleTpgMethodology('combined-')">▸ Methodology notes</button>
       <div id="combined-tpg-methodology" style="display:none;margin-top:8px;font-family:'DM Mono',monospace;font-size:.68rem;color:var(--muted);line-height:1.5">
@@ -1253,14 +1232,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
       </div>
     </div>
     <div class="table-wrap">
-      <table class="tpg-table">
-        <thead><tr id="combined-tpg-header-row"></tr></thead>
-        <tbody id="combined-tpg-body"></tbody>
-      </table>
-      <div class="empty" id="combined-tpg-empty" style="display:none">
-        <div class="empty-icon">🎯</div>
-        <p>No resolved bets yet in the nine validated leagues.</p>
-      </div>
+      <div id="combined-tpg-cohorts"></div>
     </div>
     <div id="combined-tier-perf-other" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
     <div id="combined-tier-perf-model-versions" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
@@ -3554,28 +3526,13 @@ async function _getLtmData() {
   return _ltmDataCache;
 }
 
-// League/Tournament toggle for the Calibration Tier Performance grid — one
-// shared state across Paper/Real/Combined (which competitions you want to see
-// isn't a paper-vs-real question), independent of the mode toggle those tabs
-// already drive. Default 'league' per the brief — higher-volume, more
-// decision-relevant day to day; Tournament is a deliberate second click.
-let tpgViewMode = 'league';
-const TPG_PREFIXES = ['', 'real-', 'combined-'];
-function setTpgView(view) {
-  tpgViewMode = view;
-  for (const prefix of TPG_PREFIXES) {
-    const leagueBtn     = document.getElementById(`${prefix}tpg-view-league-btn`);
-    const tournamentBtn = document.getElementById(`${prefix}tpg-view-tournament-btn`);
-    if (leagueBtn)     leagueBtn.classList.toggle('active-combined-view', view === 'league');
-    if (tournamentBtn) tournamentBtn.classList.toggle('active-combined-view', view === 'tournament');
-  }
-  // Re-render all three — cheap reads, and it keeps every tab's grid consistent
-  // with the new toggle state even before the user switches to it.
-  renderTierPerf('paper', '');
-  renderTierPerf('real', 'real-');
-  renderTierPerf('combined', 'combined-');
-}
-
+// The Calibration Tier Performance grid renders one table per calibration/
+// staking cohort (Addendum 41 follow-up). Cohorts come from
+// /api/league-tier-matrix scope.cohorts, derived server-side from the same
+// per-league factor/floor config rule 17 tracks — there is no league or cohort
+// list in this file, so a league added to an existing cohort or a new cohort
+// altogether renders without UI changes. The old League/Tournament toggle is
+// subsumed: tournaments are simply the cohort with no paper rule.
 function toggleTpgMethodology(prefix) {
   const el  = document.getElementById(`${prefix}tpg-methodology`);
   const btn = document.getElementById(`${prefix}tpg-toggle-btn`);
@@ -3764,101 +3721,101 @@ async function renderTierPerf(mode = 'paper', prefix = '') {
   } catch (e) { return; }
   const ltm = await _getLtmData();
 
-  const headerRow = document.getElementById(`${prefix}tpg-header-row`);
-  const tbody     = document.getElementById(`${prefix}tpg-body`);
-  const emptyEl   = document.getElementById(`${prefix}tpg-empty`);
+  const container = document.getElementById(`${prefix}tpg-cohorts`);
   const otherEl   = document.getElementById(`${prefix}tier-perf-other`);
-  if (!tbody) return;
-  tbody.innerHTML = '';
+  if (!container) return;
 
-  // League columns — data-driven from the matrix endpoint's scope.leagues (config-level
-  // competitionType grouping, not a hardcoded list here) so this doesn't drift out of
-  // sync with COMPETITION_TYPE server-side; falls back to whatever byLeague carries if
-  // that fetch failed, so the grid still renders (just without Historical/Continuous or
-  // the League/Tournament split). Computed before the row filter below so that filter
-  // can check every league's own cell, not just the old pooled figure.
+  // Leagues and cohorts are data-driven from the matrix endpoint's scope. Falls
+  // back to a single "All leagues" table if that fetch failed, so the grid still
+  // renders (without Historical or cohort labels).
   const allLeagues = ltm?.scope?.leagues
-    || (data.rows[0]?.byLeague || []).map(l => ({ id: l.leagueId, name: l.leagueName, competitionType: 'league' }));
-  const leagues = allLeagues.filter(l => (l.competitionType || 'league') === tpgViewMode);
+    || (data.rows[0]?.byLeague || []).map(l => ({ id: l.leagueId, name: l.leagueName, cohortId: null }));
+  const cohorts = (ltm?.scope?.cohorts || []).filter(c => c.leagueIds.some(id => allLeagues.some(l => l.id === id)));
+  const renderCohorts = cohorts.length ? cohorts : [{ id: 'all', label: 'All leagues', leagueIds: allLeagues.map(l => l.id), paperStakeEligible: true }];
 
-  // Row-inclusion rule. r.historical/r.live are pooled across only the 9 originally-
-  // validated leagues (same stale, narrow figure the Total column fix (2026-08-18)
-  // stopped relying on) — using them alone to decide whether a tier renders at all
-  // hid entire rows whenever only a tournament competition had data there. Confirmed:
-  // 70-75% never rendered in either view despite Carabao Cup alone showing n=20 real
-  // backtest fixtures — nothing to click, which is why green-flagging a tournament
-  // tier could look broken even though the toggle endpoint itself was always fine.
-  // Now also renders a tier if ANY known league (league or tournament type) has a
-  // real Historical or Live reading there.
-  const rows = data.rows.filter(r =>
-    r.historical || r.live.n > 0 ||
-    allLeagues.some(l => (ltm?.matrix?.[l.id]?.cells?.[r.tier]?.n > 0) || (r.byLeague?.find(x => x.leagueId === l.id)?.n > 0))
-  );
-  emptyEl.style.display = rows.length ? 'none' : 'block';
+  // Row-inclusion rule (unchanged): a tier renders if ANY known league has a real
+  // Historical or Live reading there. Computed once across every league so the
+  // pooled home/away table below sees the same rows as before; each cohort's
+  // table then shows only the tiers with data inside that cohort.
+  const rowHasData = (r, leagueSet) =>
+    leagueSet.some(l => (ltm?.matrix?.[l.id]?.cells?.[r.tier]?.n > 0) || (r.byLeague?.find(x => x.leagueId === l.id)?.n > 0));
+  const rows = data.rows.filter(r => r.historical || r.live.n > 0 || rowHasData(r, allLeagues));
 
-  if (headerRow) {
+  const fmtPct = v => v == null ? '—' : `${Math.round(v * 100)}%`;
+  container.innerHTML = '';
+  for (const cohort of renderCohorts) {
+    const leagues = allLeagues.filter(l => cohort.leagueIds.includes(l.id));
+    if (!leagues.length) continue;
+    const cohortRows = rows.filter(r => rowHasData(r, leagues));
+    const stakeable = !!cohort.paperStakeEligible;
+    const rule = cohort.paperEdgeMin != null
+      ? `edge ≥${fmtPct(cohort.paperEdgeMin)} · prob ≥${fmtPct(cohort.paperProbMin)}`
+      : 'no paper-money rule';
+    const meta = cohort.calibrationFactor != null
+      ? `calibration ×${cohort.calibrationFactor} · ${rule}`
+      : '';
+    const wrap = document.createElement('div');
+    wrap.className = 'tpg-cohort';
+    wrap.innerHTML = `
+      <div class="tpg-cohort-head">
+        <span class="tpg-cohort-title">${cohort.label}</span>
+        <span class="tpg-cohort-meta">${meta}</span>
+        <span class="tpg-cohort-stake ${stakeable ? 'staked' : 'observation'}">${stakeable ? 'PAPER-STAKED' : 'OBSERVATION ONLY'}</span>
+      </div>
+      <div class="table-wrap">
+        <table class="tpg-table"><thead><tr></tr></thead><tbody></tbody></table>
+        <div class="empty" style="display:none;padding:10px 0"><p style="font-size:11px;color:var(--muted)">No Historical or Live readings yet in this cohort.</p></div>
+      </div>`;
+    const headerRow = wrap.querySelector('thead tr');
+    const tbody     = wrap.querySelector('tbody');
+    const emptyEl   = wrap.querySelector('.empty');
     headerRow.innerHTML = `<th class="tpg-tier-cell">Tier</th>` +
       leagues.map(l => `<th class="tpg-cell">${l.name}</th>`).join('') +
-      `<th class="tpg-total-header">Total<br><span style="font-weight:400;color:var(--muted)">(all leagues)</span></th>`;
-  }
+      `<th class="tpg-total-header">Total<br><span style="font-weight:400;color:var(--muted)">(this cohort)</span></th>`;
+    emptyEl.style.display = cohortRows.length ? 'none' : 'block';
 
-  rows.forEach(r => {
-    const tr = document.createElement('tr');
-    const cells = leagues.map(l => {
-      const histCell = ltm?.matrix?.[l.id]?.cells?.[r.tier];
-      const liveCell = r.byLeague?.find(x => x.leagueId === l.id);
-      // Green-flag manual curation (Addendum 21 Part C) — click any per-league cell
-      // to toggle it as a flagged real-money candidate. Display-only: doesn't touch
-      // scoring/EV/bet-locking, independent of which League/Tournament view is active.
-      const flagged = isGreenFlagged(l.id, r.tier);
-      const combined = _tpgCombine(histCell, liveCell);
-      const isProxy = l.historicalSource === 'walkforward-proxy';
-      const isNoEdge = l.historicalSource === 'real-backtest-no-edge';
-      const srcMark = histCell?.n
-        ? (isProxy
-            ? '<span style="color:var(--amber);font-size:8px" title="Historical is a walk-forward proxy estimate (Addendum 21), not a genuine holdout">🔬</span>'
-            : isNoEdge
-              ? '<span style="color:var(--muted);font-size:8px" title="Historical is a genuine unseen-population backtest, but the pooled posEdge ROI 95% CI spans zero — no confirmed edge, not in the unseen-population set">bt·∅</span>'
-              : '<span style="color:var(--green);font-size:8px" title="Historical is a genuine real backtest (train/test split or unseen-population read)">✓bt</span>')
-        : '';
-      const handoffReady = isProxy && liveCell?.n >= TPG_DECISION_FLOOR;
-      // Continuous (C) row deliberately removed from this grid — stale (frozen on the
-      // Addendum 14 proxy model / single 2024-08-07+ window, never extended to
-      // competitions added since), superseded day-to-day by Historical/Live/Combined.
-      // The underlying data/endpoint (ltm.continuousMatrix) is untouched — see
-      // docs/continuous-roi-methodology.md for what it measures and how to refresh it
-      // if that specific EV-threshold question ever needs re-checking.
-      return `<td class="tpg-cell tpg-clickable${flagged ? ' tpg-flagged' : ''}" onclick="toggleGreenFlag(${l.id}, '${r.tier}')" title="Click to ${flagged ? 'un' : ''}flag ${l.name} ${r.tier} as a real-money candidate">
-        ${_tpgFmtSub('H', histCell?.n, histCell?.roi, histCell?.thin, l.hasHistoricalMatrix === false, srcMark)}
-        ${_tpgFmtSub('L', liveCell?.n, liveCell?.roi, liveCell?.thin)}
-        ${_tpgFmtSub('X', combined.n, combined.roi, combined.thin, false, isProxy ? srcMark : '', handoffReady)}
+    cohortRows.forEach(r => {
+      const tr = document.createElement('tr');
+      const cells = leagues.map(l => {
+        const histCell = ltm?.matrix?.[l.id]?.cells?.[r.tier];
+        const liveCell = r.byLeague?.find(x => x.leagueId === l.id);
+        // Green-flag manual curation (Addendum 21 Part C) — staked cohorts only.
+        // Display-only: doesn't touch scoring/EV/bet-locking.
+        const flagged = isGreenFlagged(l.id, r.tier);
+        const combined = _tpgCombine(histCell, liveCell);
+        const isProxy = l.historicalSource === 'walkforward-proxy';
+        const isNoEdge = l.historicalSource === 'real-backtest-no-edge';
+        const srcMark = histCell?.n
+          ? (isProxy
+              ? '<span style="color:var(--amber);font-size:8px" title="Historical is a walk-forward proxy estimate (Addendum 21), not a genuine holdout">🔬</span>'
+              : isNoEdge
+                ? '<span style="color:var(--muted);font-size:8px" title="Historical is a genuine unseen-population backtest, but the pooled posEdge ROI 95% CI spans zero — no confirmed edge">bt·0</span>'
+                : '<span style="color:var(--green);font-size:8px" title="Historical is a genuine real backtest (train/test split or unseen-population read)">✓bt</span>')
+          : '';
+        const handoffReady = isProxy && liveCell?.n >= TPG_DECISION_FLOOR;
+        const clickAttrs = stakeable
+          ? `class="tpg-cell tpg-clickable${flagged ? ' tpg-flagged' : ''}" onclick="toggleGreenFlag(${l.id}, '${r.tier}')" title="Click to ${flagged ? 'un' : ''}flag ${l.name} ${r.tier} as a real-money candidate"`
+          : `class="tpg-cell tpg-static${flagged ? ' tpg-flagged' : ''}" title="${l.name} ${r.tier} — observation-only cohort, not green-flaggable here"`;
+        return `<td ${clickAttrs}>
+          ${_tpgFmtSub('H', histCell?.n, histCell?.roi, histCell?.thin, l.hasHistoricalMatrix === false, srcMark)}
+          ${_tpgFmtSub('L', liveCell?.n, liveCell?.roi, liveCell?.thin)}
+          ${_tpgFmtSub('X', combined.n, combined.roi, combined.thin, false, isProxy ? srcMark : '', handoffReady)}
+        </td>`;
+      }).join('');
+      // Total column — n-weighted pool of exactly what this cohort's row shows.
+      const histTotal = leagues.reduce((acc, l) => _tpgCombine(acc, ltm?.matrix?.[l.id]?.cells?.[r.tier]), { n: 0, roi: null, thin: true });
+      const liveTotal = leagues.reduce((acc, l) => _tpgCombine(acc, r.byLeague?.find(x => x.leagueId === l.id)), { n: 0, roi: null, thin: true });
+      const totalCombined = _tpgCombine(histTotal, liveTotal);
+      const totalCell = `<td class="tpg-cell tpg-total-cell">
+        ${_tpgFmtSub('H', histTotal.n, histTotal.roi, histTotal.thin)}
+        ${_tpgFmtSub('L', liveTotal.n, liveTotal.roi, liveTotal.thin)}
+        ${_tpgFmtSub('X', totalCombined.n, totalCombined.roi, totalCombined.thin)}
       </td>`;
-    }).join('');
-    // Total column — a genuine sum of exactly what's shown in this row for the
-    // currently-visible leagues (respects the League/Tournament toggle), not a
-    // separately-sourced figure. Previously pulled straight from
-    // /api/tier-performance's row.historical/row.live — a frozen, narrow
-    // Addendum-5 test-set-only population pooled across only the 9 originally-
-    // validated leagues. That silently excluded League One/Two/Carabao Cup
-    // entirely (never part of that population) and used a different, much
-    // smaller sample than the walk-forward/real-backtest matrix each league's
-    // own H column actually shows — e.g. 65-70% previously read "Total H n=4"
-    // while League One alone showed n=134. Folded with the same n-weighted
-    // pooling _tpgCombine already uses for a single cell's H+L, just applied
-    // across leagues instead of across H/L. Green-flagging stays the deliberate,
-    // human-reviewed gate on top of every number here — summing the fuller
-    // picture doesn't change what's needed before real money acts on it.
-    const histTotal = leagues.reduce((acc, l) => _tpgCombine(acc, ltm?.matrix?.[l.id]?.cells?.[r.tier]), { n: 0, roi: null, thin: true });
-    const liveTotal = leagues.reduce((acc, l) => _tpgCombine(acc, r.byLeague?.find(x => x.leagueId === l.id)), { n: 0, roi: null, thin: true });
-    const totalCombined = _tpgCombine(histTotal, liveTotal);
-    const totalCell = `<td class="tpg-cell tpg-total-cell">
-      ${_tpgFmtSub('H', histTotal.n, histTotal.roi, histTotal.thin)}
-      ${_tpgFmtSub('L', liveTotal.n, liveTotal.roi, liveTotal.thin)}
-      ${_tpgFmtSub('X', totalCombined.n, totalCombined.roi, totalCombined.thin)}
-    </td>`;
-    tr.innerHTML = `<td class="tpg-tier-cell">${r.tier}</td>${cells}${totalCell}`;
-    tbody.appendChild(tr);
-  });
+      tr.innerHTML = `<td class="tpg-tier-cell">${r.tier}</td>${cells}${totalCell}`;
+      tbody.appendChild(tr);
+    });
+    container.appendChild(wrap);
+  }
 
   if (otherEl) {
     if (data.otherLeagueActivity?.length) {
@@ -3869,9 +3826,7 @@ async function renderTierPerf(mode = 'paper', prefix = '') {
     }
   }
 
-  // Per-model-version sample floor tracking (docs/model-versioning.md) — a brand-new
-  // model version's early results are flagged below decision-grade rather than shown
-  // with the same confidence as an established version.
+  // Per-model-version sample floor tracking (docs/model-versioning.md).
   const versionsEl = document.getElementById(`${prefix}tier-perf-model-versions`);
   if (versionsEl) {
     if (data.byModelVersion?.length) {

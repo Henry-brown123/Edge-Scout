@@ -6917,10 +6917,16 @@ app.get('/api/league-tier-matrix', async (_req, res) => {
   // One/League Two, Addendum 19) or a walk-forward proxy estimate (Addendum 21,
   // in-sample leagues) — surfaced directly in the UI wherever Combined is shown,
   // not buried in a tooltip, per that task's explicit requirement.
+  // Cohort membership (Addendum 41 follow-up): derived from the live per-league
+  // calibration/staking config, so the Performance tab can render one grid per
+  // cohort without any UI-side league list.
+  const { rows: cohortRows, cohorts: calibrationCohorts } = getCalibrationCohorts();
+  const cohortIdByLeague = Object.fromEntries(cohortRows.map(r => [r.leagueId, r.cohortId]));
   const gridLeagues = Object.keys(COMPETITION_TYPE).map(Number).map(id => ({
     id,
     name: mergedMatrix[id]?.name || LEAGUE_CONFIG[id]?.name || `League ${id}`,
     competitionType: COMPETITION_TYPE[id],
+    cohortId: cohortIdByLeague[id] || null,
     hasHistoricalMatrix: !!mergedMatrix[id],
     hasContinuousMatrix: !!CONTINUOUS_LEAGUE_TIER_MATRIX[id],
     historicalSource: mergedMatrix[id] ? historicalSourceByLeague[id] : null,
@@ -6929,6 +6935,8 @@ app.get('/api/league-tier-matrix', async (_req, res) => {
   res.json({
     scope: {
       leagues: gridLeagues,
+      // One entry per cohort with a grid-eligible league; display metadata only.
+      cohorts: calibrationCohorts.map(c => ({ ...c, leagueIds: c.leagueIds.filter(id => COMPETITION_TYPE[id]) })).filter(c => c.leagueIds.length),
       validatedLeagues: leagueIds.filter(id => !UNSEEN_POPULATION_LEAGUES.has(id)).map(id => ({ id, name: LEAGUE_TIER_MATRIX[id].name })),
       unseenPopulationLeagues: leagueIds.filter(id => UNSEEN_POPULATION_LEAGUES.has(id)).map(id => ({ id, name: LEAGUE_TIER_MATRIX[id].name })),
       tierLabels: LEAGUE_TIER_MATRIX_TIER_ORDER,
@@ -9263,9 +9271,14 @@ app.get('/api/admin/walkforward-raw-bets', (_req, res) => {
   res.json({ totalN: bets.length, byBlock: bets.reduce((acc, b) => { acc[b.blockLabel] = (acc[b.blockLabel]||0)+1; return acc; }, {}) });
 });
 
-// Rule 17 sharing record, readable live: which calibration factor, edge floor
-// and stake eligibility every tracked league resolves to right now. Read-only.
-app.get('/api/admin/calibration-factors', (_req, res) => {
+// Rule 17 sharing record: which calibration factor, edge floor and stake
+// eligibility every tracked league resolves to right now, and the cohorts that
+// fall out of that. Cohorts are DERIVED from the resolved per-league config —
+// never listed — so a league added to an existing constant set lands in that
+// cohort, and a new factor/floor set forms a new cohort automatically. The
+// Performance tab renders one grid per cohort from this (display only).
+const COHORT_LABELS = { RULE12_CALIBRATION_FACTOR: 'EFL lower divisions', TOP_DIVISION_CALIBRATION_FACTOR: 'Top divisions', TOURNAMENT_CALIBRATION_FACTOR: 'Tournaments & cups', 'settings.calibrationFactor': 'Unclassified (pooled setting)' };
+function getCalibrationCohorts() {
   const { LEAGUE_CONFIG } = require('./scoring');
   const settings = getSettings();
   const rows = Object.keys(LEAGUE_CONFIG).map(id => { const lid = parseInt(id, 10); return {
@@ -9277,10 +9290,6 @@ app.get('/api/admin/calibration-factors', (_req, res) => {
     paperProbMin: DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(lid) ? PAPER_MONEY_PROB_MIN : null,
     paperStakeEligible: PAPER_STAKE_ELIGIBLE_LEAGUE_IDS.has(lid),
   }; });
-  // Cohorts: leagues grouped by their resolved calibration/staking configuration.
-  // Derived, never listed — a league added to an existing constant set lands in
-  // that cohort; a new factor/floor set forms a new cohort automatically.
-  const COHORT_LABELS = { RULE12_CALIBRATION_FACTOR: 'EFL lower divisions', TOP_DIVISION_CALIBRATION_FACTOR: 'Top divisions', TOURNAMENT_CALIBRATION_FACTOR: 'Tournaments & cups', 'settings.calibrationFactor': 'Unclassified (pooled setting)' };
   const cohortMap = {};
   for (const r of rows) {
     const key = [r.tier, r.factorSource, r.calibrationFactor, r.paperEdgeMin, r.paperProbMin, r.paperStakeEligible].join('|');
@@ -9289,6 +9298,10 @@ app.get('/api/admin/calibration-factors', (_req, res) => {
     r.cohortId = cohortMap[key].id;
   }
   const cohorts = Object.values(cohortMap).sort((a, b) => (b.paperStakeEligible - a.paperStakeEligible) || a.label.localeCompare(b.label));
+  return { settings, rows, cohorts };
+}
+app.get('/api/admin/calibration-factors', (_req, res) => {
+  const { settings, rows, cohorts } = getCalibrationCohorts();
   const evByLeague = Object.fromEntries(((readJSON('ev-calibration.json') || {}).byLeague || []).map(l => [l.leagueId, l.n]));
   const recheckTriggers = CALIBRATION_RECHECK_TRIGGERS.map(t => ({ ...t, currentN: evByLeague[t.leagueId] ?? null, due: (evByLeague[t.leagueId] ?? 0) >= t.triggerN }));
   res.json({ settingsCalibrationFactor: settings.calibrationFactor ?? null, rows, cohorts, recheckTriggers });
