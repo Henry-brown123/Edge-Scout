@@ -36,10 +36,10 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../data');
 // and Carabao Cup (48) have both converted below -- Carabao Cup once its
 // corrected rescore (the domestic-blend over-broad-filter fix) produced its
 // own clean, banked read (CALIBRATION_AUDIT[48]: posEdgeN=192, ROI +8.04%).
-// Serie B (136), Segunda División (141), 2. Bundesliga (79) — rule-10 holdouts
-// from 2026-09-04 until each league's single backtest is banked, then rule-12
-// date-split (mirrors server.js TRAINING_HOLDOUT_LEAGUE_IDS).
-const FULLY_EXCLUDED_LEAGUE_IDS = new Set([136, 141, 79]);
+// Serie B (136), Segunda División (141), 2. Bundesliga (79) were rule-10 holdouts
+// for the evening of 2026-09-04 only; converted to the date-splits below the same
+// evening once their single backtests were banked (rule 15, Addendum 43).
+const FULLY_EXCLUDED_LEAGUE_IDS = new Set([]);
 
 // Per-league date-split cutoff (calibration-rules.md rules 12/15). Real money
 // is staked on League One/Two and new fixtures resolve weekly with no way to
@@ -56,6 +56,9 @@ const FULLY_EXCLUDED_LEAGUE_IDS = new Set([136, 141, 79]);
 // decoupled and permanently 'real-backtest' regardless of what this filter
 // does (rule 12).
 const DATE_SPLIT_CUTOFFS = new Map([
+  [136, '2026-09-04T21:00:00Z'], // Serie B — Addendum 43 Part 2 backtest compute time, rounded up
+  [141, '2026-09-04T21:00:00Z'], // Segunda División
+  [79,  '2026-09-04T21:00:00Z'], // 2. Bundesliga
   // League One / League Two — commit timestamp of the temp diagnostic that
   // produced Addendum 19's matched-population read (2c0ed15,
   // 2026-08-11T08:13:41+01:00 = 07:13:41 UTC), rounded up to a clean margin

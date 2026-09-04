@@ -6410,6 +6410,7 @@ function previewRealStake(label, modelProb, bookOdds, caveat, leagueId) {
   const lid = parseInt(leagueId, 10);
   const calFactor  = [1, 2, 3, 48, 848].includes(lid) ? 1.06
     : [40, 41, 42].includes(lid) ? 0.93
+    : [136, 141, 79].includes(lid) ? 0.90
     : [39, 140, 135, 78, 61, 179, 88, 94].includes(lid) ? 1.06
     : 1.02; // UNCLASSIFIED_CALIBRATION_FACTOR — settings no longer carry a factor
   const realFrac   = STATE.settings?.realKellyFraction ?? 0.25;

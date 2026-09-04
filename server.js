@@ -486,7 +486,9 @@ function getLeagueMode(leagueId) {
 // DATE_SPLIT_CUTOFFS in both trainers), exactly as Championship did on
 // 2026-08-24. Mirrored in models/gbdt-train.js and gbdt-train-proxy.js
 // FULLY_EXCLUDED_LEAGUE_IDS and WEEKLY_RETRAIN_FULLY_EXCLUDED_LEAGUE_IDS.
-const TRAINING_HOLDOUT_LEAGUE_IDS = new Set([136, 141, 79]);
+// 2026-09-04 21:00 UTC: all three converted to rule-12 date-splits below, per the
+// lifecycle stated above, immediately after their single looks (Addendum 43 Part 2).
+const TRAINING_HOLDOUT_LEAGUE_IDS = new Set([]);
 // Per-league date-split holdout (calibration-rules.md rules 12/15). Mirrors
 // gbdt-train.js's / gbdt-train-proxy.js's DATE_SPLIT_LEAGUE_IDS + cutoffs
 // exactly -- all four copies (this one, the weekly-retrain audit mirror
@@ -499,6 +501,15 @@ const TRAINING_HOLDOUT_LEAGUE_IDS = new Set([136, 141, 79]);
 // (e.g. Crawley Town vs Crewe, Cambridge United vs Wigan) keep whatever
 // value they were given at lock time regardless of any later change here.
 const DATE_SPLIT_HOLDOUT_CUTOFFS = new Map([
+  // Serie B / Segunda División / 2. Bundesliga — converted 2026-09-04 per rule
+  // 15, immediately after each league's single backtest look (Addendum 43
+  // Part 2, computed 20:35 UTC from the deployed diag-phase2-backtest endpoint).
+  // Cutoff = that compute time rounded up to a clean margin; gap-window check:
+  // zero fixtures in any of the three leagues kicked off between 20:35 and
+  // 21:00 UTC (last kickoffs that day were 18:30 Segunda, 16:30 2. Bundesliga).
+  [136, '2026-09-04T21:00:00Z'],
+  [141, '2026-09-04T21:00:00Z'],
+  [79,  '2026-09-04T21:00:00Z'],
   // League One / League Two — applied 2026-08-15. Cutoff = commit timestamp
   // of the temp diagnostic that produced Addendum 19's matched-population
   // read (2c0ed15, 2026-08-11T08:13:41+01:00 = 07:13:41 UTC), rounded up to
@@ -556,6 +567,9 @@ function getPaperMoneyEdgeMin(leagueId) {
   const lid = parseInt(leagueId, 10);
   if (RULE12_CALIBRATION_LEAGUE_IDS.has(lid)) return PAPER_MONEY_EDGE_MIN_RULE12;
   if (TOP_DIVISION_CALIBRATION_LEAGUE_IDS.has(lid)) return PAPER_MONEY_EDGE_MIN_TOP;
+  // Continental second tiers: no paper-money rule at all (Addendum 43 Part 4 —
+  // no edge/probability cell survived its single test look). null, never 0.18.
+  if (CONTINENTAL_SECOND_TIER_LEAGUE_IDS.has(lid)) return null;
   return PAPER_MONEY_EDGE_MIN;
 }
 // 2026-09-04 (Addendum 38, adopted): paper-with-stake is limited to the leagues
@@ -650,11 +664,24 @@ const CALIBRATION_RECHECK_TRIGGERS = [
 // three explicit cohorts above — so this fallback is reached only by a league added
 // to LEAGUES without being placed in a cohort, which the factors endpoint surfaces.
 const UNCLASSIFIED_CALIBRATION_FACTOR = 1.02;
+// Serie B (136), Segunda División (141), 2. Bundesliga (79) — rule-17 sharing
+// record, Addendum 43 Part 3 (2026-09-04): per-league Brier optima 0.88 / 0.92 /
+// 0.91 on each league's full never-trained-on matched population (2,443 / 2,962 /
+// 1,911 fixtures, 2020-06 → 2026-09); pooled optimum 0.90, and each league's cost
+// of 0.90 vs its own optimum is 0.00013 / 0.00007 / 0.00001 — inside the 0.0002
+// clustering bar Addendum 41 used. They do NOT join the EFL group at 0.93: Serie
+// B's cost of 0.93 is 0.00069, three times that bar. 1.02 costs 0.0025-0.0049.
+// Observation tier only; no paper-money rule (Part 4 found none that survives a
+// test look), so getPaperMoneyEdgeMin returns null for them — factor and floor
+// decided together, as rule 17 requires.
+const CONTINENTAL_SECOND_TIER_LEAGUE_IDS = new Set([136, 141, 79]);
+const CONTINENTAL_SECOND_TIER_CALIBRATION_FACTOR = 0.90;
 function getCalFactorForLeague(_settings, leagueId) {
   const lid = parseInt(leagueId, 10);
   if (TOURNAMENT_LEAGUE_IDS.has(lid)) return TOURNAMENT_CALIBRATION_FACTOR;
   if (RULE12_CALIBRATION_LEAGUE_IDS.has(lid)) return RULE12_CALIBRATION_FACTOR;
   if (TOP_DIVISION_CALIBRATION_LEAGUE_IDS.has(lid)) return TOP_DIVISION_CALIBRATION_FACTOR;
+  if (CONTINENTAL_SECOND_TIER_LEAGUE_IDS.has(lid)) return CONTINENTAL_SECOND_TIER_CALIBRATION_FACTOR;
   return UNCLASSIFIED_CALIBRATION_FACTOR;
 }
 function getCalFactorSource(leagueId) {
@@ -662,6 +689,7 @@ function getCalFactorSource(leagueId) {
   if (TOURNAMENT_LEAGUE_IDS.has(lid)) return 'TOURNAMENT_CALIBRATION_FACTOR';
   if (RULE12_CALIBRATION_LEAGUE_IDS.has(lid)) return 'RULE12_CALIBRATION_FACTOR';
   if (TOP_DIVISION_CALIBRATION_LEAGUE_IDS.has(lid)) return 'TOP_DIVISION_CALIBRATION_FACTOR';
+  if (CONTINENTAL_SECOND_TIER_LEAGUE_IDS.has(lid)) return 'CONTINENTAL_SECOND_TIER_CALIBRATION_FACTOR';
   return 'UNCLASSIFIED_CALIBRATION_FACTOR';
 }
 
@@ -1917,6 +1945,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   // Per-group edge floor on the live edge scale — see getPaperMoneyEdgeMin.
   const paperEdgeMin = getPaperMoneyEdgeMin(leagueId);
   const clearsPaperMoneyRule = isDomesticTierLeague
+    && paperEdgeMin != null
     && tierCandidate.hasRealOdds
     && tierCandidate.edge != null
     && tierCandidate.edge >= paperEdgeMin
@@ -4087,7 +4116,7 @@ function runWalkForwardBlock(blockLabel, trainBefore, testEnd, onComplete, extra
 // file's own isFixtureTrainingHoldout/DATE_SPLIT_HOLDOUT_CUTOFFS above --
 // three-plus copies of the same policy, no shared module, by established
 // convention in this codebase.
-const WEEKLY_RETRAIN_FULLY_EXCLUDED_LEAGUE_IDS = new Set([136, 141, 79]); // rule-10 holdouts, see TRAINING_HOLDOUT_LEAGUE_IDS
+const WEEKLY_RETRAIN_FULLY_EXCLUDED_LEAGUE_IDS = new Set([]); // 136/141/79 converted to date-splits 2026-09-04 (DATE_SPLIT_HOLDOUT_CUTOFFS)
 const WEEKLY_RETRAIN_DATE_SPLIT_CUTOFFS = new Map([
   [41, '2026-08-11T09:00:00Z'],
   [42, '2026-08-11T09:00:00Z'],
@@ -4561,149 +4590,6 @@ app.get('/api/odds/events', async (req, res) => {
     res.set('X-Requests-Remaining', headers['x-requests-remaining'] || '');
     res.json(data);
   } catch (e) { res.status(e.response?.status || 500).json({ error: e.message }); }
-});
-
-// ─── TEMP DIAGNOSTICS (2026-09-04, Phase 2 lower-division assessment) — remove after use ───
-// Read-only. (1) status: memory headroom + per-league fetched/scored/closing-odds
-// counts for 136/141/79. (2) boundary: domestic-blend crossing check, same design
-// as the 2026-08-19 Championship check (504037b). (3) backtest: the single
-// disciplined look per league, same shape as 387adb3 (calibration table + posEdge
-// >=5% ROI pooled and by tier, 95% CI). (4) brier: per-league factor sweep and the
-// clustering cost table (rule 17, Addendum 41 method). (5) grid: train-only 1%
-// grid (train = before 2024-09-16, test = from it) at a caller-supplied factor,
-// pre-registered picks, single test look (Addendum 38/39/40 structure).
-const PHASE2_LEAGUES = [136, 141, 79];
-function _p2Stats(arr) {
-  const n = arr.length;
-  if (!n) return { n: 0, roi: null, ciLow: null, ciHigh: null, abs: 0, thin: true };
-  const rets = arr.map(f => f.won ? f.pinnacleOdds - 1 : -1);
-  const mean = rets.reduce((a, v) => a + v, 0) / n;
-  const sd = n > 1 ? Math.sqrt(rets.reduce((a, v) => a + (v - mean) ** 2, 0) / (n - 1)) : 0;
-  const h = 1.96 * sd / Math.sqrt(n);
-  return { n, wins: arr.filter(f => f.won).length, roi: +(mean * 100).toFixed(2), ciLow: +((mean - h) * 100).toFixed(2), ciHigh: +((mean + h) * 100).toFixed(2), abs: +(rets.reduce((a, v) => a + v, 0)).toFixed(1), avgOdds: +(arr.reduce((a, f) => a + f.pinnacleOdds, 0) / n).toFixed(2), thin: n < 30 };
-}
-app.get('/api/admin/diag-phase2-status', async (_req, res) => {
-  try {
-    const v8 = require('v8');
-    const mem = process.memoryUsage(); const heap = v8.getHeapStatistics();
-    const existing = readHistoricalCached() || { fixtures: [], scoredRecords: [] };
-    const closing = getClosingOdds();
-    const scoredIds = new Set(existing.scoredRecords.map(r => r.fixtureId));
-    const out = {};
-    for (const id of PHASE2_LEAGUES) {
-      const fx = existing.fixtures.filter(f => parseInt(f.league?.id, 10) === id);
-      const bySeason = {};
-      for (const f of fx) { const sn = f.league?.season; if (!bySeason[sn]) bySeason[sn] = { fetched: 0, scored: 0, closing: 0 }; bySeason[sn].fetched++; if (scoredIds.has(f.fixture?.id)) bySeason[sn].scored++; if (closing[f.fixture?.id]) bySeason[sn].closing++; }
-      out[id] = { name: LEAGUE_NAMES_MAP[String(id)], fetched: fx.length, scored: fx.filter(f => scoredIds.has(f.fixture?.id)).length, closing: fx.filter(f => closing[f.fixture?.id]).length, from2020: fx.filter(f => new Date(f.fixture?.date).getUTCFullYear() >= 2020).length, bySeason };
-    }
-    res.json({ memory: { rssMB: +(mem.rss / 1048576).toFixed(0), heapUsedMB: +(mem.heapUsed / 1048576).toFixed(0), heapLimitMB: +(heap.heap_size_limit / 1048576).toFixed(0) }, population: { fixtures: existing.fixtures.length, scored: existing.scoredRecords.length, closingKeys: Object.keys(closing).length }, historicalStatus: _historicalBackfillRunning ? { running: true, ..._historicalBackfillStatus } : (readJSON('backfill-historical-meta.json') || null), closingStatus: _closingOddsStatus, leagues: out, oddsCredits: _lastKnownOddsCredits });
-  } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
-});
-// TEMP (2026-09-04, Thread A backlog scope) — how much of tonight's 6,209
-// existing-league "new fixtures" is the 24 Aug–4 Sep window vs older backlog.
-// Per league-season: pool count now vs API-Sports' own FT count today, and the
-// pool's fixture count dated inside the freeze window. Read-only.
-app.get('/api/admin/diag-backlog-scope', async (_req, res) => {
-  try {
-    const existing = readHistoricalCached();
-    const FREEZE_FROM = new Date('2026-08-24T00:00:00Z'), FREEZE_TO = new Date('2026-09-04T23:59:59Z');
-    const byLS = {};
-    for (const f of existing.fixtures) { const lid = String(f.league?.id); if (PHASE2_LEAGUES.includes(parseInt(lid, 10))) continue; const sn = f.league?.season; const k = `${lid}_${sn}`; if (!byLS[k]) byLS[k] = { leagueId: lid, name: LEAGUE_NAMES_MAP[lid] || lid, season: sn, pool: 0, inFreezeWindow: 0, latest: null }; byLS[k].pool++; const d = new Date(f.fixture?.date); if (d >= FREEZE_FROM && d <= FREEZE_TO) byLS[k].inFreezeWindow++; if (!byLS[k].latest || f.fixture?.date > byLS[k].latest) byLS[k].latest = f.fixture?.date; }
-    const rows = Object.values(byLS).filter(r => r.season >= 2024).sort((a, b) => a.leagueId.localeCompare(b.leagueId) || a.season - b.season);
-    for (const r of rows) { try { const { data } = await apiSports.get('/fixtures', { params: { league: r.leagueId, season: r.season, status: 'FT' } }); r.apiFT = data?.results ?? null; r.apiError = data?.errors && Object.keys(data.errors).length ? data.errors : undefined; } catch (e) { r.apiError = e.message; } await new Promise(x => setTimeout(x, 250)); }
-    const totalFreeze = rows.reduce((a, r) => a + r.inFreezeWindow, 0);
-    res.json({ note: 'TEMP — backlog scope. Remove after use.', freezeWindow: '2026-08-24..2026-09-04', existingLeagueFixturesInFreezeWindow: totalFreeze, tonightNewExistingLeagueFixtures: 6209, impliedPreFreezeBacklog: 6209 - totalFreeze, rows });
-  } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
-});
-app.get('/api/admin/diag-phase2-boundary', (_req, res) => {
-  try {
-    const PARTNER = { 136: [135], 141: [140], 79: [78] };
-    const existing = readHistoricalCached();
-    const scoredById = new Map(existing.scoredRecords.map(r => [r.fixtureId, r]));
-    const teamLeagueBySeason = new Map();
-    for (const f of existing.fixtures) { const sn = f.league?.season, l = String(f.league?.id); for (const side of ['home', 'away']) { const t = f.teams?.[side]?.id; if (!t) continue; if (!teamLeagueBySeason.has(t)) teamLeagueBySeason.set(t, new Map()); const m = teamLeagueBySeason.get(t); if (!m.has(sn)) m.set(sn, new Set()); m.get(sn).add(l); } }
-    const out = {};
-    for (const id of PHASE2_LEAGUES) {
-      const fx = existing.fixtures.filter(f => parseInt(f.league?.id, 10) === id && scoredById.has(f.fixture?.id));
-      const earliest = new Map();
-      for (const f of fx) { const sn = f.league?.season; for (const side of ['home', 'away']) { const t = f.teams?.[side]?.id; if (!t) continue; const k = `${t}_${sn}`; const cur = earliest.get(k); if (!cur || new Date(f.fixture?.date) < new Date(cur.fixture?.date)) earliest.set(k, f); } }
-      const rows = [];
-      for (const [k, f] of earliest) { const [t, sn] = k.split('_').map(Number); const prev = teamLeagueBySeason.get(t)?.get(sn - 1); if (!prev) continue; const fromTop = PARTNER[id].some(p => prev.has(String(p))); if (!fromTop) continue; const rec = scoredById.get(f.fixture?.id); const isHome = f.teams?.home?.id === t; const v = isHome ? rec.homeFactors?.standings : rec.awayFactors?.standings; rows.push({ team: isHome ? rec.homeTeamName : rec.awayTeamName, season: sn, priorLeague: [...prev].join(','), firstFixture: f.fixture?.date?.slice(0, 10), standings: v, neutral: v === 50 || v == null }); }
-      // reverse direction: a team's first top-flight fixture after promotion from this league
-      const rev = [];
-      for (const p of PARTNER[id]) { const top = existing.fixtures.filter(f => parseInt(f.league?.id, 10) === p && scoredById.has(f.fixture?.id)); const e2 = new Map(); for (const f of top) { const sn = f.league?.season; for (const side of ['home', 'away']) { const t = f.teams?.[side]?.id; if (!t) continue; const k = `${t}_${sn}`; const cur = e2.get(k); if (!cur || new Date(f.fixture?.date) < new Date(cur.fixture?.date)) e2.set(k, f); } } for (const [k, f] of e2) { const [t, sn] = k.split('_').map(Number); const prev = teamLeagueBySeason.get(t)?.get(sn - 1); if (!prev || !prev.has(String(id))) continue; const rec = scoredById.get(f.fixture?.id); const isHome = f.teams?.home?.id === t; const v = isHome ? rec.homeFactors?.standings : rec.awayFactors?.standings; rev.push({ team: isHome ? rec.homeTeamName : rec.awayTeamName, season: sn, topLeague: p, firstFixture: f.fixture?.date?.slice(0, 10), standings: v, neutral: v === 50 || v == null, scoredAt: rec.scoredAt || null }); } }
-      out[id] = { name: LEAGUE_NAMES_MAP[String(id)], relegatedIntoThisLeague: { n: rows.length, neutral: rows.filter(r => r.neutral).length, examples: rows.sort((a, b) => b.season - a.season).slice(0, 12) }, promotedOutToTopFlight: { n: rev.length, neutral: rev.filter(r => r.neutral).length, note: 'top-flight records were scored before these leagues joined the blend; they only change on a full rescore, which this task does not run', examples: rev.sort((a, b) => b.season - a.season).slice(0, 8) } };
-    }
-    res.json(out);
-  } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
-});
-app.get('/api/admin/diag-phase2-backtest', async (req, res) => {
-  try {
-    const id = parseInt(req.query.league, 10);
-    if (!PHASE2_LEAGUES.includes(id)) return res.status(400).json({ error: 'league must be 136, 141 or 79' });
-    const settings = getSettings();
-    const all = await computeMatchedEdgeFixtures();
-    const m = all.filter(f => parseInt(f.leagueId, 10) === id).sort((a, b) => new Date(a.date) - new Date(b.date));
-    const calib = {};
-    for (const f of m) { const t = tierOfProbShared(f.modelProb); if (!t) continue; if (!calib[t]) calib[t] = { n: 0, ps: 0, w: 0 }; calib[t].n++; calib[t].ps += f.modelProb; if (f.won) calib[t].w++; }
-    const calibration = LEAGUE_TIER_MATRIX_TIER_ORDER.filter(t => calib[t]).map(t => ({ tier: t, n: calib[t].n, avgPredicted: +(calib[t].ps / calib[t].n).toFixed(4), actualWinRate: +(calib[t].w / calib[t].n).toFixed(4), biasPp: +((calib[t].w / calib[t].n - calib[t].ps / calib[t].n) * 100).toFixed(1) }));
-    const posEdge = m.filter(f => f.edge >= 0.05);
-    const byTierRaw = {}; for (const f of posEdge) { const t = tierOfProbShared(f.modelProb); if (!t) continue; (byTierRaw[t] = byTierRaw[t] || []).push(f); }
-    const byTier = LEAGUE_TIER_MATRIX_TIER_ORDER.filter(t => byTierRaw[t]).map(t => ({ tier: t, ..._p2Stats(byTierRaw[t]) }));
-    const byYear = {}; for (const f of posEdge) { const y = f.date.slice(0, 4); (byYear[y] = byYear[y] || []).push(f); }
-    const pooled = _p2Stats(posEdge);
-    const brierRaw = m.reduce((a, f) => a + (f.modelProb - (f.won ? 1 : 0)) ** 2, 0) / (m.length || 1);
-    res.json({ league: id, name: LEAGUE_NAMES_MAP[String(id)], calFactorUsedForEdge: getCalFactorForLeague(settings, id), scoringModel: getModelTreeBoundary(), matched: m.length, from: m[0]?.date?.slice(0, 10), to: m[m.length - 1]?.date?.slice(0, 10), allMatchedStats: _p2Stats(m), brierRawTopPick: +brierRaw.toFixed(5), calibration, roi: { pooled: { ...pooled, decisionGrade: pooled.n >= 300, rule6Floor: 300 }, byTier, byYear: Object.fromEntries(Object.entries(byYear).map(([y, a]) => [y, _p2Stats(a)])) } });
-  } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
-});
-app.get('/api/admin/diag-phase2-brier', async (_req, res) => {
-  try {
-    const { LEAGUE_CONFIG } = require('./scoring');
-    const all = await computeMatchedEdgeFixtures();
-    const lid = f => parseInt(f.leagueId, 10);
-    const brier = (arr, k) => arr.reduce((a, f) => a + (Math.min(0.97, f.modelProb * k) - (f.won ? 1 : 0)) ** 2, 0) / arr.length;
-    const sweep = arr => { const rows = []; for (let k = 80; k <= 120; k++) rows.push({ factor: k / 100, brier: +brier(arr, k / 100).toFixed(5) }); const best = rows.reduce((a, b) => b.brier < a.brier ? b : a, rows[0]); return { n: arr.length, best: best.factor, brierAtBest: best.brier, at093: +brier(arr, 0.93).toFixed(5), at100: +brier(arr, 1.00).toFixed(5), at102: +brier(arr, 1.02).toFixed(5), at106: +brier(arr, 1.06).toFixed(5), curve: rows.filter(r => Math.round(r.factor * 100) % 2 === 0) }; };
-    const pops = Object.fromEntries(PHASE2_LEAGUES.map(id => [id, all.filter(f => lid(f) === id)]));
-    const pooled3 = sweep(PHASE2_LEAGUES.flatMap(id => pops[id]));
-    const F3 = pooled3.best;
-    const perLeague = Object.fromEntries(PHASE2_LEAGUES.map(id => { const sw = sweep(pops[id]); return [LEAGUE_CONFIG[id].name, { id, ...sw, atPooled3: +brier(pops[id], F3).toFixed(5), costPooled3VsOwn: +(brier(pops[id], F3) - sw.brierAtBest).toFixed(5), costEFL093VsOwn: +(brier(pops[id], 0.93) - sw.brierAtBest).toFixed(5), cost102VsOwn: +(brier(pops[id], 1.02) - sw.brierAtBest).toFixed(5) }]; }));
-    // EFL reference on the same method (full pre-cutoff populations, for comparability of the 0.93 figure)
-    const RULE12 = { 41: '2026-08-11T09:00:00Z', 42: '2026-08-11T09:00:00Z', 40: '2026-08-19T22:00:00Z' };
-    const efl = all.filter(f => RULE12[lid(f)] && new Date(f.date) < new Date(RULE12[lid(f)]));
-    const eflSweep = sweep(efl);
-    const bests = Object.values(perLeague).map(l => l.best);
-    res.json({ note: 'TEMP — Phase 2 Part 3 per-league Brier sweep (top-pick calProb vs outcome), factor 0.80-1.20. Remove after use.', perLeague, pooledThree: { n: pooled3.n, best: F3, brierAtBest: pooled3.brierAtBest, at093: pooled3.at093, at102: pooled3.at102, curve: pooled3.curve }, cluster: { bests, spread: +(Math.max(...bests) - Math.min(...bests)).toFixed(2) }, eflReference: { n: eflSweep.n, best: eflSweep.best, brierAtBest: eflSweep.brierAtBest, at093: eflSweep.at093, liveFactor: 0.93 } });
-  } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
-});
-app.get('/api/admin/diag-phase2-grid', async (req, res) => {
-  try {
-    const id = parseInt(req.query.league, 10);
-    const factor = parseFloat(req.query.factor);
-    if (!PHASE2_LEAGUES.includes(id) || !Number.isFinite(factor)) return res.status(400).json({ error: 'league (136|141|79) and factor required' });
-    const TRAIN_END = '2024-09-16T00:00:00Z';
-    const all = await computeMatchedEdgeFixtures();
-    const pop = all.filter(f => parseInt(f.leagueId, 10) === id).sort((a, b) => new Date(a.date) - new Date(b.date));
-    // re-express edge at the supplied factor: implied = calProb - edge is factor-independent
-    const withEdge = pop.map(f => ({ ...f, edgeAt: Math.min(0.97, f.modelProb * factor) - (f.calProb - f.edge) }));
-    const train = withEdge.filter(f => new Date(f.date) < new Date(TRAIN_END)), test = withEdge.filter(f => new Date(f.date) >= new Date(TRAIN_END));
-    const passes = (f, e, p) => f.edgeAt >= e / 100 - 1e-12 && f.modelProb >= p / 100 - 1e-12;
-    const EDGES = Array.from({ length: 26 }, (_, i) => 5 + i), PROBS = Array.from({ length: 31 }, (_, i) => 35 + i);
-    const blocksOf = arr => { const size = Math.ceil(arr.length / 4); return [0, 1, 2, 3].map(i => arr.slice(i * size, (i + 1) * size)); };
-    const trainBlocks = blocksOf(train);
-    const grid = [];
-    for (const e of EDGES) for (const p of PROBS) { const cell = train.filter(f => passes(f, e, p)); const st = _p2Stats(cell); const perBlock = trainBlocks.map(b => _p2Stats(b.filter(f => passes(f, e, p)))); const posBlocks = perBlock.filter(b => b.n >= 20 && b.roi > 0).length; grid.push({ e, p, ...st, posBlocks, robust: posBlocks === 4 }); }
-    const eligible = grid.filter(c => c.n >= 100);
-    const robustPick = eligible.filter(c => c.robust).sort((a, b) => (b.abs - a.abs) || (b.e - a.e))[0] || null;
-    const fallbackPick = robustPick ? null : (eligible.filter(c => c.posBlocks >= 3).sort((a, b) => (b.abs - a.abs) || (b.e - a.e))[0] || null);
-    const ciLowPick = eligible.sort((a, b) => (b.ciLow - a.ciLow) || (b.e - a.e))[0] || null;
-    const look = (e, p, label) => { const c = test.filter(f => passes(f, e, p)); return { label, e, p, test: _p2Stats(c), testBlocks: blocksOf(test).map(b => { const st = _p2Stats(b.filter(f => passes(f, e, p))); return { range: b.length ? `${b[0].date.slice(0, 10)}→${b[b.length - 1].date.slice(0, 10)}` : 'empty', n: st.n, roi: st.roi }; }), train: grid.find(g => g.e === e && g.p === p) }; };
-    const picks = [];
-    if (robustPick) picks.push(look(robustPick.e, robustPick.p, 'train-selected (robust, max abs return)'));
-    if (fallbackPick) picks.push(look(fallbackPick.e, fallbackPick.p, 'train-selected (fallback >=3 blocks, max abs return)'));
-    if (ciLowPick) picks.push(look(ciLowPick.e, ciLowPick.p, 'train-selected (max CI lower bound, n>=100)'));
-    picks.push(look(13, 45, 'EFL incumbent 13/45 applied here'));
-    res.json({ note: 'TEMP — Phase 2 Part 4. Train-only grid (train < 2024-09-16), pre-registered picks, single test look. Remove after use.', league: id, name: LEAGUE_NAMES_MAP[String(id)], factor, population: { total: pop.length, train: { n: train.length, from: train[0]?.date.slice(0, 10), to: train[train.length - 1]?.date.slice(0, 10) }, test: { n: test.length, from: test[0]?.date.slice(0, 10), to: test[test.length - 1]?.date.slice(0, 10) } }, selectionRule: 'train n>=100; robust = all 4 equal-count train blocks positive at n>=20; maximise absolute return; ties → higher edge; fallback >=3 positive blocks; plus max CI-lower-bound pick. Test looked at once, only for the picks and the EFL incumbent. Fixed before any figure was computed.', trainTop10ByAbs: grid.filter(c => c.n >= 100).sort((a, b) => b.abs - a.abs).slice(0, 10).map(c => ({ e: c.e, p: c.p, n: c.n, roi: c.roi, ciLow: c.ciLow, abs: c.abs, posBlocks: c.posBlocks })), trainRobustCount: grid.filter(c => c.n >= 100 && c.robust).length, trainPositiveCellsN100: grid.filter(c => c.n >= 100 && c.roi > 0).length, trainCellsN100: eligible.length, picks, trainGrid: grid });
-  } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
 });
 
 // ── App state API ─────────────────────────────────────────────────────────────
@@ -7039,7 +6925,9 @@ function buildWalkForwardMatrix() {
 // the display-only curation feature this was built for (Addendum 21 Part C).
 // This is NOT the same as UNSEEN_POPULATION_LEAGUES membership and does not
 // imply a validated edge.
-const UNSEEN_POPULATION_DISPLAY_IDS = new Set([48, 41, 42, 40]);
+// Serie B / Segunda División / 2. Bundesliga (136/141/79) added 2026-09-04 on the
+// same 'real-backtest-no-edge' display-only basis as Championship (Addendum 43).
+const UNSEEN_POPULATION_DISPLAY_IDS = new Set([48, 41, 42, 40, 136, 141, 79]);
 const UNSEEN_POPULATION_CONFIRMED_IDS = new Set([48, 41, 42]);
 
 async function buildUnseenPopulationMatrix() {
@@ -8349,9 +8237,9 @@ const CALIBRATION_AUDIT = {
   41:  { reliable: true, status: 'unseen_population', note: 'Single deliberate look completed 2026-08-11 against the full matched-odds population (n=3,344) — no train/test split, none of this data has ever been used for tuning. As of 2026-08-15 (rule 12): training exclusion is now date-split at kickoff cutoff 2026-08-11T09:00:00Z, not whole-league — this backtest population (all pre-cutoff) stays protected from training and this reading is never re-peeked at for the purpose of chasing a better result; fixtures kicking off at/after the cutoff feed the weekly retrain and accumulate as a separate, normal Live reading instead. Corrected 2026-08-18 (Addendum 24): a bug in computeUnifiedEdge (marginStrippedImplied read the wrong odds-object field names) silently NaN\'d every edge computation from Track A (2026-08-14) onward, so this reading was frozen at its pre-Track-A figures the whole time, not genuinely recomputed — the originally-reported posEdgeN=1,580/ROI -3.6% never actually reflected Track A\'s calFactor/margin-stripping correction. Corrected: posEdgeN=2,231, ROI -3.9% — still no confirmed edge (same conclusion as before), but the per-tier cells shifted; the 50-55% tier (n=322) still shows a CI excluding zero, now (-28.2%, -4.7%). Real-money impact of the bug: none — settings.paperTradeOnly/paperKellyFraction were never mutated by it (runEvCalibration()\'s auto-management explicitly skips roi===null leagues, confirmed via live settings read); this was a reporting-layer bug, not a bet-locking one (scoreOneFixture never calls computeUnifiedEdge). Corrected again 2026-08-24 (rule 15 addendum, Addendum 27): a genuine, traced, bounded data-quality bug, distinct from the computeUnifiedEdge bug above and discovered only as a side effect of the unrelated Carabao Cup domestic-blend fix (Addendum 27) — Championship (40) joined DOMESTIC_LEAGUE_IDS_FOR_BLEND on 2026-08-19 (fdab315) but no full rescore had touched League One\'s own scoredRecords since, so 44 of 2,231 fixtures (0.5%) involving Championship-mainstay clubs (Cardiff, Birmingham, Reading, Blackpool, Wigan, Derby, Rotherham, Huddersfield, Peterborough, Plymouth, Luton) were still resolving their domestic-blend standing off a multi-year-stale fallback snapshot from years before Championship was blend-eligible (e.g. Cardiff 2019-05-12→2025-05-03, Birmingham 2011-05-22→2024-05-04, traced fixture-by-fixture, not inferred). Corrected: posEdgeN=2,227 (was 2,231), ROI -2.36% (was -3.9%) — still no confirmed edge, same conclusion, comfortably negative; the 0.5%-scope correction does not change the substantive read. This is a bug fix to 44 previously-wrong fixtures, not a re-peek at a disappointing result — see calibration-rules.md rule 15\'s addendum for the evidentiary bar this had to clear (fixture-level trace, clear mechanism, bounded scope) before being accepted.' },
   42:  { reliable: true, status: 'unseen_population', note: 'Single deliberate look completed 2026-08-11 against the full matched-odds population (n=3,338) — no train/test split, none of this data has ever been used for tuning. As of 2026-08-15 (rule 12): training exclusion is now date-split at kickoff cutoff 2026-08-11T09:00:00Z, not whole-league — this backtest population (all pre-cutoff) stays protected from training and this reading is never re-peeked at for the purpose of chasing a better result; fixtures kicking off at/after the cutoff feed the weekly retrain and accumulate as a separate, normal Live reading instead. Corrected 2026-08-18 (Addendum 24): a bug in computeUnifiedEdge (marginStrippedImplied read the wrong odds-object field names) silently NaN\'d every edge computation from Track A (2026-08-14) onward, so this reading was frozen at its pre-Track-A figures the whole time, not genuinely recomputed — the originally-reported posEdgeN=1,746/ROI +4.2% never actually reflected Track A\'s calFactor/margin-stripping correction. Corrected: posEdgeN=2,346, ROI +3.1% — still no confirmed edge (same conclusion as before), per-tier cells shifted; see /api/league-tier-matrix for the current per-cell breakdown. Real-money impact of the bug: none — settings.paperTradeOnly/paperKellyFraction were never mutated by it (runEvCalibration()\'s auto-management explicitly skips roi===null leagues, confirmed via live settings read); this was a reporting-layer bug, not a bet-locking one (scoreOneFixture never calls computeUnifiedEdge). Re-verified 2026-08-24 (Addendum 27): while investigating League One\'s (41) small Championship-blend-driven drift (see 41\'s note), specifically checked whether League Two shares the same exposure — it does not (League Two\'s promotion/relegation partner is League One, not Championship, and Championship isn\'t in any League Two team\'s blend-eligible history). Fixture-level trace confirmed 0 of 8,244 League Two fixtures\' domestic-blend inputs changed; n=2,346/ROI +3.1% figure above is byte-for-byte the same population, untouched.' },
   40:  { reliable: false, status: 'backtested_no_edge', note: 'Single disciplined backtest completed 2026-08-19 on the full rule-10-protected, genuinely-unseen population (16 seasons, 8357 fixtures scored, 3460 matched with closing odds — 147 misses all no_event_match, pre-dating Odds API coverage). Calibration broadly overconfident in mid-high tiers (e.g. 60-65%: predicted 62.4% vs actual 50.7%; 70-75%: predicted 72.0% vs actual 56.9%). Pooled ROI on posEdge>=5% bets: n=2321 (clears rule-6 decision-grade floor), ROI -0.67%, 95% CI [-5.74%, +4.4%] — spans zero, no confirmed edge. Individual tier CIs are noisier (a couple non-zero-crossing, e.g. 35-40% and 65-70% positive) but none clear the ~300-400 floor on their own and some "significant" results are expected by chance across 10 tiers tested — not treated as decision-grade. Per calibration-rules rule 3 (single look, no re-testing) and the task brief, NOT added to UNSEEN_POPULATION_LEAGUES/historicalSource:"real-backtest" since the result does not confirm a genuine edge. Domestic-blend fix (2026-08-19) empirically verified correct on 93 real promotion/relegation boundary crossings before this backtest ran. Coverage: API-Sports league 40, Odds API soccer_efl_champ, teamsMatch() clean. As of 2026-08-24 (rule 15): with this backtest already banked and no further test in progress, a permanent whole-population holdout was never buying anything further — training exclusion is now date-split at kickoff cutoff 2026-08-19T22:00:00Z (anchored to this backtest\'s own compute date, not the date this rule was applied), same end-state League One/Two reached after their own rule-12 conversion. This reading stays exactly as reported above and never changes; fixtures kicking off at/after the cutoff feed the weekly retrain from here on. Per rule 12\'s own decoupling requirement, this is a training-pool-only decision — the deliberate exclusion from UNSEEN_POPULATION_LEAGUES/historicalSource:"real-backtest" above (a no-confirmed-edge read, not a confirmed one) is untouched by it.' },
-  136: { reliable: false, status: 'untested', note: 'Added 2026-09-04 (Phase 2 lower-division expansion, Addendum 42 shortlist), paper-only observation tier, rule-10 protected from day one (TRAINING_HOLDOUT_LEAGUE_IDS) with its rule-15 conversion stated up front. No scored data yet; the single disciplined backtest look is Phase 2 Part 2 and will be recorded here.' },
-  141: { reliable: false, status: 'untested', note: 'Added 2026-09-04 (Phase 2 lower-division expansion, Addendum 42 shortlist), paper-only observation tier, rule-10 protected from day one (TRAINING_HOLDOUT_LEAGUE_IDS) with its rule-15 conversion stated up front. No scored data yet; the single disciplined backtest look is Phase 2 Part 2 and will be recorded here.' },
-  79:  { reliable: false, status: 'untested', note: 'Added 2026-09-04 (Phase 2 lower-division expansion, Addendum 42 shortlist), paper-only observation tier, rule-10 protected from day one (TRAINING_HOLDOUT_LEAGUE_IDS) with its rule-15 conversion stated up front. No scored data yet; the single disciplined backtest look is Phase 2 Part 2 and will be recorded here.' },
+  136: { reliable: false, status: 'backtested_no_edge', note: 'Single disciplined backtest completed 2026-09-04 20:35 UTC on the full rule-10-protected, never-trained-on population (11 seasons, 4,023 fixtures scored, 2,443 matched with closing odds 2020-06 → 2026-08; 108 misses all no_event_match). Scoring model 2026-08-08 (tree boundary 2022-11-14 is date-only; this league was never in any training pool). Calibration overconfident from the mid tiers up (e.g. 55-60%: predicted 57.3% vs actual 47.3%; 65-70%: 67.2% vs 56.1%). Pooled ROI on posEdge>=5% bets at the 1.02 starting factor: n=1,319 (clears rule-6), ROI -5.58%, 95% CI [-12.51%, +1.34%] — spans zero, no confirmed edge. Per-league Brier optimum 0.88; shares 0.90 with the other two continental second tiers (cost vs own 0.00013, inside the 0.0002 bar; the EFL 0.93 costs 0.00069) — rule 17, Addendum 43 Part 3. Train-only 1% grid at 0.90 with a single test look found no threshold that survives out of window (Part 4). NOT added to UNSEEN_POPULATION_CONFIRMED_IDS; shown in the grid as real-backtest-no-edge for review only. Converted to a rule-12 date-split at 2026-09-04T21:00:00Z per rule 15 the same evening; this reading never changes.' },
+  141: { reliable: false, status: 'backtested_no_edge', note: 'Single disciplined backtest completed 2026-09-04 20:35 UTC on the full rule-10-protected, never-trained-on population (11 seasons, 4,709 fixtures scored, 2,962 matched with closing odds 2020-06 → 2026-08; 116 misses). Scoring model 2026-08-08 (tree boundary 2022-11-14 is date-only; this league was never in any training pool). Calibration overconfident from the mid tiers up (e.g. 55-60%: predicted 57.3% vs actual 48.8%; 65-70%: 67.4% vs 55.8%). Pooled ROI on posEdge>=5% bets at the 1.02 starting factor: n=1,510 (clears rule-6), ROI -4.80%, 95% CI [-11.39%, +1.79%] — spans zero, no confirmed edge. Per-league Brier optimum 0.92; shares 0.90 with the other two continental second tiers (cost vs own 0.00007, inside the 0.0002 bar; the EFL 0.93 costs 0.00004) — rule 17, Addendum 43 Part 3. Train-only 1% grid at 0.90 with a single test look found no threshold that survives out of window (Part 4). NOT added to UNSEEN_POPULATION_CONFIRMED_IDS; shown in the grid as real-backtest-no-edge for review only. Converted to a rule-12 date-split at 2026-09-04T21:00:00Z per rule 15 the same evening; this reading never changes.' },
+  79:  { reliable: false, status: 'backtested_no_edge', note: 'Single disciplined backtest completed 2026-09-04 20:35 UTC on the full rule-10-protected, never-trained-on population (16 seasons, 4,628 fixtures scored, 1,911 matched with closing odds 2020-06 → 2026-09; 111 misses). Scoring model 2026-08-08 (tree boundary 2022-11-14 is date-only; this league was never in any training pool). Calibration overconfident from the mid tiers up (e.g. 60-65%: predicted 62.3% vs actual 51.2%; 65-70%: 67.2% vs 55.9%). Pooled ROI on posEdge>=5% bets at the 1.02 starting factor: n=932 (clears rule-6), ROI -0.47%, 95% CI [-8.46%, +7.51%] — spans zero, no confirmed edge. Per-league Brier optimum 0.91; shares 0.90 with the other two continental second tiers (cost vs own 0.00001, inside the 0.0002 bar; the EFL 0.93 costs 0.00014) — rule 17, Addendum 43 Part 3. Train-only 1% grid at 0.90 with a single test look found no threshold that survives out of window (Part 4). NOT added to UNSEEN_POPULATION_CONFIRMED_IDS; shown in the grid as real-backtest-no-edge for review only. Converted to a rule-12 date-split at 2026-09-04T21:00:00Z per rule 15 the same evening; this reading never changes.' },
 };
 
 // Correction-layer-backtest readings (calibration-rules.md rules 13/14).
@@ -9519,7 +9407,7 @@ app.get('/api/admin/walkforward-raw-bets', (_req, res) => {
 // never listed — so a league added to an existing constant set lands in that
 // cohort, and a new factor/floor set forms a new cohort automatically. The
 // Performance tab renders one grid per cohort from this (display only).
-const COHORT_LABELS = { RULE12_CALIBRATION_FACTOR: 'EFL lower divisions', TOP_DIVISION_CALIBRATION_FACTOR: 'Top divisions', TOURNAMENT_CALIBRATION_FACTOR: 'Tournaments & cups', UNCLASSIFIED_CALIBRATION_FACTOR: 'Unclassified (code fallback)' };
+const COHORT_LABELS = { RULE12_CALIBRATION_FACTOR: 'EFL lower divisions', TOP_DIVISION_CALIBRATION_FACTOR: 'Top divisions', TOURNAMENT_CALIBRATION_FACTOR: 'Tournaments & cups', CONTINENTAL_SECOND_TIER_CALIBRATION_FACTOR: 'Continental second tiers', UNCLASSIFIED_CALIBRATION_FACTOR: 'Unclassified (code fallback)' };
 function getCalibrationCohorts() {
   const { LEAGUE_CONFIG } = require('./scoring');
   const settings = getSettings();

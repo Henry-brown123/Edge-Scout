@@ -7540,3 +7540,222 @@ rendered from `/api/admin/calibration-factors` (the rule-17 sharing
 record), plus the pre-registered re-check triggers. A stale value left in
 `settings.json` is reported as ignored on that endpoint. Rule 17 gains a
 "Factors live in code" bullet recording this.
+
+## Addendum 43 — Phase 2: Serie B, Segunda División, 2. Bundesliga — addition, backfill, single backtest, per-league calibration, threshold search, recommendation
+
+Brief: apply the full methodology to the three leagues Addendum 42 shortlisted,
+with the same rigour as the Championship / League One / League Two work.
+Rules 1–17 apply throughout; no real-money eligibility results from this
+addendum; every API call is tracked. Parts are written as they complete so
+the sequence of decisions is auditable.
+
+### Part 1 — Addition and protection (commit `264cfc0`, deployed 19:29 UTC 2026-09-04)
+
+Standard touchpoints, mirroring the Championship addition (`fdab315`):
+`LEAGUES` (136 `soccer_italy_serie_b`, 141 `soccer_spain_segunda_division`,
+79 `soccer_germany_bundesliga2`, season 2026), `LEAGUE_CONFIG` with no
+fabricated base rates (rule 10: no `avgHomeWinRate`/`avgDrawRate`/
+`avgAwayWinRate`/`avgGoalsPerGame`; neutral 1.0 multipliers only),
+`DOMESTIC_LEAGUE_IDS_FOR_BLEND`, `COMPETITION_TYPE` (league),
+`LEAGUE_NAMES_MAP`, `CLOSING_ODDS_SPORT_MAP`, `HISTORICAL_BACKFILL_CONFIG`
+(Serie B and Segunda 2016–2026, 2. Bundesliga 2011–2026 — API-Sports' own
+season lists, Addendum 42 Part B), `leagueModes` paper_only, `activeLeagues`
+defaults, `CALIBRATION_AUDIT` status `untested`. Not in
+`PAPER_STAKE_ELIGIBLE_LEAGUE_IDS`, so every live entry is observation tier
+(`isFakeMoney`, zero stake). Calibration factor resolves to the unclassified
+code fallback (1.02) as the rule-17 starting default until Part 3 — the
+factors endpoint and the Performance tab show them as a fourth cohort,
+"Unclassified (code fallback)", which is the honest state.
+
+**Rule-10 holdout with the rule-15 conversion stated up front.**
+`TRAINING_HOLDOUT_LEAGUE_IDS = {136, 141, 79}`, mirrored in both trainers'
+`FULLY_EXCLUDED_LEAGUE_IDS` and in `WEEKLY_RETRAIN_FULLY_EXCLUDED_LEAGUE_IDS`.
+The commit itself records the lifecycle: the moment each league's single
+look (Part 2) is computed and recorded, that league converts to a rule-12
+date-split at a cutoff anchored to its own backtest compute time. Auto-retrain
+confirmed off (`autoRetrainEnabled: false`) before the addition.
+
+**Domestic-blend boundary, verified empirically, not assumed.** Same design
+as the 2026-08-19 Championship check (`504037b`): for every team whose
+first fixture of a season in the new league followed a season in the partner
+top flight (Serie A 135, La Liga 140, Bundesliga 78), read the stored
+`standings` factor on that first fixture — a neutral 50 would mean the blend
+started blind.
+
+| League | Relegated into it (top flight → new league) | Neutral | Promoted out (new league → top flight) | Neutral |
+|---|---|---|---|---|
+| Serie B | 33 crossings | 0 | 30 crossings | 9 |
+| Segunda División | 33 | 0 | 30 | 4 |
+| 2. Bundesliga | 41 | 1 | 41 | 14 |
+
+Into-the-league crossings resolve from real prior standings in 106 of 107
+cases (e.g. Cremonese 2026 from Serie A → 15, Oviedo 2026 from La Liga → 5,
+Wolfsburg 2026 from the Bundesliga → 21). The one neutral is Elversberg
+2025, whose prior season spans both German tiers (play-off), a data edge
+case rather than a blend failure. The out-of-the-league neutrals are the
+Addendum 27 design working as intended, not a defect: a training-eligible
+top-flight fixture scores against the *filtered* domestic timeline, which
+excludes rule-10 holdout leagues precisely so a protected population cannot
+leak into training inputs (e.g. Paderborn's first Bundesliga fixture 2026
+→ 50 while Elversberg's, with a Bundesliga history of its own, → 5). Those
+cases resolve automatically once each league converts to a date-split after
+Part 2, exactly as League One/Two → Championship crossings did. No full
+rescore was run, so no banked reading of any other league moved (the
+Addendum 27 drift mechanism is a full-rescore effect).
+
+**Backfill (Part 2 step 4), memory-safe path.** `POST /api/backfill/
+historical?skipOptimise=true` — the incremental (`rescore=false`) path with
+inline optimisation disabled, so no full-population gradient descent runs at
+the 500-record checkpoints (the exact mechanism of the 2026-08-14 OOM,
+`62334ac`); persistence checkpoints only. Heap 221 MB of 1,120 MB before,
+549 MB during fetch, 293 MB after. Completed in under three minutes:
+4,023 Serie B, 4,709 Segunda, 4,628 2. Bundesliga fixtures fetched and
+scored (13,360; population 80,146 → 93,717). API-Sports: ~40 fixture calls
+for the new seasons (daily counter 1,007 → 1,227 across the whole session,
+limit 150,000). Incidental finding: the run also scored 6,209 fixtures
+from existing leagues that the nightly 00:05 chain should have handled
+since 24 August — the cron sets its own running flag and then calls a chain
+that returns early when that flag is set, so nightly runs have been
+self-skipping. Flagged for a separate fix, outside this brief.
+
+### Part 2 — Closing-odds backfill and the single backtest per league
+
+**Closing odds (step 5).** `POST /api/backfill/closing-odds?leagues=136,141,79`,
+the standard kickoff-minute-grouped historical snapshot backfill (fixtures
+from 2020 only, the provider's archive floor). 4,444 calls, 85,400 credits
+(4,997,126 → 4,911,580 remaining; reserve line 1,000,000 untouched), 55
+minutes. 7,317 of 7,651 eligible fixtures matched (95.6%), 333 misses; per
+season from 2020 on, 98–100% for every league. Heap stayed at ~200–240 MB
+throughout.
+
+**Boundary-crossing dependency on the stalled pool (Thread A question).** The
+Part 1 check reads each relegated team's standing from the partner top
+flight's *previous* season, which ended in May 2026 and is complete (the
+backlog diagnostic confirms every 2024 and 2025 league-season now equals
+API-Sports' own FT count); the promoted-out direction reads 2026 top-flight
+fixtures that tonight's run fetched and scored fresh. The three leagues' own
+fixtures, scores and closing odds were all built tonight. Nothing in this
+addendum's evidence chain reads a frozen population.
+
+**Backlog scope (Thread A question).** The run's `newFixtures` counter adds
+every fetched active-season fixture whether or not it was already in the
+pool (`newCount += fixtures.length`), so 19,569 = 13,360 new-league fixtures
++ 6,209 *re-fetched* 2025/2026 fixtures of existing leagues, not 6,209 new
+ones. The scored count moved 80,146 → 93,717 (+13,571), i.e. only 211
+existing-league fixtures were genuinely new, and exactly 212 existing-league
+fixtures are dated inside 24 Aug–4 Sep. The freeze affected the opening
+rounds only; nothing older was missing. The nightly self-skip is still real
+and is being fixed separately.
+
+**The single look (step 6).** `GET /api/admin/diag-phase2-backtest?league=…`,
+run once per league at 20:35 UTC, same shape as the Championship endpoint
+(`387adb3`): calibration per 5pp tier on all matched fixtures; ROI on
+posEdge ≥ 5% at the 1.02 starting factor; 95% CI, normal approximation on
+per-bet returns; rule-6 floor 300. Scoring model 2026-08-08; the date-only
+rule-16 tag would mark pre-2022-11-14 fixtures, but none of these leagues
+was ever in any training pool, so every fixture is genuinely unseen.
+
+| League | Matched (2020-06 →) | posEdge n | ROI | 95% CI | Decision-grade | Verdict |
+|---|---|---|---|---|---|---|
+| Serie B | 2,443 | 1,319 | −5.58% | [−12.51%, +1.34%] | yes | no confirmed edge, leans negative |
+| Segunda División | 2,962 | 1,510 | −4.80% | [−11.39%, +1.79%] | yes | no confirmed edge, leans negative |
+| 2. Bundesliga | 1,911 | 932 | −0.47% | [−8.46%, +7.51%] | yes | no confirmed edge |
+
+Calibration is overconfident in the mid-to-high tiers in all three, the
+same direction as Championship / League One / League Two: Serie B 55-60%
+predicted 57.3% vs actual 47.3%, 65-70% 67.2% vs 56.1%; Segunda 55-60% 57.3%
+vs 48.8%, 65-70% 67.4% vs 55.8%; 2. Bundesliga 60-65% 62.3% vs 51.2%, 65-70%
+67.2% vs 55.9%. Betting every matched fixture's top pick at Pinnacle
+closing loses in all three (−5.84%, −2.87%, −3.64%; Serie B's CI excludes
+zero). By tier, no cell clears the rule-6 floor with a CI above zero; the
+few positive cells (Serie B 75-80% +42%, n=21; 2. Bundesliga 45-50% +15%,
+n=160) are the chance positives ten tiers produce. By calendar year, no
+league has a positive year with a CI above zero.
+
+### Part 3 — Calibration: their own cluster at 0.90, not the EFL's 0.93
+
+Per-league Brier sweep (top-pick calProb vs outcome, factor 0.80–1.20,
+Addendum 41 method) on each league's full matched population:
+
+| League | n | Own optimum | Brier at own | at 0.90 (pooled 3) | cost of 0.90 | at 0.93 (EFL) | cost of 0.93 | cost of 1.02 |
+|---|---|---|---|---|---|---|---|---|
+| Serie B | 2,443 | 0.88 | 0.23828 | 0.23841 | 0.00013 | 0.23897 | 0.00069 | 0.00493 |
+| Segunda División | 2,962 | 0.92 | 0.24370 | 0.24377 | 0.00007 | 0.24374 | 0.00004 | 0.00249 |
+| 2. Bundesliga | 1,911 | 0.91 | 0.24334 | 0.24335 | 0.00001 | 0.24348 | 0.00014 | 0.00324 |
+
+Pooled over the three (n=7,316) the optimum is 0.90; every league's cost of
+0.90 versus its own optimum is inside the 0.0002 bar Addendum 41 used, so
+they **cluster with each other**. They do **not** cluster with the EFL
+trio at 0.93: Serie B's cost of 0.93 is 0.00069, three times the bar
+(Segunda and 2. Bundesliga individually would fit 0.93, but the group
+does not). The 1.02 starting default costs 0.0025–0.0049, an order of
+magnitude worse. Applied (commit below): `CONTINENTAL_SECOND_TIER_
+CALIBRATION_FACTOR = 0.90` for 136/141/79 as their own cohort, with the
+sharing record in the code comment, and the floor decided in the same
+commit (Part 4): none.
+
+### Part 4 — Threshold search: nothing survives out of window
+
+`GET /api/admin/diag-phase2-grid?league=…&factor=0.90`, once per league.
+Structure as Addenda 38–40: full 1% grid, edge 5–30% × probability 35–65%,
+computed on **train only** (fixtures before 2024-09-16, the same boundary
+the EFL work used); pre-registered picks — robust (all four equal-count
+train blocks positive at n≥20, train n≥100, maximise absolute return, ties
+to the higher edge floor; fallback ≥3 positive blocks) and max CI lower
+bound at n≥100 — then a single test look (2024-09-16 onward) at those picks
+and at the EFL incumbent 13%/45% applied on the 0.90 scale.
+
+| League | Train cells n≥100 | Positive on train | Robust | Pick | Train | Test (single look) |
+|---|---|---|---|---|---|---|
+| Serie B | 188 | 0 | 0 | 5/35 (CI-low) | n=502, −7.5% | n=226, −13.3% [−30.1, +3.5] |
+| Serie B | | | | 13/45 EFL | n=107, −22.2% | n=46, −48.8% [−76.4, −21.3] |
+| Segunda División | 174 | 1 | 0 | 13/38 (fallback) | n=123, −0.3% | n=62, −18.3% [−56.3, +19.6] |
+| Segunda División | | | | 9/39 (CI-low) | n=301, +0.3% | n=118, −21.4% [−46.5, +3.6] |
+| Segunda División | | | | 13/45 EFL | n=93, −18.4% | n=47, −27.6% [−67.4, +12.1] |
+| 2. Bundesliga | 136 | 135 | 4 | 5/46 (robust) | n=238, +11.9% [−3.5, +27.4] | n=97, −21.0% [−43.0, +1.1] |
+| 2. Bundesliga | | | | 5/48 (CI-low) | n=214, +13.6% | n=91, −24.9% [−46.9, −2.8] |
+| 2. Bundesliga | | | | 13/45 EFL | n=63, +15.8% | n=33, −35.7% [−73.1, +1.7] |
+
+Serie B and Segunda have no threshold to select: essentially no positive
+train cell exists. 2. Bundesliga is the instructive case: 135 of 136 train
+cells positive and four robust — and the pre-registered picks lose in **all
+four** test blocks (−40%, −9%, −26%, −8% for 5/46), the CI-low pick's test
+CI excluding zero on the wrong side. This is exactly the in-window-only
+pattern that rejected 12%/39% for the EFL leagues (Addendum 39), and the
+out-of-window rule (brief item 10) rejects it here. Rule 6: every test cell
+is under 300 and indicative-only on its own; the direction is uniform
+enough that no cell is a candidate regardless.
+
+### Part 5 — Recommendation, per league
+
+- **Serie B — does not clear the bar.** Decision-grade negative: pooled
+  −5.58% with the CI reaching only +1.3%, every-fixture ROI −5.84% with a CI
+  excluding zero, no positive train cell at n≥100, EFL rule −48.8% on test.
+- **Segunda División — does not clear the bar.** Decision-grade negative:
+  pooled −4.80% (CI to +1.8%), one marginally positive train cell that loses
+  on test, EFL rule −27.6% on test.
+- **2. Bundesliga — does not clear the bar.** Pooled −0.47% with the widest
+  CI (it is the smallest of the three); a train-only search would have
+  produced a rule, and the single test look shows that rule losing in every
+  block. Not a candidate.
+
+None joins the staked cohort; none is offered paper-with-stake. This is a
+genuine negative for the "less-followed second tiers show more value"
+hypothesis on the three best-data candidates available: the model is
+overconfident in these markets in the same way it is in the EFL, but
+without the EFL's post-calibration residual signal. What was applied
+anyway, because it is correct regardless of the verdict: the 0.90 cohort
+factor (Part 3), the rule-15 conversion of all three to date-splits at
+2026-09-04T21:00:00Z, `CALIBRATION_AUDIT` set to `backtested_no_edge` with
+the figures above, `real-backtest-no-edge` display in the tier grid (as
+Championship), and a fourth cohort, "Continental second tiers", ×0.90, no
+paper-money rule, OBSERVATION ONLY, rendered by the existing cohort tables
+with no UI change. They stay tracked as observation-tier leagues; a future
+model change would re-test them through their ordinary Live readings, not
+by re-peeking at this population.
+
+**API usage for the whole of Phase 2:** Odds API 85,400 credits (closing
+odds) + ~50 (live samples); API-Sports ~140 calls (backfill fetch of 38
+new league-seasons, active-season refresh, backlog diagnostic). Temp
+endpoints `diag-phase2-{status,boundary,backtest,brier,grid}` and
+`diag-backlog-scope` removed in the same commit as the Part 3 factor.

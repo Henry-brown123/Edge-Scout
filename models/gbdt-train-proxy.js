@@ -58,12 +58,15 @@ const NARROW_AWAY_MIN_FIT_N = 30; // below this, the inner-test subset is too th
 // (explicit "mirrors X" comments rather than a shared abstraction — see
 // server.js's DATE_SPLIT_HOLDOUT_CUTOFFS / WEEKLY_RETRAIN_DATE_SPLIT_CUTOFFS
 // for the same pattern).
-// Serie B (136), Segunda División (141), 2. Bundesliga (79) — rule-10 holdouts
-// from 2026-09-04 until each league's single backtest is banked, then rule-12
-// date-split (mirrors server.js TRAINING_HOLDOUT_LEAGUE_IDS).
-const FULLY_EXCLUDED_LEAGUE_IDS = new Set([136, 141, 79]);
+// Serie B (136), Segunda División (141), 2. Bundesliga (79) were rule-10 holdouts
+// for the evening of 2026-09-04 only; converted to the date-splits below the same
+// evening once their single backtests were banked (rule 15, Addendum 43).
+const FULLY_EXCLUDED_LEAGUE_IDS = new Set([]);
 
 const DATE_SPLIT_CUTOFFS = new Map([
+  [136, '2026-09-04T21:00:00Z'], // Serie B — Addendum 43 Part 2 backtest compute time, rounded up
+  [141, '2026-09-04T21:00:00Z'], // Segunda División
+  [79,  '2026-09-04T21:00:00Z'], // 2. Bundesliga
   [41, '2026-08-11T09:00:00Z'],
   [42, '2026-08-11T09:00:00Z'],
   [40, '2026-08-19T22:00:00Z'],
