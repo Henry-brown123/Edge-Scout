@@ -11,7 +11,7 @@ weights, or any parameter. No exceptions, including "just a quick check."
 
 **This governs deliberate, human-triggered tuning — not the core GBDT's ongoing weekly retrain.** Base-rate fits, weight sweeps, and any correction layer (rule 13) are each a deliberate decision, triggered once, evaluated against a held-out slice under rules 1-3. The GBDT model's own weekly retrain is different: since the "train/test merge decision" (`docs/model-versioning.md`), it trains on the entire available population every week by design, with no held-out portion reserved — governed instead by `model-versioning.md`'s own quality gates and improvement gate. Read literally, "no exceptions" above could look like it forbids the weekly retrain; it doesn't — the weekly retrain isn't the kind of tuning this rule is about. Deciding whether a base rate, weight, or correction parameter should change: rules 1-3 apply in full. Deciding whether this week's retrained GBDT weights should replace the deployed ones: that's `model-versioning.md`'s gates, not this rule.
 
-**"For every league" describes two different mechanisms, not one.** The GBDT model's own internal split (`gbdt-train.js`'s `splitData()`) is a single pooled, chronological, cross-league split — every league's fixtures sorted together by date, first 80% train, last 20% test — not done per league. Per-league base-rate fits genuinely are done per league, each with its own documented boundary (rule 9). "For every league" means every league's base-rate/weight/correction tuning gets this discipline individually — not that the core model is retrained separately per league.
+**"For every league" describes two different mechanisms, not one.** The GBDT model's own internal split (`gbdt-train.js`'s `splitData()`) is a single pooled, chronological, cross-league split — every league's fixtures sorted together by date, first 80% train, last 20% test — not done per league. Per-league base-rate fits genuinely are done per league, each with its own documented boundary (rule 9). "For every league" means every league's base-rate/weight/correction tuning gets this discipline individually — not that the core model is retrained separately per league. The same distinction applies to any *calibration factor* shared across leagues — see rule 17.
 
 ## 2. Tuning only ever touches the train portion.
 Grid searches, base-rate fits, weight sweeps, feature changes — all evaluated
@@ -324,3 +324,51 @@ alongside the figure rather than glossing over it. Walk-forward proxy blocks
 satisfy this rule by construction (each block's model trains strictly before
 its own window). See `docs/model-versioning.md` "Tree boundary" and
 Addendum 37 for the incident that produced this rule.
+
+## 17. A pooled calibration factor shared across leagues is a starting default, not a settled fact.
+
+Whenever one calibration figure — the domestic `calibrationFactor`, the
+tournament constant, or any future equivalent — is applied to more than one
+league, that is a known simplification, to be periodically re-examined, never
+a permanent assumption.
+
+This has now bitten twice. Addendum 23 found the original nine leagues and
+League One/Two miscalibrated in opposite directions under one shared
+treatment, which is what motivated the League Two correction layer. Addendum
+39 found the pooled domestic factor of 1.02 was a compromise between two
+populations pulling opposite ways: the top divisions' own Brier optimum is
+1.06, and Championship, League One and League Two — treated as one group —
+individually want 0.93, 0.96 and 0.91. Variation of that size inside a group
+already assumed homogeneous should be expected as the norm, not the
+exception.
+
+What the rule requires:
+
+- **Check individually once there is enough evidence.** As a league
+  accumulates a usable population — a banked backtest or live accumulation
+  past the rule-6 floor — its own calibration is compared against the pooled
+  figure it currently inherits, using a calibration-accuracy metric (Brier,
+  reliability tables), never ROI (rule 4). The check is cheap; it is the
+  omission that is expensive.
+- **Record the sharing explicitly.** Wherever a shared factor is applied, the
+  code or the addendum that set it says which leagues share it and when each
+  was last checked individually. "We use one factor for these leagues" must
+  be readable as a decision with a date, not discoverable only by tracing.
+- **Granularity is a case-by-case decision, not a mandate.** Finding that a
+  league's own optimum differs from the pooled figure does not by itself
+  require a per-league factor. Whether to split is a cost/complexity/live-
+  impact judgement — a factor change moves every Kelly stake and shifts every
+  edge, so it re-expresses any edge-floor rule sitting on top of it (Addendum
+  37 Part D2, Addendum 39 Part E). What the rule mandates is that the choice
+  to keep sharing is made knowingly and revisited, not inherited silently.
+- **Re-express thresholds when a factor changes.** Any edge floor selected
+  under one factor is a different rule under another. A factor change and the
+  rule that depends on it are decided together, in one documented step, with
+  the floor restated on the new scale — never the factor first and the
+  threshold "later".
+
+Related: rule 1's note on the two meanings of "for every league"; rule 13
+(correction layers get their own discipline); rule 16 (which model scored
+the figure). See `docs/tier-calibration-analysis.md` Addenda 23 and 39, and
+`getCalFactorForLeague()` in `server.js` for where the sharing currently
+lives.
