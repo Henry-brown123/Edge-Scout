@@ -366,6 +366,20 @@ What the rule requires:
   rule that depends on it are decided together, in one documented step, with
   the floor restated on the new scale — never the factor first and the
   threshold "later".
+- **Factors live in code, never in a runtime setting (2026-09-04).** Every
+  league's factor is a named constant resolved by `getCalFactorForLeague()`
+  (`RULE12_CALIBRATION_FACTOR`, `TOP_DIVISION_CALIBRATION_FACTOR`,
+  `TOURNAMENT_CALIBRATION_FACTOR`, with `UNCLASSIFIED_CALIBRATION_FACTOR` as
+  the fallback for a league not yet placed in a cohort). The old editable
+  `settings.calibrationFactor` — the Settings-tab input and the Model-tab
+  "Apply suggested factor" button — is gone by design: `PUT /api/settings`
+  rejects the key with a 400, a stale value left in `settings.json` is ignored,
+  and the Settings tab shows each cohort's factor, floor, stake status and
+  member leagues read-only from `/api/admin/calibration-factors`. The only
+  way to change a factor is a reviewed commit that changes the constant and
+  restates the dependent edge floor together (previous bullet). This closes
+  the remaining route by which a live edit could silently override a
+  cohort factor, now or as further leagues are added.
 
 Related: rule 1's note on the two meanings of "for every league"; rule 13
 (correction layers get their own discipline); rule 16 (which model scored

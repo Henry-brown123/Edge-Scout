@@ -83,7 +83,7 @@ console.log(`[Data] process.env.DATA_DIR=${process.env.DATA_DIR ?? '(unset)'} �
   // Seed settings.json with safe defaults if missing
   const settingsDest = path.join(DATA_DIR, 'settings.json');
   if (!fs.existsSync(settingsDest)) {
-    const defaults = { calibrationFactor: 1.02, wowyActive: true,
+    const defaults = { wowyActive: true,
       activeLeagues: ['1','39','140','78','135','61','2','179','88','94','3','848','48','41','42','40'], successThreshold: 40,
       decay: 0.05, formWindow: 6, h2hWindow: 5, kellyFraction: 0.5,
       weights: { form:18, homeAdv:12, xg:16, h2h:10, defense:14, momentum:10, injuries:8, standings:12 } };
@@ -198,15 +198,12 @@ const SETTINGS_DEFAULTS = {
   // looking anomalous) without touching the cron schedule itself.
   weeklyRetrainPaused: false,
   activeLeagues: ['1','39','140','78','135','61','2','179','88','94','3','848','48','41','42','40'], successThreshold: 40,
-  // 2026-09-01: was 1.08, fit 2026-06-16 against the old linear model's ~5pp bias,
-  // never re-measured since GBDT (own Platt scaling) took over 2026-07-25. Brier-score
-  // sweep (temp diagnostic, since removed) showed 1.08 is measurably worse-calibrated
-  // than neutral — reliability tables showed a systematic ~3-4pp overconfidence bias
-  // across the 40-70% probability band (the bulk of live betting activity) at 1.08,
-  // which is corrected at ~1.00-1.02. 1.02 is the sweep's actual Brier-minimizing
-  // point; the curve is flat enough near there that this isn't precise to the second
-  // decimal, but it's unambiguously far from 1.08.
-  calibrationFactor: 1.02,
+  // calibrationFactor used to live here (1.08 fit 2026-06-16, 1.02 from the
+  // 2026-09-01 Brier sweep). Since 2026-09-04 it is not a setting at all: every
+  // league's factor is a code constant resolved by getCalFactorForLeague()
+  // (rule 17), PUT /api/settings rejects the key, and a stale value left in
+  // settings.json is ignored (reported as legacySettingsCalibrationFactorIgnored
+  // on /api/admin/calibration-factors).
   // Correction layer deployment (calibration-rules.md rules 13/14; scoring.js's
   // CORRECTION_LAYER_RULES, validated in docs/tier-calibration-analysis.md
   // Addendum 26). deployedCorrectionRuleIds is the live gate — only rule IDs
@@ -630,19 +627,29 @@ const TOP_DIVISION_CALIBRATION_FACTOR = 1.06;
 const CALIBRATION_RECHECK_TRIGGERS = [
   { leagueId: 88, league: 'Eredivisie', reason: 'Addendum 41: own Brier optimum 1.13 vs shared 1.06 (cost 0.0011) on a 463-fixture basis', triggerMetric: 'ev-calibration byLeague n (rule-16-clean test-only)', triggerN: 750, registered: '2026-09-04' },
 ];
-function getCalFactorForLeague(settings, leagueId) {
+// 2026-09-04: calibration factors are code constants only (calibration-rules.md
+// rule 17, "Factors live in code"). The old runtime-editable settings.calibrationFactor
+// (Settings-tab input and the Model-tab "Apply" button) is gone: PUT /api/settings
+// rejects the key, the UI shows every league's factor read-only, and the
+// unclassified fallback below is this constant, not a settings read. `settings` is
+// still accepted by getCalFactorForLeague for call-site compatibility and ignored.
+// No league in LEAGUES is currently unclassified — every id resolves to one of the
+// three explicit cohorts above — so this fallback is reached only by a league added
+// to LEAGUES without being placed in a cohort, which the factors endpoint surfaces.
+const UNCLASSIFIED_CALIBRATION_FACTOR = 1.02;
+function getCalFactorForLeague(_settings, leagueId) {
   const lid = parseInt(leagueId, 10);
   if (TOURNAMENT_LEAGUE_IDS.has(lid)) return TOURNAMENT_CALIBRATION_FACTOR;
   if (RULE12_CALIBRATION_LEAGUE_IDS.has(lid)) return RULE12_CALIBRATION_FACTOR;
   if (TOP_DIVISION_CALIBRATION_LEAGUE_IDS.has(lid)) return TOP_DIVISION_CALIBRATION_FACTOR;
-  return settings.calibrationFactor ?? 1.02;
+  return UNCLASSIFIED_CALIBRATION_FACTOR;
 }
 function getCalFactorSource(leagueId) {
   const lid = parseInt(leagueId, 10);
   if (TOURNAMENT_LEAGUE_IDS.has(lid)) return 'TOURNAMENT_CALIBRATION_FACTOR';
   if (RULE12_CALIBRATION_LEAGUE_IDS.has(lid)) return 'RULE12_CALIBRATION_FACTOR';
   if (TOP_DIVISION_CALIBRATION_LEAGUE_IDS.has(lid)) return 'TOP_DIVISION_CALIBRATION_FACTOR';
-  return 'settings.calibrationFactor';
+  return 'UNCLASSIFIED_CALIBRATION_FACTOR';
 }
 
 // Sum of funded bookmaker accounts — used only for the canGoLive() "3+ funded accounts"
@@ -4851,6 +4858,11 @@ app.get('/api/transactions', (req, res) => {
 // GET settings / PUT settings
 app.get('/api/settings', (_req, res) => res.json(getSettings()));
 app.put('/api/settings', (req, res) => {
+  // Calibration factors are code constants (rule 17) — no runtime path may change
+  // one. Reject rather than silently drop so a stale client is told why.
+  if (req.body && Object.prototype.hasOwnProperty.call(req.body, 'calibrationFactor')) {
+    return res.status(400).json({ error: 'calibrationFactor is not editable at runtime — calibration factors are fixed per cohort in code (calibration-rules.md rule 17). Change the constant and its edge floor together in a reviewed commit.' });
+  }
   const current  = getSettings();
   const updated  = { ...current, ...req.body };
   writeJSON('settings.json', updated);
@@ -9325,7 +9337,7 @@ app.get('/api/admin/walkforward-raw-bets', (_req, res) => {
 // never listed — so a league added to an existing constant set lands in that
 // cohort, and a new factor/floor set forms a new cohort automatically. The
 // Performance tab renders one grid per cohort from this (display only).
-const COHORT_LABELS = { RULE12_CALIBRATION_FACTOR: 'EFL lower divisions', TOP_DIVISION_CALIBRATION_FACTOR: 'Top divisions', TOURNAMENT_CALIBRATION_FACTOR: 'Tournaments & cups', 'settings.calibrationFactor': 'Unclassified (pooled setting)' };
+const COHORT_LABELS = { RULE12_CALIBRATION_FACTOR: 'EFL lower divisions', TOP_DIVISION_CALIBRATION_FACTOR: 'Top divisions', TOURNAMENT_CALIBRATION_FACTOR: 'Tournaments & cups', UNCLASSIFIED_CALIBRATION_FACTOR: 'Unclassified (code fallback)' };
 function getCalibrationCohorts() {
   const { LEAGUE_CONFIG } = require('./scoring');
   const settings = getSettings();
@@ -9352,7 +9364,7 @@ app.get('/api/admin/calibration-factors', (_req, res) => {
   const { settings, rows, cohorts } = getCalibrationCohorts();
   const evByLeague = Object.fromEntries(((readJSON('ev-calibration.json') || {}).byLeague || []).map(l => [l.leagueId, l.n]));
   const recheckTriggers = CALIBRATION_RECHECK_TRIGGERS.map(t => ({ ...t, currentN: evByLeague[t.leagueId] ?? null, due: (evByLeague[t.leagueId] ?? 0) >= t.triggerN }));
-  res.json({ settingsCalibrationFactor: settings.calibrationFactor ?? null, rows, cohorts, recheckTriggers });
+  res.json({ editable: false, unclassifiedCalibrationFactor: UNCLASSIFIED_CALIBRATION_FACTOR, legacySettingsCalibrationFactorIgnored: settings.calibrationFactor ?? null, rows, cohorts, recheckTriggers });
 });
 
 // Pools all 4 blocks' raw bet outcomes per (league, tier) — n, ROI, 95% CI via

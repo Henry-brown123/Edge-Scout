@@ -7522,3 +7522,21 @@ production they would have bitten only when a shared-token fixture was
 listed in the same window as the one being scored — infrequent, but
 squarely in the staked cohort. First unattended exercise of the deployed
 path is the 07:00 UTC morning scan on 2026-09-05.
+
+### Part G — Calibration factor control made view-only (2026-09-04)
+
+With three explicit cohort factors live (0.93 EFL lower divisions, 1.06 top
+divisions, 1.06 tournaments), the single runtime-editable
+`settings.calibrationFactor` was a standing risk: a Settings-tab edit or the
+Model-tab "Apply suggested factor" button could silently override a
+reviewed cohort factor for any league falling through to the pooled
+fallback, and Phase 2 will add more leagues. Removed entirely: no input,
+no Apply, and `PUT /api/settings` returns 400 if the key is sent. The
+fallback is now the code constant `UNCLASSIFIED_CALIBRATION_FACTOR` (1.02),
+which no league in `LEAGUES` currently reaches — every id resolves to one
+of the three cohorts. The Settings tab shows each cohort's factor, edge and
+probability floor, stake status, source constant and member leagues,
+rendered from `/api/admin/calibration-factors` (the rule-17 sharing
+record), plus the pre-registered re-check triggers. A stale value left in
+`settings.json` is reported as ignored on that endpoint. Rule 17 gains a
+"Factors live in code" bullet recording this.

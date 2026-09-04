@@ -399,6 +399,9 @@ no league or cohort list in the UI: adding a league to an existing constant
 set, or creating a new factor/floor set, produces the right table without a
 UI change. Green-flagging is only offered in paper-staked cohorts. Every
 reading below is unchanged by this — it is grouping and labelling only.
+The same cohort configuration is shown read-only on the Settings tab
+("Calibration factors"); there is no runtime edit path for a factor — see
+`docs/calibration-rules.md` rule 17, "Factors live in code".
 
 **Live** — real, resolved bets, filtered to `modelVersion === ` the current
 live model's version and `resolvedAt >= ` that version's own `trainedAt`. For

@@ -2016,9 +2016,9 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
           </div>
           <div style="font-size:11px;color:var(--muted);padding:4px 0">Kelly fractions and bankroll controls (paper &amp; real) have moved to the bankroll panel at the top of the Scout tab.</div>
           <div class="field">
-            <label>Calibration factor <span style="color:var(--muted);font-weight:400">(edge &amp; score only)</span></label>
-            <input type="number" id="cal-factor-input" value="1.08" step="0.01" min="1.00" max="1.30" style="width:80px">
-            <div style="font-size:10px;color:var(--muted);margin-top:3px">Scales model probs before edge calc. 1.00 = off. Adjust as calibration data accumulates.</div>
+            <label>Calibration factors <span style="color:var(--muted);font-weight:400">(view-only · fixed per cohort in code, rule 17)</span></label>
+            <div id="cal-factors-view" style="font-size:11px;color:var(--muted)">Loading…</div>
+            <div style="font-size:10px;color:var(--muted);margin-top:4px">Scales model probabilities before edge, EV and Kelly. Not editable here or via the API: a factor changes only in a reviewed commit, together with the edge floor that sits on it.</div>
           </div>
           <div class="field">
             <label>WOWY probability modifiers</label>
@@ -2290,7 +2290,7 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
     if (btn.dataset.tab === 'model')       renderModel();
     if (btn.dataset.tab === 'performance') { switchPerfView('paper'); renderPerformance(); renderLeagueTierMatrix(); renderPreRetrainCalibrationMatrix(); renderCorrectionLayerBacktests(); checkHandoffCandidates(); }
-    if (btn.dataset.tab === 'settings')  { renderSettings(); loadBackfillStatus(); loadOddsHistoryStats(); loadStartupStatus(); loadAccounts(); loadLeagueWeights(); }
+    if (btn.dataset.tab === 'settings')  { renderSettings(); loadCalibrationFactors(); loadBackfillStatus(); loadOddsHistoryStats(); loadStartupStatus(); loadAccounts(); loadLeagueWeights(); }
   });
 });
 
@@ -4502,9 +4502,9 @@ async function renderCalibrationHealth() {
     <span style="width:10px;height:10px;border-radius:50%;background:${dot};display:inline-block;box-shadow:0 0 6px ${dot}"></span>
     <span style="color:${color}">${status}</span>`;
 
-  // Suggested calibration factor: 1 + avgBias/100, clamped to [1.00, 1.30]
-  const suggested = Math.min(1.30, Math.max(1.00, 1 + avgBias / 100)).toFixed(2);
-  const current   = (STATE.settings?.calibrationFactor ?? 1.08).toFixed(2);
+  // No "suggested factor" / Apply here any more: calibration factors are fixed per
+  // cohort in code (rule 17) and shown read-only under Settings ▸ Calibration factors.
+  // This pooled reliability read is diagnostic only.
 
   bodyEl.innerHTML = `
     <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:12px">
@@ -4521,12 +4521,7 @@ async function renderCalibrationHealth() {
     </div>
     <div style="display:flex;align-items:center;gap:16px;font-size:.72rem">
       <span>Avg bias: <strong style="color:${avgBias > 0 ? 'var(--amber)' : 'var(--green)'}">${avgBias >= 0 ? '+' : ''}${avgBias}pp</strong></span>
-      <span>Suggested factor: <strong style="color:var(--cyan)">${suggested}</strong></span>
-      <span>Active factor: <strong style="color:var(--text1)">${current}</strong></span>
-      ${suggested !== current
-        ? `<span style="color:var(--muted);font-size:.65rem">Based on ${data.total.toLocaleString()} fixtures. Applying this changes edge calculations and Kelly stakes on all future recommendations.</span>
-           <button class="btn btn-ghost btn-sm" style="padding:2px 10px;font-size:.68rem" onclick="applyCalFactor(${suggested})">Apply ${suggested}</button>`
-        : `<span style="color:var(--green)">✓ factor matches data</span>`}
+      <span style="color:var(--muted);font-size:.65rem">Pooled across ${data.total.toLocaleString()} fixtures — diagnostic only. Calibration factors are fixed per cohort in code (rule 17) and shown read-only under Settings ▸ Calibration factors.</span>
     </div>`;
 }
 
@@ -5154,7 +5149,6 @@ function renderSettings() {
   if (s.formWindow  != null) document.getElementById('form-window-input').value     = s.formWindow;
   if (s.h2hWindow   != null) document.getElementById('h2h-window-input').value      = s.h2hWindow;
   if (s.successThreshold!=null) document.getElementById('threshold-settings').value = s.successThreshold;
-  if (s.calibrationFactor!=null) document.getElementById('cal-factor-input').value  = s.calibrationFactor;
   const wowyChk = document.getElementById('wowy-active-input');
   const wowyWarn = document.getElementById('wowy-warning');
   if (wowyChk) {
@@ -5212,7 +5206,6 @@ async function saveSettings() {
     formWindow:       parseInt(document.getElementById('form-window-input').value),
     h2hWindow:        parseInt(document.getElementById('h2h-window-input').value),
     successThreshold:  parseInt(document.getElementById('threshold-settings').value),
-    calibrationFactor: parseFloat(document.getElementById('cal-factor-input').value),
     wowyActive:           document.getElementById('wowy-active-input')?.checked ?? false,
     preferExchange:       document.getElementById('prefer-exchange-input')?.checked ?? true,
     preferExchangeBuffer: parseInt(document.getElementById('prefer-exchange-buffer-input')?.value ?? '5'),
@@ -6243,14 +6236,35 @@ async function resetLeagueWeights(leagueId) {
   await loadLeagueWeights();
 }
 
-async function applyCalFactor(factor) {
-  const patch = { calibrationFactor: parseFloat(factor) };
-  await apiFetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
-  Object.assign(STATE.settings, patch);
-  const el = document.getElementById('cal-factor-input');
-  if (el) el.value = factor;
-  toast(`Calibration factor set to ${factor} — edge and success scores updated`, 'success');
-  renderCalibrationHealth();
+// Read-only calibration-factor display (Settings tab). Reads the same resolved
+// per-league configuration rule 17 tracks, via /api/admin/calibration-factors —
+// no league or cohort list lives in the UI, and nothing here can write.
+async function loadCalibrationFactors() {
+  const el = document.getElementById('cal-factors-view');
+  if (!el) return;
+  try {
+    const d = await apiFetch('/api/admin/calibration-factors');
+    const cohorts = d.cohorts || [];
+    const rule = c => c.paperEdgeMin != null ? `edge ≥${Math.round(c.paperEdgeMin*100)}% · prob ≥${Math.round((c.paperProbMin??0)*100)}%` : 'no paper-money rule';
+    el.innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:6px;margin-top:4px">
+        ${cohorts.map(c => `
+          <div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 10px">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <strong style="color:var(--text1);font-size:12px">${c.label}</strong>
+              <span style="color:var(--cyan);font-weight:700;font-size:13px">×${Number(c.calibrationFactor).toFixed(2)}</span>
+              <span style="color:var(--muted)">${rule(c)}</span>
+              <span class="badge ${c.paperStakeEligible ? 'badge-cyan' : ''}" style="${c.paperStakeEligible ? '' : 'background:rgba(148,163,184,.12);color:var(--muted)'}">${c.paperStakeEligible ? 'PAPER-STAKED' : 'OBSERVATION ONLY'}</span>
+              <span style="color:var(--muted);font-size:10px" title="Code constant this cohort resolves to">${c.factorSource}</span>
+            </div>
+            <div style="color:var(--text2);font-size:11px;margin-top:3px">${(c.leagues||[]).map((name, i) => `${name} <span style="color:var(--muted)">(${(c.leagueIds||[])[i] ?? '?'})</span>`).join(' · ')}</div>
+          </div>`).join('')}
+        ${(d.recheckTriggers||[]).length ? `<div style="color:var(--muted);font-size:10px">Pre-registered re-checks: ${d.recheckTriggers.map(t => `${t.league} at n≥${t.triggerN} (now ${t.currentN ?? '?'}${t.due ? ', DUE' : ''})`).join('; ')}</div>` : ''}
+        ${d.legacySettingsCalibrationFactorIgnored != null ? `<div style="color:var(--muted);font-size:10px">Legacy settings value ${d.legacySettingsCalibrationFactorIgnored} is ignored — every league resolves to a code constant.</div>` : ''}
+      </div>`;
+  } catch (e) {
+    el.innerHTML = `<span style="color:var(--red)">Could not load calibration factors (${e.message})</span>`;
+  }
 }
 
 async function loadOddsHistoryStats() {
@@ -6397,7 +6411,7 @@ function previewRealStake(label, modelProb, bookOdds, caveat, leagueId) {
   const calFactor  = [1, 2, 3, 48, 848].includes(lid) ? 1.06
     : [40, 41, 42].includes(lid) ? 0.93
     : [39, 140, 135, 78, 61, 179, 88, 94].includes(lid) ? 1.06
-    : (STATE.settings?.calibrationFactor ?? 1.02);
+    : 1.02; // UNCLASSIFIED_CALIBRATION_FACTOR — settings no longer carry a factor
   const realFrac   = STATE.settings?.realKellyFraction ?? 0.25;
   const realBr     = STATE.realBankroll?.current ?? 0;
   const calProb    = modelProb * calFactor;
