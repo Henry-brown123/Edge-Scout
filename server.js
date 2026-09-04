@@ -533,6 +533,20 @@ function isFixtureTrainingHoldout(leagueId, kickoffIso) {
 const PAPER_MONEY_EDGE_MIN = 0.18;
 const PAPER_MONEY_PROB_MIN = 0.45;
 
+// Legacy zero-stake paper records (locked 2026-08-08 → 2026-08-31, before the
+// three-tier redesign): a per-league paper_only flag zeroed their Kelly stake at
+// lock time, so they carry actualStake/suggestedStake 0 while still being
+// "placed" and resolved. The Performance-tab header (index.html renderPerfMode)
+// already drops them through its stake>0 filter; the server-side league/tier/
+// bookmaker tables didn't, so the header said 107 paper bets while the tables
+// below it said 195 (2026-09-04). This is the single shared definition every
+// count/win-rate view now applies. Deliberately scoped to !isFakeMoney: the
+// observation tier is already excluded (mode=paper) or included (mode=all) by
+// its own explicit checks at each read site, and that handling is untouched here.
+function isLegacyZeroStakeBet(b) {
+  return !b.isFakeMoney && !((b.actualStake ?? b.suggestedStake) > 0);
+}
+
 // 2026-09-01: domestic and tournament football are never allowed to share a fix —
 // a Brier-score sweep split by population (domesticOnly n=25476 vs tournamentOnly
 // n=2334) showed they genuinely want different calibration factors, not just
@@ -4868,6 +4882,7 @@ app.get('/api/bookmaker-performance', (req, res) => {
     if (mode === 'paper' && b.mode === 'real') return false;
     if (mode === 'paper' && b.isFakeMoney) return false;
     if (mode === 'real'  && b.mode !== 'real') return false;
+    if (isLegacyZeroStakeBet(b)) return false;
     if (!(b.placementStatus === 'placed' || b.placementConfirmed)) return false;
     if (fromTs || toTs) {
       const t = new Date(b.lockedAt || b.placedAt || 0).getTime();
@@ -4936,6 +4951,7 @@ app.get('/api/league-performance', (req, res) => {
     if (mode === 'paper' && b.mode === 'real') return false;
     if (mode === 'paper' && b.isFakeMoney) return false;
     if (mode === 'real'  && b.mode !== 'real') return false;
+    if (isLegacyZeroStakeBet(b)) return false;
     if (!(b.placementStatus === 'placed' || b.placementConfirmed)) return false;
     if (fromTs || toTs) {
       const t = new Date(b.lockedAt || b.placedAt || 0).getTime();
@@ -5071,6 +5087,7 @@ app.get('/api/tier-performance', (req, res) => {
     if (mode === 'paper' && b.mode === 'real') return false;
     if (mode === 'paper' && b.isFakeMoney) return false;
     if (mode === 'real'  && b.mode !== 'real') return false;
+    if (isLegacyZeroStakeBet(b)) return false;
     if (!(b.placementStatus === 'placed' || b.placementConfirmed)) return false;
     return b.result === 'win' || b.result === 'loss';
   });

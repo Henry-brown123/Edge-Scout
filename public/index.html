@@ -2634,7 +2634,12 @@ function renderScout() {
   // paper bets are removed server-side entirely, so this filter is really only
   // ever relevant to real bets in practice.
   const locked   = bets.filter(b => b.stage === 'RECOMMENDED' && !b.postponed);
-  const resolved = bets.filter(b => b.stage === 'RESOLVED');
+  // Same legacy zero-stake exclusion as server.js isLegacyZeroStakeBet and the
+  // Performance header's stake>0 filter — pre-redesign paper_only records with a
+  // zeroed stake were still counted here, so this W/L record disagreed with the
+  // Performance tab. Scoped to !isFakeMoney so observation-tier handling is unchanged.
+  const isLegacyZeroStake = b => !b.isFakeMoney && !((b.actualStake ?? b.suggestedStake) > 0);
+  const resolved = bets.filter(b => b.stage === 'RESOLVED' && !isLegacyZeroStake(b));
   const wins     = resolved.filter(b => b.result === 'win').length;
   const losses   = resolved.filter(b => b.result === 'loss').length;
   // Was bankroll.current - bankroll.initial — ignored any deposits/withdrawals
