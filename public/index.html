@@ -298,7 +298,7 @@ td.mono { font-family: var(--font-data); }
 .badge-paper-only { background: rgba(107,114,128,.12); color: var(--muted); border: 1px solid rgba(107,114,128,.25); }
 .fixture-card.real-money { border-left: 3px solid var(--amber); background: #1d1b15; border-color: #3a3220; }
 .fixture-card.paper-trade { border-left: 3px solid var(--cyan); }
-/* Clears the 18%/45% domestic paper-money rule — make it punch through the rest
+/* Clears the domestic paper-money rule (edge floor per league group / 45%+ prob) — make it punch through the rest
    of the WATCHING list at a skim, not just another small badge among many. */
 .fixture-card.watching.paper-money-hit {
   border-left: 3px solid var(--green); border-color: var(--green);
@@ -523,12 +523,12 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     </div>
   </div>
 
-  <!-- Green-flagged (18%+ edge / 45%+ prob domestic paper-money rule) subset — dedicated tiles -->
+  <!-- Green-flagged (domestic paper-money rule: edge ≥13% EFL / ≥18% top flights, 45%+ prob) subset — dedicated tiles -->
   <div class="grid-2" id="scout-stats-paper" style="margin-bottom:16px">
     <div class="stat-tile" style="background:rgba(0,255,135,.06);border:1px solid rgba(0,255,135,.25)">
       <div class="stat-label" style="color:var(--green)">Paper-Money Watching</div>
       <div class="stat-value c-green" id="s-watching-paper">0</div>
-      <div class="stat-sub">clears 18%+ edge / 45%+ prob</div>
+      <div class="stat-sub">clears edge floor (13% EFL / 18% top flights) · 45%+ prob</div>
     </div>
     <div class="stat-tile" style="background:rgba(0,255,135,.06);border:1px solid rgba(0,255,135,.25)">
       <div class="stat-label" style="color:var(--green)">Paper-Money Locked</div>
@@ -541,7 +541,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
   <div class="card" id="recommended-card">
     <div class="card-header">
       <span class="card-title">Locked Bets — Paper (Staked)</span>
-      <span style="font-size:11px;color:var(--muted)">18%+ edge · 45%+ prob · Live odds</span>
+      <span style="font-size:11px;color:var(--muted)">13%+ edge (EFL) / 18%+ (top flights) · 45%+ prob · Live odds</span>
     </div>
     <!-- Pending Placement sub-section -->
     <div id="pending-section" style="display:none">
@@ -2660,7 +2660,7 @@ function renderScout() {
   document.getElementById('s-winrate').textContent  = resolved.length ? `${((wins/(wins+losses||1))*100).toFixed(0)}%` : '—';
   document.getElementById('s-record').textContent   = `${wins}W ${losses}L`;
 
-  // Green-flagged (18%+ edge / 45%+ prob domestic paper-money rule) subset, dedicated tiles
+  // Green-flagged (domestic paper-money rule: edge ≥13% EFL / ≥18% top flights, 45%+ prob) subset, dedicated tiles
   const lockedPaper = locked.filter(b => !b.isFakeMoney);
   const lockedZero  = locked.filter(b => b.isFakeMoney);
   document.getElementById('s-watching-paper').textContent = todayW.filter(w => w.meetsPaperMoneyRule).length;
@@ -2780,7 +2780,7 @@ function recommendedCard(b) {
       ? `<span class="badge badge-paper-only" title="Zero real-money stake — a manual per-league lock or legacy EV-calibration flag (classified domestic/tournament leagues are now rule-driven, see NO STAKE badge instead).">PAPER ONLY</span>`
       : `<span class="badge badge-paper">PAPER</span>`;
   const fakeMoneyBadge = isFakeMoney
-    ? `<span class="badge" style="background:rgba(148,163,184,.15);border:1px solid rgba(148,163,184,.35);color:var(--muted)" title="No stake — either a domestic fixture that missed the 18% edge / 45% probability paper-money rule, or a tournament/cup fixture (always no-stake until it earns promotion). Still scored and logged to build evidence for future review.">NO STAKE</span>`
+    ? `<span class="badge" style="background:rgba(148,163,184,.15);border:1px solid rgba(148,163,184,.35);color:var(--muted)" title="No stake — either a domestic fixture that missed the paper-money rule (edge ≥13% for Championship/League One/League Two on their own 0.93 calibration, ≥18% for the top divisions; 45%+ probability), or a tournament/cup fixture (always no-stake until it earns promotion). Still scored and logged to build evidence for future review.">NO STAKE</span>`
     : '';
   // Carabao Cup (48) is permanently, wholly training-excluded; League One/Two (41/42)
   // are date-split (calibration-rules.md rule 12) — isTrainingHoldout is per-fixture
@@ -2891,7 +2891,7 @@ function watchingCard(w) {
       ? `<span class="badge badge-paper-only" title="Zero real-money stake — a manual per-league lock or legacy EV-calibration flag (classified domestic/tournament leagues are now rule-driven, see NO STAKE badge instead).">PAPER ONLY</span>`
       : `<span class="badge badge-paper">PAPER</span>`;
   const wFakeMoneyBadge = wIsFakeMoney
-    ? `<span class="badge" style="background:rgba(148,163,184,.15);border:1px solid rgba(148,163,184,.35);color:var(--muted)" title="No stake — either a domestic fixture that missed the 18% edge / 45% probability paper-money rule, or a tournament/cup fixture (always no-stake until it earns promotion). Will still be scored and logged to build evidence for future review.">NO STAKE</span>`
+    ? `<span class="badge" style="background:rgba(148,163,184,.15);border:1px solid rgba(148,163,184,.35);color:var(--muted)" title="No stake — either a domestic fixture that missed the paper-money rule (edge ≥13% for Championship/League One/League Two on their own 0.93 calibration, ≥18% for the top divisions; 45%+ probability), or a tournament/cup fixture (always no-stake until it earns promotion). Will still be scored and logged to build evidence for future review.">NO STAKE</span>`
     : '';
   const wIsDateSplitLeague = [41, 42].includes(parseInt(w.leagueId, 10));
   const wHoldoutTooltip = wIsDateSplitLeague

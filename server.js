@@ -530,21 +530,20 @@ function isFixtureTrainingHoldout(leagueId, kickoffIso) {
 // backtest, walk-forward robust across 4 independent time blocks, per-league
 // composition checked) as the population the user will review for real-money
 // promotion — not a permanent, unchangeable pair of numbers.
-const PAPER_MONEY_EDGE_MIN = 0.18;
+const PAPER_MONEY_EDGE_MIN = 0.18;          // top-division domestic leagues, on their live 1.02 scale
+const PAPER_MONEY_EDGE_MIN_RULE12 = 0.13;   // Championship / League One / League Two, on their live 0.93 scale
 const PAPER_MONEY_PROB_MIN = 0.45;
-// 2026-09-04 (Addendum 40, rule 17): the 18% floor above was selected (2026-08-31,
-// under 1.11) and re-validated (Addenda 37/38/39, under 1.02) on the POOLED
-// domestic calibration scale. Championship/League One/League Two now carry their
-// own live factor (RULE12_CALIBRATION_FACTOR = 0.93), which shrinks every edge
-// there by 0.09 × modelProb — so reading "edge >= 18%" off the live scale would
-// silently tighten the rule to roughly 23% on the scale it was validated on
-// (the same trap as the 1.11→1.02 change, Addendum 37 Part D2). Until the floor
-// is re-expressed on the corrected scale, the gate evaluates the rule on this
-// fixed 1.02 scale for those leagues (scoreOneFixture computes
-// edgeOnPaperRuleScale per candidate). Kelly sizing, displayed edge, EV and the
-// historical scorer all use the live factor. Remove this and switch the gate to
-// the live edge once Addendum 40's threshold is adopted.
-const PAPER_RULE_EDGE_SCALE_FACTOR = 1.02;
+// 2026-09-04 (Addendum 40, adopted): the edge floor is expressed on each league
+// group's own live calibration scale. 18% was selected and validated on the
+// pooled 1.02 scale; when leagues 40/41/42 moved to 0.93 (RULE12_CALIBRATION_FACTOR)
+// the same fixtures re-expressed as 13% — measured, not estimated (203 of 209
+// bets in common, Addendum 40 Part D1). The interim shim that held the gate on
+// the 1.02 scale (PAPER_RULE_EDGE_SCALE_FACTOR / edgeOnPaperRuleScale) is retired;
+// the gate reads the live edge with a per-group floor. Rule 17: if either group's
+// factor changes again, its floor is re-expressed in the same step.
+function getPaperMoneyEdgeMin(leagueId) {
+  return RULE12_CALIBRATION_LEAGUE_IDS.has(parseInt(leagueId, 10)) ? PAPER_MONEY_EDGE_MIN_RULE12 : PAPER_MONEY_EDGE_MIN;
+}
 
 // Legacy zero-stake paper records (locked 2026-08-08 → 2026-08-31, before the
 // three-tier redesign): a per-league paper_only flag zeroed their Kelly stake at
@@ -589,10 +588,9 @@ const TOURNAMENT_CALIBRATION_FACTOR = 1.06;
 // settings.calibrationFactor (1.02), last checked as a pooled top-division
 // population 2026-09-04 (optimum 1.06, not yet acted on).
 //
-// The paper-money gate deliberately does NOT move with this factor — see
-// PAPER_RULE_EDGE_SCALE_FACTOR: 18%/45% was selected and re-validated on the
-// 1.02 scale, so it keeps reading that scale for these leagues until the floor
-// is re-expressed on the corrected one (Addendum 40).
+// The paper-money gate's edge floor for these leagues is expressed on this
+// scale — PAPER_MONEY_EDGE_MIN_RULE12 (13%), Addendum 40 — so the two must
+// move together (rule 17).
 const RULE12_CALIBRATION_LEAGUE_IDS = new Set([40, 41, 42]);
 const RULE12_CALIBRATION_FACTOR = 0.93;
 function getCalFactorForLeague(settings, leagueId) {
@@ -1702,16 +1700,11 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
       ? kelly(calProb, displayOdds, settings.paperKellyFraction, getAvailableBankroll('paper'))
       : { stake: 0, fraction: 0 };
 
-    // Edge on the scale the 18%/45% paper-money rule was validated on — differs
-    // from `edge` only for leagues whose live factor is not the pooled one.
-    const edgeOnPaperRuleScale = hasRealOdds
-      ? (Math.min(0.97, c.prob * PAPER_RULE_EDGE_SCALE_FACTOR) - impliedP)
-      : null;
     const entry = {
       market: 'match_outcome',
       bet: c.label, modelProb: c.prob, calibratedProb: calProb,
       bookOdds: hasRealOdds ? displayOdds : null, impliedProb: impliedP,
-      edge, edgeOnPaperRuleScale, successScore: finalScore, kelly: k,
+      edge, successScore: finalScore, kelly: k,
       ev: hasRealOdds ? (calProb * (displayOdds - 1) - (1 - calProb)) : null,
       pinnacleAvailable: !!pinnStripped,
       hasRealOdds,
@@ -1798,12 +1791,12 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
 
   const tierCandidate = pickTopCandidateByProbability(results);
 
-  // Gate reads edgeOnPaperRuleScale, not edge — see PAPER_RULE_EDGE_SCALE_FACTOR.
-  const ruleEdge = tierCandidate.edgeOnPaperRuleScale ?? tierCandidate.edge;
+  // Per-group edge floor on the live edge scale — see getPaperMoneyEdgeMin.
+  const paperEdgeMin = getPaperMoneyEdgeMin(leagueId);
   const meetsPaperMoneyRule = isDomesticTierLeague
     && tierCandidate.hasRealOdds
-    && ruleEdge != null
-    && ruleEdge >= PAPER_MONEY_EDGE_MIN
+    && tierCandidate.edge != null
+    && tierCandidate.edge >= paperEdgeMin
     && tierCandidate.modelProb >= PAPER_MONEY_PROB_MIN;
 
   // A real market exists on the model's own favourite, but it either fails the
@@ -2008,7 +2001,6 @@ async function runMorningScan(leagueIds) {
               noMarketData,
               isFakeMoney:         scored.isFakeMoney,
               meetsPaperMoneyRule: scored.meetsPaperMoneyRule,
-              paperRuleEdge:       scored.tierCandidate?.edgeOnPaperRuleScale ?? null,
               isDomesticTierLeague: scored.isDomesticTierLeague,
               projectedScore:  noMarketData ? null : displayPick.successScore,
               projectedBet:    displayPick.bet,
@@ -2579,7 +2571,6 @@ async function runHourlyRescan() {
             noMarketData,
             isFakeMoney:         scored.isFakeMoney,
             meetsPaperMoneyRule: scored.meetsPaperMoneyRule,
-            paperRuleEdge:       scored.tierCandidate?.edgeOnPaperRuleScale ?? null,
             isDomesticTierLeague: scored.isDomesticTierLeague,
             projectedScore:   noMarketData ? null : displayPick.successScore,
             projectedBet:     displayPick.bet,

@@ -7145,6 +7145,16 @@ their observation logging and any future re-entry. One constant, one
 condition, the UI strings, and a re-verification that the Scout tab's
 paper-money counters match a live scan.
 
+**Adopted 2026-09-04, same day, on explicit go-ahead** (commit "Re-express
+the paper-money gate as 13%/45% on the 0.93 scale for Championship/League
+One/League Two; retire the 1.02 shim"): `PAPER_MONEY_EDGE_MIN_RULE12 = 0.13`,
+`getPaperMoneyEdgeMin()` selects it for ids 40/41/42, the gate reads the live
+edge, `PAPER_RULE_EDGE_SCALE_FACTOR` / `edgeOnPaperRuleScale` / `paperRuleEdge`
+are removed, and the Scout tab's rule labels and no-stake tooltips state the
+per-group floors. The 18% floor stays defined for the top divisions on their
+1.02 scale. First live exercise of the new floor is the next scan that
+contains a Championship / League One / League Two fixture.
+
 **What this does not change:** the eight top divisions (Addendum 38), the
 tournament factor, the pooled 1.02 for the top divisions (their own Brier
 optimum is 1.06, Addendum 39 Part E — a separate rule-17 decision), and the
