@@ -831,6 +831,14 @@ visual check on the live dashboard after deploy.
 
 ## Addendum 5 — Five more leagues validated, tier baseline widened to the full range
 
+> **Caveat added 2026-09-04 (Addendum 37).** Every figure in this addendum, including the widened tier baseline that server.js still serves as HISTORICAL_TIER_BASELINE, was scored by the
+> 2026-07-25 model, whose trees were trained on the earliest 80% (by date) of
+> the checked-in 8,316-record snapshot — a slice running to 2024-11-19 that
+> overlaps the `testFrom` windows it was then used to "hold out". Ligue 1 60%, La Liga 56%, Premier League 53%, Bundesliga 53%, Serie A 24% of each league's test-window fixtures were in that model's tree-training set (Champions League 60%; Scottish Premiership, Eredivisie, Primeira Liga, Europa League and Conference League 0% — those competitions were absent from the snapshot altogether). Measured directly on the checked-in file, 2026-09-04.
+> The base-rate tuning discipline described here was real; the *scoring model*
+> was not clean for the leagues named. Treat those leagues' figures as partly
+> in-sample, not held-out. Figures are left unchanged for the record.
+
 Triggered by the tier tracker (Addendum 4) reporting zero populated
 comparisons — every live bet fell in a league without a validated split, or
 a tier outside Addendum 2's 45-70% scope. This addendum closes both gaps:
@@ -975,6 +983,14 @@ outstanding" below.
   as the original four leagues carried all week.
 
 ## Addendum 6 — League × tier matrix: is the 40-45% finding broad or concentrated?
+
+> **Caveat added 2026-09-04 (Addendum 37).** Every cell in this matrix was scored by the
+> 2026-07-25 model, whose trees were trained on the earliest 80% (by date) of
+> the checked-in 8,316-record snapshot — a slice running to 2024-11-19 that
+> overlaps the `testFrom` windows it was then used to "hold out". Ligue 1 60%, La Liga 56%, Premier League 53%, Bundesliga 53%, Serie A 24% of each league's test-window fixtures were in that model's tree-training set (Champions League 60%; Scottish Premiership, Eredivisie, Primeira Liga, Europa League and Conference League 0% — those competitions were absent from the snapshot altogether). Measured directly on the checked-in file, 2026-09-04.
+> The base-rate tuning discipline described here was real; the *scoring model*
+> was not clean for the leagues named. Treat those leagues' figures as partly
+> in-sample, not held-out. Figures are left unchanged for the record.
 
 A complementary view to Addendum 4's live-vs-historical tracker: instead of
 one pooled figure per tier, this crosses every validated league against
@@ -1343,6 +1359,17 @@ and stable.** Nothing needs cleaning up.
 
 ### Part B: the live GBDT model has not trained on any of this week's data — confirmed with certainty, not "unknown"
 
+> **Correction added 2026-09-04 (Addendum 37).** This part's closing claim —
+> that the live model "has not been touched by any of the data this whole
+> document's tier-calibration analysis is built on" — is false as written. It
+> holds for the 2010-2019 ingestion this part is about, and for Scottish
+> Premiership, Eredivisie, Primeira Liga, Europa League and Conference League
+> (absent from the 8,316-record snapshot). It does not hold for Premier League,
+> La Liga, Bundesliga, Ligue 1, Serie A or Champions League: the snapshot's
+> chronological 80% training slice runs to 2024-11-19 and contains 24-60% of
+> each of those leagues' `testFrom` windows (Ligue 1 60%, La Liga 56%, Premier League 53%, Bundesliga 53%, Serie A 24% of each league's test-window fixtures were in that model's tree-training set (Champions League 60%; Scottish Premiership, Eredivisie, Primeira Liga, Europa League and Conference League 0% — those competitions were absent from the snapshot altogether). measured directly on the checked-in file).
+> The rest of Part B (the DATA_DIR bug, the `trainN` arithmetic) stands.
+
 This is a real, previously-undocumented finding, not a null result.
 
 **The model currently in production was trained 2026-07-25, on `trainN:
@@ -1639,6 +1666,14 @@ cache was last refreshed.
 
 ## Addendum 12 — Final Pre-Retrain Baseline
 
+> **Caveat added 2026-09-04 (Addendum 37).** This "frozen live GBDT model" baseline was scored by the
+> 2026-07-25 model, whose trees were trained on the earliest 80% (by date) of
+> the checked-in 8,316-record snapshot — a slice running to 2024-11-19 that
+> overlaps the `testFrom` windows it was then used to "hold out". Ligue 1 60%, La Liga 56%, Premier League 53%, Bundesliga 53%, Serie A 24% of each league's test-window fixtures were in that model's tree-training set (Champions League 60%; Scottish Premiership, Eredivisie, Primeira Liga, Europa League and Conference League 0% — those competitions were absent from the snapshot altogether). Measured directly on the checked-in file, 2026-09-04.
+> The base-rate tuning discipline described here was real; the *scoring model*
+> was not clean for the leagues named. Treat those leagues' figures as partly
+> in-sample, not held-out. Figures are left unchanged for the record.
+
 This is the capstone read this whole document has been building toward: a
 one-time, unrepeatable measurement of the frozen live GBDT model
 (`trainedAt: 2026-07-25T08:59:19Z`, `trainN: 6,652`) against the full
@@ -1777,6 +1812,14 @@ this document's job strictly to the pre-retrain read. This table is now
 permanently what any future model version gets compared against.
 
 ## Addendum 13 — Calibration Matrix: a proxy strength indicator, pre-retrain model only
+
+> **Caveat added 2026-09-04 (Addendum 37).** Every calibration-error cell here was scored by the
+> 2026-07-25 model, whose trees were trained on the earliest 80% (by date) of
+> the checked-in 8,316-record snapshot — a slice running to 2024-11-19 that
+> overlaps the `testFrom` windows it was then used to "hold out". Ligue 1 60%, La Liga 56%, Premier League 53%, Bundesliga 53%, Serie A 24% of each league's test-window fixtures were in that model's tree-training set (Champions League 60%; Scottish Premiership, Eredivisie, Primeira Liga, Europa League and Conference League 0% — those competitions were absent from the snapshot altogether). Measured directly on the checked-in file, 2026-09-04.
+> The base-rate tuning discipline described here was real; the *scoring model*
+> was not clean for the leagues named. Treat those leagues' figures as partly
+> in-sample, not held-out. Figures are left unchanged for the record.
 
 Addendum 6's ROI matrix is structurally frozen: Odds API's 2020-06-06 floor
 plus each of the 9 leagues' fixed `testFrom` boundary means no fixture can

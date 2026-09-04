@@ -5017,6 +5017,18 @@ app.get('/api/league-performance', (req, res) => {
 // can't silently drift if backtest data changes without a fresh, documented
 // cycle. `decisionGrade` follows calibration-rules.md rule 6's ~300-400
 // posEdge floor literally; only 40-45% currently clears it.
+//
+// CAVEAT (2026-09-04, Addendum 37): this table was scored by the 2026-07-25
+// model, whose trees were trained on the earliest 80% (by date) of the
+// checked-in 8,316-record snapshot — a slice running to 2024-11-19 that
+// overlaps the very testFrom windows it was then used to "hold out": 53-60%
+// of PL/La Liga/Bundesliga/Ligue 1's and 24% of Serie A's test-window
+// fixtures were in that model's tree-training set (SPL/Eredivisie/Primeira
+// Liga were absent from the snapshot, so clean). It is therefore a partly
+// in-sample read, not a genuine held-out one, and the "confirmed negative"
+// 40-45% row — cited as a no-exceptions rule in
+// docs/real-money-strategy-proposal.md — inherits that caveat. Left unchanged
+// for the record; the walk-forward proxy grid is the clean per-league source.
 const HISTORICAL_TIER_BASELINE = {
   '<35%':   { n: 1,   roi: 2.61,   decisionGrade: false },
   '35-40%': { n: 249, roi: -0.134, decisionGrade: false },
@@ -5246,7 +5258,7 @@ app.get('/api/tier-performance', (req, res) => {
     scope: {
       validatedLeagueIds: [...TIER_PERF_VALIDATED_LEAGUES],
       minLiveN: TIER_PERF_MIN_LIVE_N,
-      historicalSource: 'docs/tier-calibration-analysis.md Addendum 5 (widened 2026-08-07) — raw/uncorrected, test-only, pooled across all 9 validated leagues, full probability range. Platt correction never deployed live.',
+      historicalSource: 'docs/tier-calibration-analysis.md Addendum 5 (widened 2026-08-07) — raw/uncorrected, test-only, pooled across all 9 validated leagues, full probability range. Platt correction never deployed live. CAVEAT (Addendum 37, 2026-09-04): scored by the 2026-07-25 model whose tree-training slice (to 2024-11-19) contained 24-60% of PL/La Liga/Bundesliga/Ligue 1/Serie A\'s test windows — partly in-sample, not a clean held-out read.',
       note: 'Live modelProb runs through applyTeamProfileModifiers (team profile/weather/WOWY) that the historical backfill population did not include — directionally comparable, not a perfect match.',
     },
     rows,
@@ -8316,6 +8328,34 @@ const VALIDATED_SPLITS = {
   848: { testFrom: '2024-11-07T14:30:00Z', splitCommit: 'fbb8dbd' }, // Conference League, 2026-08-11
 };
 
+// Tree boundary of the model currently scoring historical fixtures (2026-09-04,
+// Addendum 37 / calibration-rules.md rule 16). models/gbdt.js always predicts
+// with whatever gbdt-weights.json holds right now — the optimisedWeights argument
+// computeMatchedEdgeFixtures() passes is ignored by the GBDT — and gbdt-train.js
+// builds trees on the earliest 80% of its pool by date. So every fixture dated
+// before that boundary was IN the scoring model's tree-training set, and no
+// "held-out"/"validated" figure may include it, whatever a league's own
+// VALIDATED_SPLITS testFrom says. Weights written from 2026-09-04 on carry
+// treeBoundary.firstTestFixtureDate (gbdt-train.js). The one deployed version
+// that predates that field is pinned here from Addendum 14's reproduction of the
+// trainer's split (boundary date 2022-11-13; the following midnight is used so
+// "strictly after" holds). Any other version without the field → null, and
+// every reader must say so rather than silently report a full population as
+// held-out.
+const KNOWN_TREE_BOUNDARIES = {
+  '2026-08-08T20:56:33.315Z': '2022-11-14T00:00:00Z',
+};
+function getModelTreeBoundary() {
+  const w = readJSON('gbdt-weights.json');
+  if (!w) return { boundary: null, source: 'no-gbdt-weights', modelVersion: null };
+  if (w.treeBoundary?.firstTestFixtureDate) {
+    return { boundary: w.treeBoundary.firstTestFixtureDate, source: 'weights-file', modelVersion: w.trainedAt };
+  }
+  const pinned = KNOWN_TREE_BOUNDARIES[w.trainedAt];
+  if (pinned) return { boundary: pinned, source: 'pinned-addendum-14', modelVersion: w.trainedAt };
+  return { boundary: null, source: 'unknown-version', modelVersion: w.trainedAt };
+}
+
 
 // Track A — single source of truth for "match scoredRecords against closing odds
 // and compute the unified edge" — the exact logic scoreOneFixture uses (calFactor
@@ -8341,6 +8381,10 @@ async function computeMatchedEdgeFixtures() {
 
   const { classifyFixture, applyLeagueBiasCorrection, LEAGUE_CONFIG, computeUnifiedEdge } = require('./scoring');
   const settings = getSettings();
+  // Rule 16 — every matched record says whether the model scoring it right
+  // now built its trees on it. null = boundary unknown for this version.
+  const treeBoundary = getModelTreeBoundary();
+  const boundaryMs = treeBoundary.boundary ? new Date(treeBoundary.boundary).getTime() : null;
 
   const matched = [];
   let sinceYield = 0;
@@ -8390,7 +8434,8 @@ async function computeMatchedEdgeFixtures() {
     const won  = rec.actualOutcome === topOutcome;
 
     matched.push({ fixtureId: rec.fixtureId, leagueId: rec.leagueId, context,
-      topOutcome, modelProb, calProb, pinnacleOdds, pinnacleImplied, edge, won, date: rec.date });
+      topOutcome, modelProb, calProb, pinnacleOdds, pinnacleImplied, edge, won, date: rec.date,
+      preTreeBoundary: boundaryMs === null ? null : new Date(rec.date).getTime() < boundaryMs });
   }
   return matched;
 }
@@ -8441,10 +8486,18 @@ async function runEvCalibration() {
     // portion was used for tuning and must never appear in a reported ROI figure.
     const leagueMap = {};
     const leagueIds = {};
+    // Rule 16 (2026-09-04, Addendum 37): a VALIDATED_SPLITS "held-out" figure may
+    // only include fixtures the scoring model never built trees on. Boundary
+    // unknown for this model version → nothing can honestly be called held-out
+    // for these leagues, so they drop out entirely (visibly, via treeBoundary
+    // below) rather than being reported as clean.
+    const treeBoundary = getModelTreeBoundary();
+    let treeBoundaryDropped = 0;
     for (const f of matched) {
       const lid   = parseInt(f.leagueId, 10);
       const split = VALIDATED_SPLITS[lid];
       if (split && new Date(f.date) < new Date(split.testFrom)) continue;
+      if (split && (f.preTreeBoundary === null || f.preTreeBoundary === true)) { treeBoundaryDropped++; continue; }
       const name = LEAGUE_CONFIG[lid]?.name || `League ${f.leagueId}`;
       if (!leagueMap[name]) leagueMap[name] = [];
       leagueMap[name].push(f);
@@ -8460,9 +8513,13 @@ async function runEvCalibration() {
       }
       const lid  = leagueIds[league];
       const audit = CALIBRATION_AUDIT[lid] || { reliable: false, status: 'unknown', note: 'Not yet audited.' };
+      const split = VALIDATED_SPLITS[lid];
       return {
         league,
         leagueId: lid,
+        // Rule 16: the date this league's figure is genuinely held out from —
+        // the later of its own testFrom and the scoring model's tree boundary.
+        heldOutFrom: split ? (new Date(split.testFrom) > new Date(treeBoundary.boundary) ? split.testFrom : treeBoundary.boundary) : null,
         n:       fxs.length,
         posEdgeN: posE.length,
         roi,
@@ -8488,6 +8545,10 @@ async function runEvCalibration() {
       },
       bands:    bandStats(matched),
       byLeague,
+      // Rule 16 — which model scored this, where its tree boundary sits, and how
+      // many VALIDATED_SPLITS test-window fixtures were dropped from byLeague
+      // because they predate it (or because the boundary is unknown).
+      treeBoundary: { ...treeBoundary, droppedFromValidatedLeagues: treeBoundaryDropped },
     };
     writeJSON('ev-calibration.json', result);
 
@@ -9110,6 +9171,100 @@ app.get('/api/admin/walkforward-log', (_req, res) => {
 app.get('/api/admin/walkforward-raw-bets', (_req, res) => {
   const bets = readJSON('walk-forward-raw-bets.json') || [];
   res.json({ totalN: bets.length, byBlock: bets.reduce((acc, b) => { acc[b.blockLabel] = (acc[b.blockLabel]||0)+1; return acc; }, {}) });
+});
+
+// ─── TEMP DIAGNOSTIC (2026-09-04, Addendum 37) — remove after use ──────────────
+// Re-validates the 18%/45% domestic paper-money rule on the population that
+// actually validated it on 2026-08-31 (commit a3795b9's walk-forward robustness
+// scan): the 11 domestic leagues, test-only per league (VALIDATED_SPLITS testFrom
+// for the 8 rule-9 leagues, pre-cutoff for the 3 rule-12 leagues), restricted to
+// the concurrent-coverage window from the latest domestic testFrom (Serie A,
+// 2024-09-16) onward, 4 equal-COUNT chronological blocks. Scored by the current
+// live weights, so it also reports how many of those fixtures predate the scoring
+// model's tree boundary (rule 16) — expected 0 for the 2026-08-08 version. For
+// contrast it reproduces the 2026-09-01 re-sweep's population (commit 37a967f:
+// every matched domestic fixture with NO test-only or tree-boundary restriction)
+// split at the tree boundary, and adds a walk-forward-block read from
+// walk-forward-raw-bets.json (per-block proxy models, genuinely out-of-sample,
+// but a different calibration: no calFactor, per-block Platt).
+app.get('/api/admin/diag-paper-rule-revalidation', async (_req, res) => {
+  try {
+    const { DOMESTIC_LEAGUE_IDS_FOR_BLEND, LEAGUE_CONFIG } = require('./scoring');
+    const RULE12 = { 41: '2026-08-11T09:00:00Z', 42: '2026-08-11T09:00:00Z', 40: '2026-08-19T22:00:00Z' };
+    const tb = getModelTreeBoundary();
+    const matched = await computeMatchedEdgeFixtures();
+    const domesticAll = matched.filter(f => DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(parseInt(f.leagueId, 10)));
+    const testOnly = domesticAll.filter(f => {
+      const lid = parseInt(f.leagueId, 10);
+      if (RULE12[lid]) return new Date(f.date) < new Date(RULE12[lid]);
+      const split = VALIDATED_SPLITS[lid];
+      return split ? new Date(f.date) >= new Date(split.testFrom) : false;
+    });
+    const concurrentFrom = new Date(Math.max(...Object.entries(VALIDATED_SPLITS)
+      .filter(([lid]) => DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(parseInt(lid, 10)))
+      .map(([, sp]) => new Date(sp.testFrom).getTime())));
+    const concurrent = testOnly.filter(f => new Date(f.date) >= concurrentFrom).sort((a, b) => new Date(a.date) - new Date(b.date));
+    const rule = f => f.edge >= PAPER_MONEY_EDGE_MIN && f.modelProb >= PAPER_MONEY_PROB_MIN;
+
+    const stats = arr => {
+      const n = arr.length;
+      if (!n) return { n: 0, roi: null, ci95: null };
+      const rets = arr.map(f => f.won ? f.pinnacleOdds - 1 : -1);
+      const mean = rets.reduce((s, v) => s + v, 0) / n;
+      const sd = n > 1 ? Math.sqrt(rets.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1)) : 0;
+      const half = 1.96 * sd / Math.sqrt(n);
+      const dates = arr.map(f => f.date).filter(Boolean).sort();
+      return { n, wins: arr.filter(f => f.won).length, roi: +(mean * 100).toFixed(2),
+        ci95: [+((mean - half) * 100).toFixed(2), +((mean + half) * 100).toFixed(2)],
+        avgOdds: +(arr.reduce((s, f) => s + f.pinnacleOdds, 0) / n).toFixed(2),
+        from: dates[0]?.slice(0, 10), to: dates[dates.length - 1]?.slice(0, 10) };
+    };
+    const group = (arr, keyFn) => { const m = {}; for (const f of arr) { const k = keyFn(f); (m[k] = m[k] || []).push(f); } return Object.fromEntries(Object.entries(m).sort().map(([k, v]) => [k, stats(v)])); };
+    const name = f => LEAGUE_CONFIG[parseInt(f.leagueId, 10)]?.name || String(f.leagueId);
+    const season = f => { const d = new Date(f.date); const y = d.getUTCFullYear(); return d.getUTCMonth() >= 6 ? `${y}-${String(y + 1).slice(2)}` : `${y - 1}-${String(y).slice(2)}`; };
+
+    // (1) the real 2026-08-31 validation population, current calibration
+    const cell = concurrent.filter(rule);
+    const blockSize = Math.ceil(concurrent.length / 4);
+    const blocks = [0, 1, 2, 3].map(i => concurrent.slice(i * blockSize, (i + 1) * blockSize));
+    const perBlock = blocks.map(b => ({ range: b.length ? `${b[0].date.slice(0, 10)} to ${b[b.length - 1].date.slice(0, 10)}` : 'empty', poolN: b.length, ...stats(b.filter(rule)) }));
+
+    // (2) what the 2026-09-01 re-sweep actually pooled, split at the tree boundary
+    const resweep = domesticAll.filter(rule);
+
+    // (3) walk-forward block read
+    const wf = readJSON('walk-forward-raw-bets.json') || [];
+    const WF_DOMESTIC = new Set([39, 140, 135, 78, 61, 179, 88, 94]);
+    const tierGe45 = t => !!t && !['<35%', '35-40%', '40-45%'].includes(t);
+    const wfDom = wf.filter(b => WF_DOMESTIC.has(parseInt(b.leagueId, 10)) && tierGe45(b.tier) && !b.narrowCorrected);
+    const wfRead = minEdge => { const p = wfDom.filter(b => b.edge >= minEdge); return { pooled: stats(p), byBlock: group(p, b => b.blockLabel), byLeague: group(p, b => LEAGUE_CONFIG[parseInt(b.leagueId, 10)]?.name || b.leagueId) }; };
+
+    res.json({
+      note: 'TEMP — Addendum 37 re-validation of the 18%/45% domestic rule. Remove after use.',
+      scoringModel: tb, rule: { edgeMin: PAPER_MONEY_EDGE_MIN, probMin: PAPER_MONEY_PROB_MIN },
+      calibrationFactorInUse: { domestic: getCalFactorForLeague(getSettings(), 39) },
+      original2026_08_31_population: {
+        definition: 'domestic 11 leagues, test-only per league, concurrent window from latest domestic testFrom, 4 equal-count blocks',
+        concurrentFrom: concurrentFrom.toISOString().slice(0, 10), poolN: concurrent.length,
+        poolPreTreeBoundary: concurrent.filter(f => f.preTreeBoundary === true).length,
+        poolBoundaryUnknown: concurrent.filter(f => f.preTreeBoundary === null).length,
+        rule18_45: { pooled: stats(cell), perBlock, allBlocksPositive: perBlock.every(b => b.n > 0 && b.roi > 0),
+          byLeague: group(cell, name), bySeason: group(cell, season),
+          rule12LeaguesShare: stats(cell.filter(f => RULE12[parseInt(f.leagueId, 10)])), rule9LeaguesShare: stats(cell.filter(f => !RULE12[parseInt(f.leagueId, 10)])) },
+      },
+      resweep2026_09_01_population: {
+        definition: 'every matched domestic fixture, no test-only or tree-boundary restriction (commit 37a967f)',
+        poolN: domesticAll.length, rule18_45_all: stats(resweep),
+        preTreeBoundary_inSample: stats(resweep.filter(f => f.preTreeBoundary === true)),
+        postTreeBoundary: stats(resweep.filter(f => f.preTreeBoundary === false)),
+        postBoundary_butBeforeTestFrom_tuningTrain: stats(resweep.filter(f => f.preTreeBoundary === false && !testOnly.includes(f))),
+        postBoundary_testOnly_preConcurrent: stats(resweep.filter(f => f.preTreeBoundary === false && testOnly.includes(f) && new Date(f.date) < concurrentFrom)),
+      },
+      walkForwardBlocks: { definition: 'walk-forward-raw-bets.json, 8 rule-9 domestic leagues (rule-12 leagues were never in the blocks), tier>=45%, per-block proxy models; edge here has NO calFactor and per-block Platt, so 0.17 is shown as the rough calFactor-equivalent of the live 0.18', totalWfBets: wf.length, domesticTierGe45: wfDom.length, atEdge018: wfRead(0.18), atEdge017: wfRead(0.17) },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
 });
 
 // Pools all 4 blocks' raw bet outcomes per (league, tier) — n, ROI, 95% CI via

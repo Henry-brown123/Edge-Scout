@@ -331,6 +331,19 @@ function bandAccuracy(records, probFn) {
   const all    = loadData();
   const { train, test } = splitData(all);
   console.log(`  Total: ${all.length}  |  Train: ${train.length}  |  Test (held-out): ${test.length}`);
+  // Tree boundary (2026-09-04, docs/model-versioning.md "Tree boundary"): the
+  // chronological split above means every fixture dated before test[0].date was
+  // used to BUILD these trees. Logged here and persisted into the weights file
+  // below so any "held-out"/"validated" backtest scored with these weights can
+  // exclude those fixtures mechanically (server.js getModelTreeBoundary()),
+  // instead of someone having to reproduce this split after the fact against a
+  // pool that has since grown (Addendum 14 had to do exactly that).
+  const treeBoundary = {
+    lastTrainFixtureDate:  train[train.length - 1]?.date ?? null,
+    firstTestFixtureDate:  test[0]?.date ?? null,
+    trainPoolN:            all.length,
+  };
+  console.log(`  Tree boundary — trees trained on fixtures up to ${treeBoundary.lastTrainFixtureDate}; first test fixture ${treeBoundary.firstTestFixtureDate}`);
 
   const ctxCount = (arr, ctx) => arr.filter(r => r.context === ctx).length;
   console.log(`  Train — domestic:${ctxCount(train,'club_domestic')} european:${ctxCount(train,'club_european')} intl:${ctxCount(train,'international')}`);
@@ -454,6 +467,7 @@ function bandAccuracy(records, probFn) {
     trainedAt:   new Date().toISOString(),
     trainN:      train.length,
     testN:       test.length,
+    treeBoundary, // see the split above — read by server.js getModelTreeBoundary()
     hyperparams: { nTrees: N_TREES, depth: DEPTH, lr: LR, minLeaf: MIN_LEAF },
     validation:  { logLoss: llGBDT, brier: bsGBDT, logLossLinear: llLinear, brierLinear: bsLinear },
     metrics:     { logLossLinear: llLinear, logLossGBDT: llGBDT, brierLinear: bsLinear, brierGBDT: bsGBDT },

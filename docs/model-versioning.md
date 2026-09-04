@@ -311,6 +311,50 @@ naturally draws from the full ~48,000-fixture live population, with no
 manual exclusion of the fixtures previously called "test" — those are simply
 part of the pool it does its own split over now.
 
+## Tree boundary — the standing rule for "held-out" claims (2026-09-04)
+
+Two facts about this pipeline combine into a trap that Addendum 37 walked
+into after the fact:
+
+1. `models/gbdt.js` always predicts with whatever `gbdt-weights.json`
+   currently holds. The `optimisedWeights` argument
+   `computeMatchedEdgeFixtures()` passes is ignored by the GBDT. Nothing pins
+   a historical fixture's scoring to the model version that existed at the
+   time, and no version archive exists.
+2. `gbdt-train.js` builds its trees on the earliest 80% of its pool by date.
+   Every fixture before that boundary is in-sample for the trees; the
+   remaining 20% fits Platt scaling and the quality gates.
+
+So a league's `VALIDATED_SPLITS.testFrom` says nothing about whether the
+model *scoring* the test window was trained on it. It wasn't for the
+2026-08-08 version (boundary 2022-11-13, every `testFrom` is later) — but
+the 2026-07-25 version's boundary was 2024-11-19, inside every test window,
+which is why Addenda 5/6/12/13 now carry caveats. And the boundary moves
+later every time a retrain passes the gate.
+
+**Standing practice from 2026-09-04:**
+
+- `gbdt-train.js` persists `treeBoundary.firstTestFixtureDate` (plus
+  `lastTrainFixtureDate`, `trainPoolN`) into every weights file it writes.
+- `server.js` `getModelTreeBoundary()` reads it. The one deployed version
+  that predates the field (2026-08-08) is pinned in `KNOWN_TREE_BOUNDARIES`
+  from Addendum 14's reproduction. Any other version without the field
+  reports `boundary: null`.
+- `computeMatchedEdgeFixtures()` tags every record `preTreeBoundary`
+  (true / false / null-unknown).
+- `runEvCalibration()`'s per-league "held-out" figures drop every fixture
+  at or before the boundary, and drop the league entirely when the boundary
+  is unknown, surfacing both in `ev-calibration.json.treeBoundary` and each
+  row's `heldOutFrom`.
+- Any new diagnostic that reports a "held-out" / "validated" / "unseen"
+  figure scored by the live weights must apply the same restriction
+  (calibration-rules.md rule 16). Walk-forward proxy blocks are exempt only
+  because each block's model is trained strictly before its own window.
+
+Platt-scaling exposure — the reserved 20% fits six parameters that shift
+every probability — is *not* removed by this rule. It is named wherever the
+figure is shown, not silently accepted.
+
 ## Historical / Live / Combined — the standing framework (Addendum 21)
 
 Every model version, past and future, produces four readings per league × tier

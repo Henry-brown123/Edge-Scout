@@ -303,3 +303,24 @@ clear the bar, it is documented exactly like a bug fix (because it is one):
 the original figure, the corrected figure, and the reason, all left
 side by side in `CALIBRATION_AUDIT`'s note and in the addendum log — never
 a silent overwrite.
+
+## 16. A "held-out" figure is held out from the *scoring* model's trees, not just from the tuning split.
+
+Every backtest figure in this project that is scored by the live weights is
+scored by whatever `gbdt-weights.json` holds at that moment (`models/gbdt.js`
+ignores the weights argument it is passed; there is no version archive). That
+model built its trees on the earliest 80% of its training pool by date. A
+fixture before that boundary is in-sample for the trees regardless of which
+side of a league's `testFrom` it sits on.
+
+So no figure may be labelled held-out, validated, test-only or unseen unless
+every fixture in it is dated strictly after the scoring model's tree boundary
+— read from the weights file's `treeBoundary.firstTestFixtureDate`
+(persisted by `gbdt-train.js` from 2026-09-04) or, for the one older deployed
+version, from `KNOWN_TREE_BOUNDARIES` in `server.js`. Boundary unknown means
+the label cannot be used at all, not that it is assumed fine. Platt-scaling
+exposure from the reserved 20% is a weaker, separate form of "seen" — name it
+alongside the figure rather than glossing over it. Walk-forward proxy blocks
+satisfy this rule by construction (each block's model trains strictly before
+its own window). See `docs/model-versioning.md` "Tree boundary" and
+Addendum 37 for the incident that produced this rule.
