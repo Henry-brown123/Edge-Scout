@@ -6535,6 +6535,16 @@ still to narrow, because the paper record is what the real-money case is
 built on, and a positive-but-uninformative sample adds noise to that case
 rather than evidence.
 
+**Adopted 2026-09-04 on explicit go-ahead** (commit "Adopt Addendum 38
+narrowing: paper-with-stake limited to Championship/League One/League Two"):
+`PAPER_STAKE_ELIGIBLE_LEAGUE_IDS = {40, 41, 42}` is a third condition on
+`meetsPaperMoneyRule`. The rule test itself is kept as a separate flag,
+`clearsPaperMoneyRule`, stored on watching entries and bet records, so
+top-division observation records still accumulate toward the group trigger
+above. `DOMESTIC_LEAGUE_IDS_FOR_BLEND` untouched. A read-only
+`GET /api/admin/calibration-factors` now lists every league's factor, floor
+and stake eligibility (rule 17's sharing record).
+
 ### Part B — Is 18%/45% the right threshold for the narrower population?
 
 **Design** (temp `GET /api/admin/diag-rule12-threshold-search`, removed
