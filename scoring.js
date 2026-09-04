@@ -66,7 +66,10 @@ const CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND = new Set([48, 2, 3, 848]); // Carabao C
 // other cup competitions (keeps the blend one-directional) and anything outside
 // LEAGUES (an untracked league contributes nothing, same limit the international
 // blend already has for non-backfilled competitions).
-const DOMESTIC_LEAGUE_IDS_FOR_BLEND = new Set([39, 140, 135, 78, 61, 179, 88, 94, 41, 42, 40]);
+// 136/141/79 added 2026-09-04: Serie B <-> Serie A, Segunda <-> La Liga,
+// 2. Bundesliga <-> Bundesliga promotion/relegation crossings now resolve through
+// the same boundary-aware timeline (verified empirically in Addendum 43 Part 1).
+const DOMESTIC_LEAGUE_IDS_FOR_BLEND = new Set([39, 140, 135, 78, 61, 179, 88, 94, 41, 42, 40, 136, 141, 79]);
 // Betting-tier classification (three-tier redesign, 2026-08-31) — distinct from
 // CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND above: that set is about SCORING methodology
 // (which fixtures borrow domestic form data) and deliberately excludes the World
@@ -413,6 +416,13 @@ const LEAGUE_CONFIG = {
   // date-split (cutoff 2026-08-19T22:00:00Z) once that read was banked — see
   // DATE_SPLIT_HOLDOUT_CUTOFFS in server.js and CALIBRATION_AUDIT[40].
   40:  { name: 'Championship', marketEfficiency: 1.0, drawBaseWeight: 1.0, homeAdvBaseWeight: 1.0 },
+  // Added 2026-09-04 (Phase 2 lower-division expansion, Addendum 42 shortlist),
+  // paper-only observation tier, rule-10 protected from day one — same guard as
+  // 48/41/42/40: no avgHomeWinRate/avgDrawRate/avgAwayWinRate/avgGoalsPerGame,
+  // neutral marketEfficiency/drawBaseWeight/homeAdvBaseWeight only (rule 10).
+  136: { name: 'Serie B',          marketEfficiency: 1.0, drawBaseWeight: 1.0, homeAdvBaseWeight: 1.0 },
+  141: { name: 'Segunda División', marketEfficiency: 1.0, drawBaseWeight: 1.0, homeAdvBaseWeight: 1.0 },
+  79:  { name: '2. Bundesliga',    marketEfficiency: 1.0, drawBaseWeight: 1.0, homeAdvBaseWeight: 1.0 },
 };
 
 // ─── XG PROXY ─────────────────────────────────────────────────────────────────

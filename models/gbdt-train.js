@@ -36,7 +36,10 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../data');
 // and Carabao Cup (48) have both converted below -- Carabao Cup once its
 // corrected rescore (the domestic-blend over-broad-filter fix) produced its
 // own clean, banked read (CALIBRATION_AUDIT[48]: posEdgeN=192, ROI +8.04%).
-const FULLY_EXCLUDED_LEAGUE_IDS = new Set([]);
+// Serie B (136), Segunda División (141), 2. Bundesliga (79) — rule-10 holdouts
+// from 2026-09-04 until each league's single backtest is banked, then rule-12
+// date-split (mirrors server.js TRAINING_HOLDOUT_LEAGUE_IDS).
+const FULLY_EXCLUDED_LEAGUE_IDS = new Set([136, 141, 79]);
 
 // Per-league date-split cutoff (calibration-rules.md rules 12/15). Real money
 // is staked on League One/Two and new fixtures resolve weekly with no way to
