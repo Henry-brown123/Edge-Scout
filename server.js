@@ -9175,6 +9175,59 @@ app.get('/api/admin/walkforward-raw-bets', (_req, res) => {
   res.json({ totalN: bets.length, byBlock: bets.reduce((acc, b) => { acc[b.blockLabel] = (acc[b.blockLabel]||0)+1; return acc; }, {}) });
 });
 
+// ─── TEMP DIAGNOSTIC (2026-09-04, Addendum 39 consolidated) — remove after use ──
+// Full 1%-increment edge-floor × probability-floor grid (5-30% × 35-65%) for
+// Championship / League One / League Two only, computed on BOTH the 23-month
+// concurrent window (2024-09-16 → 2026-08-17 — the window 18/45 was selected on
+// and Addenda 38/39 used as test, so picks from it are in-sample-selected) and the
+// pre-window period (2020-06 → 2024-09-15) as the out-of-window check. Picks are
+// pre-registered here: bestAbsReturn = max absolute return with n>=30;
+// bestRiskAdjusted = max 95% CI lower bound with n>=100. Calibration factor is
+// read live (getSettings → getCalFactorForLeague, server.js:8416/8434) and every
+// record's stored calProb is checked against min(0.97, modelProb × factor).
+app.get('/api/admin/diag-rule12-full-grid', async (_req, res) => {
+  try {
+    const { LEAGUE_CONFIG } = require('./scoring');
+    const RULE12 = { 41: '2026-08-11T09:00:00Z', 42: '2026-08-11T09:00:00Z', 40: '2026-08-19T22:00:00Z' };
+    const WINDOW_FROM = '2024-09-16T00:00:00Z';
+    const settings = getSettings();
+    const cf = getCalFactorForLeague(settings, 40);
+    const matched = await computeMatchedEdgeFixtures();
+    let mismatches = 0;
+    for (const f of matched) if (RULE12[parseInt(f.leagueId, 10)] && Math.abs(f.calProb - Math.min(0.97, f.modelProb * cf)) > 1e-9) mismatches++;
+    const pop = matched.filter(f => RULE12[parseInt(f.leagueId, 10)] && new Date(f.date) < new Date(RULE12[parseInt(f.leagueId, 10)])).sort((a, b) => new Date(a.date) - new Date(b.date));
+    const win = pop.filter(f => new Date(f.date) >= new Date(WINDOW_FROM));
+    const pre = pop.filter(f => new Date(f.date) < new Date(WINDOW_FROM));
+    const stats = arr => { const n = arr.length; if (!n) return { n: 0, roi: null, ciLow: null, ciHigh: null, abs: 0, thin: true }; const rets = arr.map(f => f.won ? f.pinnacleOdds - 1 : -1); const mean = rets.reduce((a, v) => a + v, 0) / n; const sd = n > 1 ? Math.sqrt(rets.reduce((a, v) => a + (v - mean) ** 2, 0) / (n - 1)) : 0; const h = 1.96 * sd / Math.sqrt(n); return { n, wins: arr.filter(f => f.won).length, roi: +(mean * 100).toFixed(1), ciLow: +((mean - h) * 100).toFixed(1), ciHigh: +((mean + h) * 100).toFixed(1), abs: +(rets.reduce((a, v) => a + v, 0)).toFixed(1), avgOdds: +(arr.reduce((a, f) => a + f.pinnacleOdds, 0) / n).toFixed(2), thin: n < 30 }; };
+    const EDGES = Array.from({ length: 26 }, (_, i) => 5 + i);
+    const PROBS = Array.from({ length: 31 }, (_, i) => 35 + i);
+    const passes = (f, e, p) => f.edge >= e / 100 - 1e-12 && f.modelProb >= p / 100 - 1e-12;
+    const grid = arr => Object.fromEntries(EDGES.map(e => [e, Object.fromEntries(PROBS.map(p => [p, stats(arr.filter(f => passes(f, e, p)))]))]));
+    const gWin = grid(win), gPre = grid(pre);
+    const flat = Object.entries(gWin).flatMap(([e, row]) => Object.entries(row).map(([p, c]) => ({ e: +e, p: +p, ...c })));
+    const bestAbs = flat.filter(c => c.n >= 30).sort((a, b) => (b.abs - a.abs) || (b.e - a.e))[0];
+    const bestRisk = flat.filter(c => c.n >= 100).sort((a, b) => (b.ciLow - a.ciLow) || (b.e - a.e))[0];
+    const top = (key, minN) => flat.filter(c => c.n >= minN).sort((a, b) => b[key] - a[key]).slice(0, 10).map(c => ({ e: c.e, p: c.p, n: c.n, roi: c.roi, ciLow: c.ciLow, abs: c.abs }));
+    const blocksOf = arr => { const size = Math.ceil(arr.length / 4); return [0, 1, 2, 3].map(i => arr.slice(i * size, (i + 1) * size)); };
+    const name = f => LEAGUE_CONFIG[parseInt(f.leagueId, 10)]?.name || String(f.leagueId);
+    const detail = (e, p) => ({ e, p, window: stats(win.filter(f => passes(f, e, p))), preWindow: stats(pre.filter(f => passes(f, e, p))),
+      windowBlocks: blocksOf(win).map(b => { const st = stats(b.filter(f => passes(f, e, p))); return { range: `${b[0].date.slice(0, 10)}→${b[b.length - 1].date.slice(0, 10)}`, n: st.n, roi: st.roi }; }),
+      preWindowBlocks: blocksOf(pre).map(b => { const st = stats(b.filter(f => passes(f, e, p))); return { range: `${b[0].date.slice(0, 10)}→${b[b.length - 1].date.slice(0, 10)}`, n: st.n, roi: st.roi }; }),
+      windowByLeague: Object.fromEntries(['Championship', 'League One', 'League Two'].map(L => [L, stats(win.filter(f => name(f) === L && passes(f, e, p)))])) });
+    res.json({
+      note: 'TEMP — Addendum 39 consolidated full grid. Remove after use.',
+      calibration: { codePath: 'computeMatchedEdgeFixtures: getSettings() fresh read (server.js:8347) → getCalFactorForLeague(settings, leagueId) (server.js:8416) → computeUnifiedEdge(..., { applyCalFactor: true, calFactor }) (server.js:8434)', storedSettingsCalibrationFactor: settings.calibrationFactor ?? null, effectiveDomesticCalFactor: cf, recordsChecked: pop.length, calProbMismatchesVsFactor: mismatches, scoringModel: getModelTreeBoundary() },
+      population: { window: { from: win[0]?.date.slice(0, 10), to: win[win.length - 1]?.date.slice(0, 10), n: win.length }, preWindow: { from: pre[0]?.date.slice(0, 10), to: pre[pre.length - 1]?.date.slice(0, 10), n: pre.length } },
+      selectionRule: 'bestAbsReturn: max absolute return, n>=30; bestRiskAdjusted: max 95% CI lower bound, n>=100; both chosen on the window grid, then shown with their pre-window figures. Fixed before any figure was computed.',
+      picks: { bestAbsReturn: bestAbs && detail(bestAbs.e, bestAbs.p), bestRiskAdjusted: bestRisk && detail(bestRisk.e, bestRisk.p), incumbent18_45: detail(18, 45) },
+      top10ByAbsReturn: top('abs', 30), top10ByCiLow: top('ciLow', 100),
+      gridWindow: gWin, gridPreWindow: gPre,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
 // Pools all 4 blocks' raw bet outcomes per (league, tier) — n, ROI, 95% CI via
 // normal approximation on per-bet returns (same method used for the Europa
 // League/Conference League splits, Addendum 20). Writes walk-forward-pooled.json,
