@@ -9246,39 +9246,6 @@ app.get('/api/admin/calibration-factors', (_req, res) => {
   res.json({ settingsCalibrationFactor: settings.calibrationFactor ?? null, rows });
 });
 
-// ─── TEMP DIAGNOSTIC (2026-09-04, top-division calibration) — remove after use ──
-// Per-league Brier sweep for the eight top divisions on their rule-16-clean
-// population (test-only per VALIDATED_SPLITS, after the live model's tree
-// boundary), same method as commit 3415075 / Addendum 39 Part E. Then, at the
-// pooled optimum F, the measured re-expression of the 18%@1.02 floor: which edge
-// floor at F selects the same fixtures (Jaccard), on the full clean population and
-// on the concurrent window.
-app.get('/api/admin/diag-top8-calibration', async (_req, res) => {
-  try {
-    const { LEAGUE_CONFIG } = require('./scoring');
-    const TOP8 = [39, 140, 135, 78, 61, 179, 88, 94];
-    const settings = getSettings();
-    const matched = await computeMatchedEdgeFixtures();
-    const lid = f => parseInt(f.leagueId, 10);
-    const pop = matched.filter(f => TOP8.includes(lid(f)) && VALIDATED_SPLITS[lid(f)] && new Date(f.date) >= new Date(VALIDATED_SPLITS[lid(f)].testFrom) && f.preTreeBoundary === false);
-    const brier = (arr, factor) => arr.reduce((a, f) => a + (Math.min(0.97, f.modelProb * factor) - (f.won ? 1 : 0)) ** 2, 0) / arr.length;
-    const sweep = arr => { const rows = []; for (let k = 90; k <= 120; k++) rows.push({ factor: k / 100, brier: +brier(arr, k / 100).toFixed(5) }); const best = rows.reduce((a, b) => b.brier < a.brier ? b : a, rows[0]); return { n: arr.length, best: best.factor, brierAtBest: best.brier, at100: +brier(arr, 1.00).toFixed(5), at102: +brier(arr, 1.02).toFixed(5), at106: +brier(arr, 1.06).toFixed(5), curve: rows }; };
-    const pooled = sweep(pop);
-    const F = pooled.best;
-    const perLeague = Object.fromEntries(TOP8.map(id => { const arr = pop.filter(f => lid(f) === id); const sw = sweep(arr); return [LEAGUE_CONFIG[id].name, { n: sw.n, best: sw.best, brierAtBest: sw.brierAtBest, at102: sw.at102, atPooledBest: +brier(arr, F).toFixed(5), costOfPooledVsOwn: +(brier(arr, F) - sw.brierAtBest).toFixed(5), curve: sw.curve.filter(r => Math.round(r.factor * 100) % 2 === 0) }]; }));
-    const bests = Object.values(perLeague).map(l => l.best);
-    const stats = arr => { const n = arr.length; if (!n) return { n: 0 }; const rets = arr.map(f => f.won ? f.pinnacleOdds - 1 : -1); const mean = rets.reduce((a, v) => a + v, 0) / n; const sd = n > 1 ? Math.sqrt(rets.reduce((a, v) => a + (v - mean) ** 2, 0) / (n - 1)) : 0; const h = 1.96 * sd / Math.sqrt(n); return { n, wins: arr.filter(f => f.won).length, roi: +(mean * 100).toFixed(1), ci95: [+((mean - h) * 100).toFixed(1), +((mean + h) * 100).toFixed(1)], abs: +(rets.reduce((a, v) => a + v, 0)).toFixed(1) }; };
-    const edgeAt = (f, factor) => Math.min(0.97, f.modelProb * factor) - (f.calProb - f.edge);
-    const translate = arr => { const R = arr.filter(f => edgeAt(f, 1.02) >= 0.18 - 1e-12 && f.modelProb >= 0.45 - 1e-12); const Rset = new Set(R.map(f => f.fixtureId)); const rows = []; for (let e = 14; e <= 26; e++) { const c = arr.filter(f => edgeAt(f, F) >= e / 100 - 1e-12 && f.modelProb >= 0.45 - 1e-12); const ov = c.filter(f => Rset.has(f.fixtureId)).length; rows.push({ edge: e, n: c.length, overlap: ov, jaccard: +(ov / (c.length + R.length - ov)).toFixed(3), stats: stats(c) }); } const best = rows.reduce((a, b) => b.jaccard > a.jaccard ? b : a, rows[0]); return { rule18at102: stats(R), byLeague18at102: Object.fromEntries(TOP8.map(id => [LEAGUE_CONFIG[id].name, R.filter(f => lid(f) === id).length])), candidates: rows, bestMatch: best }; };
-    const concurrent = pop.filter(f => new Date(f.date) >= new Date('2024-09-16T00:00:00Z'));
-    res.json({ note: 'TEMP — top-division calibration check and floor re-expression. Remove after use.',
-      population: { n: pop.length, from: pop.map(f => f.date).sort()[0]?.slice(0, 10), to: pop.map(f => f.date).sort().pop()?.slice(0, 10), currentFactor: getCalFactorForLeague(settings, 39) },
-      pooled: { n: pooled.n, best: F, brierAtBest: pooled.brierAtBest, at100: pooled.at100, at102: pooled.at102, at106: pooled.at106, curve: pooled.curve.filter(r => Math.round(r.factor * 100) % 2 === 0) },
-      perLeague, cluster: { bests, min: Math.min(...bests), max: Math.max(...bests), spread: +(Math.max(...bests) - Math.min(...bests)).toFixed(2) },
-      floorTranslationAtPooledBest: { factor: F, fullCleanPopulation: translate(pop), concurrentWindow: translate(concurrent) } });
-  } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
-});
-
 // Pools all 4 blocks' raw bet outcomes per (league, tier) — n, ROI, 95% CI via
 // normal approximation on per-bet returns (same method used for the Europa
 // League/Conference League splits, Addendum 20). Writes walk-forward-pooled.json,

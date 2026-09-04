@@ -7174,3 +7174,83 @@ Addendum 37 Part G open items.
 Temp endpoint `/api/admin/diag-rule12-grid-corrected` removed after use in
 commit `c2ef550`; confirmed live via a logged-in 404 check at 2026-09-04
 15:03 UTC.
+
+## Addendum 41 — Top-division calibration: per-league Brier check and the measured floor re-expression (decision pending)
+
+2026-09-04. Rule 17 check for the eight top divisions, run after the
+Addendum 38 narrowing went live (commit `163fb6d`). **No factor change was
+made**: the per-league optima do not cluster cleanly enough to meet the
+"cluster → one shared factor" condition set for this task, so the result is
+reported for decision. Same method as commit `3415075` / Addendum 39 Part E
+(Brier of the top pick's `min(0.97, modelProb × factor)`, step 0.01) on each
+league's rule-16-clean population (test-only from its own `testFrom`, after
+the live model's tree boundary; n=5,497, 2023-11-03 → 2026-08-07). Current
+factor 1.02 (`settings.calibrationFactor`).
+
+### Part A — Per-league optima
+
+| League | n | Own optimum | Brier at own optimum | at 1.02 (now) | at 1.06 (pooled optimum) | Cost of 1.06 vs own | Cost of 1.02 vs own |
+|---|---|---|---|---|---|---|---|
+| Bundesliga | 770 | 1.03 | 0.23597 | 0.23602 | 0.23612 | 0.00015 | 0.00005 |
+| Premier League | 951 | 1.04 | 0.24117 | 0.24128 | 0.24126 | 0.00009 | 0.00011 |
+| La Liga | 950 | 1.04 | 0.23254 | 0.23266 | 0.23261 | 0.00007 | 0.00012 |
+| Ligue 1 | 833 | 1.05 | 0.23433 | 0.23456 | 0.23435 | 0.00002 | 0.00023 |
+| Scottish Premiership | 348 | 1.06 | 0.22242 | 0.22295 | 0.22242 | 0.00000 | 0.00053 |
+| Serie A | 722 | 1.08 | 0.24161 | 0.24239 | 0.24169 | 0.00008 | 0.00078 |
+| Primeira Liga | 460 | 1.09 | 0.22581 | 0.22701 | 0.22603 | 0.00022 | 0.00120 |
+| Eredivisie | 463 | 1.13 | 0.23038 | 0.23321 | 0.23148 | 0.00110 | 0.00283 |
+| **Pooled** | **5,497** | **1.06** | 0.23476 | 0.23515 | 0.23476 | — | 0.00039 |
+
+Pooled curve: 1.00 → 0.23563, 1.02 → 0.23515, 1.04 → 0.23486, **1.06 →
+0.23476**, 1.08 → 0.23486, 1.10 → 0.23516.
+
+**Reading.** The raw optima span 1.03 to 1.13 — a spread of 0.10, twice the
+0.05 the lower three showed, which is why this is a report rather than a
+commit. But the *cost* column tells a more specific story: seven of the eight
+leagues sit within 0.00022 Brier of their own optimum at a shared 1.06 —
+inside the flat bottom of their curves, the same test that justified one
+shared 0.93 for the lower three. Eredivisie is the genuine outlier: its
+optimum is 1.13 and a shared 1.06 costs it 0.0011, comparable to what
+motivated the lower-league split. Even so, 1.06 is better than today's 1.02
+for every league except Bundesliga (where the two are a wash at 0.0001), and
+today's 1.02 is worst precisely for Eredivisie, Primeira Liga and Serie A.
+So this is a cluster of seven with one outlier, not a scatter of eight.
+
+### Part B — The floor re-expression, measured (ready, not applied)
+
+At 1.06 the edge floor that selects the same fixtures as today's 18% at 1.02
+is **20% / 45%** (Jaccard 0.95 on both populations):
+
+| Population | 18%/45% at 1.02 | 20%/45% at 1.06 | Overlap |
+|---|---|---|---|
+| Full clean population | 77 bets, +102.5%, CI [+12.7, +192.3], abs +78.9 | 81 bets, +98.1%, CI [+12.5, +183.8], abs +79.5 | 77 |
+| Concurrent window (from 2024-09-16) | 60 bets, +95.9%, CI [+0.4, +191.3], abs +57.5 | 63 bets, +90.1%, CI [−1.2, +181.4], abs +56.8 | 60 |
+
+Neighbouring floors at 1.06 do not match: 19% gives 105 bets (Jaccard
+0.73), 21% gives 67 (0.87). These populations are thin — 5 to 19 bets per
+league — which is the Addendum 38 reason the top divisions are now
+observation-only; the floor matters here for what gets flagged as "clears
+the rule" in observation and for the graduation trigger, not for stakes.
+
+### Part C — Options for decision
+
+1. **Shared 1.06 for all eight, floor 20%/45%, one commit** (explicit
+   top-division branch beside the tournament and rule-12 ones, so the
+   Settings-tab value falls back to being the unclassified-league default).
+   Improves seven leagues and leaves Bundesliga a wash; Eredivisie improves
+   over today but stays 0.0011 short of its own optimum. Record Eredivisie as
+   a rule-17 individual re-check at n ≥ 750.
+2. **Shared 1.06 for seven, Eredivisie at 1.13 — two floors.** Eredivisie's
+   floor would need its own measured re-expression (roughly 23% at 1.13 for
+   the same fixtures, to be measured, not assumed). Two factors, two floors,
+   on a 463-fixture basis for the outlier.
+3. **Hold at 1.02.** Keeps the known-wrong compromise for all eight.
+
+Recommended: option 1 now, with the Eredivisie re-check pre-registered. It
+is the same shape as the lower-league decision (one shared value inside the
+flat region), and it does not spend a per-league factor on the thinnest
+population in the set.
+
+Temp endpoint `/api/admin/diag-top8-calibration` removed after use (commit
+below). `GET /api/admin/calibration-factors` remains as the permanent
+rule-17 sharing record.
