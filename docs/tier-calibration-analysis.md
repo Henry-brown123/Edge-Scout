@@ -7151,6 +7151,5 @@ optimum is 1.06, Addendum 39 Part E — a separate rule-17 decision), and the
 Addendum 37 Part G open items.
 
 Temp endpoint `/api/admin/diag-rule12-grid-corrected` removed after use in
-commit `c2ef550` (verified in code: zero references remain). The post-deploy
-live check returned 401 because the browser session had expired, so the
-removal is verified in code rather than by a logged-in 404 this time.
+commit `c2ef550`; confirmed live via a logged-in 404 check at 2026-09-04
+15:03 UTC.
