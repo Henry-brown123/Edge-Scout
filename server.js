@@ -4666,6 +4666,44 @@ app.get('/api/admin/diag-lineup-probe', (_req, res) => {
   res.json({ status, fixtures: rows.sort((a, b) => a.kickoff.localeCompare(b.kickoff)) });
 });
 
+// TEMP DIAGNOSTIC (2026-09-05, Reading v Blackpool deep dive) — remove after use.
+// Season-phase split of the staked EFL cohort's frozen pre-cutoff matched population:
+// are August/September fixtures (3-8 league games in, form/xG/defence windows
+// straddling the summer, standings read at full strength) worse calibrated and
+// worse-returning than the rest of the season? Also the same split for the other
+// domestic cohorts for comparison. Read-only.
+app.get('/api/admin/diag-season-phase', async (_req, res) => {
+  try {
+    const all = await computeMatchedEdgeFixtures();
+    const lid = f => parseInt(f.leagueId, 10);
+    const RULE12 = { 41: '2026-08-11T09:00:00Z', 42: '2026-08-11T09:00:00Z', 40: '2026-08-19T22:00:00Z' };
+    const groups = {
+      efl: all.filter(f => RULE12[lid(f)] && new Date(f.date) < new Date(RULE12[lid(f)])),
+      topDivisions: all.filter(f => TOP_DIVISION_CALIBRATION_LEAGUE_IDS.has(lid(f)) && VALIDATED_SPLITS[lid(f)] && new Date(f.date) >= new Date(VALIDATED_SPLITS[lid(f)].testFrom) && f.preTreeBoundary === false),
+      continental2nd: all.filter(f => CONTINENTAL_SECOND_TIER_LEAGUE_IDS.has(lid(f)) && new Date(f.date) < new Date('2026-09-04T21:00:00Z')),
+    };
+    const brier = (arr, k) => arr.length ? arr.reduce((a, f) => a + (Math.min(0.97, f.modelProb * k) - (f.won ? 1 : 0)) ** 2, 0) / arr.length : null;
+    const stats = arr => { const n = arr.length; if (!n) return { n: 0 }; const rets = arr.map(f => f.won ? f.pinnacleOdds - 1 : -1); const mean = rets.reduce((a, v) => a + v, 0) / n; const sd = n > 1 ? Math.sqrt(rets.reduce((a, v) => a + (v - mean) ** 2, 0) / (n - 1)) : 0; const h = 1.96 * sd / Math.sqrt(n); return { n, roi: +(mean * 100).toFixed(2), ciLow: +((mean - h) * 100).toFixed(2), ciHigh: +((mean + h) * 100).toFixed(2) }; };
+    const bias = arr => { const n = arr.length; if (!n) return null; const pred = arr.reduce((a, f) => a + f.modelProb, 0) / n, act = arr.filter(f => f.won).length / n; return { n, predPct: +(pred * 100).toFixed(1), actualPct: +(act * 100).toFixed(1), biasPp: +((act - pred) * 100).toFixed(1) }; };
+    const month = f => new Date(f.date).getUTCMonth() + 1;
+    const phase = f => { const m = month(f); return (m === 8 || m === 9) ? 'augSep' : (m === 10 || m === 11) ? 'octNov' : 'decMay'; };
+    const out = {};
+    for (const [g, arr] of Object.entries(groups)) {
+      const factor = g === 'efl' ? 0.93 : g === 'topDivisions' ? 1.06 : 0.90;
+      const byPhase = {};
+      for (const ph of ['augSep', 'octNov', 'decMay']) {
+        const sub = arr.filter(f => phase(f) === ph);
+        const mid = sub.filter(f => f.modelProb >= 0.45 && f.modelProb < 0.70);
+        const edgeAt = f => Math.min(0.97, f.modelProb * factor) - (f.calProb - f.edge);
+        const rule = g === 'efl' ? sub.filter(f => edgeAt(f) >= 0.13 && f.modelProb >= 0.45) : g === 'topDivisions' ? sub.filter(f => edgeAt(f) >= 0.20 && f.modelProb >= 0.45) : [];
+        byPhase[ph] = { n: sub.length, brierRaw: brier(sub, 1.0) && +brier(sub, 1.0).toFixed(5), brierAtCohortFactor: brier(sub, factor) && +brier(sub, factor).toFixed(5), biasAll: bias(sub), bias45to70: bias(mid), posEdge5: stats(sub.filter(f => f.edge >= 0.05)), cohortRule: rule.length ? stats(rule) : null, awayPicks45to50: stats(sub.filter(f => f.topOutcome === 'away' && f.modelProb >= 0.45 && f.modelProb < 0.50 && f.edge >= 0.05)) };
+      }
+      out[g] = { total: arr.length, factor, byPhase };
+    }
+    res.json({ note: 'TEMP — remove after use', groups: out });
+  } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
+});
+
 // ── App state API ─────────────────────────────────────────────────────────────
 
 // GET divergence report — fixtures where model and market disagree by >8pp
