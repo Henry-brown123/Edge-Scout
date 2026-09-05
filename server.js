@@ -3074,8 +3074,10 @@ function setupScheduler() {
   // 1. 00:05 UTC — nightly backfill chain
   cron.schedule('5 0 * * *', async () => {
     if (isRateLimited()) { console.log('[Cron:Backfill] Skipped — rate limited'); return; }
+    // runBackfillChain() owns _cronRunning.backfill (set on entry, cleared in its finally).
+    // Do NOT pre-set it here: doing so made the chain's own duplicate guard see the cron's
+    // flag and self-skip every night (status stuck at completedAt 2026-08-24 until 2026-09-04).
     if (_cronRunning.backfill) { console.log('[Cron:Backfill] Skipped — already running'); return; }
-    _cronRunning.backfill = true;
     const t0 = Date.now();
     console.log('[Cron:Backfill] 00:05 UTC — starting nightly backfill chain');
     try {
@@ -3084,7 +3086,6 @@ function setupScheduler() {
     } catch (e) {
       console.error(`[Cron:Backfill] Error: ${e.message}`);
     } finally {
-      _cronRunning.backfill = false;
       _cronLastRan.backfill = new Date().toISOString();
     }
   }, { timezone: 'UTC' });
@@ -7759,10 +7760,13 @@ app.get('/api/diagnostics/factor-distribution', (req, res) => {
 let _startupStatus = { phase: 'idle', startedAt: null, completedAt: null, skipped: false, error: null };
 
 async function runBackfillChain() {
-  if (_cronRunning.backfill && _startupStatus.phase !== 'queued') {
+  // Single-flight guard shared by the startup path (30s post-boot) and the 00:05 UTC cron.
+  // The chain itself owns the flag; callers must only read it, never pre-set it.
+  if (_cronRunning.backfill) {
     console.log('[Backfill] Already running — skipping duplicate invocation');
     return;
   }
+  _cronRunning.backfill = true;
   _startupStatus = { phase: 'historical', startedAt: new Date().toISOString(), completedAt: null, skipped: false, error: null };
 
   try {
@@ -7864,6 +7868,8 @@ async function runBackfillChain() {
     _startupStatus.phase = 'error';
     _startupStatus.error = e.message;
     console.error('[Backfill] Chain error:', e.message);
+  } finally {
+    _cronRunning.backfill = false;
   }
 }
 
