@@ -4592,6 +4592,79 @@ app.get('/api/odds/events', async (req, res) => {
   } catch (e) { res.status(e.response?.status || 500).json({ error: e.message }); }
 });
 
+// ─── TEMP DIAGNOSTICS (2026-09-04, lock-time lineup availability) — remove after use ───
+// (1) diag-lineup-at-lock: read-only join of every locked bet against lineups.json —
+//     was a confirmed lineup on disk at the moment the bet locked (fetchedAt <= lockedAt),
+//     per league, with the real lock offset (kickoff - lockedAt) distribution.
+// (2) diag-lineup-probe: forward probe. Polls API-Sports /fixtures/lineups every
+//     5 minutes for today's fixtures in tracked leagues from T-120 to kickoff and
+//     records the first tick at which a full lineup (both teams) was returned, per
+//     fixture, in DATA_DIR/diag-lineup-probe.json. Read-only w.r.t. app data.
+app.get('/api/admin/diag-lineup-at-lock', (_req, res) => {
+  try {
+    const bets = getBets().filter(b => b.lockedAt && b.kickoff && b.fixtureId);
+    const lineups = getLineups();
+    const q = (arr, f) => { if (!arr.length) return null; const a = [...arr].sort((x, y) => x - y); return a[Math.min(a.length - 1, Math.floor(f * a.length))]; };
+    const byLeague = {};
+    const examples = [];
+    for (const b of bets) {
+      const lid = String(b.leagueId);
+      const lu = lineups[String(b.fixtureId)];
+      const lockOffsetMin = (new Date(b.kickoff) - new Date(b.lockedAt)) / 60000;
+      const fetchedAt = lu?.fetchedAt ? new Date(lu.fetchedAt) : null;
+      const availableAtLock = !!fetchedAt && fetchedAt <= new Date(new Date(b.lockedAt).getTime() + 2 * 60000);
+      const fetchedBeforeKo = !!fetchedAt && fetchedAt < new Date(b.kickoff);
+      const fetchOffsetMin = fetchedAt ? (new Date(b.kickoff) - fetchedAt) / 60000 : null;
+      if (!byLeague[lid]) byLeague[lid] = { name: LEAGUE_NAMES_MAP[lid] || lid, n: 0, availableAtLock: 0, lineupOnDiskAnyTime: 0, fetchedBeforeKickoff: 0, lockOffsets: [], fetchOffsetsPreKo: [], firstLock: null, lastLock: null };
+      const L = byLeague[lid]; L.n++; if (availableAtLock) L.availableAtLock++; if (lu) L.lineupOnDiskAnyTime++; if (fetchedBeforeKo) { L.fetchedBeforeKickoff++; L.fetchOffsetsPreKo.push(+fetchOffsetMin.toFixed(1)); }
+      L.lockOffsets.push(+lockOffsetMin.toFixed(1));
+      L.firstLock = !L.firstLock || b.lockedAt < L.firstLock ? b.lockedAt : L.firstLock; L.lastLock = !L.lastLock || b.lockedAt > L.lastLock ? b.lockedAt : L.lastLock;
+      if (b.lockedAt >= '2026-09-01') examples.push({ fixture: b.fixture, league: L.name, kickoff: b.kickoff, lockedAt: b.lockedAt, lockOffsetMin: +lockOffsetMin.toFixed(1), lineupFetchedAt: lu?.fetchedAt || null, fetchOffsetMin: fetchOffsetMin == null ? null : +fetchOffsetMin.toFixed(1), availableAtLock, isFakeMoney: !!b.isFakeMoney, stake: b.suggestedStake });
+    }
+    const summary = Object.fromEntries(Object.entries(byLeague).map(([lid, L]) => [lid, { name: L.name, n: L.n, availableAtLock: L.availableAtLock, availableAtLockPct: +(100 * L.availableAtLock / L.n).toFixed(1), lineupOnDiskAnyTime: L.lineupOnDiskAnyTime, fetchedBeforeKickoff: L.fetchedBeforeKickoff, lockOffsetMin: { min: q(L.lockOffsets, 0), p25: q(L.lockOffsets, 0.25), median: q(L.lockOffsets, 0.5), p75: q(L.lockOffsets, 0.75), max: q(L.lockOffsets, 1) }, fetchOffsetPreKoMin: { min: q(L.fetchOffsetsPreKo, 0), median: q(L.fetchOffsetsPreKo, 0.5), max: q(L.fetchOffsetsPreKo, 1) }, firstLock: L.firstLock, lastLock: L.lastLock }]));
+    res.json({ note: 'TEMP — remove after use. availableAtLock = lineups.json entry for the fixture with fetchedAt <= lockedAt+2min (fetchedAt is the LAST successful fetch, normally the lock fetch itself).', totalLockedBets: bets.length, wowyActive: getSettings().wowyActive ?? null, byLeague: summary, recentExamples: examples.sort((a, b) => b.lockedAt.localeCompare(a.lockedAt)).slice(0, 40) });
+  } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
+});
+let _lineupProbe = { running: false, startedAt: null, ticks: 0, apiCalls: 0, lastTick: null, error: null, timer: null };
+function _probeFile() { return readJSON('diag-lineup-probe.json') || { fixtures: {} }; }
+async function _lineupProbeTick() {
+  const st = _lineupProbe; st.ticks++; st.lastTick = new Date().toISOString();
+  try {
+    const now = Date.now();
+    const today = new Date().toISOString().slice(0, 10);
+    const tracked = new Set(Object.keys(LEAGUES).map(Number));
+    const { data } = await apiSports.get('/fixtures', { params: { date: today } }); st.apiCalls++;
+    const store = _probeFile();
+    const cands = (data?.response || []).filter(f => tracked.has(f.league?.id)).filter(f => { const m = (new Date(f.fixture.date) - now) / 60000; return m <= 130 && m > -5; });
+    for (const f of cands) {
+      const fid = String(f.fixture.id);
+      const rec = store.fixtures[fid] || (store.fixtures[fid] = { fixtureId: f.fixture.id, league: f.league?.name, leagueId: f.league?.id, home: f.teams?.home?.name, away: f.teams?.away?.name, kickoff: f.fixture.date, checks: [], firstFullAt: null, firstFullMinBeforeKo: null, firstPartialAt: null });
+      if (rec.firstFullAt) continue;
+      const { data: lu } = await apiSports.get('/fixtures/lineups', { params: { fixture: f.fixture.id } }); st.apiCalls++;
+      const teams = (lu?.response || []).filter(t => (t.startXI || []).length >= 11).length;
+      const minBefore = +(((new Date(f.fixture.date) - Date.now()) / 60000).toFixed(1));
+      rec.checks.push({ at: new Date().toISOString(), minBeforeKo: minBefore, teamsWithXI: teams });
+      if (teams >= 1 && !rec.firstPartialAt) rec.firstPartialAt = new Date().toISOString();
+      if (teams >= 2) { rec.firstFullAt = new Date().toISOString(); rec.firstFullMinBeforeKo = minBefore; }
+      await new Promise(r => setTimeout(r, 200));
+    }
+    writeJSON('diag-lineup-probe.json', store);
+  } catch (e) { st.error = e.message; }
+  if (Date.now() - new Date(st.startedAt).getTime() > 16 * 3600e3) { clearInterval(st.timer); st.running = false; }
+}
+app.post('/api/admin/diag-lineup-probe/start', (_req, res) => {
+  if (_lineupProbe.running) return res.json({ started: false, status: _lineupProbe });
+  _lineupProbe = { running: true, startedAt: new Date().toISOString(), ticks: 0, apiCalls: 0, lastTick: null, error: null, timer: setInterval(_lineupProbeTick, 5 * 60000) };
+  _lineupProbeTick();
+  res.json({ started: true, note: 'polls every 5 min for up to 16h; results at GET /api/admin/diag-lineup-probe' });
+});
+app.get('/api/admin/diag-lineup-probe', (_req, res) => {
+  const { timer, ...status } = _lineupProbe;
+  const store = _probeFile();
+  const rows = Object.values(store.fixtures).map(r => ({ league: r.league, leagueId: r.leagueId, fixture: `${r.home} v ${r.away}`, kickoff: r.kickoff, checks: r.checks.length, firstPartialMinBeforeKo: r.firstPartialAt ? +(((new Date(r.kickoff) - new Date(r.firstPartialAt)) / 60000).toFixed(1)) : null, firstFullMinBeforeKo: r.firstFullMinBeforeKo, lastCheckMinBeforeKo: r.checks[r.checks.length - 1]?.minBeforeKo ?? null, lastTeamsWithXI: r.checks[r.checks.length - 1]?.teamsWithXI ?? null }));
+  res.json({ status, fixtures: rows.sort((a, b) => a.kickoff.localeCompare(b.kickoff)) });
+});
+
 // ── App state API ─────────────────────────────────────────────────────────────
 
 // GET divergence report — fixtures where model and market disagree by >8pp
