@@ -8542,3 +8542,19 @@ this read.
    `docs/feature-design-backlog.md`.
 
 No live change to staking or the current rule.
+
+### Addendum 46 Part C — adopted (2026-09-06, commit below)
+
+`PAPER_STAKE_ELIGIBLE_LEAGUE_IDS` narrowed from {40, 41, 42} to {42}.
+Championship and League One move to the observation tier: their fixtures
+still score, still clear or fail the 13%/45% rule at 0.93 as logged
+observation records, and still count toward any trigger, but carry no
+paper stake and are not real-money convertible. League Two is unchanged in
+every respect — same factor, floors, eligibility and correction layer. The
+rule constants (`PAPER_MONEY_EDGE_MIN_RULE12`, `PAPER_MONEY_PROB_MIN`,
+`RULE12_CALIBRATION_FACTOR`) were not touched. The cohort table now shows
+the rule-12 leagues as two tables, "EFL lower divisions — staked" (League
+Two) and "EFL lower divisions — observation" (Championship, League One),
+derived from the same configuration with no UI list. Reversible by
+restoring 40 and 41 to the set. Re-inclusion requires each league to pass
+its own beyond-market validation under the market-residual model.

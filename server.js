@@ -582,7 +582,14 @@ function getPaperMoneyEdgeMin(leagueId) {
 // negative at n>=30). clearsPaperMoneyRule (the edge/prob test, any domestic
 // league) is kept separate from meetsPaperMoneyRule (clears AND stake-eligible)
 // precisely so top-division observation records still count toward that trigger.
-const PAPER_STAKE_ELIGIBLE_LEAGUE_IDS = new Set([40, 41, 42]);
+// 2026-09-06 (Addendum 46 Part C, adopted): narrowed to League Two only. Against
+// Pinnacle closing, Championship (+1.8pp beyond market, z 0.6, closing ROI +0.7%)
+// and League One (+1.3pp, z 0.4, +1.3%) add nothing the market does not already
+// price; League Two carries the cohort's residual (+5.9pp, z 1.9, +41.6%). The
+// 13%/45% rule at 0.93 (PAPER_MONEY_EDGE_MIN_RULE12 / PAPER_MONEY_PROB_MIN /
+// RULE12_CALIBRATION_FACTOR) is untouched for all three; 40 and 41 keep clearing
+// it as observation-tier records. Reversible by restoring 40 and 41 here.
+const PAPER_STAKE_ELIGIBLE_LEAGUE_IDS = new Set([42]);
 
 // Legacy zero-stake paper records (locked 2026-08-08 → 2026-08-31, before the
 // three-tier redesign): a per-league paper_only flag zeroed their Kelly stake at
@@ -9459,7 +9466,7 @@ function getCalibrationCohorts() {
   const cohortMap = {};
   for (const r of rows) {
     const key = [r.tier, r.factorSource, r.calibrationFactor, r.paperEdgeMin, r.paperProbMin, r.paperStakeEligible].join('|');
-    if (!cohortMap[key]) cohortMap[key] = { id: key.replace(/[^a-z0-9]+/gi, '-').toLowerCase(), label: COHORT_LABELS[r.factorSource] || `${r.tier} @ ${r.calibrationFactor}`, tier: r.tier, calibrationFactor: r.calibrationFactor, factorSource: r.factorSource, paperEdgeMin: r.paperEdgeMin, paperProbMin: r.paperProbMin, paperStakeEligible: r.paperStakeEligible, leagueIds: [], leagues: [] };
+    if (!cohortMap[key]) cohortMap[key] = { id: key.replace(/[^a-z0-9]+/gi, '-').toLowerCase(), label: (COHORT_LABELS[r.factorSource] || `${r.tier} @ ${r.calibrationFactor}`) + (rows.some(o => o.factorSource === r.factorSource && o.paperStakeEligible !== r.paperStakeEligible) ? (r.paperStakeEligible ? ' — staked' : ' — observation') : ''), tier: r.tier, calibrationFactor: r.calibrationFactor, factorSource: r.factorSource, paperEdgeMin: r.paperEdgeMin, paperProbMin: r.paperProbMin, paperStakeEligible: r.paperStakeEligible, leagueIds: [], leagues: [] };
     cohortMap[key].leagueIds.push(r.leagueId); cohortMap[key].leagues.push(r.name);
     r.cohortId = cohortMap[key].id;
   }
