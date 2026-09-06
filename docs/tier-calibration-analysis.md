@@ -8110,3 +8110,100 @@ makes the eventual number meaningful.
 
 Then re-run the rule-12 grid once on the now-equivalent population (rule 3),
 re-express 13%/45% if it moves, and let the live record accumulate.
+
+## Addendum 46 — Model-design review: feature granularity and completeness, evidence-first (2026-09-06, design review only)
+
+Question: independent of the pipeline gaps in Addendum 45, is the model's
+feature set as complete and as granular as the data can support? Every
+flag below is tagged **demonstrated** (measured on this project's own data
+today) or **untested** (plausible, no measurement yet). Nothing was
+implemented. Evidence came from one read-only diagnostic
+(`diag-design-review`, removed after use) over the 93,804-fixture pool, the
+deployed 2026-08-08 trees, and the 35,126-fixture matched population
+(20,403 of it after the tree boundary). "Residual" below is outcome minus
+calibrated top-pick probability at the league's live factor, so a positive
+residual means the side under-predicted by the model.
+
+### What the model actually is
+
+24 inputs: sixteen 0–100 factor scores (home and away × form, homeAdv, xG,
+h2h, defence, momentum, injuries, standings), five home-minus-away
+differences (form, xG, defence, momentum, standings) and three competition-
+context flags. Three one-vs-rest ensembles of 200 depth-3 trees, Platt-
+scaled, renormalised. **No league identity, no team identity, no market
+input.** Depth-weighted split share in the deployed trees:
+
+| Feature | Share | Feature | Share |
+|---|---|---|---|
+| xG diff | 13.7% | away xG | 5.4% |
+| defence diff | 10.0% | away defence | 4.7% |
+| standings diff | 9.5% | home xG | 3.9% |
+| home homeAdv | 8.4% | home defence | 2.9% |
+| home h2h | 6.5% | momentum (3 inputs) | 7.7% |
+| home standings | 5.9% | **form (3 inputs)** | **6.1%** |
+| away standings | 5.8% | context flags | 3.7% |
+| away h2h | 5.6% | **injuries (2 inputs)** | **0.0%** |
+
+Two things the trees themselves demonstrate: injuries is a dead input (a
+constant 50 in every training record, never split on), and form — the
+factor the UI foregrounds and the season-phase problem centres on — is
+among the least-used inputs, so early-season distortion enters mainly
+through standings and the goals-based xG/defence windows, not form.
+
+### The finding that frames everything else: the market explains the model's errors
+
+On the matched population the margin-stripped Pinnacle closing price is a
+better forecast than the model by a wide margin — top-pick Brier 0.2262 vs
+0.2395 (post-boundary 0.2263 vs 0.2393, n=20,403). Regressing the model's
+residual on (market − model) gives a slope of **1.05**: on average the
+model's disagreement with the market is entirely error. **Demonstrated.**
+This does not say no edge exists anywhere — the banked cells are exactly
+the places where that average does not hold — but it does say the largest
+single omission in the feature set is the market itself, and that any
+future design should treat "model − market" as the object to validate,
+not "model" alone. It also explains why calibration factors below 1.0 keep
+being needed: the model is confident where the market is not.
+
+### Part 1 — Granularity of every existing feature
+
+| Feature | Computed at | What the data supports | Flag |
+|---|---|---|---|
+| Form (6 league games, decay 0.05) | pooled: same window, same decay, every league and team | per-league windows/decay are fittable (thousands of fixtures per league); per-team is not | **Demonstrated: low importance (6.1%) and it straddles the summer (Addendum 44). Untested: whether a per-league window helps** — form's problem is definition (season boundary, cups excluded live but not historically), not granularity |
+| Home advantage (home team's home ppg, last 10) | per-team record vs a **pooled** 46.3% baseline in the modifier; the factor itself is per-team | per-league baselines are strongly supported; per-team home advantage is not | **Demonstrated: pooled baseline is wrong for most leagues** — home-win rates run 41.7% (Serie B) to 48.4% (Conference League); every EFL league is 42–43%. **Demonstrated: per-team home advantage is mostly noise** — across 279 teams with ≥40 home and ≥40 away games in each half, home-minus-away ppg correlates only 0.175 between odd and even seasons (team strength itself: 0.688). "Fortresses" do not persist at this sample size; league-level home advantage does |
+| Standings (rank → score, own table from game 1) | pooled function of rank and league size; no season-phase weighting | per-league shrinkage toward last season is fittable; the standings difference is the model's third most-used input (9.5%) | **Demonstrated: read at full strength after one game; Aug–Sep is the worst-calibrated phase (Addendum 44 Part D).** Remedy is a season-phase prior, not finer team granularity |
+| xG (8 games; StatsBomb/Understat → shots → goals) | pooled; source varies by league — top-5 get Understat, EFL and second tiers get goals, live gets a one-game shots proxy | per-league sources; the diff is the single most-used input (13.7%) | **Demonstrated: most important feature and the least consistently sourced.** Untested: whether shots-based xG for the EFL (API-Sports statistics coverage exists for 41/42/40 but is never fetched historically) improves on goals |
+| Defence (goals conceded, 8 games) | pooled | same as xG | Second most-used diff (10.0%); same sourcing point as xG. No granularity flag |
+| Momentum | pooled | — | 7.7% total; no evidence either way. Untested |
+| H2H (last 5 meetings) | pooled; any competition | — | 12.1% combined, more than form. Untested whether it carries signal beyond strength (the market slope suggests most such inputs do not) |
+| Injuries | pooled; constant 50 historically | per-league coverage exists only for some leagues (none for League One/Two) | **Demonstrated dead input** (0 splits). Either back-fill injuries historically where coverage exists and retrain, or drop it |
+| League identity | **absent** | trivially supportable — 4,000–8,000 fixtures per league | **Demonstrated gap.** Draw rates run 21% (UEFA cups) to 32% (Serie B); home rates 42–48%; per-cohort factors (0.90/0.93/1.06) exist only because the model cannot learn this. Post-boundary per-league top-pick residuals at the live factors: Eredivisie +3.7pp ±1.7, Primeira +3.7 ±1.7, League One +3.0 ±1.1, Carabao +5.6 ±3.0, Segunda +1.7 ±1.2 — league-level miscalibration survives cohort-level factors |
+| Team draw propensity | **absent** | per-team draw rate correlates **0.445** between odd and even seasons (279 teams) — a persistent trait | **Demonstrated as a stable, unmodelled trait.** Untested as a feature (the draw ensemble may partly recover it through defence/xG) |
+| Home/away multiplier (modifier) | per-team rates vs pooled baseline | per-league baseline supported; per-team advantage not | **Demonstrated: baseline should be per-league (or per-league average from the pool); per-team advantage beyond that is not supported** |
+
+### Part 2 — Signals not in the model
+
+| Candidate | Data exists? | Evidence today | Status |
+|---|---|---|---|
+| **Market prior (Pinnacle pre-match probability)** | yes — closing odds for 35k fixtures, live Pinnacle at lock | Brier 0.226 vs 0.240; residual slope 1.05 | **Demonstrated, and the largest.** Design implication: model the residual over the market (or include the market as an input), and validate edges as "vs market" from the start |
+| **Rest days / midweek involvement** | yes — pool fixture dates (tracked leagues only) | Consistent in both halves of the population: a pick with ≥3 days *more* rest than its opponent under-performs (home ≥3 more: −6.8pp ±1.1 post, −7.9 ±1.3 in-sample; away ≥3 more: +5.1 ±1.2 / +2.5 ±1.4); picks playing on ≤3 days' rest over-perform (+3.2pp ±1.2 post) | **Demonstrated residual signal, opposite sign to the deactivated congestion modifier.** Mechanism is almost certainly a strength proxy — sides playing midweek are the ones in Europe or cup runs, which the model under-rates — so the concept had signal and the implementation had the wrong sign. Build as "days since last match / midweek fixture" features under rule 13 |
+| **Travel distance** | partially — only 58 venues have coordinates in the deployed `stadiums.json` (the repo seed has 238) | thin: <100 km away picks +5.0pp ±3.4 (n=202), 300–600 km −5.0 ±3.9 (n=151) | **Untested** — suggestive, under-powered; needs the venue table completed before it can be measured |
+| **Weather (per-team sensitivity)** | yes — `weather-history.json` (6.3 MB), Open-Meteo archive | Addendum 29 walk-forward: 0.7% pooled improvement, reversed in 2 of 4 blocks; only wind ever qualified. Not re-measured here (store keys not fixture-indexed) | **Untested at proper granularity.** Per-team was the design that failed; per-team is also the granularity the data cannot support (≈100 games × wet fraction). A per-league or global rain/wind effect on totals/draws is the only version worth testing |
+| **Referee** | no — the pool does not retain referee names (`stripFixture`); API-Sports provides them per fixture | none | **Untested.** Plausible for cards/penalties markets; weak a-priori case for 1X2 |
+| **Manager change / tenure** | yes — API-Sports coaches endpoint (career dates); not in the pool | none | **Untested.** Football case is real (new-manager bounce, caretaker spells); would need a backfill |
+| **Squad value / market data** | not from current providers | — | The market prior above already carries this; a separate squad-value source is not needed to capture it |
+| **European participation this season** | derivable from the pool (CL/EL/Conf fixtures per team) | the rest-days finding is probably this in disguise | **Untested as an explicit flag**; cheap to build, likely the cleaner form of the rest-days signal |
+| **Season phase / matchday number** | yes — standings gamesPlayed | Addendum 44 Part D | Demonstrated need (see standings row) |
+| Congestion (as deployed) | — | Addendum 28: calibration worse with it on | Closed; superseded by the rest-days finding above |
+
+### What this says for the per-league, data-first rebuild
+
+Demonstrated and in order of size: (1) the market is the missing feature
+and the right validation baseline; (2) league identity is missing and
+cheap; (3) the rest-days/European-involvement signal is real and currently
+absent; (4) xG sourcing is inconsistent for the most important input; (5)
+standings need a season-phase prior; (6) injuries is dead; (7) per-team
+home advantage should not be modelled — per-league should; (8) team draw
+propensity is a real trait to test. Untested and worth a proper rule-13
+cycle: manager changes, travel (after the venue table), per-league weather
+on totals. Not worth pursuing on current evidence: per-team home
+"fortress" effects, per-team weather sensitivity, congestion as a penalty.
