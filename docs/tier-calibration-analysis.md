@@ -8590,3 +8590,56 @@ old key is in git history and should be rotated); the local git remote URL
 carried a GitHub PAT, removed from the URL after the final push of this
 step — it was visible in a session transcript and should be rotated. Temp
 endpoint `diag-top8-recheck` removed.
+
+## Addendum 48 — Shared scorer, Stage A: behaviour-preserving lift, shadow mode, and the zero-diff gate (2026-09-06)
+
+Plan item H (Addendum 45 G1/G3). Stage A changes no number: it lifts the
+three copies of "build factors, then turn them into probabilities" into one
+module and proves the lift is byte-identical before anything is switched.
+
+**What moved.** `sharedScorer.js` now holds `buildLiveFactors` (the factor
+block from `scoreOneFixture`, verbatim), `scoreProbabilities` (model → league
+bias correction → deployed correction layer → international rank anchor →
+host boost → team-profile modifiers, each stage switchable through
+`options`), `buildPoolFactors` (the factor block from
+`scoreFixtureFromPool`, verbatim), and `FEATURE_SPEC`, which records the
+definitions each path uses today — cups in the pool's windows but not
+live's, xG sourcing, injuries constant historically, the two standings
+resolvers — so Stage B closes them deliberately. The callers keep their
+legacy code in closures behind `settings.scorerPath` (`'legacy'`, the
+default, or `'shared'`); with `settings.scorerShadow` on (the default) the
+other path runs on every score and the maximum absolute difference across
+the 16 factors and 3 probabilities is stored on the result. The weather,
+profile and lineup preparation was hoisted above the probability chain
+unchanged (it does not read probabilities). `computeMatchedEdgeFixtures`
+and `runEvCalibrationConsensus` take the same switch with every optional
+stage off, reproducing their long-standing "model + bias correction"
+definition exactly. Every scored record, watching entry and bet now
+carries `scorerVersion`, `featureSpecVersion` and `scorerShadowMaxDiff`.
+
+**Gate (1e-12 tolerance).**
+
+| Population | n | Max abs diff | Above tolerance |
+|---|---|---|---|
+| Local pool, every FT fixture, legacy vs shared pool path | 8,316 | 0 | 0 |
+| Production pool, 2,000 most recent FT fixtures (2026-04-03 → 2026-09-05) | 2,000 | 0 | 0 |
+| Production live path: last 200 locked bets, inputs re-fetched, scored once with the shared path in shadow | 200 | see completion note | |
+
+**Rollback.** `PUT /api/settings {scorerPath:'legacy'}` (already the
+default); `scorerShadow:false` to stop the diffing; git revert of `98f05d4`
+as the last resort. No data was rewritten; the version tags identify
+anything scored after this commit.
+
+**Reserved populations declared (F and G).** F: League Two home picks with
+Pinnacle-implied probability under 30%, a third pre-registered cell on the
+existing League Two reserved set, from 2026-09-07T00:00Z (the 15 Aug–6 Sep
+bets were partially read in Addendum 45 section 0, so every League Two
+cell is also reported on the from-7-September subset at the look). G: a new
+League One entry, home side priced 45–65% by Pinnacle, from 2026-09-07,
+one look at season end. Both are unread by construction.
+
+**Shadow period.** From this deploy every scan and lock scores both paths
+and records the difference; the 07:00 UTC morning scan on 7 September is
+the first unattended exercise. Stage B (definition unification) and the
+cutover to `scorerPath:'shared'` do not start without an explicit
+go-ahead, regardless of how clean the shadow period is.
