@@ -651,6 +651,16 @@ const TOP_DIVISION_CALIBRATION_FACTOR = 1.06;
 // once its rule-16-clean test-only population (ev-calibration.json byLeague n,
 // which is exactly that population) reaches the stated size. Detection is
 // surfaced by GET /api/admin/calibration-factors; the action is manual.
+// Reserved out-of-sample test sets (calibration-rules.md rule 3). A reserved set is
+// never read — not for a grid, a tier screen, a calibration check or a "quick look" —
+// until its pre-registered look. Registered 2026-09-06 (Addendum 47): League Two's
+// post-cutoff population is the only genuinely unseen League Two evidence left.
+const RESERVED_TEST_SETS = [
+  { id: 'l2-post-cutoff-2026', leagueId: 42, league: 'League Two', from: '2026-08-11T09:00:00Z', registered: '2026-09-06',
+    purpose: 'Market-residual model test set for League Two; first candidate pocket edge>=10% at 0.93 AND modelProb>=40% (Addendum 47), alongside the live 13%/45% rule',
+    lookRule: 'One look, at the end of the 2026-27 season (target >=500 matched fixtures with Pinnacle closing). Report beyond-market residual and closing ROI for the pre-registered cells only. No interim reads.',
+    candidates: [{ label: 'edge>=10 & prob>=40 at 0.93', edgeMin: 0.10, probMin: 0.40 }, { label: 'live rule 13/45 at 0.93', edgeMin: 0.13, probMin: 0.45 }] },
+];
 const CALIBRATION_RECHECK_TRIGGERS = [
   { leagueId: 88, league: 'Eredivisie', reason: 'Addendum 41: own Brier optimum 1.13 vs shared 1.06 (cost 0.0011) on a 463-fixture basis', triggerMetric: 'ev-calibration byLeague n (rule-16-clean test-only)', triggerN: 750, registered: '2026-09-04' },
 ];
@@ -6146,7 +6156,7 @@ function teamsMatch(a, b) {
   return ta.some(w => w.length >= 4 && tb.includes(w));
 }
 
-async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null, debug = false } = {}) {
+async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null, debug = false, sinceDays = null } = {}) {
   if (_closingOddsStatus.running) return;
   _closingOddsStatus = {
     running: true, startedAt: new Date().toISOString(), completedAt: null, error: null,
@@ -6204,6 +6214,9 @@ async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null,
       // against Pinnacle closing odds, regardless of budget.
       const year = new Date(date).getUTCFullYear();
       if (year < 2020) { skipped++; continue; }
+      // Nightly automation (2026-09-06): bound the scan to recent kickoffs so the run
+      // never re-buys every historic no_event_match miss (misses are not persisted).
+      if (sinceDays != null && new Date(date).getTime() < Date.now() - sinceDays * 86400000) { skipped++; continue; }
       if (alreadyDone.has(fid)) { skipped++; continue; }
       const minuteKey = date.slice(0, 16); // "2024-10-05T15:30"
       const groupKey = `${sport}|${minuteKey}`;
@@ -6363,8 +6376,9 @@ app.post('/api/backfill/closing-odds', (req, res) => {
   const budget = parseInt(req.query.budget || '80000', 10);
   const leagueIds = req.query.leagues ? req.query.leagues.split(',').map(s => s.trim()) : null;
   const debug = req.query.debug === 'true';
-  res.json({ started: true, budget, leagueIds, debug, message: `Closing odds backfill starting — budget ${budget} credits${leagueIds ? `, leagues: ${leagueIds.join(',')}` : ''}${debug ? ' [DEBUG]' : ''}` });
-  runClosingOddsBackfill({ budgetCredits: budget, leagueIds, debug }).catch(e => console.error('[ClosingOdds]', e.message));
+  const sinceDays = req.query.sinceDays ? parseInt(req.query.sinceDays, 10) : null;
+  res.json({ started: true, budget, leagueIds, debug, sinceDays, message: `Closing odds backfill starting — budget ${budget} credits${leagueIds ? `, leagues: ${leagueIds.join(',')}` : ''}${sinceDays ? `, kickoffs in the last ${sinceDays} days` : ''}${debug ? ' [DEBUG]' : ''}` });
+  runClosingOddsBackfill({ budgetCredits: budget, leagueIds, debug, sinceDays }).catch(e => console.error('[ClosingOdds]', e.message));
 });
 
 app.get('/api/backfill/closing-odds/status', (req, res) => res.json(_closingOddsStatus));
@@ -7709,6 +7723,22 @@ async function runBackfillChain() {
       return;
     }
     console.log(`[Backfill] Phase 1 complete — ${hist.fixtures.length} fixtures in pool`);
+
+    // Phase 1b (2026-09-06): closing odds for recent kickoffs, every night. Until now
+    // this was manual-only, so every matched-population reading (Historical grids,
+    // calibration re-checks, the reserved League Two test set) lagged until someone
+    // ran it. Odds API, not API-Sports, so the 05:00 UTC quota cutoff does not apply;
+    // bounded to the last 14 days and a 5,000-credit cap (typically <1,000 a night)
+    // so it cannot re-buy the historic no_event_match misses. Never blocks Phase 2.
+    if (_closingOddsStatus.running) {
+      console.log('[Backfill] Phase 1b: closing odds already running — skipping');
+    } else {
+      console.log('[Backfill] Phase 1b: closing odds for kickoffs in the last 14 days…');
+      try {
+        await runClosingOddsBackfill({ budgetCredits: 5000, sinceDays: 14 });
+        console.log(`[Backfill] Phase 1b complete — matched ${_closingOddsStatus.fixturesMatched}, missed ${_closingOddsStatus.fixturesMissed}, ${_closingOddsStatus.creditsUsed} credits`);
+      } catch (e) { console.error(`[Backfill] Phase 1b error: ${e.message}`); }
+    }
 
     // Phase 2: lineups (~5,000 budget, hard stop at 05:00 UTC)
     if (backfillCutoffReached()) {
@@ -9440,7 +9470,10 @@ app.get('/api/admin/calibration-factors', (_req, res) => {
   const { settings, rows, cohorts } = getCalibrationCohorts();
   const evByLeague = Object.fromEntries(((readJSON('ev-calibration.json') || {}).byLeague || []).map(l => [l.leagueId, l.n]));
   const recheckTriggers = CALIBRATION_RECHECK_TRIGGERS.map(t => ({ ...t, currentN: evByLeague[t.leagueId] ?? null, due: (evByLeague[t.leagueId] ?? 0) >= t.triggerN }));
-  res.json({ editable: false, unclassifiedCalibrationFactor: UNCLASSIFIED_CALIBRATION_FACTOR, legacySettingsCalibrationFactorIgnored: settings.calibrationFactor ?? null, rows, cohorts, recheckTriggers });
+  const closingKeys = getClosingOdds();
+  const histFx = (readHistoricalCached() || { fixtures: [] }).fixtures;
+  const reservedTestSets = RESERVED_TEST_SETS.map(r => { const fx = histFx.filter(f => f.league?.id === r.leagueId && f.fixture?.status?.short === 'FT' && new Date(f.fixture?.date) >= new Date(r.from)); return { ...r, currentFT: fx.length, currentWithClosing: fx.filter(f => closingKeys[f.fixture.id]).length, latest: fx.map(f => f.fixture.date).sort().pop() || null }; });
+  res.json({ editable: false, unclassifiedCalibrationFactor: UNCLASSIFIED_CALIBRATION_FACTOR, legacySettingsCalibrationFactorIgnored: settings.calibrationFactor ?? null, rows, cohorts, recheckTriggers, reservedTestSets });
 });
 
 // Pools all 4 blocks' raw bet outcomes per (league, tier) — n, ROI, 95% CI via
