@@ -7775,3 +7775,164 @@ Addendum 41 Brier/floor re-check and the Eredivisie counter re-read on the
 completed population; then `paused: false` through the same endpoint.
 `retrainPending` (the old every-500-record trigger) is informational only —
 `autoRetrainEnabled` remains false.
+
+## Addendum 44 — Lock-time lineup availability across competitions, and a deep dive on Reading v Blackpool (2026-09-05)
+
+Two questions from the same Saturday: are bets locking before confirmed
+lineups exist, and why did the model put 47% on Blackpool at Reading when
+Pinnacle had them at 27%?
+
+### Part A — What the lock actually does with lineups (code trace)
+
+- **The lock is not T-60.** The minute cron fires `runPreMatchScan` when a
+  watching entry is between 55 and 60 minutes from kickoff *plus a
+  deterministic per-fixture, per-day offset of −15 to +15 minutes*
+  (`getLockOffsetMinutes`), so real locks land anywhere from T-45 to T-75.
+  Measured on all 297 locked bets: median offsets per league 56–67 min,
+  range 42–75 (one League One outlier at 516 min was a manual lock).
+- **If no lineup is available, the lock proceeds regardless.** The lock
+  fetch (`/fixtures/lineups`) saves an entry to `lineups.json` only when the
+  API returns both teams; otherwise it does nothing, silently. There is no
+  delay, no skip, and no marker on the bet record. The hourly rescan does
+  the same fetch with the same semantics.
+- **What is lost is the WOWY signal, and only that.** `scoreOneFixture`
+  attaches confirmed-absent WOWY players only when a `lineups.json` entry
+  exists for the fixture; with none, the WOWY modifier applies nothing.
+  Injuries come from `/injuries` (available days out, but empty for League
+  One/Two, whose API-Sports coverage flag is `injuries:false` — the
+  injuries factor is a permanent neutral 50 in two of the three staked
+  leagues). xG, form, defence, standings and the team-profile inputs are
+  historical, not lineup-dependent. So the exposure is "WOWY off", not
+  "scored against a projected XI".
+
+### Part B — Lineups have never been available at lock, in any club competition
+
+Read-only join of every locked bet against `lineups.json` (temp
+`diag-lineup-at-lock`): **0 of 287 club-competition locks** had a lineup
+entry at lock time — and 0 had one at any later time either. Only the July
+World Cup (7 of 10 locks, fetched T-51 to T-64) ever produced one. `wowyActive`
+is true, so WOWY has been a no-op on every club bet since the first SPL lock
+on 3 August, including every staked EFL bet.
+
+The cause is the provider, not the fetch. A forward probe (temp
+`diag-lineup-probe`, polling `/fixtures/lineups` every five minutes from
+T-130) on Saturday 5 September:
+
+| Competition (kickoff UTC) | Official release | First tick with both XIs on API-Sports |
+|---|---|---|
+| Premier League 14:00 (5 fixtures) | T-60 | between T-34 and T-29 (absent at T-34, present at T-29) |
+| Championship 14:00 (7) | T-60 | between T-34 and T-29 |
+| League One 14:00 (9), League Two 14:00 (10) | T-60 | between T-34 and T-29 |
+| Scottish Premiership 14:00 (3) | T-60 | between T-34 and T-29 |
+| Bundesliga 13:30 (5) | T-60 to T-75 | present at T-4 (first tick; earlier unknown) |
+| La Liga 14:15, Segunda División 14:15 | T-60 | between T-33 and T-28 |
+| Eredivisie 14:30, Primeira Liga 14:30 | T-60 | between T-33 and T-28 |
+| Ligue 1 15:15, Serie B 15:15 | T-60 | between T-33 and T-28 |
+| Serie A 16:00, Bundesliga 16:30 | T-60 to T-75 | see the note appended at the end of this addendum |
+
+The provider publishes lineups at roughly **T-30 in every competition
+probed**, irrespective of whether the clubs release at T-60 or T-75. The
+club's release time is therefore not the variable that matters; the
+provider's ~30-minute lag is, and it is uniform. Combined with the T-45 to
+T-75 lock window, no lock can ever see a lineup, which is exactly what the
+297-bet join shows.
+
+**Cohort exposure.** Every cohort is equally blind, but the consequence
+differs: the staked EFL cohort (Championship / League One / League Two)
+is the only one where this touches real-money sizing, and it is also the
+cohort with no injury coverage, so it currently scores with neither
+lineup nor injury information. Top divisions and tournaments are
+observation-only; continental second tiers likewise.
+
+### Part C — Recommendation (not implemented; for review)
+
+A uniform later lock is the wrong fix: T-25 would trade away line stability
+and staking time in every league for a signal the provider delivers at
+T-30 ± a tick, and the ±15-minute offset is a red herring (it exists to
+spread API load, not to chase lineups). Proposed instead:
+
+1. **Keep the current lock as the odds/edge lock.** Nothing about Pinnacle
+   pricing or the paper-money rule depends on lineups.
+2. **Add a lineup pass at ~T-25** for every locked bet: re-fetch
+   `/fixtures/lineups`; if both XIs are present, re-run only the WOWY step
+   on the already-locked probabilities and store `lineupConfirmedAt`,
+   `wowyAppliedAtLineup` and the resulting probability delta on the bet.
+   If still absent, store `lineupStatus: 'unavailable'` so the bet is
+   visibly flagged as having no lineup input — today that is silent.
+3. **Do not change the staked decision on the lineup pass** without its
+   own rule-13 evidence: a bet already placed is not re-sized, but the
+   delta is recorded so the effect of confirmed lineups can be measured on
+   live data before anyone lets it move stakes.
+4. **Staked EFL cohort first**, since it is the only real-money exposure
+   and also lacks injuries; top divisions and tournaments next; continental
+   second tiers are observation-only and can follow.
+5. **Record the fact on the Scout card** so a lock with no lineup input is
+   never mistaken for a lineup-informed one.
+
+### Part D — Reading v Blackpool (League One, 5 Sep 14:00 UTC): why 47% vs the market's 27%
+
+Locked 13:08 UTC (T-52) at Pinnacle 3.53 (Reading 2.02 / draw 3.82),
+model 47.3% → 44.0% calibrated at 0.93, edge +16.7%, cleared 13%/45%,
+paper stake £250. No lineup at lock (as above); injuries empty (no League
+One coverage). Factor scores Reading / Blackpool: form 30/70, homeAdv
+45/50, xG 42/62, H2H 39/61, defence 52/78, momentum 63/53, injuries 50/50,
+standings 46/92. Traced input by input:
+
+- **Form straddles the summer.** The form window is the last six *league*
+  fixtures, so Reading's is W 5-0, D 0-0, L 3-4 (this season) then L 0-1,
+  D 1-1, L 1-3 (April–May 2026): points 3,1,0,0,1,0 → 30. Blackpool's is
+  L 1-2, W 4-0, W 2-1, D 1-1 then W 1-0, W 1-0 (their five-wins-in-six
+  run-in): 0,3,3,1,3,3 → 70. Both clubs finished mid-table last season
+  (Reading 12th, Blackpool 13th); the market is pricing the 2026-27
+  squads, the model is still partly pricing April.
+- **Standings read at full strength after three games.** `standingsScore`
+  uses the live table whenever a team has played at least once, with no
+  shrinkage toward last season: Blackpool 3rd of 24 after four games → 92,
+  Reading 14th after three → 46. A 46-point gap from four rounds.
+- **xG and defence** use the last eight league fixtures, so half of each
+  window is also last season.
+- **H2H** genuinely favours Blackpool (three of the last four, including
+  1-0 at Reading in May).
+- **Injuries** neutral for both by data absence; **lineups** absent.
+
+So nothing is missing from the data feed for this fixture; the model is
+over-reading two early-season inputs that carry no season-phase awareness,
+and has no squad-strength prior at all, which is the market's dominant
+input in September.
+
+**Is it systematic?** Season-phase split of each domestic cohort's frozen
+matched population (temp `diag-season-phase`; EFL = rule-12 pre-cutoff,
+top divisions = rule-16-clean test-only, continental = pre-cutoff):
+
+| Cohort | Phase | n | Raw Brier | Bias 45–70% band | posEdge ≥5% ROI | Cohort rule ROI |
+|---|---|---|---|---|---|---|
+| EFL (0.93) | Aug–Sep | 1,713 | 0.2523 | −6.1pp (n=879) | +1.6% [−9.7, +12.9] (n=630) | 13/45: +7.2% [−16.6, +30.9] (n=163) |
+| EFL | Oct–Nov | 2,069 | 0.2424 | −6.0pp (n=1,095) | −10.1% [−20.0, −0.2] (n=667) | +11.6% [−11.0, +34.1] (n=163) |
+| EFL | Dec–May | 6,360 | 0.2452 | −3.6pp (n=3,427) | +3.6% [−3.0, +10.3] (n=1,889) | +19.3% [−0.1, +38.7] (n=373) |
+| Top divisions (1.06) | Aug–Sep | 709 | 0.2310 | +5.4pp | −10.2% (n=272) | 20/45: n=18 |
+| Top divisions | Dec–May | 3,944 | 0.2360 | +3.9pp | −12.6% (n=1,340) | n=56 |
+| Continental 2nd (0.90) | Aug–Sep | 1,161 | 0.2439 | −6.9pp | +0.3% (n=396) | — |
+| Continental 2nd | Dec–May | 4,646 | 0.2448 | −5.1pp | −5.5% (n=1,257) | — |
+
+For the staked cohort, August–September is the worst-calibrated phase
+(highest raw Brier, mid-band overconfidence 6.1pp vs 3.6pp in Dec–May) and
+the 13%/45% rule returns least there (+7% vs +19%), but every interval
+overlaps: **indicative, not decision-grade** (rule 6). It is consistent
+with, not proof of, the mechanism traced above. The natural remedy —
+shrinking the standings and form factors toward last season's table for
+the first six to eight matchdays — would be a rule-13 correction layer
+with its own train/test cycle, not a live tweak, and it is not proposed
+for implementation here. The bet itself is a legitimate output of the
+current, validated rule; what this addendum changes is how much weight a
+September edge of this shape should carry in anyone's manual review.
+
+**Probe completion note (2026-09-05 evening, read 2026-09-06).** The remaining
+competitions all landed at the same point: Serie A 16:00 and 18:45, Bundesliga
+16:30, 2. Bundesliga 18:30, Ligue 1 18:45 (two fixtures), Eredivisie 16:45,
+18:00 and 19:00, Primeira Liga 17:00 (two) and 19:30, Segunda 16:30 (two) and
+19:00, La Liga 16:30 and 19:00, Premier League 16:30, Championship 19:00,
+Scottish Premiership 19:00, Serie B 17:30 — every one first seen with both XIs
+at **T-28**, none earlier. Thirteen competitions, one provider release time.
+The cron fix (`e040bc5`) also verified: the nightly chain completed at
+00:08 UTC on 6 September. Temp endpoints `diag-lineup-at-lock`,
+`diag-lineup-probe` and `diag-season-phase` removed after these reads.
