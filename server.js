@@ -4593,6 +4593,52 @@ app.get('/api/odds/events', async (req, res) => {
   } catch (e) { res.status(e.response?.status || 500).json({ error: e.message }); }
 });
 
+// TEMP DIAGNOSTIC (2026-09-06, Addendum 47) — remove after use. Read-only, exploratory.
+// League Two only. Full 1% edge x probability grid (edge 5-30 at 0.93, prob 35-65) on the
+// spent pre-cutoff population, each cell with n, ROI at Pinnacle closing, beyond-market
+// residual (actual - market) and z, 4-block sign consistency, and window/pre-window
+// splits. Odds-band generalisation across broad edge x prob bands; side, phase and
+// table-position structure. Freshness accounting: post-cutoff League Two fixtures and
+// how many carry closing odds.
+app.get('/api/admin/diag-l2-grid', async (_req, res) => {
+  try {
+    const all = await computeMatchedEdgeFixtures();
+    const hist = readHistoricalCached() || { fixtures: [], scoredRecords: [] };
+    const recById = new Map(hist.scoredRecords.map(r => [r.fixtureId, r]));
+    const closing = getClosingOdds();
+    const lid = f => parseInt(f.leagueId, 10);
+    const CUT = '2026-08-11T09:00:00Z', WIN = '2024-09-16T00:00:00Z';
+    const implied = f => f.calProb - f.edge;
+    const edgeAt = f => Math.min(0.97, f.modelProb * 0.93) - implied(f);
+    const pop = all.filter(f => lid(f) === 42 && new Date(f.date) < new Date(CUT)).sort((a, b) => new Date(a.date) - new Date(b.date));
+    const post = hist.fixtures.filter(f => f.league?.id === 42 && new Date(f.fixture?.date) >= new Date(CUT) && f.fixture?.status?.short === 'FT');
+    const postWithClosing = post.filter(f => closing[f.fixture.id]).length;
+    const stats = arr => { const n = arr.length; if (!n) return { n: 0 }; const wins = arr.filter(f => f.won).length, act = wins / n; const mkt = arr.reduce((a, f) => a + implied(f), 0) / n; const rets = arr.map(f => f.won ? f.pinnacleOdds - 1 : -1); const mean = rets.reduce((a, v) => a + v, 0) / n; const sd = n > 1 ? Math.sqrt(rets.reduce((a, v) => a + (v - mean) ** 2, 0) / (n - 1)) : 0; const h = 1.96 * sd / Math.sqrt(n); const se = Math.sqrt(mkt * (1 - mkt) / n); return { n, act: +(100 * act).toFixed(1), mkt: +(100 * mkt).toFixed(1), beyond: +(100 * (act - mkt)).toFixed(1), z: +((act - mkt) / se).toFixed(2), roi: +(100 * mean).toFixed(1), lo: +(100 * (mean - h)).toFixed(1), hi: +(100 * (mean + h)).toFixed(1), odds: +(arr.reduce((a, f) => a + f.pinnacleOdds, 0) / n).toFixed(2) }; };
+    const size = Math.ceil(pop.length / 4); const blocks = [0, 1, 2, 3].map(i => pop.slice(i * size, (i + 1) * size));
+    const passes = (f, e, p) => edgeAt(f) >= e / 100 - 1e-12 && f.modelProb >= p / 100 - 1e-12;
+    const rows = ['e,p,n,act,mkt,beyond,z,roi,lo,hi,odds,blocksBeyondPos,winN,winBeyond,winRoi,preN,preBeyond,preRoi'];
+    for (let e = 5; e <= 30; e++) for (let p = 35; p <= 65; p++) {
+      const c = pop.filter(f => passes(f, e, p)); const st = stats(c); if (!st.n) { rows.push(`${e},${p},0`); continue; }
+      const bp = blocks.filter(b => { const s2 = stats(b.filter(f => passes(f, e, p))); return s2.n >= 10 && s2.beyond > 0; }).length;
+      const w = stats(c.filter(f => new Date(f.date) >= new Date(WIN))), pr = stats(c.filter(f => new Date(f.date) < new Date(WIN)));
+      rows.push([e, p, st.n, st.act, st.mkt, st.beyond, st.z, st.roi, st.lo, st.hi, st.odds, bp, w.n, w.beyond ?? '', w.roi ?? '', pr.n, pr.beyond ?? '', pr.roi ?? ''].join(','));
+    }
+    // odds-band generalisation across broad bands
+    const EB = [[5, 10], [10, 15], [15, 20], [20, 100]], PB = [[35, 45], [45, 55], [55, 65], [65, 101]], OB = [[1, 2.2], [2.2, 2.8], [2.8, 3.5], [3.5, 99]];
+    const oddsGen = [];
+    for (const [e1, e2] of EB) for (const [p1, p2] of PB) for (const [o1, o2] of OB) { const c = pop.filter(f => edgeAt(f) >= e1 / 100 && edgeAt(f) < e2 / 100 && f.modelProb >= p1 / 100 && f.modelProb < p2 / 100 && f.pinnacleOdds >= o1 && f.pinnacleOdds < o2); const st = stats(c); if (st.n >= 15) oddsGen.push({ edge: `${e1}-${e2}`, prob: `${p1}-${p2}`, odds: `${o1}-${o2}`, ...st }); }
+    // negative-edge control: does long odds help when the model does NOT disagree?
+    const oddsNoEdge = OB.map(([o1, o2]) => ({ odds: `${o1}-${o2}`, ...stats(pop.filter(f => edgeAt(f) < 0.05 && f.pinnacleOdds >= o1 && f.pinnacleOdds < o2)) }));
+    // structure: side x market band, side x model band, side x phase, table position
+    const side = {};
+    for (const sd of ['home', 'away']) { const S = pop.filter(f => f.topOutcome === sd); side[sd] = { all: stats(S), byMarketBand: [[0, 0.3], [0.3, 0.4], [0.4, 0.5], [0.5, 0.6], [0.6, 1]].map(([a, b]) => ({ band: `${a}-${b}`, ...stats(S.filter(f => implied(f) >= a && implied(f) < b)) })), byModelBand: [[0.35, 0.45], [0.45, 0.55], [0.55, 0.65], [0.65, 1]].map(([a, b]) => ({ band: `${a}-${b}`, ...stats(S.filter(f => f.modelProb >= a && f.modelProb < b)) })), byPhase: ['augSep', 'octNov', 'decMay'].map(ph => ({ ph, ...stats(S.filter(f => { const m = new Date(f.date).getUTCMonth() + 1; return ph === 'augSep' ? m === 8 || m === 9 : ph === 'octNov' ? m === 10 || m === 11 : !(m >= 8 && m <= 11); })) })) }; }
+    const tp = f => { const r = recById.get(f.fixtureId); if (!r) return null; const mine = f.topOutcome === 'home' ? r.homeFactors?.standings : r.awayFactors?.standings; const theirs = f.topOutcome === 'home' ? r.awayFactors?.standings : r.homeFactors?.standings; return { mine, theirs, gap: mine - theirs }; };
+    const table = { byPickedTeamPosition: [[0, 34], [34, 67], [67, 101]].map(([a, b]) => ({ band: `${a}-${b}`, ...stats(pop.filter(f => { const t = tp(f); return t && t.mine >= a && t.mine < b; })) })), byTableGap: [[-101, -33], [-33, 0], [0, 33], [33, 101]].map(([a, b]) => ({ band: `${a}..${b}`, ...stats(pop.filter(f => { const t = tp(f); return t && t.gap >= a && t.gap < b; })) })), underdogPickVsHigherTable: stats(pop.filter(f => { const t = tp(f); return t && implied(f) < 0.35 && t.gap > 0; })), underdogPickVsLowerTable: stats(pop.filter(f => { const t = tp(f); return t && implied(f) < 0.35 && t.gap <= 0; })) };
+    const draws = { fixturesWhereDrawWasMarketFavourite: pop.filter(f => { const co = closing[f.fixtureId]; return co && co.drawOdds && co.drawOdds < Math.min(co.homeOdds, co.awayOdds); }).length, actualDrawRate: +(100 * pop.filter(f => recById.get(f.fixtureId)?.actualOutcome === 'draw').length / pop.length).toFixed(1) };
+    res.json({ note: 'TEMP — Addendum 47 exploratory. Remove after use.', freshness: { preCutoffMatched: pop.length, preCutoffFrom: pop[0]?.date.slice(0, 10), preCutoffTo: pop[pop.length - 1]?.date.slice(0, 10), postCutoffFT: post.length, postCutoffWithClosing: postWithClosing, postCutoffFrom: post.map(f => f.fixture.date).sort()[0]?.slice(0, 10), postCutoffTo: post.map(f => f.fixture.date).sort().pop()?.slice(0, 10) }, gridCsv: rows.join('\n'), oddsGen, oddsNoEdge, side, table, draws });
+  } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
+});
+
 // ── App state API ─────────────────────────────────────────────────────────────
 
 // GET divergence report — fixtures where model and market disagree by >8pp
