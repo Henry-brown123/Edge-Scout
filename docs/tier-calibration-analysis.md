@@ -8518,3 +8518,27 @@ first on the fresh set is the widest robust one (edge ≥10, prob ≥40): it is
 the same phenomenon as 13/45 at twice the volume, and if the residual is
 real it will show there soonest. Temp endpoint `diag-l2-grid` removed after
 this read.
+
+### Addendum 47 — follow-through (2026-09-06, evening)
+
+1. **Closing-odds backfill automated.** The nightly chain now runs a
+   bounded closing-odds step (Phase 1b) after the fixture fetch: kickoffs
+   in the last 14 days, 5,000-credit cap, Odds API only so the 05:00 UTC
+   API-Sports cutoff does not apply, skipped if a manual run is in
+   progress. A `sinceDays` option was added to the backfill and its POST
+   endpoint for the same bounding. A one-off run for Championship/League
+   One/League Two over the last 60 days captures the post-cutoff fixtures
+   already played.
+2. **Reserved test set registered in code.** `RESERVED_TEST_SETS` in
+   `server.js` records League Two's post-2026-08-11T09:00Z population as
+   the market-residual model's test set, with the pre-registered look
+   (one, at the end of the 2026-27 season, target ≥500 matched fixtures)
+   and the two cells it will report — edge ≥10%/prob ≥40% at 0.93 (the
+   Addendum 47 candidate) and the live 13%/45% rule. The read-only
+   factors endpoint reports its current size and closing-odds coverage so
+   the count can be watched without reading the outcomes. No interim
+   reads; this population is not to be used for any further exploration.
+3. **Draw-picking gap logged standalone** as FD-1 in
+   `docs/feature-design-backlog.md`.
+
+No live change to staking or the current rule.
