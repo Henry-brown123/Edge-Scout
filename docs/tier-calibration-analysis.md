@@ -7936,3 +7936,177 @@ at **T-28**, none earlier. Thirteen competitions, one provider release time.
 The cron fix (`e040bc5`) also verified: the nightly chain completed at
 00:08 UTC on 6 September. Temp endpoints `diag-lineup-at-lock`,
 `diag-lineup-probe` and `diag-season-phase` removed after these reads.
+
+## Addendum 45 — Review: why the EFL cohort's historical signal has not shown up live — complete gap inventory and fix order (diagnosis only, 2026-09-06)
+
+Scope: Championship / League One / League Two, the one staked cohort. No code
+was changed. Every item below was traced in code and, where it could be,
+measured on production data on 6 September.
+
+### 0. First, the live record as it actually stands
+
+All EFL bets locked 15 Aug → 6 Sep, resolved (Pinnacle price at lock, paper):
+
+| Population | n | ROI | 95% CI |
+|---|---|---|---|
+| All resolved EFL locks | 101 | +0.8% | [−24.1, +25.7] |
+| Bets clearing the staked rule (13%/45% on 0.93) | 32 | +26.0% | [−29.4, +81.4] |
+| Locks since the three-tier redesign (31 Aug) | 65 | −11.7% | [−39.5, +16.1] |
+| Staked since the redesign | 10 | −5.1% | [−103.7, +93.5] |
+| Away picks (all) | 43 | −28.7% | [−66.5, +9.1] |
+| Model prob 35–45% band (all) | 45 | −25.8% | [−61.1, +9.5] |
+
+The staked rule is not underperforming its own backtest on the evidence
+available: +26% on 32 bets against a banked +19% (Dec–May) / +7% (Aug–Sep)
+is inside every interval. What looks like a gap is (a) the observation-tier
+population, which is not the validated rule and was never expected to pay,
+and (b) noise: 32 staked bets cannot distinguish +19% from −10%. The
+review below is therefore about making the live pipeline *equivalent* to
+the validated one, not about explaining a shortfall that the data cannot
+yet show.
+
+### 1. Inventory
+
+**G1 — Validation is not like-for-like with live scoring (newly found; the
+most foundational item).** The backtest population behind 13%/45%
+(`computeMatchedEdgeFixtures`) is `model.predict` → `applyLeagueBiasCorrection`
+only. Live scoring (`scoreOneFixture`) then applies (i) the deployed
+correction layer — `league-two-50plus` is live, `league-one-50plus` is not —
+and (ii) the team-profile modifier stack. So every live League Two bet with a
+pick ≥50% is re-scaled by a Platt transform the rule's own validation never
+saw, and every EFL bet passes through modifiers the validation never saw.
+Impact: the live probability that decides "clears 13%/45%" is a different
+number from the one the threshold was selected on; the rule's backtested
+return does not transfer by construction. Correct fix: one scoring function
+shared by live, backtest and walk-forward, parameterised by the deployed
+correction/modifier configuration, so any threshold is validated on exactly
+the probabilities live will produce; then re-run the rule-12 grid once on the
+equivalent population (rule 3) and re-express 13%/45% if it moves.
+
+**G2 — The one modifier that actually fires on EFL bets is unvalidated and
+uses a top-flight baseline (newly found).** By data scope, transfer
+(`TRANSFER_LEAGUES`: top divisions + UEFA), PIR (`PIR_LEAGUES`: PL, La Liga,
+Bundesliga, Serie A) and WOWY (`LINEUP_LEAGUES`: PL, CL, La Liga, Serie A,
+Bundesliga, Ligue 1) contain no 40/41/42 data, so those three are inert for
+the cohort whatever their flags say. The home/away win-rate multiplier is the
+exception: profiles are rebuilt from the pool for every team, the flag is on,
+thresholds are 5 games, and it divides each team's home (away) win rate by a
+pooled `club_domestic` constant of 46.3% (29.0%). EFL home-win rates run
+several points lower than that constant, so the multiplier is biased below
+1.0 for essentially every EFL home side and above for away sides — a
+systematic, unvalidated push toward away picks, which is the pick type that
+is losing live (−28.7%, n=43). Correct fix: fold the multiplier into G1's
+shared scorer and validate it under rule 13 with league-specific baselines
+(or per-league averages computed from the pool), or switch it off for the
+cohort until it is.
+
+**G3 — Historical and live factor inputs are not the same features (newly
+found).** (a) Form, xG, defence and momentum windows: the historical scorer
+walks `teamIndex`, which contains every pool fixture for the team including
+Carabao Cup; live walks league-only fixtures. (b) xG: historical uses an
+empty stats cache (goals, or Understat/StatsBomb where present — neither
+covers the EFL), live fetches statistics for the 15 most recent *league*
+fixtures, so the two teams' last game gets a shots-based value and the rest
+goals — a distribution shift the trees never saw. (c) Injuries: constant 50
+in every training record, so the feature carries no learned signal; live it
+is 50 anyway for League One/Two (`injuries:false` coverage) but real for
+Championship, i.e. a value the model cannot use. (d) Standings: historical
+`resolveStandingsScore` (own snapshot, else domestic blend) vs live
+`standingsScore` (API table, else last-season proxy of the same league) —
+they disagree for a team's first fixtures after promotion/relegation. Impact:
+each is a small feature-space mismatch between what the trees learned and
+what they are fed live; together they are exactly what an equivalent-scorer
+design (G1) removes. Correct fix: one feature builder used by both paths,
+with the cup-inclusion, stats-source and standings-resolution decisions made
+once, documented, and retrained through.
+
+**G4 — Lineups never reach the lock; WOWY is a no-op (known; Addendum 44).**
+Provider publishes at T-28 in all 13 competitions probed; the lock runs
+T-45..T-75; 0 of 287 club locks had a lineup. Redesign in progress
+separately. For this cohort the redesign must also extend the post-match
+lineups backfill to 40/41/42, otherwise WOWY has no deltas to apply even once
+lineups arrive — a no-op fixed into a different no-op. Impact today: zero
+(nothing scored against a wrong XI); impact of the fix: a new, unvalidated
+input, to be measured via the recorded delta before it moves stakes.
+
+**G5 — Early-season form/standings distortion (known; Addendum 44 Part D).**
+Mechanism traced fully: form/xG/defence windows straddle the summer (three
+league games this season plus last season's run-in); `standingsScore` reads
+the live table at full strength from one game played; there is no
+squad-strength prior. Aug–Sep is the worst-calibrated phase for the cohort
+(raw Brier 0.2523 vs 0.2452, mid-band overconfidence 6.1pp vs 3.6pp, rule ROI
++7% vs +19%), indicative not decision-grade. Correct fix: a season-phase
+prior — shrink standings and form toward last season's final table for the
+first 6–8 matchdays with the shrinkage weight fitted under rule 13 on train
+only — implemented in the shared feature builder (G1/G3) so the backtest and
+live see the same thing, and retrained through rather than bolted on.
+
+**G6 — The retrain improvement gate is not like-for-like (known; confirmed).**
+`gbdt-train.js` accepts a candidate only if its log-loss on *its own* newest
+20% chronological slice beats the deployed file's stored log-loss from *its*
+older slice by 0.001. Weekly log: 17, 24 and 31 Aug all "retrained",
+`versionChanged:false`; model still 2026-08-08. Impact on this cohort: none
+of the post-cutoff EFL fixtures (12 per league per week) have ever reached
+the live model, so the "walk-forward" cycle has been static. Correct fix:
+score both incumbent and candidate on the same fixed recent window
+(requires the version archive from Addendum 37 Part G item 1, since
+`gbdt.js` can only load the current weights), gate on that paired
+comparison, and log both numbers. Not a threshold tweak.
+
+**G7 — Nightly chain stall (known; fixed `e040bc5`, verified 00:08 UTC 6
+Sep).** Live-scoring impact, traced: the pool feeds live scoring through
+`leagueBackfill` (older form/xG/defence fixtures once the API's last-60
+window is exhausted, i.e. from ~matchday 6), team profiles (home/away
+multipliers, G2), and `lastSeasonStandings`. During 24 Aug–4 Sep the API's
+last-60 window covered the season so far, so form windows were complete;
+profiles were stale by 11 days; PIR/transfers irrelevant to the cohort. So
+the live impact on EFL bets was small and is now closed. Closing-odds backfill
+remains manual: no live-scoring impact, but every Historical reading and the
+Eredivisie counter lag until it is run (Addendum 43 Part 6 preconditions).
+
+**G8 — Closing-line value is not measured on the basis the backtest uses
+(newly found as a measurement gap).** The CLV cron compares the *bookmaker*
+odds a bet was placed at against a UK-book closing snapshot (Addendum 30
+already flagged this); mean +0.81% on 99 EFL bets. Nothing records Pinnacle
+at lock vs Pinnacle at close, which is the only comparison that tells whether
+a T-60 edge survives to the price the backtest was computed at. Impact: the
+single most direct test of "does the live edge exist" is unavailable.
+Correct fix: capture Pinnacle closing per bet (the historical snapshot
+endpoint at kickoff minute, same as the closing-odds backfill) and report
+Pinnacle-to-Pinnacle CLV per cohort; a persistently negative figure would
+explain a live shortfall without any model change.
+
+**G9 — Lock price vs closing price basis (structural, not a bug).** The
+backtest is settled at Pinnacle closing; live bets are settled at the T-45..
+T-75 Pinnacle price. Whether that helps or hurts is exactly what G8
+measures. Recorded here so it is not rediscovered.
+
+**G10 — Sample size (structural).** 32 staked bets; the rule selects roughly
+one bet per league-round. At this rate decision-grade live evidence (rule 6,
+300+) is two to three seasons away. Impact: no live number should move any
+parameter for a long time; the pipeline-equivalence work (G1–G3) is what
+makes the eventual number meaningful.
+
+### 2. Recommended order (most foundational first)
+
+1. **G1 + G3: one scorer, one feature builder, shared by live, backtest and
+   walk-forward.** Everything else is validated *through* this; without it
+   any later fix is validated on one path and run on another.
+2. **G6: like-for-like retrain gate with a version archive.** Needed before
+   any retrained-through fix (G5, G2) can actually reach the live model.
+3. **G2: home/away multiplier — validate under rule 13 inside the shared
+   scorer, with league-specific baselines, or disable for the cohort.** It is
+   the only modifier acting on staked bets today and it leans the wrong way.
+4. **G5: season-phase prior as a rule-13 correction layer**, fitted train-only
+   and retrained through, once 1–2 exist.
+5. **G4: lineup redesign (in progress) — with the lineups backfill extended to
+   40/41/42**, its effect recorded per bet before it touches stakes.
+6. **G8: Pinnacle-to-Pinnacle CLV per bet and per cohort** — cheap, can run in
+   parallel from now, and is the measurement that will eventually say
+   whether the live edge is real.
+7. **G7: run the closing-odds backfill for the top divisions and automate it
+   in the nightly chain**, then the Addendum 43 Part 6 re-checks and the
+   retrain resume.
+
+Then re-run the rule-12 grid once on the now-equivalent population (rule 3),
+re-express 13%/45% if it moves, and let the live record accumulate.
