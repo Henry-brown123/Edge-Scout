@@ -8372,3 +8372,149 @@ block, but on 46–111 fixtures. A future market-relative model should treat
 League Two with a wider disagreement scale (noise) and test the long-odds
 pocket as an explicit, pre-registered hypothesis (bias), not assume either.
 Temp endpoint `diag-l2-mechanism` removed after this read.
+
+## Addendum 47 — League Two on its own terms: full grid in the market-residual framing, odds-band generalisation, structure, and an honest freshness account (2026-09-06, exploratory)
+
+### Freshness first (rule 3)
+
+League Two's pre-cutoff population (3,338 matched fixtures, 2020-06-18 →
+2026-05-25, cutoff 2026-08-11) has now been read many times: Addenda 19/24
+(tier ROI), 26 (correction layer fitted and walk-forward-tested on it), 32/36
+(tier × pick-type screens), 38 (train/test with one test look), 39/40 (the
+full 806-cell grid on *both* halves, pooled with the other two leagues), and
+46 B/C (cell by odds, side, phase, season). **It is spent for selection.**
+Everything below is exploratory and in-sample; no cell found here can be
+promoted on this population's numbers.
+
+What is genuinely fresh: League Two fixtures kicking off after
+2026-08-11T09:00Z. As of today: **60 FT fixtures (15 Aug → 5 Sep), of which
+only 10 carry closing odds** — the closing-odds backfill has not been run for
+the EFL since the cutoff. So the fresh test set exists in principle,
+accumulates at ~12 fixtures a week (~550 a season), and is unusable until
+closing odds are captured for it. Recommendation: reserve it now as the
+market-residual model's League Two test set, automate closing-odds capture
+for it (Addendum 45 G7/G8), and take one look at a pre-registered n — a full
+season is the realistic horizon for anything decision-grade.
+
+### The grid (edge 5–30% at 0.93 × modelProb 35–65%, League Two only)
+
+Full table in `docs/addendum-47-league-two-grid.csv` (806 cells: n, actual,
+market, beyond-market pp and z, ROI at Pinnacle closing with 95% CI, mean
+odds, number of the four sequential blocks with positive beyond-market
+residual, and the ≥2024-09-16 window / pre-window splits). Volume column =
+n ÷ 6 seasons, since matched coverage is ~556 fixtures a season, i.e. the
+full fixture list.
+
+Shape of the surface, cells with n ≥ 60 (453 of 806): 391 have a positive
+beyond-market residual, 240 have a closing-ROI interval above zero, 192 are
+positive in all four blocks, 17 reach z ≥ 2. This is not a single pocket; it
+is a broad, shallow, nested surface — the whole "model disagrees upward and
+is itself ≥40–45% confident" region of League Two runs ~+2 to +6pp over the
+market — and the cells are heavily correlated, so 17 z≥2 cells among 453 is
+what one real +5pp region produces, not 17 discoveries.
+
+Representative cells across the volume/confidence trade-off (all in-sample):
+
+| Cell (edge/prob) | n | ~bets/season | Beyond market | z | ROI at closing | 95% CI | Blocks + | Window / pre-window ROI |
+|---|---|---|---|---|---|---|---|---|
+| 5/40 | 964 | 161 | +2.7pp | 1.74 | +10.8% | [+0.8, +20.8] | 4/4 | +18.2% / +7.7% |
+| 10/40 | 463 | 77 | +5.0pp | 2.24 | +24.7% | [+7.7, +41.8] | 4/4 | +40.0% / +17.6% |
+| 10/44 | 413 | 69 | +5.4pp | 2.27 | +27.9% | [+9.6, +46.3] | 3/4 | +46.2% / +19.7% |
+| 13/45 (current rule) | 236 | 39 | +5.9pp | 1.89 | +41.6% | [+13.0, +70.2] | 4/4 | +57.5% / +33.9% |
+| 14/45 | 202 | 34 | +7.2pp | 2.13 | +48.0% | [+15.8, +80.3] | 4/4 | +67.3% / +38.9% |
+| 16/45 | 133 | 22 | +8.5pp | 2.05 | +63.5% | [+17.8, +109] | 4/4 | +112.6% / +46.6% |
+| 18/45 | 99 | 17 | +9.9pp | 2.08 | +75.6% | [+17.5, +134] | 4/4 | +169% / +48.8% |
+| 8/62 (worst region) | 139 | 23 | −3.3pp | −0.79 | −5.9% | [−25, +14] | 1/4 | −5.3% / −6.1% |
+
+Read across the row: as the edge floor rises, beyond-market residual and
+ROI rise and volume falls roughly proportionally — the classic
+confidence-versus-volume trade-off, with no cliff. At edge ≥10 and prob ≥40
+the surface is positive in every block and both halves at ~70–80 bets a
+season; the current 13/45 rule sits in the middle of it at ~39. The
+negative region is unambiguous too: low edge with high model probability
+(prob ≥60%, edge 5–9%) — the model's confident short-priced picks — runs
+−3 to −4pp under the market in both halves.
+
+### Does the odds-band pattern generalise beyond 13/45?
+
+Beyond-market residual by broad edge × probability × odds band (n ≥ 15):
+
+| Edge | Prob | Odds ≤2.2 | 2.2–2.8 | 2.8–3.5 | ≥3.5 |
+|---|---|---|---|---|---|
+| 5–10% | 35–45% | — | −1.9 (n=18) | +0.3 (n=209) | +10.0 (n=40, z 1.4) |
+| 5–10% | 45–55% | +15.6 (n=17) | −2.7 (n=177) | −22.0 (n=17) | — |
+| 5–10% | 55–65% | +5.7 (n=87) | — | — | — |
+| 10–15% | 35–45% | — | — | +11.4 (n=32) | −3.2 (n=57) |
+| 10–15% | 45–55% | — | −2.3 (n=52) | **+11.3 (n=64, z 1.9)** | — |
+| 10–15% | 55–65% | **−18.8 (n=34, z −2.2)** | +10.6 (n=41) | — | — |
+| 15–20% | 35–45% | — | — | — | **−15.6 (n=22, z −1.8)** |
+| 15–20% | 45–55% | — | — | **+25.5 (n=23, z 2.7)** | +7.0 (n=17) |
+| 15–20% | 55–65% | — | +3.2 (n=33) | — | — |
+| 15–20% | ≥65% | −7.9 (n=19) | — | — | — |
+
+Control (no edge, <5%): ≤2.2 −1.3pp (n=1,303), 2.2–2.8 +2.4, 2.8–3.5 +3.2,
+≥3.5 −19.6 (n=8) — long odds alone do nothing.
+
+**It half-generalises, and the half that does is informative.** The
+"short-priced model pick loses" half generalises cleanly: every cell with
+the model's pick at ≤2.2 and a real edge is negative (−18.8, −7.9, −4.6).
+The "long-odds model pick wins" half does **not** generalise to the 35–45%
+probability band: at prob 35–45 and odds ≥3.5 the residual is −3.2 and
+−15.6. It holds only where the model is itself ≥45% confident *and* the
+market is ≤35% (odds ≥2.8): +11.3, +25.5, +7.0. So the discovery is not
+"long odds" — it is **large disagreement combined with high absolute model
+confidence**, which is what the 45% floor was already encoding. Long odds
+with a merely-plausible model (35–45%) is where the model is wrong.
+
+### Other structure (exploratory)
+
+- **Side.** Home picks the market prices below 30%: +7.6pp, z 2.27, ROI
+  +44.8% [+6.7, +82.8], n=173 (~29/season) — the League Two analogue of a
+  directional pocket, and it is *model-conditional* (these are the model's
+  picks), unlike League One's market-level home-favourite bias. Home picks
+  priced 50–60% lose: −3.0pp, ROI −9.1% [−16.7, −1.5], n=531. Away picks
+  show nothing by market or model band (all |z| < 1.1). League Two has no
+  League One-style market-level side bias (Addendum 46 Part C).
+- **Season phase.** Aug–Sep positive on both sides (+3.0 home, +4.7 away),
+  Oct–Nov negative on both (−1.7, −3.0), Dec–May flat-positive. Consistent
+  with Addendum 44's early-season read, but none of it clears z 1.7.
+- **Table position.** Nothing: picked team's own position bands +1.4 / +1.3
+  / +0.3; table gap bands +3.1 / +0.9 / +0.3 / +0.9; underdog picks against
+  a lower-table opponent +4.7pp (z 1.9) vs higher-table +2.7 (z 1.2) — no
+  usable structure.
+- **Draws.** The model never picks a draw in League Two; the market made
+  the draw favourite in 48 of 3,338 fixtures; actual draw rate 26.7%. The
+  draw side of this market is entirely unexplored by the model, which is a
+  feature-design gap (Addendum 46: team draw propensity persists, r 0.45),
+  not something this grid can test.
+
+### What this feeds into the market-residual model
+
+Model-vs-pipeline tags, per the standing instruction:
+
+- The surface's shape — residual rising with disagreement *conditional on*
+  absolute confidence, and turning negative for confident short-priced
+  picks — is a **model-learns-something** finding: a market-relative
+  learner given (model − market), model confidence and league would fit
+  this directly instead of a hand-drawn cell.
+- The unusable fresh test set (60 fixtures, 10 with closing odds) is a
+  **pipeline** problem: closing-odds capture must be automated before any
+  League Two claim can ever be tested out of sample again.
+- The draw blind spot is a **model** gap.
+
+Candidate pockets for the registry, all **exploratory (in-sample), not
+confirmed**, with volume beside confidence as required:
+
+| Pocket | ~bets/season | Beyond market | ROI at closing | Confidence | Note |
+|---|---|---|---|---|---|
+| L2, edge ≥10, prob ≥40 | 77 | +5.0pp | +24.7% [+7.7, +41.8] | z 2.2, 4/4 blocks | higher volume, lower per-bet edge |
+| L2, edge ≥13, prob ≥45 (current) | 39 | +5.9pp | +41.6% [+13, +70] | z 1.9, 4/4 | the live rule |
+| L2, edge ≥16, prob ≥45 | 22 | +8.5pp | +63.5% [+18, +109] | z 2.1, 4/4 | high confidence, low volume |
+| L2 home pick, market <30% | 29 | +7.6pp | +44.8% [+7, +83] | z 2.3 | overlaps the above |
+| L2, edge ≥5, prob ≥40 | 161 | +2.7pp | +10.8% [+1, +21] | z 1.7, 4/4 | volume play, thin edge |
+
+None can be promoted from this addendum. The one that should be tested
+first on the fresh set is the widest robust one (edge ≥10, prob ≥40): it is
+the same phenomenon as 13/45 at twice the volume, and if the residual is
+real it will show there soonest. Temp endpoint `diag-l2-grid` removed after
+this read.
