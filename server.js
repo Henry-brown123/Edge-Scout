@@ -4593,6 +4593,92 @@ app.get('/api/odds/events', async (req, res) => {
   } catch (e) { res.status(e.response?.status || 500).json({ error: e.message }); }
 });
 
+// ─── TEMP DIAGNOSTIC (2026-09-06, model-design review, Addendum 46) — remove after use ───
+// Read-only, descriptive. Evidence for the feature granularity/completeness review:
+// (A) DATA_DIR inventory, (B) split-count feature importance from the deployed trees,
+// (C) per-league outcome rates and per-league model bias (league identity is not a
+// feature), (D) per-team home-advantage and draw-propensity persistence across
+// odd/even seasons (is it a trait or noise?), (E) rest-days residuals, (F) travel-
+// distance residuals, (G) market vs model Brier and residual slope, (H) weather
+// residuals if a per-fixture weather store exists. Residual analyses use the
+// matched population; the pre-tree-boundary part is in-sample for the trees, which
+// is fine for "does a feature the trees never saw explain residuals" but is labelled.
+app.get('/api/admin/diag-design-review', async (_req, res) => {
+  try {
+    const fsx = require('fs'), pathx = require('path');
+    const inventory = fsx.readdirSync(DATA_DIR).filter(f => f.endsWith('.json')).map(f => ({ f, kb: Math.round(fsx.statSync(pathx.join(DATA_DIR, f)).size / 1024) })).sort((a, b) => b.kb - a.kb);
+    // (B) feature importance
+    const FEATURE_NAMES = ['h.form','a.form','h.homeAdv','a.homeAdv','h.xg','a.xg','h.h2h','a.h2h','h.defense','a.defense','h.momentum','a.momentum','h.injuries','a.injuries','h.standings','a.standings','d.form','d.xg','d.defense','d.momentum','d.standings','ctx.domestic','ctx.european','ctx.international'];
+    let importance = null, modelMeta = null;
+    try {
+      const w = JSON.parse(fsx.readFileSync(pathx.join(DATA_DIR, 'gbdt-weights.json'), 'utf8'));
+      modelMeta = { trainedAt: w.trainedAt, trainN: w.trainN, treesPerClass: Object.fromEntries(Object.entries(w.classifiers || {}).map(([k, v]) => [k, (v.trees || v).length])), platt: w.platt, params: w.params || w.hyperparams || null };
+      const counts = {}; const rootCounts = {};
+      const walk = (node, depth, cls) => { if (!node || node.leaf) return; const nm = FEATURE_NAMES[node.feature] || String(node.feature); counts[nm] = counts[nm] || { splits: 0, depthWeighted: 0, byClass: {} }; counts[nm].splits++; counts[nm].depthWeighted += 1 / (depth + 1); counts[nm].byClass[cls] = (counts[nm].byClass[cls] || 0) + 1; if (depth === 0) rootCounts[nm] = (rootCounts[nm] || 0) + 1; walk(node.left, depth + 1, cls); walk(node.right, depth + 1, cls); };
+      for (const [cls, ens] of Object.entries(w.classifiers || {})) for (const t of (ens.trees || ens)) walk(t.tree || t, 0, cls);
+      const tot = Object.values(counts).reduce((a, c) => a + c.depthWeighted, 0);
+      importance = Object.entries(counts).map(([f, c]) => ({ feature: f, splits: c.splits, share: +(100 * c.depthWeighted / tot).toFixed(1), rootSplits: rootCounts[f] || 0, byClass: c.byClass })).sort((a, b) => b.share - a.share);
+    } catch (e) { importance = { error: e.message }; }
+    // pool
+    const hist = readHistoricalCached() || { fixtures: [], scoredRecords: [] };
+    const FT = hist.fixtures.filter(f => f.fixture?.status?.short === 'FT' && f.goals?.home != null && f.goals?.away != null);
+    const outcome = f => f.goals.home > f.goals.away ? 'home' : f.goals.home < f.goals.away ? 'away' : 'draw';
+    const DOM = [...DOMESTIC_LEAGUE_IDS_FOR_BLEND];
+    // (C) league rates
+    const leagueRates = {};
+    for (const f of FT) { const l = String(f.league.id); if (!leagueRates[l]) leagueRates[l] = { name: LEAGUE_NAMES_MAP[l] || f.league.name, n: 0, home: 0, draw: 0, away: 0, goals: 0 }; const r = leagueRates[l]; r.n++; r[outcome(f)]++; r.goals += f.goals.home + f.goals.away; }
+    for (const r of Object.values(leagueRates)) { r.homePct = +(100 * r.home / r.n).toFixed(1); r.drawPct = +(100 * r.draw / r.n).toFixed(1); r.awayPct = +(100 * r.away / r.n).toFixed(1); r.goalsPerGame = +(r.goals / r.n).toFixed(2); delete r.home; delete r.draw; delete r.away; delete r.goals; }
+    // (D) per-team persistence (domestic leagues, seasons >= 2016)
+    const teamStats = {}; // teamId -> {name, odd:{hp,hn,ap,an,d,n}, even:{...}}
+    for (const f of FT) { if (!DOM.includes(f.league.id) || f.league.season < 2016) continue; const par = f.league.season % 2 === 0 ? 'even' : 'odd'; const o = outcome(f); for (const side of ['home', 'away']) { const t = f.teams[side].id; if (!teamStats[t]) teamStats[t] = { name: f.teams[side].name, league: f.league.id, odd: { hp: 0, hn: 0, ap: 0, an: 0, d: 0, n: 0 }, even: { hp: 0, hn: 0, ap: 0, an: 0, d: 0, n: 0 } }; const st = teamStats[t][par]; const pts = o === 'draw' ? 1 : (o === side ? 3 : 0); if (side === 'home') { st.hp += pts; st.hn++; } else { st.ap += pts; st.an++; } if (o === 'draw') st.d++; st.n++; } }
+    const MINH = 40;
+    const rows = Object.values(teamStats).filter(t => t.odd.hn >= MINH && t.odd.an >= MINH && t.even.hn >= MINH && t.even.an >= MINH).map(t => ({ name: t.name, league: t.league, haOdd: t.odd.hp / t.odd.hn - t.odd.ap / t.odd.an, haEven: t.even.hp / t.even.hn - t.even.ap / t.even.an, drOdd: t.odd.d / t.odd.n, drEven: t.even.d / t.even.n, homePpgOdd: t.odd.hp / t.odd.hn, homePpgEven: t.even.hp / t.even.hn, nOdd: t.odd.n, nEven: t.even.n }));
+    const corr = (xs, ys) => { const n = xs.length; const mx = xs.reduce((a, v) => a + v, 0) / n, my = ys.reduce((a, v) => a + v, 0) / n; let sxy = 0, sxx = 0, syy = 0; for (let i = 0; i < n; i++) { sxy += (xs[i] - mx) * (ys[i] - my); sxx += (xs[i] - mx) ** 2; syy += (ys[i] - my) ** 2; } return sxx && syy ? +(sxy / Math.sqrt(sxx * syy)).toFixed(3) : null; };
+    const persistence = { teams: rows.length, minGamesPerSideHalf: MINH, homeAdvantage: { corrOddEven: corr(rows.map(r => r.haOdd), rows.map(r => r.haEven)), sdOdd: +Math.sqrt(rows.reduce((a, r) => a + (r.haOdd - rows.reduce((b, q) => b + q.haOdd, 0) / rows.length) ** 2, 0) / rows.length).toFixed(3) }, drawRate: { corrOddEven: corr(rows.map(r => r.drOdd), rows.map(r => r.drEven)) }, homePpg: { corrOddEven: corr(rows.map(r => r.homePpgOdd), rows.map(r => r.homePpgEven)) }, extremes: { biggestHA: rows.sort((a, b) => (b.haOdd + b.haEven) - (a.haOdd + a.haEven)).slice(0, 5).map(r => `${r.name}: ${(r.haOdd).toFixed(2)}/${(r.haEven).toFixed(2)} ppg gap`), smallestHA: rows.sort((a, b) => (a.haOdd + a.haEven) - (b.haOdd + b.haEven)).slice(0, 5).map(r => `${r.name}: ${(r.haOdd).toFixed(2)}/${(r.haEven).toFixed(2)}`) } };
+    // per-league HA mean (home win% - away win%) and home win% vs the modifier's pooled 46.3%
+    const leagueHA = Object.fromEntries(Object.entries(leagueRates).filter(([l]) => DOM.includes(+l)).map(([l, r]) => [l, { name: r.name, homeWinPct: r.homePct, awayWinPct: r.awayPct, pooledBaselineUsed: 46.3, gapPp: +(r.homePct - 46.3).toFixed(1) }]));
+    // (E/F/G/H) residual analyses on the matched population
+    const matched = await computeMatchedEdgeFixtures();
+    const settings = getSettings();
+    const closing = getClosingOdds();
+    const byFid = new Map(FT.map(f => [f.fixture.id, f]));
+    // previous fixture date per team (any league) for rest days
+    const teamFix = {}; for (const f of FT) { for (const side of ['home', 'away']) { const t = f.teams[side].id; (teamFix[t] = teamFix[t] || []).push(f.fixture.date); } } for (const t of Object.keys(teamFix)) teamFix[t].sort();
+    const restDays = (t, date) => { const arr = teamFix[t]; if (!arr) return null; let lo = 0, hi = arr.length - 1, prev = null; while (lo <= hi) { const mid = (lo + hi) >> 1; if (arr[mid] < date) { prev = arr[mid]; lo = mid + 1; } else hi = mid - 1; } return prev ? (new Date(date) - new Date(prev)) / 86400000 : null; };
+    const venues = (() => { try { return (JSON.parse(fsx.readFileSync(pathx.join(DATA_DIR, 'stadiums.json'), 'utf8')).venues) || {}; } catch { return {}; } })();
+    const homeVenueOf = {}; for (const f of FT) { const v = f.fixture?.venue?.name; if (!v) continue; const t = f.teams.home.id; (homeVenueOf[t] = homeVenueOf[t] || {})[v] = (homeVenueOf[t][v] || 0) + 1; } const mainVenue = t => { const m = homeVenueOf[t]; if (!m) return null; return Object.entries(m).sort((a, b) => b[1] - a[1])[0][0]; };
+    const km = (a, b) => { const R = 6371, dLat = (b.lat - a.lat) * Math.PI / 180, dLon = (b.lon - a.lon) * Math.PI / 180; const x = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * Math.sin(dLon / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(x)); };
+    let weather = null; try { const wf = inventory.find(x => /weather/i.test(x.f)); if (wf) weather = JSON.parse(fsx.readFileSync(pathx.join(DATA_DIR, wf.f), 'utf8')); } catch {}
+    const bucketStats = {};
+    const add = (key, bucket, resid, market) => { const b = (bucketStats[key] = bucketStats[key] || {}); const c = (b[bucket] = b[bucket] || { n: 0, sum: 0, sq: 0, msum: 0 }); c.n++; c.sum += resid; c.sq += resid * resid; if (market != null) c.msum += market; };
+    let marketN = 0, brierMarket = 0, brierModel = 0, brierMarket3 = 0, brierModel3 = 0, slopeXY = 0, slopeXX = 0, nPost = 0, brierMarketPost = 0, brierModelPost = 0;
+    for (const m of matched) {
+      const f = byFid.get(m.fixtureId); if (!f) continue;
+      const inSample = m.preTreeBoundary === true;
+      const co = closing[m.fixtureId] || closing[String(m.fixtureId)];
+      // full 3-way model probs need a predict; approximate via top pick only for residuals
+      const won = m.won ? 1 : 0; const resid = won - m.calProb;
+      // market prob of the same pick (margin-stripped)
+      let mp = null; if (co && co.homeOdds && co.drawOdds && co.awayOdds) { const inv = { home: 1 / co.homeOdds, draw: 1 / co.drawOdds, away: 1 / co.awayOdds }; const s3 = inv.home + inv.draw + inv.away; mp = inv[m.topOutcome] / s3; }
+      if (mp != null) { marketN++; const bm = (mp - won) ** 2, bmo = (m.calProb - won) ** 2; brierMarket += bm; brierModel += bmo; if (!inSample) { nPost++; brierMarketPost += bm; brierModelPost += bmo; } slopeXY += (mp - m.calProb) * resid; slopeXX += (mp - m.calProb) ** 2; }
+      const tag = inSample ? 'inSample' : 'postBoundary';
+      // rest days
+      const rh = restDays(f.teams.home.id, f.fixture.date), ra = restDays(f.teams.away.id, f.fixture.date);
+      if (rh != null && ra != null && rh <= 30 && ra <= 30) { const diff = rh - ra; const b = diff <= -3 ? 'home≤-3' : diff <= -1 ? 'home-1..-2' : diff === 0 ? 'equal' : diff <= 2 ? 'home+1..+2' : 'home≥+3'; add('restDiff_' + tag, b, m.topOutcome === 'home' ? resid : m.topOutcome === 'away' ? -resid : 0, null); const pickRest = m.topOutcome === 'home' ? rh : m.topOutcome === 'away' ? ra : null; if (pickRest != null) add('pickRest_' + tag, pickRest <= 3 ? '≤3d' : pickRest <= 5 ? '4-5d' : pickRest <= 8 ? '6-8d' : '≥9d', resid, mp); }
+      // travel
+      const hv = venues[f.fixture?.venue?.name], av = venues[mainVenue(f.teams.away.id)];
+      if (hv && av) { const d = km(hv, av); const b = d < 100 ? '<100km' : d < 300 ? '100-300' : d < 600 ? '300-600' : '≥600km'; add('travel_' + tag, b, m.topOutcome === 'away' ? resid : m.topOutcome === 'home' ? -resid : 0, null); }
+      // weather
+      if (weather) { const wv = weather[m.fixtureId] || weather[String(m.fixtureId)]; if (wv) { const rain = wv.precipProb ?? wv.precipitation ?? wv.rain; const wind = wv.windSpeed ?? wv.wind; if (rain != null) add('rain_' + tag, rain >= 60 ? 'wet' : rain >= 30 ? 'mixed' : 'dry', resid, null); if (wind != null) add('wind_' + tag, wind >= 30 ? '≥30kmh' : wind >= 18 ? '18-30' : '<18', resid, null); } }
+      // per-league bias (model vs actual) for the top pick
+      add('leagueBias_' + tag, LEAGUE_NAMES_MAP[String(m.leagueId)] || m.leagueId, resid, mp);
+    }
+    const fin = obj => Object.fromEntries(Object.entries(obj).map(([k, b]) => [k, Object.fromEntries(Object.entries(b).map(([bk, c]) => [bk, { n: c.n, meanResidPp: +(100 * c.sum / c.n).toFixed(2), sePp: +(100 * Math.sqrt(Math.max(0, c.sq / c.n - (c.sum / c.n) ** 2) / c.n)).toFixed(2), ...(c.msum ? { meanMarketMinusModelPp: null } : {}) }]))]));
+    const residuals = fin(bucketStats);
+    res.json({ note: 'TEMP — Addendum 46 design review evidence. Remove after use.', inventory, modelMeta, importance, leagueRates, leagueHA, persistence, market: { n: marketN, brierMarketTopPick: +(brierMarket / marketN).toFixed(5), brierModelTopPick: +(brierModel / marketN).toFixed(5), postBoundary: { n: nPost, brierMarket: +(brierMarketPost / nPost).toFixed(5), brierModel: +(brierModelPost / nPost).toFixed(5) }, residualSlopeOnMarketMinusModel: +(slopeXY / slopeXX).toFixed(3), note: 'slope≈1 means the market fully explains the model residual; 0 means it adds nothing' }, residuals, weatherStoreFound: !!weather, travelVenueCoverage: Object.keys(venues).length });
+  } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
+});
+
 // ── App state API ─────────────────────────────────────────────────────────────
 
 // GET divergence report — fixtures where model and market disagree by >8pp
