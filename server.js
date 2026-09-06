@@ -50,7 +50,8 @@ const {
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
-const API_SPORTS_KEY = process.env.API_SPORTS_KEY || '36e45a67eec7cabd0a51db8f2570f934';
+const API_SPORTS_KEY = process.env.API_SPORTS_KEY;
+if (!API_SPORTS_KEY) console.error('[Startup] API_SPORTS_KEY not set — every API-Sports call will fail (no hardcoded fallback since 2026-09-06; the old key is in git history and should be rotated)');
 const ODDS_API_KEY   = process.env.ODDS_API_KEY;
 if (!ODDS_API_KEY) console.warn('[Startup] ODDS_API_KEY not set — odds fetching will fail');
 const DATA_DIR       = process.env.DATA_DIR || path.join(__dirname, 'data');
@@ -4614,35 +4615,6 @@ app.get('/api/odds/events', async (req, res) => {
     res.json(data);
   } catch (e) { res.status(e.response?.status || 500).json({ error: e.message }); }
 });
-
-// ─── TEMP DIAGNOSTIC (2026-09-06, Addendum 43 Part 6 re-check) — remove after use ───
-app.get('/api/admin/diag-top8-recheck', async (_req, res) => {
-  try {
-    const { LEAGUE_CONFIG } = require('./scoring');
-    const TOP8 = [39, 140, 135, 78, 61, 179, 88, 94];
-    const settings = getSettings();
-    const matched = await computeMatchedEdgeFixtures();
-    const lid = f => parseInt(f.leagueId, 10);
-    const pop = matched.filter(f => TOP8.includes(lid(f)) && VALIDATED_SPLITS[lid(f)] && new Date(f.date) >= new Date(VALIDATED_SPLITS[lid(f)].testFrom) && f.preTreeBoundary === false);
-    const brier = (arr, factor) => arr.reduce((a, f) => a + (Math.min(0.97, f.modelProb * factor) - (f.won ? 1 : 0)) ** 2, 0) / arr.length;
-    const sweep = arr => { const rows = []; for (let k = 90; k <= 120; k++) rows.push({ factor: k / 100, brier: +brier(arr, k / 100).toFixed(5) }); const best = rows.reduce((a, b) => b.brier < a.brier ? b : a, rows[0]); return { n: arr.length, best: best.factor, brierAtBest: best.brier, at100: +brier(arr, 1.00).toFixed(5), at102: +brier(arr, 1.02).toFixed(5), at106: +brier(arr, 1.06).toFixed(5), curve: rows }; };
-    const pooled = sweep(pop);
-    const F = pooled.best;
-    const perLeague = Object.fromEntries(TOP8.map(id => { const arr = pop.filter(f => lid(f) === id); const sw = sweep(arr); return [LEAGUE_CONFIG[id].name, { n: sw.n, best: sw.best, brierAtBest: sw.brierAtBest, at102: sw.at102, atPooledBest: +brier(arr, F).toFixed(5), costOfPooledVsOwn: +(brier(arr, F) - sw.brierAtBest).toFixed(5), curve: sw.curve.filter(r => Math.round(r.factor * 100) % 2 === 0) }]; }));
-    const bests = Object.values(perLeague).map(l => l.best);
-    const stats = arr => { const n = arr.length; if (!n) return { n: 0 }; const rets = arr.map(f => f.won ? f.pinnacleOdds - 1 : -1); const mean = rets.reduce((a, v) => a + v, 0) / n; const sd = n > 1 ? Math.sqrt(rets.reduce((a, v) => a + (v - mean) ** 2, 0) / (n - 1)) : 0; const h = 1.96 * sd / Math.sqrt(n); return { n, wins: arr.filter(f => f.won).length, roi: +(mean * 100).toFixed(1), ci95: [+((mean - h) * 100).toFixed(1), +((mean + h) * 100).toFixed(1)], abs: +(rets.reduce((a, v) => a + v, 0)).toFixed(1) }; };
-    const edgeAt = (f, factor) => Math.min(0.97, f.modelProb * factor) - (f.calProb - f.edge);
-    const translate = arr => { const R = arr.filter(f => edgeAt(f, 1.02) >= 0.18 - 1e-12 && f.modelProb >= 0.45 - 1e-12); const Rset = new Set(R.map(f => f.fixtureId)); const rows = []; for (let e = 14; e <= 26; e++) { const c = arr.filter(f => edgeAt(f, F) >= e / 100 - 1e-12 && f.modelProb >= 0.45 - 1e-12); const ov = c.filter(f => Rset.has(f.fixtureId)).length; rows.push({ edge: e, n: c.length, overlap: ov, jaccard: +(ov / (c.length + R.length - ov)).toFixed(3), stats: stats(c) }); } const best = rows.reduce((a, b) => b.jaccard > a.jaccard ? b : a, rows[0]); return { rule18at102: stats(R), byLeague18at102: Object.fromEntries(TOP8.map(id => [LEAGUE_CONFIG[id].name, R.filter(f => lid(f) === id).length])), candidates: rows, bestMatch: best }; };
-    const concurrent = pop.filter(f => new Date(f.date) >= new Date('2024-09-16T00:00:00Z'));
-    const ered = pop.filter(f => lid(f) === 88);
-    res.json({ note: 'TEMP — Addendum 43 Part 6 re-check of Addendum 41 on the completed population. Remove after use.', env: { apiSportsKeySet: !!process.env.API_SPORTS_KEY, oddsApiKeySet: !!process.env.ODDS_API_KEY }, eredivisieRecheck: { n: ered.length, triggerN: 750, latest: ered.map(f => f.date).sort().pop() || null },
-      population: { n: pop.length, from: pop.map(f => f.date).sort()[0]?.slice(0, 10), to: pop.map(f => f.date).sort().pop()?.slice(0, 10), currentFactor: getCalFactorForLeague(settings, 39) },
-      pooled: { n: pooled.n, best: F, brierAtBest: pooled.brierAtBest, at100: pooled.at100, at102: pooled.at102, at106: pooled.at106, curve: pooled.curve.filter(r => Math.round(r.factor * 100) % 2 === 0) },
-      perLeague, cluster: { bests, min: Math.min(...bests), max: Math.max(...bests), spread: +(Math.max(...bests) - Math.min(...bests)).toFixed(2) },
-      floorTranslationAtPooledBest: { factor: F, fullCleanPopulation: translate(pop), concurrentWindow: translate(concurrent) } });
-  } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
-});
-
 
 // ── App state API ─────────────────────────────────────────────────────────────
 

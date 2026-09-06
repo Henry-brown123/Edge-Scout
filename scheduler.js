@@ -6,7 +6,8 @@ const path   = require('path');
 const cron   = require('node-cron');
 const sc     = require('./scoring');
 
-const API_KEY  = '36e45a67eec7cabd0a51db8f2570f934';
+const API_KEY  = process.env.API_SPORTS_KEY;
+if (!API_KEY) { console.error('API_SPORTS_KEY not set'); process.exit(1); }
 const DATA_DIR = path.join(__dirname, 'data');
 
 const api = axios.create({

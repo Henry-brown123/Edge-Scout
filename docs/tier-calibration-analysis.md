@@ -8558,3 +8558,35 @@ Two) and "EFL lower divisions — observation" (Championship, League One),
 derived from the same configuration with no UI list. Reversible by
 restoring 40 and 41 to the set. Re-inclusion requires each league to pass
 its own beyond-market validation under the market-residual model.
+
+### Part 7 — Re-check on the completed population; retrain pause lifted (2026-09-06 evening)
+
+Preconditions from Part 6 met: the top-division closing odds for 24 Aug–4 Sep
+were captured (one-off run, 120 of 120 fixtures matched, 1,840 credits) on
+top of the nightly closing-odds step now in the chain. The Addendum 41 check
+was re-run once on the rule-16-clean test-only population as it now stands
+(n=5,617, 2023-11-03 → 2026-09-05, vs 5,497 before):
+
+| | Before (Addendum 41) | Now |
+|---|---|---|
+| Pooled optimum | 1.06 | **1.06** (Brier 0.23465 at 1.06 vs 0.23504 at 1.02) |
+| Per-league optima | 1.03–1.09, Eredivisie 1.13 | PL 1.03, La Liga 1.04, Bundesliga 1.04, Ligue 1 1.05, SPL 1.05, Serie A 1.09, Primeira 1.09, **Eredivisie 1.12** |
+| Cost of 1.06 vs own | seven within 0.0002; Eredivisie 0.0011 | six within 0.0002, Primeira 0.00031 (n=474, marginal), Eredivisie 0.0011 |
+| Floor re-expression of 18%@1.02 | 20% at 1.06, Jaccard 0.95 | 20% at 1.06, Jaccard 0.954 (full) / 0.957 (concurrent) |
+| Eredivisie counter | 463 / 750 | 474 / 750, not due |
+
+Nothing moves: 1.06 and 20%/45% stand, Eredivisie remains the registered
+outlier with its trigger untouched. `settings.weeklyRetrainPaused` set back
+to false via the admin endpoint; the next cycle is Monday 05:15 UTC. Note
+that item I of the plan (the improvement gate) is still open, so a candidate
+that would legitimately pass may still be rejected until it is fixed.
+
+Also in this step: the post-match lineups backfill now covers Championship,
+League One and League Two (`LINEUP_LEAGUES`), filling via the nightly
+chain's 5,000-call phase plus a manual run started tonight; the hardcoded
+API-Sports key fallback was removed from `server.js`, `scheduler.js` and the
+two fetch scripts (both keys confirmed set in the Render environment; the
+old key is in git history and should be rotated); the local git remote URL
+carried a GitHub PAT, removed from the URL after the final push of this
+step — it was visible in a session transcript and should be rotated. Temp
+endpoint `diag-top8-recheck` removed.

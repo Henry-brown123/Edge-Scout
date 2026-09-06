@@ -6,7 +6,8 @@ const axios = require('axios');
 
 const DATA_DIR        = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
 const PIR_PATH        = path.join(DATA_DIR, 'pir-data.json');
-const API_KEY         = process.env.API_SPORTS_KEY || '36e45a67eec7cabd0a51db8f2570f934';
+const API_KEY         = process.env.API_SPORTS_KEY;
+if (!API_KEY) { console.error('API_SPORTS_KEY not set'); process.exit(1); }
 const RATE_LIMIT_MS   = 300;
 const PIR_REFRESH_DAYS = 7;
 const FORCE_REFRESH   = process.env.PIR_FORCE === '1';
