@@ -28,6 +28,7 @@ const {
 } = require('./scoring');
 
 const model = require('./models/interface');
+const { SCORER_VERSION, FEATURE_SPEC, buildLiveFactors, scoreProbabilities, diffScores } = require('./sharedScorer');
 
 const {
   getTeamProfiles,
@@ -185,6 +186,9 @@ function writeJSON(file, data, options = {}) {
 const SETTINGS_DEFAULTS = {
   weights: { form:18, homeAdv:12, xg:16, h2h:10, defense:14, momentum:10, injuries:8, standings:12 },
   decay: 0.05, formWindow: 6, h2hWindow: 5,
+  // Stage A (2026-09-06): which scoring path is live ('legacy' | 'shared') and whether the
+  // other path runs in shadow and is diffed on every score. Runtime-switchable rollback.
+  scorerPath: 'legacy', scorerShadow: true,
   // Kelly fraction is a property of each bankroll's own risk posture, not the model —
   // paper and real are set independently (Scout-tab bankroll panel), each occasionally
   // adjusted by the user rather than tuned per bet. paperKellyFraction also still drives
@@ -667,7 +671,17 @@ const RESERVED_TEST_SETS = [
   { id: 'l2-post-cutoff-2026', leagueId: 42, league: 'League Two', from: '2026-08-11T09:00:00Z', registered: '2026-09-06',
     purpose: 'Market-residual model test set for League Two; first candidate pocket edge>=10% at 0.93 AND modelProb>=40% (Addendum 47), alongside the live 13%/45% rule',
     lookRule: 'One look, at the end of the 2026-27 season (target >=500 matched fixtures with Pinnacle closing). Report beyond-market residual and closing ROI for the pre-registered cells only. No interim reads.',
-    candidates: [{ label: 'edge>=10 & prob>=40 at 0.93', edgeMin: 0.10, probMin: 0.40 }, { label: 'live rule 13/45 at 0.93', edgeMin: 0.13, probMin: 0.45 }] },
+    candidates: [{ label: 'edge>=10 & prob>=40 at 0.93', edgeMin: 0.10, probMin: 0.40 }, { label: 'live rule 13/45 at 0.93', edgeMin: 0.13, probMin: 0.45 },
+      // F (Addendum 47), declared 2026-09-06: clean start 2026-09-07 because resolved League Two bets
+      // from 15 Aug–6 Sep were partially read in Addendum 45 section 0. Every cell above is also
+      // reported on the from-2026-09-07 subset at the look, for the same reason.
+      { label: 'F: home pick, market-implied < 30%', side: 'home', marketImpliedMax: 0.30, from: '2026-09-07T00:00:00Z' }] },
+  // G (Addendum 46 Part C): League One's market-level home-favourite bias. Found on the
+  // whole pre-cutoff population, which is spent; this is its fresh, unread population.
+  { id: 'l1-home-favourite-2026', leagueId: 41, league: 'League One', from: '2026-09-07T00:00:00Z', registered: '2026-09-06',
+    purpose: 'Test of the League One home-favourite bias (home side priced 45-65% by Pinnacle wins ~4.7pp more than priced on 2020-26 data, z 2.6/2.0); bet the home side',
+    lookRule: 'One look, at the end of the 2026-27 season (target >=500 matched fixtures). Report actual minus market and closing ROI for the pre-registered cell only. No interim reads.',
+    candidates: [{ label: 'home side, market-implied home 45-65%', side: 'home', marketImpliedMin: 0.45, marketImpliedMax: 0.65 }] },
 ];
 const CALIBRATION_RECHECK_TRIGGERS = [
   { leagueId: 88, league: 'Eredivisie', reason: 'Addendum 41: own Brier optimum 1.13 vs shared 1.06 (cost 0.0011) on a 463-fixture basis', triggerMetric: 'ev-calibration byLeague n (rule-16-clean test-only)', triggerN: 750, registered: '2026-09-04' },
@@ -1461,7 +1475,7 @@ async function resolveCupStandingsScore(fix, teamId, standings, domesticFixtures
   return null;
 }
 
-async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap, settings, totalsMap = {}) {
+async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap, settings, totalsMap = {}, opts = {}) {
   const homeId   = fix.teams?.home?.id;
   const awayId   = fix.teams?.away?.id;
   const homeName = fix.teams?.home?.name;
@@ -1573,161 +1587,88 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   const neutralVenue = context === 'international' &&
     (competitionPhase === 'group_stage' || competitionPhase === 'knockout');
 
-  const homeF = {
-    form:      formScore(scoringPool, homeId, fw, d),
-    homeAdv:   neutralVenue ? 50 : homeAdvScore(scoringPool, homeId, d),
-    xg:        xgScore(scoringPool, homeId, statsCache, d),
-    h2h:       h2hScore(h2hFixtures, homeId, hw, d),
-    defense:   defenseScore(scoringPool, homeId, d),
-    momentum:  momentumScore(scoringPool, homeId),
-    injuries:  injuryScore(injuries, homeId),
-    standings: homeStandingsOverride ?? standingsScore(standings, homeId, context, lastSeasonStandings),
-  };
-  const awayF = {
-    form:      formScore(scoringPool, awayId, fw, d),
-    homeAdv:   50,
-    xg:        xgScore(scoringPool, awayId, statsCache, d),
-    h2h:       100 - h2hScore(h2hFixtures, homeId, hw, d),
-    defense:   defenseScore(scoringPool, awayId, d),
-    momentum:  momentumScore(scoringPool, awayId),
-    injuries:  injuryScore(injuries, awayId),
-    standings: awayStandingsOverride ?? standingsScore(standings, awayId, context, lastSeasonStandings),
-  };
-
-  // Staleness pull: recencyAvg's decay is ordinal (per-game index), not calendar-based —
-  // a fixture 76 days old at index 0 (e.g. the only data available at season start) gets
-  // full weight otherwise. Discount form/momentum/defense/xg toward neutral based on how
-  // long ago each team's most recent form-pool fixture was actually played. Every xG tier
-  // in xgScore() (StatsBomb, API-Sports stats, goals proxy) draws from the same past-match
-  // pool, so there's no separate "live" xG source to gate on here — it gets the same pull.
-  const mostRecentFixtureDate = (teamId) => {
-    const teamFixtures = scoringPool.filter(f => f.teams?.home?.id === teamId || f.teams?.away?.id === teamId);
-    return teamFixtures[0]?.fixture?.date || null; // scoringPool is sorted most-recent-first
-  };
-  const homeStaleness = stalenessMultiplier(mostRecentFixtureDate(homeId));
-  const awayStaleness = stalenessMultiplier(mostRecentFixtureDate(awayId));
-  homeF.form     = applyStalenessPull(homeF.form,     homeStaleness);
-  homeF.momentum = applyStalenessPull(homeF.momentum, homeStaleness);
-  homeF.defense  = applyStalenessPull(homeF.defense,  homeStaleness);
-  homeF.xg       = applyStalenessPull(homeF.xg,       homeStaleness);
-  awayF.form     = applyStalenessPull(awayF.form,     awayStaleness);
-  awayF.momentum = applyStalenessPull(awayF.momentum, awayStaleness);
-  awayF.defense  = applyStalenessPull(awayF.defense,  awayStaleness);
-  awayF.xg       = applyStalenessPull(awayF.xg,       awayStaleness);
-
-  // International quality overrides: replace generic form + standings with
-  // opponent-quality-weighted form and three-component quality signal.
-  if (context === 'international') {
-    const seeds = getTournamentSeeds();
-    homeF.form     = internationalFormScore(homeId, scoringPool);
-    awayF.form     = internationalFormScore(awayId, scoringPool);
-    homeF.standings = internationalQualityScore(homeName, seeds);
-    awayF.standings = internationalQualityScore(awayName, seeds);
-  }
-
-  // Data confidence per team (capped at 1 when ≥15 fixtures available).
-  // For international fixtures, count from the full international scoring pool so that
-  // qualifying and Nations League data contributes confidence, not just WC group stage.
-  const homeFormCount = scoringPool.filter(f =>
-    f.teams?.home?.id === homeId || f.teams?.away?.id === homeId
-  ).length;
-  const awayFormCount = scoringPool.filter(f =>
-    f.teams?.home?.id === awayId || f.teams?.away?.id === awayId
-  ).length;
-  // Adjustment 1: for international fixtures, cap dataConf at 0.70 so the ranking anchor
-  // always contributes at least 30% weight. Form data informs but quality signal is never
-  // fully overridden — WC teams have thin cross-competition comparability.
-  const confCap      = context === 'international' ? 0.70 : 1;
-  const homeDataConf = Math.min(homeFormCount / 15, confCap);
-  const awayDataConf = Math.min(awayFormCount / 15, confCap);
-  const dataConf     = Math.min(homeDataConf, awayDataConf); // use the weaker team's confidence
-
-  const rawProbs = model.predict(homeF, awayF, weights, context, leagueConfig);
-  let probs = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
-  const modelVersion = model.getVersion ? model.getVersion() : 'unknown';
-
-  // Correction layer (calibration-rules.md rules 13/14) — applied on top of
-  // applyLeagueBiasCorrection's output (identical to rawProbs for League Two,
-  // which has no base rates to blend toward), same point in the pipeline the
-  // Addendum 25/26 fit/test used. Scoped strictly to settings.deployedCorrectionRuleIds
-  // — applyVariableCorrectionLayer only touches a league if one of the ACTIVE
-  // rules' `leagues` list includes it, so every league without a deployed rule
-  // (League One, Carabao Cup, all others) passes through this line unchanged.
-  const deployedRuleIds = settings.deployedCorrectionRuleIds || [];
-  const activeCorrectionRules = deployedRuleIds.length
-    ? CORRECTION_LAYER_RULES.filter(r => deployedRuleIds.includes(r.id))
-    : [];
-  let correctionVersion = null;
-  if (activeCorrectionRules.length) {
-    const lidNum = parseInt(leagueId, 10);
-    if (activeCorrectionRules.some(r => r.leagues.includes(lidNum))) {
-      probs = applyVariableCorrectionLayer(probs, leagueId, activeCorrectionRules);
-      correctionVersion = settings.deployedCorrectionVersion || null;
-    }
-  }
-
-  // FIFA ranking quality adjustment — anchors model when historical data is thin.
-  // scale=0 for club_domestic means rankings have no effect there.
-  if (cfg.rankScale > 0 && dataConf < 1) {
-    const homeRank = lookupFIFARank(homeName);
-    const awayRank = lookupFIFARank(awayName);
-    const homeQ    = rankToQuality(homeRank);
-    const awayQ    = rankToQuality(awayRank);
-    const rankDiff = homeQ - awayQ; // positive = home ranked stronger
-
-    // Adjustment 3: WC group stage and knockout fixtures are played at neutral venues.
-    // Symmetric base at 0.34/0.34 (no home advantage); quality and form do the differentiation.
-    // Lower than 0.38 so genuine underdogs can still be suppressed by the rank correction.
-    // neutralVenue already declared above homeF so both factor score and prob anchor respect it.
-    const anchorHomeBase = neutralVenue ? 0.34 : cfg.homeBase;
-    const anchorAwayBase = neutralVenue ? 0.34 : cfg.awayBase;
-
-    const rH = Math.max(0.05, Math.min(0.85, anchorHomeBase + rankDiff * cfg.rankScale));
-    const rA = Math.max(0.05, Math.min(0.85, anchorAwayBase - rankDiff * cfg.rankScale));
-    const rD = Math.max(0.05, 1 - rH - rA);
-    const rSum   = rH + rD + rA;
-    const rankAdj = { home: rH / rSum, draw: rD / rSum, away: rA / rSum };
-
-    probs = {
-      home: dataConf * probs.home + (1 - dataConf) * rankAdj.home,
-      draw: dataConf * probs.draw + (1 - dataConf) * rankAdj.draw,
-      away: dataConf * probs.away + (1 - dataConf) * rankAdj.away,
+  // Stage A (2026-09-06): the legacy factor block is kept verbatim inside legacyFactors();
+  // the shared path is sharedScorer.buildLiveFactors (a verbatim lift of the same code).
+  const scorerPath = opts.scorerPath || (settings.scorerPath === 'shared' ? 'shared' : 'legacy');
+  const scorerShadowOn = opts.scorerShadow ?? (settings.scorerShadow !== false);
+  const factorInputs = { scoringPool, homeId, awayId, homeName, awayName, h2hFixtures, injuries, standings, lastSeasonStandings, statsCache, context, neutralVenue, homeStandingsOverride, awayStandingsOverride, fw, d, hw, seeds: context === 'international' ? getTournamentSeeds() : null };
+  const legacyFactors = () => {
+    const homeF = {
+      form:      formScore(scoringPool, homeId, fw, d),
+      homeAdv:   neutralVenue ? 50 : homeAdvScore(scoringPool, homeId, d),
+      xg:        xgScore(scoringPool, homeId, statsCache, d),
+      h2h:       h2hScore(h2hFixtures, homeId, hw, d),
+      defense:   defenseScore(scoringPool, homeId, d),
+      momentum:  momentumScore(scoringPool, homeId),
+      injuries:  injuryScore(injuries, homeId),
+      standings: homeStandingsOverride ?? standingsScore(standings, homeId, context, lastSeasonStandings),
     };
-  }
+    const awayF = {
+      form:      formScore(scoringPool, awayId, fw, d),
+      homeAdv:   50,
+      xg:        xgScore(scoringPool, awayId, statsCache, d),
+      h2h:       100 - h2hScore(h2hFixtures, homeId, hw, d),
+      defense:   defenseScore(scoringPool, awayId, d),
+      momentum:  momentumScore(scoringPool, awayId),
+      injuries:  injuryScore(injuries, awayId),
+      standings: awayStandingsOverride ?? standingsScore(standings, awayId, context, lastSeasonStandings),
+    };
 
-  // Adjustment 4: host nation tournament boost.
-  // USA/Canada/Mexico are co-hosting WC 2026; host nations consistently outperform FIFA
-  // ranking at major tournaments. Apply +8pp to host, redistributed from draw and opponent.
-  // Only applies to international group stage and knockout, not qualifying.
-  const HOST_NATIONS_2026 = new Set([2384, 5529, 16]); // USA, Canada, Mexico
-  if (context === 'international' &&
-      (competitionPhase === 'group_stage' || competitionPhase === 'knockout')) {
-    const homeIsHost = HOST_NATIONS_2026.has(homeId);
-    const awayIsHost = HOST_NATIONS_2026.has(awayId);
-    if (homeIsHost || awayIsHost) {
-      const BOOST = 0.08;
-      if (homeIsHost) {
-        const take = BOOST * 0.6; // 60% from draw, 40% from away
-        probs = {
-          home: Math.min(0.90, probs.home + BOOST),
-          draw: Math.max(0.03, probs.draw - take),
-          away: Math.max(0.03, probs.away - (BOOST - take)),
-        };
-      } else {
-        const take = BOOST * 0.6;
-        probs = {
-          home: Math.max(0.03, probs.home - (BOOST - take)),
-          draw: Math.max(0.03, probs.draw - take),
-          away: Math.min(0.90, probs.away + BOOST),
-        };
-      }
-      // Re-normalise after boost
-      const bSum = probs.home + probs.draw + probs.away;
-      probs = { home: probs.home / bSum, draw: probs.draw / bSum, away: probs.away / bSum };
+    // Staleness pull: recencyAvg's decay is ordinal (per-game index), not calendar-based —
+    // a fixture 76 days old at index 0 (e.g. the only data available at season start) gets
+    // full weight otherwise. Discount form/momentum/defense/xg toward neutral based on how
+    // long ago each team's most recent form-pool fixture was actually played. Every xG tier
+    // in xgScore() (StatsBomb, API-Sports stats, goals proxy) draws from the same past-match
+    // pool, so there's no separate "live" xG source to gate on here — it gets the same pull.
+    const mostRecentFixtureDate = (teamId) => {
+      const teamFixtures = scoringPool.filter(f => f.teams?.home?.id === teamId || f.teams?.away?.id === teamId);
+      return teamFixtures[0]?.fixture?.date || null; // scoringPool is sorted most-recent-first
+    };
+    const homeStaleness = stalenessMultiplier(mostRecentFixtureDate(homeId));
+    const awayStaleness = stalenessMultiplier(mostRecentFixtureDate(awayId));
+    homeF.form     = applyStalenessPull(homeF.form,     homeStaleness);
+    homeF.momentum = applyStalenessPull(homeF.momentum, homeStaleness);
+    homeF.defense  = applyStalenessPull(homeF.defense,  homeStaleness);
+    homeF.xg       = applyStalenessPull(homeF.xg,       homeStaleness);
+    awayF.form     = applyStalenessPull(awayF.form,     awayStaleness);
+    awayF.momentum = applyStalenessPull(awayF.momentum, awayStaleness);
+    awayF.defense  = applyStalenessPull(awayF.defense,  awayStaleness);
+    awayF.xg       = applyStalenessPull(awayF.xg,       awayStaleness);
+
+    // International quality overrides: replace generic form + standings with
+    // opponent-quality-weighted form and three-component quality signal.
+    if (context === 'international') {
+      const seeds = getTournamentSeeds();
+      homeF.form     = internationalFormScore(homeId, scoringPool);
+      awayF.form     = internationalFormScore(awayId, scoringPool);
+      homeF.standings = internationalQualityScore(homeName, seeds);
+      awayF.standings = internationalQualityScore(awayName, seeds);
     }
-  }
+
+    // Data confidence per team (capped at 1 when ≥15 fixtures available).
+    // For international fixtures, count from the full international scoring pool so that
+    // qualifying and Nations League data contributes confidence, not just WC group stage.
+    const homeFormCount = scoringPool.filter(f =>
+      f.teams?.home?.id === homeId || f.teams?.away?.id === homeId
+    ).length;
+    const awayFormCount = scoringPool.filter(f =>
+      f.teams?.home?.id === awayId || f.teams?.away?.id === awayId
+    ).length;
+    // Adjustment 1: for international fixtures, cap dataConf at 0.70 so the ranking anchor
+    // always contributes at least 30% weight. Form data informs but quality signal is never
+    // fully overridden — WC teams have thin cross-competition comparability.
+    const confCap      = context === 'international' ? 0.70 : 1;
+    const homeDataConf = Math.min(homeFormCount / 15, confCap);
+    const awayDataConf = Math.min(awayFormCount / 15, confCap);
+    const dataConf     = Math.min(homeDataConf, awayDataConf); // use the weaker team's confidence
+    return { homeF, awayF, homeFormCount, awayFormCount, homeDataConf, awayDataConf, dataConf };
+  };
+  const activeFactors = scorerPath === 'shared' ? buildLiveFactors(factorInputs) : legacyFactors();
+  const { homeF, awayF, homeFormCount, awayFormCount, homeDataConf, awayDataConf, dataConf } = activeFactors;
+
 
   // Weather — fetch first so it can inform profile modifiers
+  const modelVersion = model.getVersion ? model.getVersion() : 'unknown';
   const kickoffDate = fix.fixture?.date;
   const coords = venueCoords(fix.fixture?.venue?.name, fix.fixture?.venue?.city);
   let weather = null;
@@ -1776,15 +1717,120 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   const awayMatchday   = standingsFlat.find(s => s.team?.id === awayId)?.all?.played ?? null;
   const currentSeason  = fix.league?.season ?? null;
 
-  const { probs: adjustedProbs, teamIntel } = applyTeamProfileModifiers(
-    probs, homeProfile, awayProfile, context, dataConf, homeDays, awayDays, weatherForModifier,
-    { wowyActive, competitionPhase, homeMatchday, awayMatchday, season: currentSeason,
-      transferModifierActive: settings.transferModifierActive === true,
-      homeAwayMultiplierActive: settings.homeAwayMultiplierActive === true,
-      congestionModifierActive: settings.congestionModifierActive === true,
-      weatherModifierActive: settings.weatherModifierActive === true }
-  );
-  probs = adjustedProbs;
+  // Stage A (2026-09-06): weather/profile/lineup preparation above is input gathering and
+  // was hoisted unchanged; the model -> bias -> correction -> rank -> host -> modifier chain
+  // is kept verbatim in legacyProbs() and mirrored by sharedScorer.scoreProbabilities.
+  const legacyProbs = () => {
+    const rawProbs = model.predict(homeF, awayF, weights, context, leagueConfig);
+    let probs = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
+
+    // Correction layer (calibration-rules.md rules 13/14) — applied on top of
+    // applyLeagueBiasCorrection's output (identical to rawProbs for League Two,
+    // which has no base rates to blend toward), same point in the pipeline the
+    // Addendum 25/26 fit/test used. Scoped strictly to settings.deployedCorrectionRuleIds
+    // — applyVariableCorrectionLayer only touches a league if one of the ACTIVE
+    // rules' `leagues` list includes it, so every league without a deployed rule
+    // (League One, Carabao Cup, all others) passes through this line unchanged.
+    const deployedRuleIds = settings.deployedCorrectionRuleIds || [];
+    const activeCorrectionRules = deployedRuleIds.length
+      ? CORRECTION_LAYER_RULES.filter(r => deployedRuleIds.includes(r.id))
+      : [];
+    let correctionVersion = null;
+    if (activeCorrectionRules.length) {
+      const lidNum = parseInt(leagueId, 10);
+      if (activeCorrectionRules.some(r => r.leagues.includes(lidNum))) {
+        probs = applyVariableCorrectionLayer(probs, leagueId, activeCorrectionRules);
+        correctionVersion = settings.deployedCorrectionVersion || null;
+      }
+    }
+
+    // FIFA ranking quality adjustment — anchors model when historical data is thin.
+    // scale=0 for club_domestic means rankings have no effect there.
+    if (cfg.rankScale > 0 && dataConf < 1) {
+      const homeRank = lookupFIFARank(homeName);
+      const awayRank = lookupFIFARank(awayName);
+      const homeQ    = rankToQuality(homeRank);
+      const awayQ    = rankToQuality(awayRank);
+      const rankDiff = homeQ - awayQ; // positive = home ranked stronger
+
+      // Adjustment 3: WC group stage and knockout fixtures are played at neutral venues.
+      // Symmetric base at 0.34/0.34 (no home advantage); quality and form do the differentiation.
+      // Lower than 0.38 so genuine underdogs can still be suppressed by the rank correction.
+      // neutralVenue already declared above homeF so both factor score and prob anchor respect it.
+      const anchorHomeBase = neutralVenue ? 0.34 : cfg.homeBase;
+      const anchorAwayBase = neutralVenue ? 0.34 : cfg.awayBase;
+
+      const rH = Math.max(0.05, Math.min(0.85, anchorHomeBase + rankDiff * cfg.rankScale));
+      const rA = Math.max(0.05, Math.min(0.85, anchorAwayBase - rankDiff * cfg.rankScale));
+      const rD = Math.max(0.05, 1 - rH - rA);
+      const rSum   = rH + rD + rA;
+      const rankAdj = { home: rH / rSum, draw: rD / rSum, away: rA / rSum };
+
+      probs = {
+        home: dataConf * probs.home + (1 - dataConf) * rankAdj.home,
+        draw: dataConf * probs.draw + (1 - dataConf) * rankAdj.draw,
+        away: dataConf * probs.away + (1 - dataConf) * rankAdj.away,
+      };
+    }
+
+    // Adjustment 4: host nation tournament boost.
+    // USA/Canada/Mexico are co-hosting WC 2026; host nations consistently outperform FIFA
+    // ranking at major tournaments. Apply +8pp to host, redistributed from draw and opponent.
+    // Only applies to international group stage and knockout, not qualifying.
+    const HOST_NATIONS_2026 = new Set([2384, 5529, 16]); // USA, Canada, Mexico
+    if (context === 'international' &&
+        (competitionPhase === 'group_stage' || competitionPhase === 'knockout')) {
+      const homeIsHost = HOST_NATIONS_2026.has(homeId);
+      const awayIsHost = HOST_NATIONS_2026.has(awayId);
+      if (homeIsHost || awayIsHost) {
+        const BOOST = 0.08;
+        if (homeIsHost) {
+          const take = BOOST * 0.6; // 60% from draw, 40% from away
+          probs = {
+            home: Math.min(0.90, probs.home + BOOST),
+            draw: Math.max(0.03, probs.draw - take),
+            away: Math.max(0.03, probs.away - (BOOST - take)),
+          };
+        } else {
+          const take = BOOST * 0.6;
+          probs = {
+            home: Math.max(0.03, probs.home - (BOOST - take)),
+            draw: Math.max(0.03, probs.draw - take),
+            away: Math.min(0.90, probs.away + BOOST),
+          };
+        }
+        // Re-normalise after boost
+        const bSum = probs.home + probs.draw + probs.away;
+        probs = { home: probs.home / bSum, draw: probs.draw / bSum, away: probs.away / bSum };
+      }
+    }
+    const { probs: adjustedProbs, teamIntel } = applyTeamProfileModifiers(
+      probs, homeProfile, awayProfile, context, dataConf, homeDays, awayDays, weatherForModifier,
+      { wowyActive, competitionPhase, homeMatchday, awayMatchday, season: currentSeason,
+        transferModifierActive: settings.transferModifierActive === true,
+        homeAwayMultiplierActive: settings.homeAwayMultiplierActive === true,
+        congestionModifierActive: settings.congestionModifierActive === true,
+        weatherModifierActive: settings.weatherModifierActive === true }
+    );
+    probs = adjustedProbs;
+    return { rawProbs, probs, correctionVersion, teamIntel };
+  };
+  const probInputs = () => ({ homeF, awayF, weights, context, leagueId, leagueConfig, settings, cfg, dataConf, homeName, awayName, neutralVenue, competitionPhase, homeId, awayId, homeProfile, awayProfile, homeDays, awayDays, weatherForModifier, homeMatchday, awayMatchday, currentSeason, rankToQuality });
+  const activeProbs = scorerPath === 'shared' ? scoreProbabilities(probInputs()) : legacyProbs();
+  let probs = activeProbs.probs;
+  const correctionVersion = activeProbs.correctionVersion;
+  const teamIntel = activeProbs.teamIntel;
+  let scorerShadow = null;
+  if (scorerShadowOn) {
+    try {
+      const otherFactors = scorerPath === 'shared' ? legacyFactors() : buildLiveFactors(factorInputs);
+      const otherProbs = scorerPath === 'shared' ? legacyProbs() : scoreProbabilities({ ...probInputs(), homeF: otherFactors.homeF, awayF: otherFactors.awayF, dataConf: otherFactors.dataConf });
+      const dsc = diffScores({ homeF, awayF, probs }, { homeF: otherFactors.homeF, awayF: otherFactors.awayF, probs: otherProbs.probs });
+      scorerShadow = { path: scorerPath, otherPath: scorerPath === 'shared' ? 'legacy' : 'shared', maxDiff: dsc.maxDiff, where: dsc.where };
+      if (!(dsc.maxDiff <= 1e-12)) console.warn(`[ScorerShadow] ${homeName} vs ${awayName} (${leagueId}): max diff ${dsc.maxDiff} at ${dsc.where.join(',')}`);
+    } catch (e) { scorerShadow = { path: scorerPath, error: e.message }; console.error(`[ScorerShadow] error: ${e.message}`); }
+  }
+
 
   // Build results for H/D/A
   // Canonical bet keys ('Home Win'/'Away Win'/'Draw') are preserved for resolution matching.
@@ -2004,6 +2050,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     teamIntel, paperTradeOnly, isTrainingHoldout, betMode,
     isClassifiedLeague, isDomesticTierLeague, tierCandidate, clearsPaperMoneyRule, meetsPaperMoneyRule, isFakeMoney,
     goalsCandidates, modelVersion, correctionVersion, domesticBlendFixtures,
+    scorerPath, scorerVersion: SCORER_VERSION, featureSpecVersion: `live-${FEATURE_SPEC.version}`, scorerShadow,
   };
 }
 
@@ -2113,6 +2160,7 @@ async function runMorningScan(leagueIds) {
             scoredAt:     new Date().toISOString(),
             successScore:    best.successScore,
             modelVersion:    scored.modelVersion,
+            scorerVersion: scored.scorerVersion, featureSpecVersion: scored.featureSpecVersion, scorerShadowMaxDiff: scored.scorerShadow?.maxDiff ?? null,
             correctionVersion: scored.correctionVersion,
             projectedBet:    best.displayLabel || best.bet,
             projectedBetKey: best.bet,
@@ -2483,6 +2531,7 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
       watchingStageModelProb: watchingEntry?.modelProb ?? null,
       watchingStageScoredAt:  watchingEntry?.scoredAt ?? null,
       modelVersion: scored.modelVersion,
+      scorerVersion: scored.scorerVersion, featureSpecVersion: scored.featureSpecVersion, scorerShadowMaxDiff: scored.scorerShadow?.maxDiff ?? null,
       correctionVersion: scored.correctionVersion,
       bookOdds:     best.bookOdds,
       // Raw Pinnacle price at lock time, separate from bookOdds (which is a generic
@@ -3721,6 +3770,8 @@ async function runHistoricalBackfill({ rescore = false, skipOptimise = false, on
       const filteredDomesticTimeline = buildDomesticTimeline(filteredDomesticTimelineFixtures);
       const fullDomesticTimeline     = buildDomesticTimeline(allFixtures);
       let   scored         = 0;
+      const _sc = getSettings(); const scorerOpts = { scorerPath: _sc.scorerPath === 'shared' ? 'shared' : 'legacy', shadow: _sc.scorerShadow !== false };
+      let shadowMax = 0, shadowOver = 0, shadowN = 0;
       const checkpointEvery = isLargeRun ? LARGE_RUN_PERSIST_EVERY : OPTIMISE_EVERY;
       let   nextCheckpointAt = Math.ceil(scoredMap.size / checkpointEvery) * checkpointEvery;
       if (nextCheckpointAt <= scoredMap.size) nextCheckpointAt += checkpointEvery;
@@ -3756,7 +3807,8 @@ async function runHistoricalBackfill({ rescore = false, skipOptimise = false, on
           const domesticTimelineForFixture = isFixtureTrainingHoldout(fix.league?.id, fix.fixture?.date)
             ? fullDomesticTimeline
             : filteredDomesticTimeline;
-          record = scoreFixtureFromPool(fix, teamIndex, standingsIndex, domesticTimelineForFixture);
+          record = scoreFixtureFromPool(fix, teamIndex, standingsIndex, domesticTimelineForFixture, scorerOpts);
+          if (record && record._scorerShadowMaxDiff != null) { shadowN++; if (record._scorerShadowMaxDiff > shadowMax) shadowMax = record._scorerShadowMaxDiff; if (!(record._scorerShadowMaxDiff <= 1e-12)) shadowOver++; delete record._scorerShadowMaxDiff; }
         } catch (e) {
           console.error(`[HistoricalBackfill] scoreFixtureFromPool failed for fixture ${fix.fixture?.id} (${fix.league?.id}/${fix.league?.season}): ${e.message}`);
           continue;
@@ -3806,6 +3858,7 @@ async function runHistoricalBackfill({ rescore = false, skipOptimise = false, on
         }
       }
 
+      if (shadowN) console.log(`[ScorerShadow:pool] ${shadowN} records compared (${scorerOpts.scorerPath} active) — max diff ${shadowMax}, ${shadowOver} above 1e-12`);
       const msg = `[Score] ${scored} fixtures scored (total: ${scoredMap.size})`;
       console.log(msg); onProgress?.(msg);
       _historicalBackfillStatus.scored = scoredMap.size;
@@ -4615,6 +4668,63 @@ app.get('/api/odds/events', async (req, res) => {
     res.json(data);
   } catch (e) { res.status(e.response?.status || 500).json({ error: e.message }); }
 });
+
+// ─── TEMP DIAGNOSTIC (2026-09-06, Stage A gate) — remove after cutover ─────────────────
+// Background job: (a) pool — the 2,000 most recent FT fixtures re-scored through the
+// legacy and shared pool paths in one process; (b) live — the last N locked bets with
+// their inputs re-fetched (same gathering as runPreMatchScan) and scored once through
+// scoreOneFixture with the shared path in shadow, i.e. both paths on identical inputs.
+// Reports max abs diff and every fixture above 1e-12. Read-only w.r.t. app data
+// (no bets, watching, lineups or stats are written).
+let _stageA = { running: false };
+app.post('/api/admin/diag-stagea/start', (req, res) => {
+  if (_stageA.running) return res.json({ started: false, status: _stageA });
+  const betsN = parseInt(req.query.bets || '200', 10), poolN = parseInt(req.query.pool || '2000', 10);
+  _stageA = { running: true, startedAt: new Date().toISOString(), pool: null, live: { done: 0, total: 0, maxDiff: 0, over: [], errors: [], apiCalls: 0 }, error: null };
+  (async () => {
+    try {
+      const hist = readHistoricalCached() || { fixtures: [] };
+      const ft = hist.fixtures.filter(f => f.fixture?.status?.short === 'FT');
+      const teamIndex = buildTeamIndex(ft), standingsIndex = buildStandingsIndex(ft), timeline = buildDomesticTimeline(ft);
+      const sample = [...ft].sort((a, b) => new Date(b.fixture.date) - new Date(a.fixture.date)).slice(0, poolN);
+      let pmax = 0, pover = 0, pn = 0;
+      for (const f of sample) { const r = scoreFixtureFromPool(f, teamIndex, standingsIndex, timeline, { scorerPath: 'legacy', shadow: true }); if (!r) continue; pn++; if (r._scorerShadowMaxDiff > pmax) pmax = r._scorerShadowMaxDiff; if (!(r._scorerShadowMaxDiff <= 1e-12)) pover++; }
+      _stageA.pool = { n: pn, maxDiff: pmax, above1e12: pover, from: sample[sample.length - 1]?.fixture.date.slice(0, 10), to: sample[0]?.fixture.date.slice(0, 10) };
+      const settings = getSettings();
+      const bets = getBets().filter(b => b.lockedAt && b.fixtureId && LEAGUES[String(b.leagueId)]).sort((a, b) => b.lockedAt.localeCompare(a.lockedAt)).slice(0, betsN);
+      _stageA.live.total = bets.length;
+      const oddsCache = {};
+      for (const bet of bets) {
+        try {
+          const leagueId = String(bet.leagueId); const meta = LEAGUES[leagueId];
+          const { data: fd } = await apiSports.get('/fixtures', { params: { id: bet.fixtureId } }); _stageA.live.apiCalls++;
+          const fix = fd?.response?.[0]; if (!fix) { _stageA.live.errors.push(`${bet.fixture}: fixture not found`); continue; }
+          const formSeasons = [meta.season, meta.season - 1];
+          const formResults = await Promise.all(formSeasons.map(sn => apiSports.get('/fixtures', { params: { league: leagueId, season: sn, last: 60 } }).catch(() => ({ data: { response: [] } })))); _stageA.live.apiCalls += 2;
+          const formFixtures = formResults.flatMap(r => r.data?.response || []).filter(f => f.fixture?.status?.short === 'FT').sort((a, b) => new Date(b.fixture?.date) - new Date(a.fixture?.date));
+          const leagueBackfill = ft.filter(f => String(f.league?.id) === leagueId);
+          const enriched = [...formFixtures, ...leagueBackfill].filter((f, i, arr) => arr.findIndex(x => x.fixture?.id === f.fixture?.id) === i).sort((a, b) => new Date(b.fixture?.date) - new Date(a.fixture?.date));
+          const fixtureStatsDb = getFixtureStats(); const statsCache = {};
+          for (const f of formFixtures) if (fixtureStatsDb[f.fixture.id]) statsCache[f.fixture.id] = fixtureStatsDb[f.fixture.id];
+          for (const f of formFixtures.slice(0, 15)) { if (statsCache[f.fixture.id]) continue; try { const { data: st } = await apiSports.get('/fixtures/statistics', { params: { fixture: f.fixture.id } }); _stageA.live.apiCalls++; if (st?.response?.length >= 2) statsCache[f.fixture.id] = { home: parseStats(st.response[0]), away: parseStats(st.response[1]) }; } catch {} }
+          try { const { data: injData } = await apiSports.get('/injuries', { params: { fixture: fix.fixture.id } }); _stageA.live.apiCalls++; if (injData?.response?.length) fix._injuries = injData.response; } catch {}
+          const { data: std } = await apiSports.get('/standings', { params: { league: leagueId, season: meta.season } }); _stageA.live.apiCalls++;
+          const standings = std?.response?.[0]?.league?.standings || [];
+          if (!oddsCache[meta.sport]) oddsCache[meta.sport] = await fetchOddsForLeague(meta.sport || 'soccer_epl', QUALIFICATION_SPORT_FALLBACK[leagueId]);
+          const { oddsMap, totalsMap } = oddsCache[meta.sport];
+          const scored = await scoreOneFixture(fix, enriched, standings, statsCache, oddsMap, settings, totalsMap, { scorerPath: 'legacy', scorerShadow: true });
+          const md = scored?.scorerShadow?.maxDiff; if (md == null) { _stageA.live.errors.push(`${bet.fixture}: no shadow (${scored?.scorerShadow?.error || 'n/a'})`); }
+          else { if (md > _stageA.live.maxDiff) _stageA.live.maxDiff = md; if (!(md <= 1e-12)) _stageA.live.over.push({ fixture: bet.fixture, league: meta.name, maxDiff: md, where: scored.scorerShadow.where }); }
+        } catch (e) { _stageA.live.errors.push(`${bet.fixture}: ${e.message}`); }
+        _stageA.live.done++;
+        await new Promise(r => setTimeout(r, 150));
+      }
+    } catch (e) { _stageA.error = e.message; }
+    _stageA.running = false; _stageA.completedAt = new Date().toISOString();
+  })();
+  res.json({ started: true, betsN, poolN });
+});
+app.get('/api/admin/diag-stagea/status', (_req, res) => res.json(_stageA));
 
 // ── App state API ─────────────────────────────────────────────────────────────
 
@@ -8688,8 +8798,11 @@ async function computeMatchedEdgeFixtures() {
     // (the linear model) is never used for live predictions — see docs/july-upgrade-notes.md.
     const leagueId  = parseInt(rec.leagueId, 10);
     const calFactor = getCalFactorForLeague(settings, leagueId);
-    const rawProbs  = model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]);
-    const probs     = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
+    // Stage A: identical quantity on either path (model + bias correction only, this
+    // path's long-standing definition); Stage B decides what else joins it.
+    const probs = settings.scorerPath === 'shared'
+      ? scoreProbabilities({ homeF: rec.homeFactors, awayF: rec.awayFactors, weights, context, leagueId, leagueConfig: LEAGUE_CONFIG[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: false, rankAdjust: false, hostBoost: false, modifiers: false } }).probs
+      : applyLeagueBiasCorrection(model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]), leagueId, LEAGUE_CONFIG);
 
     let topOutcome, modelProb, pinnacleOdds;
     if (probs.home >= probs.draw && probs.home >= probs.away) {
@@ -8953,6 +9066,7 @@ function computeConsensusOdds(fixtureId, closingOddsMulti) {
 // against the restored ~71,614-record population to be a live-endpoint OOM
 // risk, not just a background-job one.
 async function runEvCalibrationConsensus() {
+  const settings = getSettings(); // Stage A: scorer path switch (read once per run)
   // Track A follow-up (2026-08-14): even after fixing the redundant re-read
   // inside computeConsensusOdds(), this endpoint still crashed the 512MB
   // instance almost immediately (~1.3s) against the full ~71,614-record
@@ -9009,8 +9123,11 @@ async function runEvCalibrationConsensus() {
     if (!sourceOdds) continue;
 
     const leagueId  = parseInt(rec.leagueId, 10);
-    const rawProbs  = model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]);
-    const probs     = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
+    // Stage A: identical quantity on either path (model + bias correction only, this
+    // path's long-standing definition); Stage B decides what else joins it.
+    const probs = settings.scorerPath === 'shared'
+      ? scoreProbabilities({ homeF: rec.homeFactors, awayF: rec.awayFactors, weights, context, leagueId, leagueConfig: LEAGUE_CONFIG[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: false, rankAdjust: false, hostBoost: false, modifiers: false } }).probs
+      : applyLeagueBiasCorrection(model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]), leagueId, LEAGUE_CONFIG);
 
     let topOutcome, modelProb, bookOdds;
     if (probs.home >= probs.draw && probs.home >= probs.away) { topOutcome = 'home'; modelProb = probs.home; bookOdds = sourceOdds.homeOdds; }

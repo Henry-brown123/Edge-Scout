@@ -6,6 +6,7 @@ const {
   CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND, DOMESTIC_LEAGUE_IDS_FOR_BLEND,
   UEFA_SINGLE_PHASE_SEASON_FLOOR, EURO_COMPETITION_PHASE_GAMES_FLOOR, rankToProxyScore,
 } = require('./scoring');
+const { buildPoolFactors, FEATURE_SPEC, diffScores } = require('./sharedScorer');
 
 // ─── RECENCY WEIGHT ───────────────────────────────────────────────────────────
 
@@ -230,7 +231,11 @@ const FINAL_RESULT_STATUSES = new Set(['FT', 'AET', 'PEN']);
 // compatibility (callers that don't pass it get the pre-Addendum-24 behaviour of
 // "own-competition table or neutral", just without ever fabricating a knockout
 // pseudo-table, since resolveStandingsScore only trusts a genuinely valid table).
-function scoreFixtureFromPool(fix, teamIndex, standingsIndex, domesticTimeline) {
+// Stage A (2026-09-06): opts.scorerPath 'legacy' (default) keeps the inline factor
+// block below; 'shared' uses sharedScorer.buildPoolFactors (a verbatim lift).
+// opts.shadow computes both and records the max abs difference on the record
+// (_scorerShadowMaxDiff) so the nightly run can prove equivalence on real data.
+function scoreFixtureFromPool(fix, teamIndex, standingsIndex, domesticTimeline, opts = {}) {
   const homeId = fix.teams?.home?.id;
   const awayId = fix.teams?.away?.id;
   if (!homeId || !awayId) return null;
@@ -262,27 +267,39 @@ function scoreFixtureFromPool(fix, teamIndex, standingsIndex, domesticTimeline) 
   const homeStandings = resolveStandingsScore(fix, homeId, true,  ownSnap, domesticTimeline || {});
   const awayStandings = resolveStandingsScore(fix, awayId, false, ownSnap, domesticTimeline || {});
 
-  const homeFactors = {
-    form:      formScore(homeFixtures, homeId, 6, 0.05),
-    homeAdv:   homeAdvScore(homeFixtures, homeId, 0.05),
-    xg:        xgScore(homeFixtures, homeId, {}, 0.05),
-    h2h:       h2hScore(h2h, homeId, 5, 0.05),
-    defense:   defenseScore(homeFixtures, homeId, 0.05),
-    momentum:  momentumScore(homeFixtures, homeId),
-    injuries:  50,
-    standings: homeStandings,
+  const legacyFactors = () => {
+    const homeFactors = {
+      form:      formScore(homeFixtures, homeId, 6, 0.05),
+      homeAdv:   homeAdvScore(homeFixtures, homeId, 0.05),
+      xg:        xgScore(homeFixtures, homeId, {}, 0.05),
+      h2h:       h2hScore(h2h, homeId, 5, 0.05),
+      defense:   defenseScore(homeFixtures, homeId, 0.05),
+      momentum:  momentumScore(homeFixtures, homeId),
+      injuries:  50,
+      standings: homeStandings,
+    };
+    const h2hAway = 100 - homeFactors.h2h;
+    const awayFactors = {
+      form:      formScore(awayFixtures, awayId, 6, 0.05),
+      homeAdv:   50,
+      xg:        xgScore(awayFixtures, awayId, {}, 0.05),
+      h2h:       h2hAway,
+      defense:   defenseScore(awayFixtures, awayId, 0.05),
+      momentum:  momentumScore(awayFixtures, awayId),
+      injuries:  50,
+      standings: awayStandings,
+    };
+    return { homeFactors, awayFactors };
   };
-  const h2hAway = 100 - homeFactors.h2h;
-  const awayFactors = {
-    form:      formScore(awayFixtures, awayId, 6, 0.05),
-    homeAdv:   50,
-    xg:        xgScore(awayFixtures, awayId, {}, 0.05),
-    h2h:       h2hAway,
-    defense:   defenseScore(awayFixtures, awayId, 0.05),
-    momentum:  momentumScore(awayFixtures, awayId),
-    injuries:  50,
-    standings: awayStandings,
-  };
+  const sharedInputs = { homeFixtures, awayFixtures, h2h, homeId, awayId, homeStandings, awayStandings };
+  const scorerPath = opts.scorerPath === 'shared' ? 'shared' : 'legacy';
+  const active = scorerPath === 'shared' ? buildPoolFactors(sharedInputs) : legacyFactors();
+  const { homeFactors, awayFactors } = active;
+  let shadowMaxDiff = null;
+  if (opts.shadow) {
+    const other = scorerPath === 'shared' ? legacyFactors() : buildPoolFactors(sharedInputs);
+    shadowMaxDiff = diffScores({ homeF: active.homeFactors, awayF: active.awayFactors }, { homeF: other.homeFactors, awayF: other.awayFactors }).maxDiff;
+  }
 
   const context = classifyFixture(fix.league?.id);
 
@@ -306,6 +323,9 @@ function scoreFixtureFromPool(fix, teamIndex, standingsIndex, domesticTimeline) 
     actualOutcome: hg > ag ? 'home' : hg < ag ? 'away' : 'draw',
     goals:         { home: hg, away: ag },
     recencyWeight: recencyWeight(fix.fixture?.date),
+    featureSpecVersion: `pool-${FEATURE_SPEC.version}`,
+    scorerPath,
+    ...(shadowMaxDiff != null ? { _scorerShadowMaxDiff: shadowMaxDiff } : {}),
   };
 }
 
