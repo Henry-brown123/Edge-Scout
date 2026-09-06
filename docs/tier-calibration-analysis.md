@@ -8207,3 +8207,64 @@ propensity is a real trait to test. Untested and worth a proper rule-13
 cycle: manager changes, travel (after the venue table), per-league weather
 on totals. Not worth pursuing on current evidence: per-team home
 "fortress" effects, per-team weather sensitivity, congestion as a penalty.
+
+### Part B — Does the banked EFL cell beat the market? (2026-09-06, follow-up)
+
+Direct test, not inferred from the pooled slope. Population: the frozen
+pre-cutoff EFL matched population (10,142 fixtures with Pinnacle closing),
+cell = edge ≥13% at 0.93 and modelProb ≥45% (n=699, 2020-06 → 2026-08).
+"Market" is Pinnacle's margin-stripped closing probability of the pick;
+"beyond the market" = actual win rate minus that, with a binomial z.
+
+| Slice | n | Actual | Model (×0.93) | Market | Actual − market | z | ROI at closing | 95% CI | Residual slope |
+|---|---|---|---|---|---|---|---|---|---|
+| **Whole cell** | 699 | 39.3% | 54.7% | 36.3% | +3.0pp | 1.67 | +14.7% | [+1.8, +27.5] | 0.83 |
+| Championship | 260 | 37.3% | 53.9% | 35.6% | +1.8pp | 0.59 | +0.7% | [−16.2, +17.5] | 0.95 |
+| League One | 203 | 37.9% | 55.0% | 36.6% | +1.3pp | 0.39 | +1.3% | [−17.9, +20.6] | 0.89 |
+| League Two | 236 | 42.8% | 55.2% | 36.9% | +5.9pp | 1.89 | +41.6% | [+13.0, +70.2] | 0.63 |
+| Train window (< 2024-09-16) | 490 | 36.7% | 54.5% | 36.0% | +0.7pp | 0.32 | +7.4% | [−6.4, +21.1] | 0.95 |
+| Test window (≥ 2024-09-16) | 209 | 45.5% | 55.0% | 36.9% | +8.6pp | 2.57 | +31.8% | [+3.4, +60.2] | 0.52 |
+| Edge 13–17% | 350 | 41.1% | 53.2% | 38.5% | +2.7pp | 1.04 | +11.2% | [−3.6, +26.1] | 0.80 |
+| Edge 17–22% | 222 | 38.7% | 54.8% | 35.7% | +3.1pp | 0.96 | +3.1% | [−15.2, +21.3] | 0.85 |
+| Edge ≥22% | 127 | 35.4% | 58.4% | 31.5% | +3.9pp | 1.0 | +44% | wide | 0.85 |
+| Home picks | 561 | 40.1% | 55.7% | 37.1% | +3.0pp | 1.46 | +16.9% | [+2.0, +31.8] | 0.81 |
+| Away picks | 138 | 36.2% | 50.7% | 32.9% | +3.3pp | 0.83 | +5.6% | [−18.6, +29.8] | 0.90 |
+
+Controls on the same population: all EFL matched fixtures, actual − market
++1.1pp (z 2.32, slope 0.98, ROI at closing −0.2%); the excluded region
+"edge ≥13% but modelProb <45%" (n=159) actual − market **−4.4pp**, ROI
+−21.9% — the 45% floor removes a genuinely bad region; the top-division
+20%/45% test-only cell (n=81) +8.5pp, z 1.65, ROI +98% [+12, +184].
+
+**Reading, stated plainly.**
+
+1. Inside the banked cell the model is still massively overconfident: it
+   says 54.7% where 39.3% happens. Roughly 15 of the cell's ~18 points of
+   nominal "edge" are model error the market already knew about (residual
+   slope 0.83). The cell's positive ROI comes from the remaining ~3 points
+   over the market at average odds 2.94, not from the model's probability
+   being right.
+2. That residual, +3.0pp over Pinnacle closing across 699 fixtures, is
+   **suggestive but not decision-grade** (z = 1.67). It is not zero, and it
+   is what the +14.7% closing ROI with a CI just clear of zero is made of.
+3. It is **not uniform across the cohort**: Championship and League One
+   individually add essentially nothing beyond the market (z 0.6 and 0.4,
+   ROI at closing +0.7% and +1.3%); League Two carries it (+5.9pp, z 1.89,
+   ROI +41.6% [+13, +70]).
+4. It is **not uniform over time**: nothing beyond the market in the train
+   window (+0.7pp, z 0.32) and a clear excess in the single test window
+   (+8.6pp, z 2.57, n=209). Addendum 38 selected 13/45 on the train window
+   and looked at test once; the beyond-market signal lives in that one
+   look, which is honest evidence but also a single window that cannot be
+   re-drawn.
+
+So the answer to the question as asked: the EFL backtest's edge is
+**partly** the same "disagreement with the market is error" pattern — most
+of the nominal edge is exactly that — with a thin, real-looking residual
+beyond the market that is concentrated in League Two and in the 2024-09
+onward window, and that does not clear a 2σ bar for the cohort as a
+whole. It should be described as "positive closing-line ROI with a
+beyond-market residual of about +3pp, indicative", not as "validated
+signal beyond the market". A market-relative model (Addendum 46's first
+recommendation) would make this the primary quantity from the start.
+Temp endpoint `diag-cell-vs-market` removed after this read.

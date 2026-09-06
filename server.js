@@ -4593,47 +4593,6 @@ app.get('/api/odds/events', async (req, res) => {
   } catch (e) { res.status(e.response?.status || 500).json({ error: e.message }); }
 });
 
-// TEMP DIAGNOSTIC (2026-09-06, Addendum 46 follow-up) — remove after use.
-// Does the banked EFL cell (edge>=13% at 0.93, modelProb>=45%, pre-cutoff population)
-// beat the market, i.e. is its actual win rate above Pinnacle's margin-stripped
-// closing probability, not just above the model's own probability? Read-only.
-app.get('/api/admin/diag-cell-vs-market', async (_req, res) => {
-  try {
-    const all = await computeMatchedEdgeFixtures();
-    const lid = f => parseInt(f.leagueId, 10);
-    const RULE12 = { 41: '2026-08-11T09:00:00Z', 42: '2026-08-11T09:00:00Z', 40: '2026-08-19T22:00:00Z' };
-    const TRAIN_END = '2024-09-16T00:00:00Z';
-    const efl = all.filter(f => RULE12[lid(f)] && new Date(f.date) < new Date(RULE12[lid(f)]));
-    const implied = f => f.calProb - f.edge; // margin-stripped Pinnacle prob of the pick (factor-independent)
-    const edgeAt = (f, k) => Math.min(0.97, f.modelProb * k) - implied(f);
-    const cell = efl.filter(f => edgeAt(f, 0.93) >= 0.13 - 1e-12 && f.modelProb >= 0.45 - 1e-12);
-    const summarise = arr => {
-      const n = arr.length; if (!n) return { n: 0 };
-      const wins = arr.filter(f => f.won).length, act = wins / n;
-      const model = arr.reduce((a, f) => a + Math.min(0.97, f.modelProb * 0.93), 0) / n;
-      const mkt = arr.reduce((a, f) => a + implied(f), 0) / n;
-      const rets = arr.map(f => f.won ? f.pinnacleOdds - 1 : -1); const mean = rets.reduce((a, v) => a + v, 0) / n;
-      const sd = n > 1 ? Math.sqrt(rets.reduce((a, v) => a + (v - mean) ** 2, 0) / (n - 1)) : 0; const h = 1.96 * sd / Math.sqrt(n);
-      const seBinom = Math.sqrt(mkt * (1 - mkt) / n);
-      // within-group residual slope on (market - model)
-      let sxy = 0, sxx = 0; for (const f of arr) { const x = implied(f) - Math.min(0.97, f.modelProb * 0.93); const y = (f.won ? 1 : 0) - Math.min(0.97, f.modelProb * 0.93); sxy += x * y; sxx += x * x; }
-      return { n, wins, actualPct: +(100 * act).toFixed(1), modelPct: +(100 * model).toFixed(1), marketPct: +(100 * mkt).toFixed(1), actualMinusMarketPp: +(100 * (act - mkt)).toFixed(1), zVsMarket: +((act - mkt) / seBinom).toFixed(2), actualMinusModelPp: +(100 * (act - model)).toFixed(1), roiAtClosing: +(100 * mean).toFixed(1), roiCi: [+(100 * (mean - h)).toFixed(1), +(100 * (mean + h)).toFixed(1)], avgOdds: +(arr.reduce((a, f) => a + f.pinnacleOdds, 0) / n).toFixed(2), residualSlope: sxx ? +(sxy / sxx).toFixed(2) : null };
-    };
-    const name = f => LEAGUE_NAMES_MAP[String(f.leagueId)];
-    const byLeague = Object.fromEntries(['Championship', 'League One', 'League Two'].map(L => [L, summarise(cell.filter(f => name(f) === L))]));
-    const byWindow = { train_pre2024_09_16: summarise(cell.filter(f => new Date(f.date) < new Date(TRAIN_END))), test_from2024_09_16: summarise(cell.filter(f => new Date(f.date) >= new Date(TRAIN_END))) };
-    const byEdge = Object.fromEntries([[0.13, 0.17], [0.17, 0.22], [0.22, 0.30], [0.30, 1]].map(([a, b]) => [`${Math.round(a * 100)}-${Math.round(b * 100)}%`, summarise(cell.filter(f => edgeAt(f, 0.93) >= a - 1e-12 && edgeAt(f, 0.93) < b - 1e-12))]));
-    const byPick = Object.fromEntries(['home', 'draw', 'away'].map(p => [p, summarise(cell.filter(f => f.topOutcome === p))]));
-    const byProb = Object.fromEntries([[0.45, 0.50], [0.50, 0.55], [0.55, 0.65], [0.65, 1]].map(([a, b]) => [`${Math.round(a * 100)}-${Math.round(b * 100)}%`, summarise(cell.filter(f => f.modelProb >= a - 1e-12 && f.modelProb < b - 1e-12))]));
-    // comparison groups
-    const notCell = efl.filter(f => !(edgeAt(f, 0.93) >= 0.13 - 1e-12 && f.modelProb >= 0.45 - 1e-12));
-    const topCell = all.filter(f => TOP_DIVISION_CALIBRATION_LEAGUE_IDS.has(lid(f)) && VALIDATED_SPLITS[lid(f)] && new Date(f.date) >= new Date(VALIDATED_SPLITS[lid(f)].testFrom) && f.preTreeBoundary === false && (Math.min(0.97, f.modelProb * 1.06) - implied(f)) >= 0.20 - 1e-12 && f.modelProb >= 0.45 - 1e-12);
-    // shuffled control: same n as the cell drawn by edge rank only (no prob floor), to show what "high model-market disagreement" alone gives
-    const disagreeOnly = efl.filter(f => edgeAt(f, 0.93) >= 0.13 - 1e-12 && f.modelProb < 0.45 - 1e-12);
-    res.json({ note: 'TEMP — Addendum 46 follow-up. Remove after use. actual − market > 0 with |z|>2 means the cell wins more often than Pinnacle closing implied, i.e. signal beyond the market.', population: { eflPreCutoffMatched: efl.length, cellN: cell.length, from: cell.map(f => f.date).sort()[0]?.slice(0, 10), to: cell.map(f => f.date).sort().pop()?.slice(0, 10) }, cell: summarise(cell), byLeague, byWindow, byEdge, byPick, byProb, controls: { eflAllMatched: summarise(efl), eflOutsideCell: summarise(notCell), eflHighEdgeButProbBelow45: summarise(disagreeOnly), topDivisionCell20_45_at106: summarise(topCell) } });
-  } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
-});
-
 // ── App state API ─────────────────────────────────────────────────────────────
 
 // GET divergence report — fixtures where model and market disagree by >8pp
