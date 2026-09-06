@@ -4593,6 +4593,62 @@ app.get('/api/odds/events', async (req, res) => {
   } catch (e) { res.status(e.response?.status || 500).json({ error: e.message }); }
 });
 
+// TEMP DIAGNOSTIC (2026-09-06, Addendum 46 Part C) — remove after use. Read-only.
+// Part 1: League Two's own train/test and block-wise beyond-market read of the FIXED
+// 13/45 cell (no re-selection). Part 2: mechanism — market calibration by implied band,
+// direction by side/odds/table position, market Brier + calibration slope + overround
+// vs other leagues, season-by-season consistency.
+app.get('/api/admin/diag-l2-mechanism', async (_req, res) => {
+  try {
+    const all = await computeMatchedEdgeFixtures();
+    const closing = getClosingOdds();
+    const hist = readHistoricalCached() || { scoredRecords: [] };
+    const recById = new Map(hist.scoredRecords.map(r => [r.fixtureId, r]));
+    const lid = f => parseInt(f.leagueId, 10);
+    const RULE12 = { 41: '2026-08-11T09:00:00Z', 42: '2026-08-11T09:00:00Z', 40: '2026-08-19T22:00:00Z' };
+    const TRAIN_END = '2024-09-16T00:00:00Z';
+    const implied = f => f.calProb - f.edge;
+    const edgeAt = (f, k) => Math.min(0.97, f.modelProb * k) - implied(f);
+    const inCell = f => edgeAt(f, 0.93) >= 0.13 - 1e-12 && f.modelProb >= 0.45 - 1e-12;
+    const stripped3 = f => { const co = closing[f.fixtureId] || closing[String(f.fixtureId)]; if (!co || !co.homeOdds || !co.drawOdds || !co.awayOdds) return null; const inv = { home: 1 / co.homeOdds, draw: 1 / co.drawOdds, away: 1 / co.awayOdds }; const s3 = inv.home + inv.draw + inv.away; return { p: { home: inv.home / s3, draw: inv.draw / s3, away: inv.away / s3 }, overround: s3 - 1, odds: co }; };
+    const summarise = arr => { const n = arr.length; if (!n) return { n: 0 }; const wins = arr.filter(f => f.won).length, act = wins / n; const model = arr.reduce((a, f) => a + Math.min(0.97, f.modelProb * 0.93), 0) / n; const mkt = arr.reduce((a, f) => a + implied(f), 0) / n; const rets = arr.map(f => f.won ? f.pinnacleOdds - 1 : -1); const mean = rets.reduce((a, v) => a + v, 0) / n; const sd = n > 1 ? Math.sqrt(rets.reduce((a, v) => a + (v - mean) ** 2, 0) / (n - 1)) : 0; const h = 1.96 * sd / Math.sqrt(n); const se = Math.sqrt(mkt * (1 - mkt) / n); return { n, actualPct: +(100 * act).toFixed(1), modelPct: +(100 * model).toFixed(1), marketPct: +(100 * mkt).toFixed(1), beyondMarketPp: +(100 * (act - mkt)).toFixed(1), z: +((act - mkt) / se).toFixed(2), roiAtClosing: +(100 * mean).toFixed(1), roiCi: [+(100 * (mean - h)).toFixed(1), +(100 * (mean + h)).toFixed(1)], avgOdds: +(arr.reduce((a, f) => a + f.pinnacleOdds, 0) / n).toFixed(2) }; };
+    const blocksOf = (arr, k) => { const s = [...arr].sort((a, b) => new Date(a.date) - new Date(b.date)); const size = Math.ceil(s.length / k); return Array.from({ length: k }, (_, i) => s.slice(i * size, (i + 1) * size)); };
+    // ── Part 1: League Two on its own
+    const l2 = all.filter(f => lid(f) === 42 && new Date(f.date) < new Date(RULE12[42]));
+    const l2cell = l2.filter(inCell);
+    const part1 = { l2Matched: l2.length, cell: summarise(l2cell), train: summarise(l2cell.filter(f => new Date(f.date) < new Date(TRAIN_END))), test: summarise(l2cell.filter(f => new Date(f.date) >= new Date(TRAIN_END))), fourBlocks: blocksOf(l2cell, 4).map(b => ({ range: `${b[0]?.date.slice(0, 10)}→${b[b.length - 1]?.date.slice(0, 10)}`, ...summarise(b) })), bySeasonYear: Object.fromEntries(Object.entries(l2cell.reduce((m, f) => { const y = f.date.slice(0, 4); (m[y] = m[y] || []).push(f); return m; }, {})).map(([y, a]) => [y, summarise(a)])), byPick: Object.fromEntries(['home', 'away'].map(p => [p, summarise(l2cell.filter(f => f.topOutcome === p))])), byOdds: Object.fromEntries([[1, 2.2], [2.2, 2.8], [2.8, 3.5], [3.5, 99]].map(([a, b]) => [`${a}-${b}`, summarise(l2cell.filter(f => f.pinnacleOdds >= a && f.pinnacleOdds < b))])), sameCellOtherLeagues: { championship: summarise(all.filter(f => lid(f) === 40 && new Date(f.date) < new Date(RULE12[40]) && inCell(f))), leagueOne: summarise(all.filter(f => lid(f) === 41 && new Date(f.date) < new Date(RULE12[41]) && inCell(f))) } };
+    // ── Part 2: mechanism across whole matched populations
+    const groups = { leagueTwo: l2, leagueOne: all.filter(f => lid(f) === 41 && new Date(f.date) < new Date(RULE12[41])), championship: all.filter(f => lid(f) === 40 && new Date(f.date) < new Date(RULE12[40])), topDivisions: all.filter(f => TOP_DIVISION_CALIBRATION_LEAGUE_IDS.has(lid(f)) && f.preTreeBoundary === false) };
+    const mech = {};
+    for (const [g, arr] of Object.entries(groups)) {
+      const rows = arr.map(f => ({ f, m: stripped3(f) })).filter(x => x.m);
+      // market calibration by implied band, for home and away outcomes
+      const bands = [[0, 0.25], [0.25, 0.35], [0.35, 0.45], [0.45, 0.55], [0.55, 0.65], [0.65, 1]];
+      const calib = side => Object.fromEntries(bands.map(([a, b]) => { const sub = rows.filter(x => x.m.p[side] >= a && x.m.p[side] < b); const n = sub.length; if (!n) return [`${Math.round(a * 100)}-${Math.round(b * 100)}`, { n: 0 }]; const rec = x => recById.get(x.f.fixtureId); const act = sub.filter(x => rec(x)?.actualOutcome === side).length / n; const mk = sub.reduce((s, x) => s + x.m.p[side], 0) / n; return [`${Math.round(a * 100)}-${Math.round(b * 100)}`, { n, marketPct: +(100 * mk).toFixed(1), actualPct: +(100 * act).toFixed(1), diffPp: +(100 * (act - mk)).toFixed(1), z: +((act - mk) / Math.sqrt(mk * (1 - mk) / n)).toFixed(2) }]; }));
+      // market Brier (3-way) and calibration slope (logit regression approx via linear slope of outcome on p)
+      let brier = 0, n3 = 0, sxy = 0, sxx = 0, over = 0, homeAct = 0, homeMk = 0, drawAct = 0, drawMk = 0, awayAct = 0, awayMk = 0;
+      for (const x of rows) { const r = recById.get(x.f.fixtureId); if (!r) continue; n3++; over += x.m.overround; for (const side of ['home', 'draw', 'away']) { const y = r.actualOutcome === side ? 1 : 0; brier += (x.m.p[side] - y) ** 2; const px = x.m.p[side] - 1 / 3; sxy += px * (y - 1 / 3); sxx += px * px; } homeAct += r.actualOutcome === 'home' ? 1 : 0; homeMk += x.m.p.home; drawAct += r.actualOutcome === 'draw' ? 1 : 0; drawMk += x.m.p.draw; awayAct += r.actualOutcome === 'away' ? 1 : 0; awayMk += x.m.p.away; }
+      // model residual slope on market-minus-model (top pick)
+      let rxy = 0, rxx = 0; for (const x of rows) { const f = x.f; const mp = Math.min(0.97, f.modelProb * (g === 'topDivisions' ? 1.06 : 0.93)); const d = implied(f) - mp; rxy += d * ((f.won ? 1 : 0) - mp); rxx += d * d; }
+      mech[g] = { n: n3, marketBrier3way: +(brier / n3).toFixed(5), marketCalibrationSlope: +(sxy / sxx).toFixed(3), avgOverroundPct: +(100 * over / n3).toFixed(2), overallBiasPp: { home: +(100 * (homeAct - homeMk) / n3).toFixed(1), draw: +(100 * (drawAct - drawMk) / n3).toFixed(1), away: +(100 * (awayAct - awayMk) / n3).toFixed(1) }, homeCalibByBand: calib('home'), awayCalibByBand: calib('away'), modelResidualSlope: +(rxy / rxx).toFixed(2) };
+    }
+    // League Two: is the beyond-market residual directional by situation? (whole L2 population, top pick)
+    const l2rows = l2.map(f => ({ f, m: stripped3(f), r: recById.get(f.fixtureId) })).filter(x => x.m && x.r);
+    const sit = (label, pred) => { const sub = l2rows.filter(pred).map(x => x.f); return [label, summarise(sub)]; };
+    const standingsOf = (x, side) => side === 'home' ? x.r.homeFactors?.standings : x.r.awayFactors?.standings;
+    const situations = Object.fromEntries([
+      sit('pick=home', x => x.f.topOutcome === 'home'), sit('pick=away', x => x.f.topOutcome === 'away'), sit('pick=draw', x => x.f.topOutcome === 'draw'),
+      sit('home fav (mkt home>=50%)', x => x.m.p.home >= 0.5 && x.f.topOutcome === 'home'), sit('away fav (mkt away>=45%)', x => x.m.p.away >= 0.45 && x.f.topOutcome === 'away'),
+      sit('pick is market underdog (<35%)', x => implied(x.f) < 0.35), sit('pick is market favourite (>=50%)', x => implied(x.f) >= 0.5),
+      sit('picked team top-third table (standings>=67)', x => standingsOf(x, x.f.topOutcome === 'draw' ? 'home' : x.f.topOutcome) >= 67), sit('picked team bottom-third (standings<=33)', x => standingsOf(x, x.f.topOutcome === 'draw' ? 'home' : x.f.topOutcome) <= 33),
+      sit('Aug-Sep', x => [8, 9].includes(new Date(x.f.date).getUTCMonth() + 1)), sit('Oct-Nov', x => [10, 11].includes(new Date(x.f.date).getUTCMonth() + 1)), sit('Dec-May', x => ![8, 9, 10, 11].includes(new Date(x.f.date).getUTCMonth() + 1)),
+      sit('model≥market+13pp (any prob)', x => edgeAt(x.f, 0.93) >= 0.13), sit('model≥market+13pp & prob<45', x => edgeAt(x.f, 0.93) >= 0.13 && x.f.modelProb < 0.45),
+    ]);
+    const bySeasonAll = Object.fromEntries(Object.entries(l2rows.reduce((m, x) => { const y = x.f.date.slice(0, 4); (m[y] = m[y] || []).push(x.f); return m; }, {})).map(([y, a]) => [y, summarise(a)]));
+    res.json({ note: 'TEMP — Addendum 46 Part C. Remove after use.', part1, part2: { mechanismByLeague: mech, leagueTwoSituations: situations, leagueTwoAllBySeason: bySeasonAll } });
+  } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
+});
+
 // ── App state API ─────────────────────────────────────────────────────────────
 
 // GET divergence report — fixtures where model and market disagree by >8pp
