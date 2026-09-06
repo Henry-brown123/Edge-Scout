@@ -8268,3 +8268,107 @@ beyond-market residual of about +3pp, indicative", not as "validated
 signal beyond the market". A market-relative model (Addendum 46's first
 recommendation) would make this the primary quantity from the start.
 Temp endpoint `diag-cell-vs-market` removed after this read.
+
+### Part C — League Two on its own, and what is driving its residual (2026-09-06, follow-up)
+
+Same fixed cell (edge ≥13% at 0.93, modelProb ≥45%), League Two's frozen
+pre-cutoff population only (3,338 matched, cell n=236). No re-selection; one
+read. "Beyond market" = actual win rate minus Pinnacle margin-stripped
+closing probability.
+
+**Part 1 — League Two's own split.**
+
+| Slice | n | Actual | Model | Market | Beyond market | z | ROI at closing | 95% CI |
+|---|---|---|---|---|---|---|---|---|
+| Whole L2 cell | 236 | 42.8% | 55.2% | 36.9% | +5.9pp | 1.89 | +41.6% | [+13.0, +70.2] |
+| Train (< 2024-09-16) | 159 | 42.8% | 55.6% | 36.6% | +6.1pp | 1.61 | +33.9% | [+6.1, +61.7] |
+| Test (≥ 2024-09-16) | 77 | 42.9% | 54.5% | 37.4% | +5.5pp | 1.00 | +57.5% | [−8.9, +124] |
+| Block 1 2020-06 → 2021-11 | 59 | 44.1% | | 38.4% | +5.6pp | 0.89 | +14.8% | [−20, +50] |
+| Block 2 → 2023-09 | 59 | 37.3% | | 36.2% | +1.1pp | 0.18 | +16.9% | [−27, +61] |
+| Block 3 → 2025-03 | 59 | 42.4% | | 35.9% | +6.5pp | 1.04 | +52.2% | [−1, +106] |
+| Block 4 → 2026-05 | 59 | 47.5% | | 37.0% | +10.5pp | 1.66 | +82.6% | [−1, +167] |
+| Pick odds ≤2.2 | 52 | 32.7% | 65.0% | 48.1% | **−15.5pp** | −2.23 | −38.9% | [−63, −15] |
+| Pick odds 2.2–2.8 | 73 | 42.5% | 56.2% | 38.9% | +3.5pp | 0.62 | +2.4% | [−25, +30] |
+| Pick odds 2.8–3.5 | 65 | 43.1% | 49.8% | 31.9% | +11.2pp | 1.94 | +31.4% | [−6, +69] |
+| Pick odds ≥3.5 | 46 | 54.3% | 50.4% | 27.9% | **+26.5pp** | 4.00 | +209% | [+95, +324] |
+
+By calendar year the beyond-market figure is positive in five of seven
+(2020 +11.5, 2021 +7.3, 2022 −2.6, 2023 +8.5, 2024 +4.8, 2025 +15.9, 2026
+−6.2). Home picks +4.9pp (n=196), away +10.8pp (n=40).
+
+**Reading.** League Two's signal survives its own train/test and all four
+sequential blocks in direction (every block positive ROI at closing), but
+it is not decision-grade on its own: 236 fixtures against rule 6's 300
+floor, z 1.89 pooled, and the test window's ROI interval spans zero. It is
+also not one thing: the cell's short-priced picks (≤2.2) lose to the market
+decisively, and the entire beyond-market excess sits at odds ≥2.8, where
+the model's disagreement with the market is largest.
+
+**Staking recommendation (report only, nothing changed).** Narrow
+paper-with-stake to League Two and move Championship and League One to
+observation-only until a market-relative model re-validates all three
+individually. Reasoning: the staked rule's beyond-market residual is
+carried by League Two alone; Championship (+1.8pp, z 0.6, ROI at closing
++0.7%) and League One (+1.3pp, z 0.4, +1.3%) add nothing beyond Pinnacle,
+so their real-money eligibility currently rests on a pooled figure they do
+not contribute to. League Two itself should be described as indicative,
+not validated. Do **not** add an odds floor inside the League Two cell
+now — that would be a new selection on the same population (rule 3); it is
+recorded here as a pre-registered check for the market-relative model
+(hypothesis: the residual lives at odds ≥2.8).
+
+**Part 2 — behavioural bias or thin-market noise?** Data used: all League
+Two matched fixtures (3,338) against League One (3,344), Championship
+(3,460) and the rule-16-clean top divisions (8,573); Pinnacle's
+margin-stripped closing 3-way probabilities vs outcomes.
+
+| Market | 3-way Brier | Calibration slope | Overround | Home bias by implied band (pp, z) |
+|---|---|---|---|---|
+| League Two | **0.634** | 0.976 | 3.62% | +1.2 (0.4), +2.1 (1.3), +1.9 (1.3), −0.9 (−0.5), −3.8 (−1.4), +0.1 (0.0) |
+| League One | 0.607 | 1.157 | 3.73% | −4.7 (−2.2), +0.1, +0.1, **+4.7 (2.6)**, **+4.7 (2.0)**, +1.6 |
+| Championship | 0.623 | 0.997 | 3.29% | +2.3, +1.3, −0.3, +2.3, −2.0, +2.8 (all |z| < 1.3) |
+| Top divisions | 0.566 | 1.067 | 2.94% | −2.7 (−2.7), −2.1, +1.4, +1.8, −1.8, +3.2 (2.7) |
+
+League Two's market is the least *resolving* of the four (highest Brier —
+outcomes are least predictable there) but it is **well calibrated**: slope
+0.976, overall bias under 1pp on every outcome, and no implied-probability
+band deviates by more than 1.4σ for either home or away. Season by season
+the whole-population beyond-market residual flips sign (−2.2, −0.7, +4.1,
+−1.3, −1.8, +2.1, +6.7). That is the signature of **thin-market noise, not
+a directional behavioural bias**: Pinnacle's League Two prices are right
+on average and in every band, just less sharp. (League One, by contrast,
+does show a directional pattern — home sides priced 45–65% win 4.7pp more
+than priced, z 2.6 and 2.0 — which the model does not exploit; noted, not
+acted on.)
+
+Where League Two's residual actually lives is model-conditional:
+
+| League Two situation (all matched, top pick) | n | Beyond market | z | ROI at closing |
+|---|---|---|---|---|
+| Pick is a market underdog (<35%) | 746 | +3.7pp | 2.18 | +16.3% [+3.3, +29.4] |
+| Pick is a market favourite (≥50%) | 839 | −1.9pp | −1.11 | −7.1% [−12.9, −1.4] |
+| Model ≥ market + 13pp, any prob | 281 | +4.0pp | 1.41 | +29.0% [+3.8, +54.3] |
+| Model ≥ market + 13pp, prob < 45% | 45 | −6.2pp | −1.01 | −36.9% |
+| Picked team top-third of table | 1,611 | +0.3pp | 0.24 | −1.0% |
+| Picked team bottom-third | 736 | +1.4pp | 0.80 | +1.2% |
+| Aug–Sep / Oct–Nov / Dec–May | 580 / 675 / 2,083 | +3.4 / −2.0 / +1.0 | 1.7 / −1.1 / 1.0 | +7.4 / −7.1 / +1.6% |
+
+No team-type or table-position pattern; no persistent seasonal one. The
+one directional pocket is **the model's underdog picks**: when the model
+backs a side the market prices below 35%, that side wins 3.7pp more often
+than priced (z 2.18, n=746), and the effect steepens with odds (+11pp at
+2.8–3.5, +26pp at ≥3.5 inside the cell). Favourites the model likes do
+worse than priced.
+
+**Verdict: a genuine mix, weighted toward noise.** At the population level
+League Two is a thin, noisy but unbiased market — the case for
+confidence/uncertainty weighting (the market's lower resolution means a
+given model-market disagreement carries more information there than in a
+sharp market, which is exactly what a market-relative model with a
+per-league disagreement scale would capture). Layered on that is one
+narrow, directional, model-conditional pocket — long-odds picks the model
+rates ≥45% — that behaves like information rather than noise across every
+block, but on 46–111 fixtures. A future market-relative model should treat
+League Two with a wider disagreement scale (noise) and test the long-odds
+pocket as an explicit, pre-registered hypothesis (bias), not assume either.
+Temp endpoint `diag-l2-mechanism` removed after this read.
