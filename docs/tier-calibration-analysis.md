@@ -8623,7 +8623,7 @@ carries `scorerVersion`, `featureSpecVersion` and `scorerShadowMaxDiff`.
 |---|---|---|---|
 | Local pool, every FT fixture, legacy vs shared pool path | 8,316 | 0 | 0 |
 | Production pool, 2,000 most recent FT fixtures (2026-04-03 → 2026-09-05) | 2,000 | 0 | 0 |
-| Production live path: last 200 locked bets, inputs re-fetched, scored once with the shared path in shadow | 200 | see completion note | |
+| Production live path: last 200 locked bets, inputs re-fetched, scored once with the shared path in shadow (plus a second 500-fixture pool sample, 2026-08-20 → 2026-09-06, also 0) | 200 | 0 | 0 |
 
 **Rollback.** `PUT /api/settings {scorerPath:'legacy'}` (already the
 default); `scorerShadow:false` to stop the diffing; git revert of `98f05d4`
@@ -8639,7 +8639,21 @@ League One entry, home side priced 45–65% by Pinnacle, from 2026-09-07,
 one look at season end. Both are unread by construction.
 
 **Shadow period.** From this deploy every scan and lock scores both paths
-and records the difference; the 07:00 UTC morning scan on 7 September is
-the first unattended exercise. Stage B (definition unification) and the
+and records the difference; the 07:00 UTC morning scan on 7 September was
+the first unattended exercise.
+
+**Gate completion note (2026-09-07, 18:18–18:25 UTC).** The live 200-bet
+run had been killed at 3/200 by the Addendum 48 docs deploy (in-memory job);
+it was re-run on the deployed build and completed: 200/200 bets, max abs
+diff 0, none above 1e-12, no errors, 1,440 API-Sports calls. All three gate
+populations are therefore at exactly 0. Shadow period confirmed on real
+traffic the same day: 7 bets locked since the deploy carry
+`scorerVersion shared-stageA-2026-09-06` / `featureSpecVersion
+live-stageA-2026-09-06` with `scorerShadowMaxDiff 0` (latest 17:31 UTC);
+both reserved populations (F on `l2-post-cutoff-2026`, G as
+`l1-home-favourite-2026`) are exposed on the calibration-factors endpoint
+with G at 0 fixtures as expected before its 7 September start. League Two
+closing-odds coverage on the reserved set is 60/60, confirming the nightly
+Phase 1b capture. Stage B (definition unification) and the
 cutover to `scorerPath:'shared'` do not start without an explicit
 go-ahead, regardless of how clean the shadow period is.
