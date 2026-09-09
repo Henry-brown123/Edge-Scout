@@ -25,6 +25,7 @@ const {
   CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND, DOMESTIC_LEAGUE_IDS_FOR_BLEND, TOURNAMENT_LEAGUE_IDS,
   UEFA_SINGLE_PHASE_SEASON_FLOOR, EURO_COMPETITION_PHASE_GAMES_FLOOR, rankToProxyScore, lookupStandingScore,
   pickTopCandidateByProbability,
+  marginStrippedImplied,
 } = require('./scoring');
 
 const model = require('./models/interface');
@@ -3086,6 +3087,127 @@ function extractH2hPrices(outcomes, home, away) {
   return { home: homePrice, draw: drawEntry?.price ?? null, away: awayPrice };
 }
 
+// ─── ITEM L (2026-09-09): Pinnacle-to-Pinnacle CLV per bet ───────────────────
+// The existing `clv` compares the soft-book price the user got (actualOdds)
+// against Pinnacle's T-5 price, and `executionClv` compares actualOdds against
+// Pinnacle at lock — both mix the UK book into the measurement (Addendum 45,
+// G8). This is the clean market-drift figure: Pinnacle at LOCK vs Pinnacle at
+// CLOSE for the same pick, both margin-stripped when all three prices are
+// available at both ends, on every locked bet (not just placed ones), plus the
+// per-bet beyond-market residual (outcome − Pinnacle closing probability) that
+// the watchdog and the reserved-set looks are defined on.
+//
+// Sources: lock = the bet's frozen `oddsSnapshot` Pinnacle row (three prices;
+// margin-stripped) with `pinnacleOddsAtLock` as the pick-price fallback;
+// close = closing-odds.json (nightly Phase 1b, three prices, Pinnacle) with the
+// bet's own T-5 `closingOdds` as the pick-price fallback. Sign conventions:
+// clvPinnacle > 0 means the lock price was better than the close (the market
+// moved toward the pick); clvPinnacleProb is the same movement in probability
+// points; beyondMarket > 0 means the pick won more often than Pinnacle's close
+// implied. Never overwrites the legacy `clv` / `executionClv` fields.
+function computePinnacleClv(bet, closingStore) {
+  const pick = bet.pickType || (bet.bet === 'Home Win' ? 'home' : bet.bet === 'Away Win' ? 'away' : 'draw');
+  const threePrices = o => o && o.homeOdds > 1 && o.drawOdds > 1 && o.awayOdds > 1;
+
+  const snapRow = Array.isArray(bet.oddsSnapshot) ? bet.oddsSnapshot.find(r => r && r.name === 'Pinnacle') : null;
+  let lockOdds = bet.pinnacleOddsAtLock > 1 ? bet.pinnacleOddsAtLock : (snapRow?.[`${pick}Odds`] > 1 ? snapRow[`${pick}Odds`] : null);
+  let lockProb = null, lockBasis = null;
+  if (threePrices(snapRow)) { lockProb = marginStrippedImplied(snapRow)[pick]; lockBasis = 'snapshot-stripped'; }
+  else if (lockOdds > 1) { lockProb = 1 / lockOdds; lockBasis = 'raw-implied'; }
+
+  const co = closingStore[bet.fixtureId] || closingStore[String(bet.fixtureId)];
+  let closeOdds = null, closeProb = null, closeBasis = null, closeAt = null;
+  if (co && co.bookmaker === 'pinnacle' && threePrices(co)) {
+    closeOdds = co[`${pick}Odds`]; closeProb = marginStrippedImplied(co)[pick]; closeBasis = 'closing-store-stripped'; closeAt = co.collectedAt || co.snapshotTs || null;
+  } else if (bet.closingOdds > 1 && bet.closingOddsBookmaker === 'pinnacle') {
+    closeOdds = bet.closingOdds; closeProb = 1 / closeOdds; closeBasis = 'bet-closing-raw'; closeAt = bet.closingOddsAt || null;
+  }
+  if (!(lockOdds > 1) || !(closeOdds > 1)) return null;
+
+  const bothStripped = lockBasis === 'snapshot-stripped' && closeBasis === 'closing-store-stripped';
+  const resolved = bet.result === 'win' || bet.result === 'loss';
+  return {
+    pick, lockOdds, closeOdds, lockProb, closeProb, lockBasis, closeBasis, closeAt,
+    lockMinutesBeforeKickoff: (bet.lockedAt && bet.kickoff) ? Math.round((new Date(bet.kickoff) - new Date(bet.lockedAt)) / 60000) : null,
+    clvPinnacle:     +(((lockOdds - closeOdds) / closeOdds) * 100).toFixed(2),
+    clvPinnacleProb: bothStripped ? +((closeProb - lockProb) * 100).toFixed(2) : null,
+    beyondMarket:    resolved ? +(((bet.result === 'win' ? 1 : 0) - closeProb) * 100).toFixed(2) : null,
+    closingPnlPerUnit: resolved ? +((bet.result === 'win' ? closeOdds - 1 : -1).toFixed(4)) : null,
+    computedAt: new Date().toISOString(),
+  };
+}
+
+// Fills `pinnacleClv` on every bet that lacks it, and re-fills entries whose
+// beyondMarket is still null once the bet has resolved. Cheap (no API calls);
+// runs nightly after Phase 1b and on demand via POST /api/admin/pinnacle-clv/run.
+function runPinnacleClvPass() {
+  const bets = getBets();
+  const closing = getClosingOdds();
+  let filled = 0, updated = 0, missing = 0;
+  for (const b of bets) {
+    if (!b.fixtureId) continue;
+    const resolved = b.result === 'win' || b.result === 'loss';
+    const have = b.pinnacleClv;
+    if (have && !(resolved && have.beyondMarket == null)) continue;
+    const next = computePinnacleClv(b, closing);
+    if (!next) { missing++; continue; }
+    b.pinnacleClv = next;
+    b.clvPinnacle = next.clvPinnacle;
+    if (have) updated++; else filled++;
+  }
+  if (filled || updated) saveBets(bets);
+  const summary = { at: new Date().toISOString(), bets: bets.length, filled, updated, missingInputs: missing, withPinnacleClv: bets.filter(b => b.pinnacleClv).length };
+  console.log(`[PinnacleCLV] pass — filled ${filled}, updated ${updated}, ${missing} without both Pinnacle prices, ${summary.withPinnacleClv}/${bets.length} covered`);
+  writeJSON('pinnacle-clv-status.json', summary);
+  return summary;
+}
+
+function _meanSe(arr) {
+  const n = arr.length;
+  if (!n) return { n: 0, mean: null, se: null };
+  const mean = arr.reduce((a, b) => a + b, 0) / n;
+  const v = n > 1 ? arr.reduce((a, x) => a + (x - mean) ** 2, 0) / (n - 1) : 0;
+  return { n, mean: +mean.toFixed(3), se: n > 1 ? +Math.sqrt(v / n).toFixed(3) : null };
+}
+
+// Cohort report over bets that carry pinnacleClv. Cells are the ones the
+// project already reasons in (staked rule vs observation, league, lock-time
+// bucket, model-vs-market band); nothing here reads a reserved population's
+// outcomes beyond what the bet log already exposes.
+function buildPinnacleClvReport(bets) {
+  const rows = bets.filter(b => b.pinnacleClv && b.pinnacleClv.clvPinnacle != null);
+  const agg = (list) => {
+    const resolved = list.filter(b => b.pinnacleClv.beyondMarket != null);
+    const pnl = resolved.map(b => b.pinnacleClv.closingPnlPerUnit);
+    return {
+      n: list.length,
+      clvPinnacle:     _meanSe(list.map(b => b.pinnacleClv.clvPinnacle)),
+      clvPinnacleProb: _meanSe(list.filter(b => b.pinnacleClv.clvPinnacleProb != null).map(b => b.pinnacleClv.clvPinnacleProb)),
+      beyondMarket:    _meanSe(resolved.map(b => b.pinnacleClv.beyondMarket)),
+      closingRoiPct:   resolved.length ? +((pnl.reduce((a, b) => a + b, 0) / resolved.length) * 100).toFixed(1) : null,
+      resolvedN: resolved.length,
+      bothStrippedShare: list.length ? +(list.filter(b => b.pinnacleClv.clvPinnacleProb != null).length / list.length).toFixed(2) : null,
+    };
+  };
+  const groupBy = (keyFn) => {
+    const g = {};
+    for (const b of rows) { const k = keyFn(b); if (k == null) continue; (g[k] = g[k] || []).push(b); }
+    return Object.fromEntries(Object.entries(g).map(([k, v]) => [k, agg(v)]));
+  };
+  const lockBucket = b => { const m = b.pinnacleClv.lockMinutesBeforeKickoff; if (m == null) return null; return m <= 45 ? '≤45m' : m <= 75 ? '46–75m' : m <= 180 ? '76–180m' : '>180m'; };
+  const marketBand = b => { const p = b.pinnacleClv.closeProb; if (p == null) return null; return p < 0.30 ? '<30%' : p < 0.45 ? '30–45%' : p < 0.60 ? '45–60%' : '≥60%'; };
+  return {
+    definition: 'clvPinnacle % = (Pinnacle at lock − Pinnacle at close) / close; clvPinnacleProb pp = stripped close prob − stripped lock prob; beyondMarket pp = outcome − stripped Pinnacle close prob; closingRoi = flat-stake ROI at the Pinnacle close price. Positive = good for the pick.',
+    all: agg(rows),
+    byStakeTier: groupBy(b => b.clearsPaperMoneyRule ? 'clears-paper-rule' : (b.isFakeMoney ? 'observation' : 'other')),
+    byLeague: groupBy(b => b.leagueName || String(b.leagueId)),
+    byLockBucket: groupBy(lockBucket),
+    byMarketBand: groupBy(marketBand),
+    byPick: groupBy(b => b.pinnacleClv.pick),
+    coverage: { betsTotal: bets.length, withPinnacleClv: rows.length, resolvedWithClv: rows.filter(b => b.pinnacleClv.beyondMarket != null).length },
+  };
+}
+
 async function fetchClosingOddsForBet(bet) {
   const primarySport = CLOSING_ODDS_SPORT_MAP[String(bet.leagueId)];
   if (!primarySport) return { closingOdds: null, bookmaker: null, snapshotTs: null };
@@ -5108,6 +5230,21 @@ app.get('/api/model-info', (_req, res) => {
 });
 
 // CLV report — aggregates CLV across all placed bets that have closing odds
+// Item L (2026-09-09): Pinnacle-to-Pinnacle CLV — see computePinnacleClv().
+app.post('/api/admin/pinnacle-clv/run', (_req, res) => {
+  try { res.json({ success: true, ...runPinnacleClvPass() }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/admin/pinnacle-clv', (req, res) => {
+  const bets = getBets();
+  const fromTs = req.query.from ? new Date(req.query.from).getTime() : null;
+  const subset = fromTs ? bets.filter(b => new Date(b.lockedAt || 0).getTime() >= fromTs) : bets;
+  const report = buildPinnacleClvReport(subset);
+  if (req.query.bets === 'true') report.bets = subset.filter(b => b.pinnacleClv).map(b => ({ id: b.id, fixture: b.fixture, leagueName: b.leagueName, bet: b.bet, lockedAt: b.lockedAt, kickoff: b.kickoff, result: b.result ?? null, clearsPaperMoneyRule: !!b.clearsPaperMoneyRule, ...b.pinnacleClv }));
+  report.lastPass = readJSON('pinnacle-clv-status.json') || null;
+  res.json(report);
+});
+
 app.get('/api/clv-report', (req, res) => {
   const bets = getBets();
   const mode   = req.query.mode || 'paper'; // 'paper' | 'real' | 'all'
@@ -7923,6 +8060,9 @@ async function runBackfillChain() {
         console.log(`[Backfill] Phase 1b complete — matched ${_closingOddsStatus.fixturesMatched}, missed ${_closingOddsStatus.fixturesMissed}, ${_closingOddsStatus.creditsUsed} credits`);
       } catch (e) { console.error(`[Backfill] Phase 1b error: ${e.message}`); }
     }
+    // Phase 1c (item L, 2026-09-09): Pinnacle-to-Pinnacle CLV per bet from the
+    // closing store just refreshed. No API calls; never blocks Phase 2.
+    try { runPinnacleClvPass(); } catch (e) { console.error(`[Backfill] Phase 1c (Pinnacle CLV) error: ${e.message}`); }
 
     // Phase 2: lineups (~5,000 budget, hard stop at 05:00 UTC)
     if (backfillCutoffReached()) {
