@@ -6897,7 +6897,7 @@ function getInjuryHistory() { return readJSON('injuries-history.json') || {}; }
 function saveInjuryHistory(d) { writeJSON('injuries-history.json', d); }
 let _injuriesBackfillStatus = { running: false, startedAt: null, completedAt: null, calls: 0, withEntries: 0, empty: 0, errors: 0, remainingBefore: null, remainingAfter: null, stoppedBy: null, error: null };
 
-async function runInjuriesHistoryBackfill({ budget = 2500 } = {}) {
+async function runInjuriesHistoryBackfill({ budget = 2500, respectCutoff = true } = {}) {
   if (_injuriesBackfillStatus.running) return _injuriesBackfillStatus;
   _injuriesBackfillStatus = { running: true, startedAt: new Date().toISOString(), completedAt: null, calls: 0, withEntries: 0, empty: 0, errors: 0, remainingBefore: null, remainingAfter: null, stoppedBy: null, error: null };
   const st = _injuriesBackfillStatus;
@@ -6912,7 +6912,10 @@ async function runInjuriesHistoryBackfill({ budget = 2500 } = {}) {
     console.log(`[InjuriesHistory] ${targets.length} fixtures to fetch (budget ${budget})`);
     for (const fix of targets) {
       if (st.calls >= budget) { st.stoppedBy = 'budget'; break; }
-      if (backfillCutoffReached()) { st.stoppedBy = 'cutoff'; break; }
+      // The 05:00 UTC cutoff protects the morning scan's quota inside the nightly
+      // chain; a manual daytime trigger passes respectCutoff:false (it was
+      // stopping at 0 calls otherwise, 2026-09-09).
+      if (respectCutoff && backfillCutoffReached()) { st.stoppedBy = 'cutoff'; break; }
       if (isRateLimited()) { st.stoppedBy = 'rate-limited'; break; }
       const fid = String(fix.fixture.id);
       try {
@@ -6942,7 +6945,7 @@ async function runInjuriesHistoryBackfill({ budget = 2500 } = {}) {
 app.post('/api/backfill/injuries', (req, res) => {
   if (_injuriesBackfillStatus.running) return res.json({ error: 'already_running' });
   const budget = Math.max(1, Math.min(20000, parseInt(req.query.budget, 10) || 2500));
-  runInjuriesHistoryBackfill({ budget }).catch(e => console.error('[InjuriesHistory]', e.message));
+  runInjuriesHistoryBackfill({ budget, respectCutoff: false }).catch(e => console.error('[InjuriesHistory]', e.message));
   res.json({ started: true, budget });
 });
 
@@ -8181,12 +8184,12 @@ async function runBackfillChain() {
     console.log(`[Backfill] Phase 2 complete — ${lineupsCount} lineups on disk`);
 
     // Phase 2b (item T, 2026-09-09): historical injuries for the nine covered
-    // leagues, 2,500 calls a night, cutoff-aware. The lineups pool is complete
+    // leagues, 5,000 calls a night, cutoff-aware. The lineups pool is complete
     // (K), so this reuses quota Phase 2 no longer needs.
     if (!backfillCutoffReached()) {
       _startupStatus.phase = 'injuries-history';
       try {
-        const r = await runInjuriesHistoryBackfill({ budget: 2500 });
+        const r = await runInjuriesHistoryBackfill({ budget: 5000 }); // Mega plan, 150k/day; 3.1k used on a full day 2026-09-09
         console.log(`[Backfill] Phase 2b complete — ${r.calls} calls, ${r.remainingAfter ?? '?'} remaining`);
       } catch (e) { console.error(`[Backfill] Phase 2b error: ${e.message}`); }
     }

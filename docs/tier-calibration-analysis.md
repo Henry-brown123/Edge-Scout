@@ -8743,7 +8743,11 @@ What this says, and what it does not:
   not a sample.
 - **The 15 real-money bets are −22.7 ± 8.6pp beyond market (z ≈ −2.6) with
   closing ROI −70%.** Small, but that residual is not noise-sized. They are
-  listed in the report with lock dates (`?bets=true`). It is reported here because the user places every real bet by hand and should
+  listed in the report with lock dates (`?bets=true`): 2 wins on 15 Aug, then
+  13 straight losses of which 8 were Carabao Cup home picks on the single
+  evening of 25 Aug — so the z is inflated by one clustered night, not 15
+  independent decisions, and Carabao Cup is not in the staked set today. Still
+  bad, differently bad. It is reported here because the user places every real bet by hand and should
   see it, not because a rule follows from it.
 - **Long-shot picks (market <30%) lose 2.8% to the close** (−2.8 ± 1.2), the one
   cell where the market moves against us with any consistency. Same shape as
@@ -8785,7 +8789,7 @@ competition, February 2026 or the last completed round):
 Decision: pool it where it exists rather than drop it. The staked league
 (League Two) has no injuries data at all, so the feature can never help the
 staked pocket, and the live factor there is honestly 50. Implemented as
-`injuries-history.json` (Phase 2b of the nightly chain, 2,500 calls a night
+`injuries-history.json` (Phase 2b of the nightly chain, 5,000 calls a night
 for the nine covered leagues, 2022–26; `POST /api/backfill/injuries`,
 `GET /api/backfill/injuries/status`), reusing quota the completed lineups
 pool no longer needs. **Wiring it into pool features is not done**: that

@@ -105,8 +105,14 @@ async function run() {
   if (!teams.length) { console.log('[Coaches] No club teams found in backfill-historical.json — nothing to do'); return { teams: 0, fetched: 0 }; }
   const store = readCoaches();
   console.log(`[Coaches] ${teams.length} club teams; ${Object.keys(store).length} already pooled`);
-  let fetched = 0, errors = 0, rateLimited = false;
+  let fetched = 0, errors = 0, skipped = 0, rateLimited = false;
+  // Resume-friendly: a team pooled within the last 7 days is skipped (a deploy
+  // can restart the server mid-run; re-fetching 700 stored teams before reaching
+  // a new one wasted ~6 minutes on 2026-09-09). COACHES_FORCE=1 refreshes all.
+  const freshMs = 7 * 86400000, force = process.env.COACHES_FORCE === '1';
   for (const t of teams) {
+    const prev = store[String(t.id)];
+    if (!force && prev?.updatedAt && (Date.now() - new Date(prev.updatedAt).getTime()) < freshMs) { skipped++; continue; }
     const entry = await fetchTeamCoaches(t.id, t.name);
     if (entry?.rateLimited) { rateLimited = true; console.warn('[Coaches] Rate limit reached — saving progress and stopping'); break; }
     if (entry) { store[String(t.id)] = entry; fetched++; } else errors++;
@@ -115,8 +121,8 @@ async function run() {
   }
   saveCoaches(store);
   const withCurrent = Object.values(store).filter(e => e.currentCoach).length;
-  console.log(`[Coaches] Done — ${fetched} fetched, ${errors} errors${rateLimited ? ', stopped on rate limit' : ''}. ${Object.keys(store).length} teams on disk, ${withCurrent} with a current coach.`);
-  return { teams: teams.length, fetched, errors, rateLimited, total: Object.keys(store).length, withCurrent };
+  console.log(`[Coaches] Done — ${fetched} fetched, ${skipped} skipped (fresh), ${errors} errors${rateLimited ? ', stopped on rate limit' : ''}. ${Object.keys(store).length} teams on disk, ${withCurrent} with a current coach.`);
+  return { teams: teams.length, fetched, skipped, errors, rateLimited, total: Object.keys(store).length, withCurrent };
 }
 
 module.exports = { run };
