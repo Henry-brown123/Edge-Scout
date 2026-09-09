@@ -8657,3 +8657,168 @@ closing-odds coverage on the reserved set is 60/60, confirming the nightly
 Phase 1b capture. Stage B (definition unification) and the
 cutover to `scorerPath:'shared'` do not start without an explicit
 go-ahead, regardless of how clean the shadow period is.
+
+## Addendum 49 — Shadow-period work: retrain gate (I), Pinnacle-to-Pinnacle CLV (L), pooling for T and U, K confirmed, R corrected (2026-09-09)
+
+Everything here was chosen because it does not touch the live factor block,
+the probability chain or their shared-scorer lifts, so the Stage A shadow
+(Addendum 48) keeps proving what it is proving. No live staking change, no
+Stage B work, no cutover.
+
+### I — retrain gate is now paired and like-for-like; model versions archived
+
+Root cause and fix are in `docs/model-versioning.md` ("Retrain gate — paired
+comparison and version archive"). In one line: the old gate compared the
+candidate's log-loss on its own newest-20% slice against the number the
+deployed weights file stored from a different, older slice, and rejected every
+weekly cycle from 2026-08-08 to 2026-09-07. The trainer now scores both models
+on the same out-of-sample window and decides on the paired per-fixture
+difference (mean, SE, z). Default policy is non-inferiority (adopt unless the
+candidate is significantly or materially worse), because with a fixed recipe
+a week's fixtures cannot move log-loss by a superiority margin, so any
+superiority test freezes the model. `GATE_POLICY` flips it.
+
+Local proof on the 8,316-fixture pool: run 1 (deployed = the Jul-25 weights)
+paired window n=1,664, candidate 0.9873 vs deployed 0.9880, mean diff
+−0.00068 ± 0.00081 (z −0.84) → adopted; the deployed model scored through the
+trainer's predictor reproduced its stored figure to four decimals, so the two
+sides are read through identical arithmetic. Run 2 (deployed = run 1's output,
+now carrying a tree boundary) came out +0.00083 ± 0.00081 (z +1.02) worse by
+stochastic subsampling alone and was adopted under non-inferiority, which is
+the intended behaviour and the reason the archive exists. Every deployed
+version is kept under `DATA_DIR/model-archive/` with an index;
+`GET /api/admin/model-archive` and `GET /api/admin/retrain-gate` expose it.
+Production: current version 2026-08-08T20:56:33Z, archive empty until the
+first run under the new trainer archives it. First live cycle: Monday
+2026-09-14 05:15 UTC, deliberately not triggered by hand mid-shadow.
+
+Side finding while reading the 7 Sep log entry: the weekly-retrain audit
+mirror (`WEEKLY_RETRAIN_DATE_SPLIT_CUTOFFS`) lacked the 136/141/79 cutoffs
+added 2026-09-04, so that entry reported 67,969 eligible and 13,696 "new"
+fixtures while the trainer itself (the source of truth) correctly trained on
+50,253. Mirror fixed; audit-log accuracy only, no training effect.
+
+### L — Pinnacle-to-Pinnacle CLV per bet
+
+New per-bet object `pinnacleClv` (nightly Phase 1c after the closing-odds
+capture, and `POST /api/admin/pinnacle-clv/run`): Pinnacle at lock (the frozen
+`oddsSnapshot` row, margin-stripped, else `pinnacleOddsAtLock`) against
+Pinnacle at close (nightly closing store, margin-stripped, else the bet's T-5
+price), for every locked bet, plus the beyond-market residual and closing-price
+PnL once resolved. Report at `GET /api/admin/pinnacle-clv` (stake tier, rule,
+league, lock-time bucket, market band, pick). Positive = good for the pick.
+
+First production read (322 of 370 bets covered; the 47 without both Pinnacle
+prices are excluded; one entry excluded as implausible, below):
+
+| Cell | n | Lock→close move, mean ± SE (median) | Beyond-market pp ± SE | Closing ROI |
+|---|---|---|---|---|
+| All | 322 | −0.14% ± 0.41 (0) | +0.9 ± 2.5 | −4.9% |
+| Locked 46–75 min before kickoff | 311 | −0.15% ± 0.42 (0) | +0.7 ± 2.5 | −6.1% |
+| Paper-staked tier | 151 | −0.59% ± 0.58 (0) | +3.7 ± 3.5 | −2.2% |
+| Observation tier | 156 | +0.73% ± 0.49 (0) | +0.4 ± 3.8 | −1.2% |
+| Real-money bets | 15 | −4.6% ± 3.9 (−1.3) | −22.7 ± 8.6 | −70.1% |
+| Clears the 13/45 rule | 6 | −3.0% ± 3.0 | −17.7 ± 16.1 | −59.7% |
+| League Two | 37 | +0.6% ± 1.4 (−0.5) | +3.7 ± 8.3 | +15.3% |
+| Market <30% | 80 | −2.8% ± 1.2 (−0.3) | −1.9 ± 4.5 | −15.1% |
+| Market 45–60% | 82 | +1.2% ± 0.6 (0) | +6.4 ± 5.4 | +8.5% |
+
+What this says, and what it does not:
+
+- **The lock-to-close drift is zero on average.** Median 0, mean −0.14% ± 0.41
+  across 322 bets locked mostly 46–75 minutes out. Pinnacle does not move
+  against our picks between lock and close, and does not move toward them
+  either. For brief J this is the number it was waiting for: moving the single
+  lock from ~T-60 to ~T-25 costs nothing measurable in closing-line value on
+  this population, so the decision turns entirely on whether lineups add
+  information, not on price. The operational window (twenty minutes to place
+  by hand) is now the only cost.
+- **No pre-lineup informational edge shows up in the price.** If our picks
+  carried information the market had not priced, the line would drift toward
+  them; it does not. Consistent with Addendum 46's finding that the market
+  explains the model's residuals.
+- **Beyond-market residual across everything is +0.9 ± 2.5pp, i.e. nothing.**
+  Paper-staked +3.7 ± 3.5 and League Two +3.7 ± 8.3 point the same way as the
+  banked backtests but are far from decision grade; 6 rule-clearing bets is
+  not a sample.
+- **The 15 real-money bets are −22.7 ± 8.6pp beyond market (z ≈ −2.6) with
+  closing ROI −70%.** Small, but that residual is not noise-sized. They are
+  listed in the report with lock dates (`?bets=true`). It is reported here because the user places every real bet by hand and should
+  see it, not because a rule follows from it.
+- **Long-shot picks (market <30%) lose 2.8% to the close** (−2.8 ± 1.2), the one
+  cell where the market moves against us with any consistency. Same shape as
+  Addendum 47's finding that long odds alone are not the pocket.
+- Only 67 of 322 bets have Pinnacle's three prices at both ends (the
+  snapshot's Pinnacle row is guaranteed only since 2026-08-29), so the
+  probability-basis move is thin; the odds-basis figure covers all 322.
+
+**Bug found and fixed on the way (pipeline).** The first read had a La Liga
+entry at +988%: Real Madrid v Real Sociedad, Pinnacle 12.95 at lock, "close"
+1.19, legacy `clv` +908%. `fetchClosingOddsForBet` (the T-5 fetch that feeds
+the legacy CLV) chose its Odds API event with `events.find()` on
+`teamsMatch()`, whose token-overlap rule ("any shared word ≥ 4 characters")
+binds "Real Madrid" to any event containing "Real"; it took the first one. It
+now uses the same kickoff-aware, strength-ranked chooser Addendum 42 gave the
+odds lookup, with a floor that both names must match by more than token
+overlap. The legacy `clv` values already on old bets are not rewritten; the
+new field carries a `suspect` flag (lock/close ratio outside [0.4, 2.5] on a
+legacy T-5 price) and the report excludes flagged entries and lists them.
+
+### K — confirmed complete
+
+Lineups store 8,265 → 15,115 fixtures (+6,850 against a ~6,900 target for
+three leagues × five seasons); idle; 15 sampled EFL team profiles (five per
+division) all carry WOWY player records (83–139 players each). The status
+endpoint has no per-league breakdown, so that is the evidence.
+
+### T — injuries: measured, decision is backfill-for-covered-leagues
+
+Coverage probe on past fixtures via `/injuries?fixture=` (5–8 fixtures per
+competition, February 2026 or the last completed round):
+
+| Coverage | Competitions | Entries per fixture |
+|---|---|---|
+| 100% | Premier League, La Liga, Bundesliga, Serie A, Ligue 1, Eredivisie, Champions League, Europa League, Championship | 7.5–11.5 |
+| ~0 | League One (2/5, 0.6), Serie B (1/5, 0.2), Segunda (2/5, 0.4) | — |
+| 0% | Primeira Liga, Scottish Premiership, League Two, Carabao Cup, 2. Bundesliga | 0 |
+
+Decision: pool it where it exists rather than drop it. The staked league
+(League Two) has no injuries data at all, so the feature can never help the
+staked pocket, and the live factor there is honestly 50. Implemented as
+`injuries-history.json` (Phase 2b of the nightly chain, 2,500 calls a night
+for the nine covered leagues, 2022–26; `POST /api/backfill/injuries`,
+`GET /api/backfill/injuries/status`), reusing quota the completed lineups
+pool no longer needs. **Wiring it into pool features is not done**: that
+changes a feature definition (pool: constant 50 → real) and waits on the
+shared scorer's Stage B, then a retrain through the new gate. Tag: pipeline
+(data never pooled), with the model question (does it carry signal beyond the
+market?) untested until then. First run: a 300-call test was kicked at 11:55 UTC on 2026-09-09 (session expired before its status was read); Phase 2b takes over nightly until the ~15–17k target fixtures are on disk.
+
+### U — manager tenures pooled
+
+`scripts/fetch-coaches.js` → `coaches.json`, one `/coachs?team=` call per club
+team in the historical pool (national teams excluded), keeping each coach's
+spells at that team and the current open spell. Nightly chain Phase 6 (weekly
+cadence), `POST /api/backfill/coaches`, `GET /api/backfill/coaches/status?team=`.
+Data only; the "manager change within N days" feature is a separate,
+evidence-gated test. First production run reached 650 teams (623 with a current coach) before the 11:54 UTC deploy restarted the server; re-triggered at 11:55 UTC and resumes from disk (saves every 50 teams). Phase 6 also re-runs when the store holds fewer teams than the pool, not only on the weekly age check.
+
+### R — corrected: there is no 238-venue seed
+
+Addendum 46's "only 58 venues have coordinates in the deployed table (the
+repo seed has 238)" is wrong on the second half. Git history for
+`data/stadiums.json` shows the seed has only ever held 58 venues plus 32
+city fallbacks; the 238 figure came from Addendum 29's prose and was never a
+file. So R is not a deployment gap to close; completing the venue table is
+data work (a few hundred venues across 13 competitions, most of them
+geocodable from API-Sports' venue city field). Parked behind V, as sequenced.
+
+### C and J — design briefs written
+
+`docs/design-brief-watchdog-prospector.md` and
+`docs/design-brief-lineup-timing.md`. Both builds wait on L; L's first read
+above already answers J's price question (zero drift) and leaves the
+operational window as the open decision. The watchdog brief includes the
+honest power arithmetic: at ~77 League Two bets a season, a fall from +5.9pp
+to 0 is not detectable inside a season; its fast role is catching pipeline
+breaks, and its slow role is accumulating the season-end evidence.

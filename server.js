@@ -8259,14 +8259,18 @@ async function runBackfillChain() {
     const coachesStore   = readCoachesStore();
     const coachesNewest  = Object.values(coachesStore).reduce((a, b) => (!a || b.updatedAt > a.updatedAt) ? b : a, null);
     const coachesAgeDays = coachesNewest ? (Date.now() - new Date(coachesNewest.updatedAt).getTime()) / 86400000 : Infinity;
-    if (coachesAgeDays >= 7) {
+    // Also run when the store is incomplete (a deploy can restart the server
+    // mid-fetch; the script resumes from disk), not only on the weekly age check.
+    const clubTeamsInPool = (() => { try { const seen = new Set(); for (const f of (readHistoricalCached()?.fixtures || [])) { if (f.teams?.home?.id) seen.add(f.teams.home.id); if (f.teams?.away?.id) seen.add(f.teams.away.id); } return seen.size; } catch { return 0; } })();
+    const coachesIncomplete = Object.keys(coachesStore).length < clubTeamsInPool * 0.9; // national teams are excluded by the script, hence the slack
+    if (coachesAgeDays >= 7 || coachesIncomplete) {
       if (backfillCutoffReached()) {
         console.log('[Backfill] 05:00 UTC cutoff — skipping coaches refresh');
       } else if (_coachesRunning) {
         console.log('[Backfill] Phase 6: coaches fetch already running — skipping');
       } else {
         _startupStatus.phase = 'coaches';
-        console.log('[Backfill] Phase 6: coaches refresh (data is ' + (isFinite(coachesAgeDays) ? Math.round(coachesAgeDays) + ' days old' : 'absent') + ')…');
+        console.log('[Backfill] Phase 6: coaches refresh (data is ' + (isFinite(coachesAgeDays) ? Math.round(coachesAgeDays) + ' days old' : 'absent') + (coachesIncomplete ? `, store ${Object.keys(coachesStore).length} < ~${clubTeamsInPool} teams` : '') + ')…');
         try {
           _coachesRunning = true;
           const { run: runCoaches } = require('./scripts/fetch-coaches');
