@@ -3126,8 +3126,13 @@ function computePinnacleClv(bet, closingStore) {
 
   const bothStripped = lockBasis === 'snapshot-stripped' && closeBasis === 'closing-store-stripped';
   const resolved = bet.result === 'win' || bet.result === 'loss';
+  // Plausibility: a lock/close ratio outside [0.4, 2.5] on a legacy T-5 price
+  // (bet-closing-raw) is almost always the wrong event (see fetchClosingOddsForBet
+  // 2026-09-09 note), not a real move. Kept on the bet, excluded from aggregates.
+  const ratio = lockOdds / closeOdds;
+  const suspect = closeBasis === 'bet-closing-raw' && (ratio > 2.5 || ratio < 0.4) ? 'lock-close-ratio' : null;
   return {
-    pick, lockOdds, closeOdds, lockProb, closeProb, lockBasis, closeBasis, closeAt,
+    pick, lockOdds, closeOdds, lockProb, closeProb, lockBasis, closeBasis, closeAt, suspect,
     lockMinutesBeforeKickoff: (bet.lockedAt && bet.kickoff) ? Math.round((new Date(bet.kickoff) - new Date(bet.lockedAt)) / 60000) : null,
     clvPinnacle:     +(((lockOdds - closeOdds) / closeOdds) * 100).toFixed(2),
     clvPinnacleProb: bothStripped ? +((closeProb - lockProb) * 100).toFixed(2) : null,
@@ -3148,7 +3153,8 @@ function runPinnacleClvPass() {
     if (!b.fixtureId) continue;
     const resolved = b.result === 'win' || b.result === 'loss';
     const have = b.pinnacleClv;
-    if (have && !(resolved && have.beyondMarket == null)) continue;
+    if (have && have.suspect === undefined) { /* pre-guard entry: recompute */ }
+    else if (have && !(resolved && have.beyondMarket == null)) continue;
     const next = computePinnacleClv(b, closing);
     if (!next) { missing++; continue; }
     b.pinnacleClv = next;
@@ -3164,10 +3170,12 @@ function runPinnacleClvPass() {
 
 function _meanSe(arr) {
   const n = arr.length;
-  if (!n) return { n: 0, mean: null, se: null };
+  if (!n) return { n: 0, mean: null, se: null, median: null };
   const mean = arr.reduce((a, b) => a + b, 0) / n;
   const v = n > 1 ? arr.reduce((a, x) => a + (x - mean) ** 2, 0) / (n - 1) : 0;
-  return { n, mean: +mean.toFixed(3), se: n > 1 ? +Math.sqrt(v / n).toFixed(3) : null };
+  const sorted = [...arr].sort((a, b) => a - b);
+  const median = n % 2 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
+  return { n, mean: +mean.toFixed(3), se: n > 1 ? +Math.sqrt(v / n).toFixed(3) : null, median: +median.toFixed(3) };
 }
 
 // Cohort report over bets that carry pinnacleClv. Cells are the ones the
@@ -3175,7 +3183,8 @@ function _meanSe(arr) {
 // bucket, model-vs-market band); nothing here reads a reserved population's
 // outcomes beyond what the bet log already exposes.
 function buildPinnacleClvReport(bets) {
-  const rows = bets.filter(b => b.pinnacleClv && b.pinnacleClv.clvPinnacle != null);
+  const rows = bets.filter(b => b.pinnacleClv && b.pinnacleClv.clvPinnacle != null && !b.pinnacleClv.suspect);
+  const suspects = bets.filter(b => b.pinnacleClv?.suspect).map(b => ({ id: b.id, fixture: b.fixture, lockOdds: b.pinnacleClv.lockOdds, closeOdds: b.pinnacleClv.closeOdds, reason: b.pinnacleClv.suspect }));
   const agg = (list) => {
     const resolved = list.filter(b => b.pinnacleClv.beyondMarket != null);
     const pnl = resolved.map(b => b.pinnacleClv.closingPnlPerUnit);
@@ -3199,12 +3208,14 @@ function buildPinnacleClvReport(bets) {
   return {
     definition: 'clvPinnacle % = (Pinnacle at lock − Pinnacle at close) / close; clvPinnacleProb pp = stripped close prob − stripped lock prob; beyondMarket pp = outcome − stripped Pinnacle close prob; closingRoi = flat-stake ROI at the Pinnacle close price. Positive = good for the pick.',
     all: agg(rows),
-    byStakeTier: groupBy(b => b.clearsPaperMoneyRule ? 'clears-paper-rule' : (b.isFakeMoney ? 'observation' : 'other')),
+    byStakeTier: groupBy(b => b.mode === 'real' ? 'real' : b.isFakeMoney ? 'observation' : 'paper-staked'),
+    byRule: groupBy(b => b.clearsPaperMoneyRule ? 'clears-paper-rule' : 'does-not-clear'),
     byLeague: groupBy(b => b.leagueName || String(b.leagueId)),
     byLockBucket: groupBy(lockBucket),
     byMarketBand: groupBy(marketBand),
     byPick: groupBy(b => b.pinnacleClv.pick),
-    coverage: { betsTotal: bets.length, withPinnacleClv: rows.length, resolvedWithClv: rows.filter(b => b.pinnacleClv.beyondMarket != null).length },
+    coverage: { betsTotal: bets.length, withPinnacleClv: rows.length, resolvedWithClv: rows.filter(b => b.pinnacleClv.beyondMarket != null).length, suspectExcluded: suspects.length },
+    suspects,
   };
 }
 
@@ -3229,8 +3240,17 @@ async function fetchClosingOddsForBet(bet) {
                   oddsFormat: 'decimal', date: kickoffIso },
       });
       const events = resp.data?.data || resp.data || [];
-      const ev = events.find(e => teamsMatch(e.home_team, home) && teamsMatch(e.away_team, away));
-      if (!ev) continue;
+      // 2026-09-09 (item L): was events.find() on teamsMatch() alone, whose
+      // token-overlap rule ("any shared word >= 4 chars") let "Real Madrid vs
+      // Real Sociedad" bind to the first event sharing "Real" — the bet's T-5
+      // closing price then came from a different match (live: 12.95 at lock,
+      // 1.19 "close", legacy clv +908%). Same kickoff-aware, strength-ranked
+      // chooser Addendum 42 gave the odds lookup, plus a floor: both names must
+      // match by more than token overlap.
+      const cands = events.filter(e => teamsMatch(e.home_team, home) && teamsMatch(e.away_team, away));
+      const strength = e => _matchStrength(e.home_team, home) + _matchStrength(e.away_team, away);
+      const ev = _pickByKickoff(cands, kickoffIso, e => e.commence_time, strength);
+      if (!ev || strength(ev) < 4) continue;
 
       // Prefer Pinnacle; no fallback — spec requires Pinnacle or null
       const bm = ev.bookmakers?.find(b => b.key === 'pinnacle');
@@ -4327,6 +4347,14 @@ const WEEKLY_RETRAIN_DATE_SPLIT_CUTOFFS = new Map([
   [42, '2026-08-11T09:00:00Z'],
   [40, '2026-08-19T22:00:00Z'],
   [48, '2026-08-24T16:00:00Z'],
+  // 2026-09-09: these three were missing from this audit mirror since their
+  // rule-15 conversion on 2026-09-04, so the 7 Sep cycle's log entry counted
+  // 13,386 pre-cutoff Serie B / Segunda / 2. Bundesliga fixtures as "new
+  // eligible" that gbdt-train.js (the source of truth) correctly excluded
+  // (trainN+testN = 50,253 vs the entry's 67,969). Audit-log accuracy only.
+  [136, '2026-09-04T21:00:00Z'],
+  [141, '2026-09-04T21:00:00Z'],
+  [79,  '2026-09-04T21:00:00Z'],
 ]);
 
 function isWeeklyRetrainExcluded(leagueId, date) {
@@ -6850,6 +6878,80 @@ app.get('/api/backfill/fixture-stats/status', (_req, res) => {
 
 let _lineupsBackfillRunning = false;
 
+// ─── ITEM T (2026-09-09): historical injuries pool ───────────────────────────
+// The injuries factor is a dead input in training (constant 50 in every pool
+// record; 0 tree splits, Addendum 46) because /injuries was only ever fetched
+// live. Coverage probe 2026-09-09 on past fixtures (5-8 per league):
+// PL, La Liga, Bundesliga, Serie A, Ligue 1, Eredivisie, CL, EL, Championship
+// all 100% with ~8-11 entries per fixture; Primeira, Scottish Prem, League Two,
+// Carabao Cup, 2. Bundesliga 0%; League One / Serie B / Segunda ~0.2-0.6
+// entries. So: pool it for the nine covered leagues (data decision = backfill,
+// not drop), and leave the staked League Two honestly at "no injuries data".
+// WIRING INTO POOL FEATURES IS NOT DONE HERE — that changes a feature
+// definition and waits on the shared scorer's cutover (Stage B).
+// Store: injuries-history.json { fixtureId: { fetchedAt, n, entries:[{playerId, teamId, type, reason}] } }
+// (empty responses are stored with n:0 so they are never refetched).
+const INJURY_HISTORY_LEAGUES = new Set([39, 140, 78, 135, 61, 88, 2, 3, 40]);
+const INJURY_HISTORY_SEASONS = new Set([2022, 2023, 2024, 2025, 2026]);
+function getInjuryHistory() { return readJSON('injuries-history.json') || {}; }
+function saveInjuryHistory(d) { writeJSON('injuries-history.json', d); }
+let _injuriesBackfillStatus = { running: false, startedAt: null, completedAt: null, calls: 0, withEntries: 0, empty: 0, errors: 0, remainingBefore: null, remainingAfter: null, stoppedBy: null, error: null };
+
+async function runInjuriesHistoryBackfill({ budget = 2500 } = {}) {
+  if (_injuriesBackfillStatus.running) return _injuriesBackfillStatus;
+  _injuriesBackfillStatus = { running: true, startedAt: new Date().toISOString(), completedAt: null, calls: 0, withEntries: 0, empty: 0, errors: 0, remainingBefore: null, remainingAfter: null, stoppedBy: null, error: null };
+  const st = _injuriesBackfillStatus;
+  try {
+    const hist = readHistoricalCached();
+    const store = getInjuryHistory();
+    const targets = (hist?.fixtures || []).filter(f =>
+      INJURY_HISTORY_LEAGUES.has(f.league?.id) && INJURY_HISTORY_SEASONS.has(f.league?.season) &&
+      ['FT', 'AET', 'PEN'].includes(f.fixture?.status?.short) && !store[String(f.fixture?.id)]
+    );
+    st.remainingBefore = targets.length;
+    console.log(`[InjuriesHistory] ${targets.length} fixtures to fetch (budget ${budget})`);
+    for (const fix of targets) {
+      if (st.calls >= budget) { st.stoppedBy = 'budget'; break; }
+      if (backfillCutoffReached()) { st.stoppedBy = 'cutoff'; break; }
+      if (isRateLimited()) { st.stoppedBy = 'rate-limited'; break; }
+      const fid = String(fix.fixture.id);
+      try {
+        const { data } = await apiSports.get('/injuries', { params: { fixture: fid } });
+        st.calls++;
+        if (data?.errors?.requests) { setRateLimited(); st.stoppedBy = 'rate-limited'; break; }
+        const entries = (data?.response || []).map(i => ({ playerId: i.player?.id ?? null, teamId: i.team?.id ?? null, type: i.player?.type ?? null, reason: i.player?.reason ?? null }));
+        store[fid] = { fetchedAt: new Date().toISOString(), n: entries.length, entries };
+        if (entries.length) st.withEntries++; else st.empty++;
+      } catch { st.errors++; }
+      if (st.calls % 100 === 0 && st.calls > 0) saveInjuryHistory(store);
+      await new Promise(r => setTimeout(r, 300));
+    }
+    saveInjuryHistory(store);
+    st.remainingAfter = Math.max(0, targets.length - st.calls);
+    console.log(`[InjuriesHistory] Done — ${st.calls} calls, ${st.withEntries} with entries, ${st.empty} empty, ${st.errors} errors, ${st.remainingAfter} remaining${st.stoppedBy ? ` (stopped: ${st.stoppedBy})` : ''}. Total on disk: ${Object.keys(store).length}`);
+  } catch (e) {
+    st.error = e.message;
+    console.error('[InjuriesHistory] Fatal:', e.message);
+  } finally {
+    st.running = false;
+    st.completedAt = new Date().toISOString();
+  }
+  return st;
+}
+
+app.post('/api/backfill/injuries', (req, res) => {
+  if (_injuriesBackfillStatus.running) return res.json({ error: 'already_running' });
+  const budget = Math.max(1, Math.min(20000, parseInt(req.query.budget, 10) || 2500));
+  runInjuriesHistoryBackfill({ budget }).catch(e => console.error('[InjuriesHistory]', e.message));
+  res.json({ started: true, budget });
+});
+
+app.get('/api/backfill/injuries/status', (_req, res) => {
+  const store = getInjuryHistory();
+  const vals = Object.values(store);
+  res.json({ ..._injuriesBackfillStatus, onDisk: vals.length, withEntries: vals.filter(v => v.n > 0).length, leagues: [...INJURY_HISTORY_LEAGUES], seasons: [...INJURY_HISTORY_SEASONS] });
+});
+
 app.post('/api/backfill/lineups', async (req, res) => {
   if (_lineupsBackfillRunning) return res.json({ error: 'already_running' });
   _lineupsBackfillRunning = true;
@@ -8077,6 +8179,17 @@ async function runBackfillChain() {
     const lineupsAfter = readJSON('lineups.json');
     const lineupsCount = lineupsAfter ? Object.keys(lineupsAfter).length : 0;
     console.log(`[Backfill] Phase 2 complete — ${lineupsCount} lineups on disk`);
+
+    // Phase 2b (item T, 2026-09-09): historical injuries for the nine covered
+    // leagues, 2,500 calls a night, cutoff-aware. The lineups pool is complete
+    // (K), so this reuses quota Phase 2 no longer needs.
+    if (!backfillCutoffReached()) {
+      _startupStatus.phase = 'injuries-history';
+      try {
+        const r = await runInjuriesHistoryBackfill({ budget: 2500 });
+        console.log(`[Backfill] Phase 2b complete — ${r.calls} calls, ${r.remainingAfter ?? '?'} remaining`);
+      } catch (e) { console.error(`[Backfill] Phase 2b error: ${e.message}`); }
+    }
 
     // Phase 3: fixture stats (~1,000 budget, hard stop at 05:00 UTC)
     if (backfillCutoffReached()) {
