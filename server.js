@@ -7278,6 +7278,53 @@ app.get('/api/backfill/transfers/status', (_req, res) => {
   res.json({ ..._transfersStatus, count: Object.keys(data).length });
 });
 
+// Item U (2026-09-09): manager tenures per club team, pooled from API-Sports
+// /coachs into DATA_DIR/coaches.json by scripts/fetch-coaches.js. Data only —
+// nothing in scoring reads it; the "manager change" feature is a separate,
+// evidence-gated test (Addendum 46 listed it as untested). Refreshed weekly by
+// the nightly chain (Phase 6) and on demand here.
+let _coachesRunning = false;
+const _coachesStatus = { running: false, startedAt: null, completedAt: null, count: 0, withCurrent: 0, error: null };
+function readCoachesStore() { try { return JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'coaches.json'), 'utf8')); } catch { return {}; } }
+
+app.post('/api/backfill/coaches', (_req, res) => {
+  if (_coachesRunning) return res.json({ running: true, message: 'Coaches fetch already in progress' });
+  _coachesRunning = true;
+  _coachesStatus.running = true;
+  _coachesStatus.startedAt = new Date().toISOString();
+  _coachesStatus.completedAt = null;
+  _coachesStatus.error = null;
+  res.json({ started: true, message: 'Coaches fetch running — poll /api/backfill/coaches/status' });
+  const { execFile } = require('child_process');
+  const scriptPath = path.join(__dirname, 'scripts', 'fetch-coaches.js');
+  execFile(process.execPath, [scriptPath], {
+    env: { ...process.env, DATA_DIR, API_SPORTS_KEY: process.env.API_SPORTS_KEY },
+    timeout: 1800000, // 30 min
+  }, (err, stdout, stderr) => {
+    _coachesRunning = false;
+    _coachesStatus.running = false;
+    _coachesStatus.completedAt = new Date().toISOString();
+    const store = readCoachesStore();
+    _coachesStatus.count = Object.keys(store).length;
+    _coachesStatus.withCurrent = Object.values(store).filter(e => e.currentCoach).length;
+    if (err) {
+      _coachesStatus.error = err.message;
+      console.error('[Coaches] Error:', err.message, stderr);
+      return;
+    }
+    console.log(`[Coaches] Complete — ${_coachesStatus.count} teams in coaches.json (${_coachesStatus.withCurrent} with a current coach)`);
+    console.log('[Coaches]', stdout.trim().split('\n').slice(-2).join(' | '));
+  });
+});
+
+app.get('/api/backfill/coaches/status', (req, res) => {
+  const store = readCoachesStore();
+  const out = { ..._coachesStatus, count: Object.keys(store).length, withCurrent: Object.values(store).filter(e => e.currentCoach).length };
+  // ?team=<id> returns that team's pooled tenures for inspection.
+  if (req.query.team) out.team = store[String(req.query.team)] || null;
+  res.json(out);
+});
+
 
 app.get('/api/pir/analysis', (_req, res) => {
   const { getPIRData, readProfiles, playerImportanceScore } = require('./teamProfiles');
@@ -7953,6 +8000,31 @@ async function runBackfillChain() {
       }
     } else {
       console.log(`[Backfill] Transfers data is ${Math.round(transfersAgeDays)} days old — skipping refresh`);
+    }
+
+    // Phase 6 (item U, 2026-09-09): manager tenures — weekly cadence like PIR/transfers.
+    const coachesStore   = readCoachesStore();
+    const coachesNewest  = Object.values(coachesStore).reduce((a, b) => (!a || b.updatedAt > a.updatedAt) ? b : a, null);
+    const coachesAgeDays = coachesNewest ? (Date.now() - new Date(coachesNewest.updatedAt).getTime()) / 86400000 : Infinity;
+    if (coachesAgeDays >= 7) {
+      if (backfillCutoffReached()) {
+        console.log('[Backfill] 05:00 UTC cutoff — skipping coaches refresh');
+      } else if (_coachesRunning) {
+        console.log('[Backfill] Phase 6: coaches fetch already running — skipping');
+      } else {
+        _startupStatus.phase = 'coaches';
+        console.log('[Backfill] Phase 6: coaches refresh (data is ' + (isFinite(coachesAgeDays) ? Math.round(coachesAgeDays) + ' days old' : 'absent') + ')…');
+        try {
+          _coachesRunning = true;
+          const { run: runCoaches } = require('./scripts/fetch-coaches');
+          const r = await runCoaches();
+          console.log(`[Backfill] Phase 6 complete — ${r.total} teams pooled (${r.withCurrent} with a current coach, ${r.errors} errors${r.rateLimited ? ', stopped on rate limit' : ''})`);
+        } catch (coachesErr) {
+          console.error('[Backfill] Coaches phase error (non-fatal):', coachesErr.message);
+        } finally { _coachesRunning = false; }
+      }
+    } else {
+      console.log(`[Backfill] Coaches data is ${Math.round(coachesAgeDays)} days old — skipping refresh`);
     }
 
     _startupStatus.phase = 'complete';
