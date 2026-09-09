@@ -29,6 +29,116 @@ const L2_LAMBDA = 1.0;  // L2 regularisation on leaf values (Newton step)
 // local data/ dir only when DATA_DIR truly isn't set (e.g. run standalone in dev).
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../data');
 
+// ─── RETRAIN GATE + VERSION ARCHIVE (2026-09-09, item I) ─────────────────────
+// Every version that has ever been deployed is kept under DATA_DIR/model-archive/
+// (gbdt-weights-<trainedAt>.json + index.json) so any past fixture can be
+// re-scored with exactly the version that scored it live, and so a version
+// change is recoverable without a redeploy. Rejected candidates are NOT
+// archived (their stats go to retrain-gate-result.json instead).
+//
+// The improvement gate used to compare the candidate's log-loss on ITS OWN
+// newest-20% slice against the number the deployed weights file stored from
+// ITS OWN (older, different) slice — not like-for-like, and it rejected every
+// weekly cycle from 2026-08-08 onwards. It now scores BOTH models on the same
+// paired window (the candidate's held-out slice, restricted to fixtures after
+// the deployed model's own tree boundary so it is out-of-sample for both) and
+// decides on the paired per-fixture log-loss difference.
+//
+// Policy: 'non-inferiority' (default) adopts the candidate unless it is
+// significantly or materially WORSE than the deployed model on that window —
+// the weekly walk-forward cycle exists to fold newly-resolved fixtures into a
+// fixed recipe, and with a fixed recipe two candidates a week apart are
+// statistically indistinguishable, so any superiority test freezes the model
+// (which is exactly what happened). 'superiority' keeps the old semantics
+// (adopt only if better by GATE_BETTER_MARGIN) on the now like-for-like
+// window. Flip the one constant to change policy; the gate result records
+// which policy decided.
+const ARCHIVE_DIR        = path.join(DATA_DIR, 'model-archive');
+const GATE_POLICY        = 'non-inferiority'; // | 'superiority'
+const GATE_WORSE_Z       = 1.645;  // reject if candidate worse with one-sided p<0.05
+const GATE_WORSE_ABS     = 0.002;  // reject if candidate worse by this much regardless of z
+const GATE_BETTER_MARGIN = 0.001;  // superiority policy only: adopt if better by this much
+// Mirrors server.js KNOWN_TREE_BOUNDARIES: the one deployed version that
+// predates the treeBoundary field (Addendum 14's reproduction of its split).
+const KNOWN_TREE_BOUNDARIES = { '2026-08-08T20:56:33.315Z': '2022-11-14T00:00:00Z' };
+
+function safeVersionName(v) { return String(v).replace(/[^0-9A-Za-z._-]/g, '_'); }
+
+function readArchiveIndex() {
+  try { return JSON.parse(fs.readFileSync(path.join(ARCHIVE_DIR, 'index.json'), 'utf8')); } catch { return []; }
+}
+
+function writeArchiveIndex(index) {
+  fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
+  fs.writeFileSync(path.join(ARCHIVE_DIR, 'index.json'), JSON.stringify(index, null, 2));
+}
+
+// Idempotent: archive a weights object under its trainedAt if not already there,
+// and (re)mark its status. Returns the index entry.
+function archiveVersion(weights, status, extra = {}) {
+  if (!weights?.trainedAt) return null;
+  fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
+  const file = `gbdt-weights-${safeVersionName(weights.trainedAt)}.json`;
+  const full = path.join(ARCHIVE_DIR, file);
+  if (!fs.existsSync(full)) fs.writeFileSync(full, JSON.stringify(weights));
+  const index = readArchiveIndex();
+  let entry = index.find(e => e.version === weights.trainedAt);
+  if (!entry) {
+    entry = {
+      version:      weights.trainedAt,
+      file,
+      archivedAt:   new Date().toISOString(),
+      trainN:       weights.trainN ?? null,
+      testN:        weights.testN ?? null,
+      treeBoundary: weights.treeBoundary ?? null,
+      validation:   weights.validation ?? weights.metrics ?? null,
+      hyperparams:  weights.hyperparams ?? null,
+    };
+    index.push(entry);
+  }
+  Object.assign(entry, extra, { status, statusAt: new Date().toISOString() });
+  index.sort((a, b) => a.version < b.version ? -1 : 1);
+  writeArchiveIndex(index);
+  return entry;
+}
+
+function writeGateResult(result) {
+  fs.writeFileSync(path.join(DATA_DIR, 'retrain-gate-result.json'), JSON.stringify(result, null, 2));
+}
+
+// Prediction function for an arbitrary weights object (deployed or archived),
+// identical arithmetic to models/gbdt.js predict() and to gbdtProb() below.
+function probFnFromWeights(w) {
+  return (r) => {
+    const pHome = sigmoid(w.platt.home.A * ensembleRaw(w.classifiers.home, r.x) + w.platt.home.B);
+    const pDraw = sigmoid(w.platt.draw.A * ensembleRaw(w.classifiers.draw, r.x) + w.platt.draw.B);
+    const pAway = sigmoid(w.platt.away.A * ensembleRaw(w.classifiers.away, r.x) + w.platt.away.B);
+    const s = pHome + pDraw + pAway;
+    return { home: pHome / s, draw: pDraw / s, away: pAway / s };
+  };
+}
+
+// Paired per-fixture log-loss comparison of two probability functions on the
+// same records. diff = candidate − deployed, so negative means candidate better.
+function pairedLogLoss(records, candFn, depFn) {
+  const diffs = [];
+  let llC = 0, llD = 0;
+  for (const r of records) {
+    const pc = candFn(r), pd = depFn(r);
+    const yc = r.y === 'home' ? pc.home : r.y === 'draw' ? pc.draw : pc.away;
+    const yd = r.y === 'home' ? pd.home : r.y === 'draw' ? pd.draw : pd.away;
+    const lc = -Math.log(Math.max(EPS, yc)), ld = -Math.log(Math.max(EPS, yd));
+    llC += lc; llD += ld; diffs.push(lc - ld);
+  }
+  const n = diffs.length;
+  if (!n) return { n: 0 };
+  const meanDiff = diffs.reduce((a, b) => a + b, 0) / n;
+  const varDiff  = n > 1 ? diffs.reduce((a, d) => a + (d - meanDiff) ** 2, 0) / (n - 1) : 0;
+  const se       = n > 1 ? Math.sqrt(varDiff / n) : null;
+  const z        = se ? meanDiff / se : null;
+  return { n, candidateLogLoss: llC / n, deployedLogLoss: llD / n, meanDiff, se, z };
+}
+
 // 2026-08-24 (calibration-rules.md rule 15): no rule-10 holdout stays fully/
 // permanently excluded any more -- it exists only long enough to bank one
 // genuine backtest, then converts immediately to a date-split cutoff (rule
@@ -454,34 +564,108 @@ function bandAccuracy(records, probFn) {
     process.exit(0);
   }
 
-  // ── Improvement gate: only replace deployed weights if new log-loss is meaningfully better ──
-  const outPath = path.join(DATA_DIR, 'gbdt-weights.json');
+  // ── Improvement gate: paired, like-for-like comparison against the deployed weights ──
+  // (see the RETRAIN GATE + VERSION ARCHIVE block at the top of this file)
+  const outPath   = path.join(DATA_DIR, 'gbdt-weights.json');
+  const trainedAt = new Date().toISOString();
+  let deployed = null;
   if (fs.existsSync(outPath)) {
-    try {
-      const current = JSON.parse(fs.readFileSync(outPath, 'utf8'));
-      const currentLogLoss = current.validation?.logLoss ?? current.metrics?.logLossGBDT ?? Infinity;
-      if (llGBDT >= currentLogLoss - 0.001) {
-        console.log(`\n  [GBDT] New log-loss (${llGBDT.toFixed(4)}) not meaningfully better than deployed (${currentLogLoss.toFixed(4)}) — keeping existing weights`);
-        process.exit(0);
-      }
-      console.log(`\n  [GBDT] Improvement: ${currentLogLoss.toFixed(4)} → ${llGBDT.toFixed(4)} — writing new weights`);
-    } catch {}
+    try { deployed = JSON.parse(fs.readFileSync(outPath, 'utf8')); } catch (e) { console.warn(`  [Gate] Could not read deployed weights: ${e.message}`); }
+  }
+
+  const gateResult = {
+    at: trainedAt,
+    candidateVersion: trainedAt,
+    deployedVersion: deployed?.trainedAt ?? null,
+    policy: GATE_POLICY,
+    thresholds: { worseZ: GATE_WORSE_Z, worseAbs: GATE_WORSE_ABS, betterMargin: GATE_BETTER_MARGIN },
+    qualityGates: { gate1, gate2, gate3 },
+    candidateOwnSlice: { n: test.length, logLoss: llGBDT, brier: bsGBDT, from: test[0]?.date ?? null, to: test[test.length - 1]?.date ?? null },
+    deployedStoredLogLoss: deployed ? (deployed.validation?.logLoss ?? deployed.metrics?.logLossGBDT ?? null) : null,
+    pairedWindow: null,
+    decision: null,
+    reason: null,
+  };
+
+  if (deployed?.classifiers && deployed?.platt) {
+    // Make sure the deployed version is in the archive before anything can replace it.
+    archiveVersion(deployed, 'deployed');
+
+    // Paired window: the candidate's held-out slice, restricted to fixtures on
+    // or after the deployed model's own tree boundary so the window is
+    // out-of-sample for BOTH models. (Both Platt fits saw some of it — 2
+    // parameters per class, negligible, and symmetric between the two.)
+    let deployedBoundary = deployed.treeBoundary?.firstTestFixtureDate ?? KNOWN_TREE_BOUNDARIES[deployed.trainedAt] ?? null;
+    const boundarySource = deployed.treeBoundary?.firstTestFixtureDate ? 'weights-file'
+                         : KNOWN_TREE_BOUNDARIES[deployed.trainedAt] ? 'pinned-addendum-14' : 'unknown';
+    const window = deployedBoundary ? test.filter(r => r.date >= deployedBoundary) : test;
+    const paired = pairedLogLoss(window, gbdtProb, probFnFromWeights(deployed));
+    gateResult.pairedWindow = {
+      n: paired.n,
+      from: window[0]?.date ?? null,
+      to: window[window.length - 1]?.date ?? null,
+      deployedBoundary,
+      boundarySource,
+      excludedAsInSampleForDeployed: test.length - window.length,
+      candidateLogLoss: paired.candidateLogLoss ?? null,
+      deployedLogLoss:  paired.deployedLogLoss ?? null,
+      meanDiff: paired.meanDiff ?? null,   // candidate − deployed; negative = candidate better
+      se: paired.se ?? null,
+      z:  paired.z ?? null,
+    };
+
+    console.log('\n  Paired gate (same window, both models):');
+    console.log(`    window n=${paired.n} (${gateResult.pairedWindow.from} → ${gateResult.pairedWindow.to}; deployed boundary ${deployedBoundary ?? 'unknown'} [${boundarySource}]; ${gateResult.pairedWindow.excludedAsInSampleForDeployed} excluded as in-sample for deployed)`);
+    console.log(`    candidate ${paired.candidateLogLoss?.toFixed(4)} vs deployed ${paired.deployedLogLoss?.toFixed(4)} on this window (deployed's stored own-slice figure: ${gateResult.deployedStoredLogLoss?.toFixed?.(4) ?? 'n/a'})`);
+    console.log(`    mean paired diff ${paired.meanDiff?.toFixed(5)} ± ${paired.se?.toFixed(5)} (z ${paired.z?.toFixed(2)}), policy ${GATE_POLICY}`);
+
+    let adopt, reason;
+    if (!paired.n) {
+      adopt = false; reason = 'empty paired window';
+    } else if (GATE_POLICY === 'superiority') {
+      adopt = paired.meanDiff <= -GATE_BETTER_MARGIN;
+      reason = adopt ? `candidate better by ${(-paired.meanDiff).toFixed(4)} ≥ ${GATE_BETTER_MARGIN}` : `candidate not better by ${GATE_BETTER_MARGIN} on the paired window`;
+    } else {
+      const sigWorse = paired.z != null && paired.z >= GATE_WORSE_Z;
+      const absWorse = paired.meanDiff >= GATE_WORSE_ABS;
+      adopt = !(sigWorse || absWorse);
+      reason = adopt
+        ? `candidate not inferior on the paired window (diff ${paired.meanDiff.toFixed(5)}, z ${paired.z?.toFixed(2)})`
+        : `candidate worse: ${sigWorse ? `z ${paired.z.toFixed(2)} ≥ ${GATE_WORSE_Z}` : ''}${sigWorse && absWorse ? '; ' : ''}${absWorse ? `diff ${paired.meanDiff.toFixed(4)} ≥ ${GATE_WORSE_ABS}` : ''}`;
+    }
+    gateResult.decision = adopt ? 'adopted' : 'rejected';
+    gateResult.reason = reason;
+    if (!adopt) {
+      console.log(`\n  [GBDT] Gate: REJECTED — ${reason}. Keeping deployed version ${deployed.trainedAt}.`);
+      writeGateResult(gateResult);
+      process.exit(0);
+    }
+    console.log(`\n  [GBDT] Gate: ADOPTED — ${reason}. Replacing ${deployed.trainedAt}.`);
+  } else {
+    gateResult.decision = 'adopted';
+    gateResult.reason = deployed ? 'deployed weights unreadable/incomplete — nothing to compare against' : 'no deployed weights — first version';
+    console.log(`\n  [GBDT] Gate: ${gateResult.reason}; writing weights.`);
   }
 
   // ── Write weights ──
   const weightsOut = {
-    trainedAt:   new Date().toISOString(),
+    trainedAt,
     trainN:      train.length,
     testN:       test.length,
     treeBoundary, // see the split above — read by server.js getModelTreeBoundary()
     hyperparams: { nTrees: N_TREES, depth: DEPTH, lr: LR, minLeaf: MIN_LEAF },
     validation:  { logLoss: llGBDT, brier: bsGBDT, logLossLinear: llLinear, brierLinear: bsLinear },
     metrics:     { logLossLinear: llLinear, logLossGBDT: llGBDT, brierLinear: bsLinear, brierGBDT: bsGBDT },
+    gate:        { policy: GATE_POLICY, decision: gateResult.decision, reason: gateResult.reason, pairedWindow: gateResult.pairedWindow, replaced: deployed?.trainedAt ?? null },
     classifiers,
     platt,
   };
   fs.writeFileSync(outPath, JSON.stringify(weightsOut));
   console.log(`\n  Written: ${outPath} (${(fs.statSync(outPath).size / 1024).toFixed(0)} KB)`);
+  if (deployed?.trainedAt) archiveVersion(deployed, 'superseded', { supersededBy: trainedAt, supersededAt: trainedAt });
+  archiveVersion(weightsOut, 'deployed');
+  writeGateResult(gateResult);
+  console.log(`  Archived: ${ARCHIVE_DIR} (${readArchiveIndex().length} versions indexed)`);
 })().catch(e => {
   // Explicit catch rather than relying on Node's default unhandledRejection
   // behaviour — this must fail loudly with a clear, attributable message (the

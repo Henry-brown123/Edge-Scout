@@ -4061,10 +4061,16 @@ function runGbdtRetrain(reason, onComplete) {
       // call anywhere in this same process picks up the new weights automatically.
       console.log('[GBDT] Retraining complete — new weights will be picked up on next predict()');
       writeJSON('retrain-pending.json', { pending: false });
-      writeJSON('retrain-status.json', { status: 'success', reason, startedAt, finishedAt, error: null, exitCode: code, tail: output.slice(-4000) });
-      let weights = null;
+      let weights = null, gate = null;
       try { weights = readJSON('gbdt-weights.json'); } catch {}
-      onComplete?.({ success: true, trainedAt: weights?.trainedAt, trainN: weights?.trainN, testN: weights?.testN });
+      // Item I (2026-09-09): gbdt-train.js writes retrain-gate-result.json on
+      // every completed run (adopted or rejected) — the paired like-for-like
+      // comparison against the deployed version. Only trust it if it belongs to
+      // this run (startedAt precedes its timestamp), so a stale file from an
+      // earlier run never gets attributed to a failed/short-circuited one.
+      try { const g = readJSON('retrain-gate-result.json'); if (g?.at && g.at >= startedAt) gate = g; } catch {}
+      writeJSON('retrain-status.json', { status: 'success', reason, startedAt, finishedAt, error: null, exitCode: code, gate, tail: output.slice(-4000) });
+      onComplete?.({ success: true, trainedAt: weights?.trainedAt, trainN: weights?.trainN, testN: weights?.testN, gate });
     } else {
       // Distinguish *why* a non-zero/no exit happened rather than just logging a bare
       // code — signal is set (code is null) when the process was killed rather than
@@ -4286,6 +4292,14 @@ async function runWeeklyRetrainCycle() {
       // weights (trainedAt unchanged) even on a "successful" run that completed
       // without error — distinct from a failed run, worth surfacing separately.
       versionChanged: !!(result.success && result.trainedAt && result.trainedAt !== previousVersion),
+      // Item I: the paired gate's verdict and window stats for this run (null on
+      // a failed run or when the trainer exited before reaching the gate).
+      gate: result.gate ? {
+        policy: result.gate.policy, decision: result.gate.decision, reason: result.gate.reason,
+        deployedVersion: result.gate.deployedVersion, candidateVersion: result.gate.candidateVersion,
+        pairedWindow: result.gate.pairedWindow, deployedStoredLogLoss: result.gate.deployedStoredLogLoss,
+        candidateOwnSlice: result.gate.candidateOwnSlice, qualityGates: result.gate.qualityGates,
+      } : null,
       error: result.success ? null : result.error,
     });
     console.log(`[WeeklyRetrain] Cycle complete — success=${result.success} versionChanged=${result.success && result.trainedAt !== previousVersion} trainN=${result.trainN ?? 'n/a'}`);
@@ -9517,6 +9531,29 @@ app.get('/api/admin/retrain-status', (_req, res) => {
 app.post('/api/admin/trigger-weekly-retrain', (_req, res) => {
   runWeeklyRetrainCycle().catch(e => console.error(`[WeeklyRetrain] ${e.message}`));
   res.json({ success: true, started: true, message: 'Weekly retrain cycle started — poll GET /api/admin/retrain-status for the underlying training run, GET /api/admin/weekly-retrain-log for the audit entry once it completes.' });
+});
+
+// Item I (2026-09-09): model version archive and the last paired-gate result.
+// The trainer keeps every version that has ever been deployed under
+// DATA_DIR/model-archive/ (index.json + one weights file per trainedAt); this
+// lists the index with which entry is live now. Read-only — restoring a
+// version is a deliberate manual act (copy the archived file over
+// gbdt-weights.json on the disk), not an endpoint.
+app.get('/api/admin/model-archive', (_req, res) => {
+  const dir = path.join(DATA_DIR, 'model-archive');
+  let index = [];
+  try { index = JSON.parse(fs.readFileSync(path.join(dir, 'index.json'), 'utf8')); } catch {}
+  const current = readJSON('gbdt-weights.json');
+  res.json({
+    currentVersion: current?.trainedAt ?? null,
+    currentGate: current?.gate ?? null,
+    archiveDir: dir,
+    versions: index.map(e => ({ ...e, isCurrent: e.version === current?.trainedAt, fileExists: fs.existsSync(path.join(dir, e.file || '')) })),
+  });
+});
+
+app.get('/api/admin/retrain-gate', (_req, res) => {
+  res.json({ last: readJSON('retrain-gate-result.json') || null });
 });
 
 app.get('/api/admin/weekly-retrain-log', (_req, res) => {

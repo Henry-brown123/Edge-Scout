@@ -291,6 +291,72 @@ whether the version actually changed, and a reference to the previous
 version. This is the ongoing, automatic equivalent of what Addendum 12/19's
 manual "final snapshot" reports did by hand.
 
+## Retrain gate — paired comparison and version archive (2026-09-09, item I)
+
+**What was wrong.** `gbdt-train.js`'s improvement gate compared the
+candidate's log-loss on *its own* newest-20% slice against the number the
+deployed weights file had stored from *its own* slice at the time it was
+trained. Those are different fixture sets: the pool grows every week, so the
+candidate's slice is newer (and, in practice, harder) than the deployed
+model's was. Every weekly cycle from 2026-08-08 to 2026-09-07 completed
+without error and was rejected (`versionChanged:false`), not because the
+candidates were worse but because the comparison was not like-for-like
+(Addendum 45, gap G6).
+
+**What it does now.** After the three quality gates (unchanged), the trainer
+loads the deployed weights and scores **both** models on the **same paired
+window**: the candidate's held-out slice, restricted to fixtures dated on or
+after the deployed model's own `treeBoundary.firstTestFixtureDate` (falling
+back to the pinned Addendum 14 boundary for the one pre-field version, and
+to the whole slice with `boundarySource:'unknown'` otherwise). That window
+is out-of-sample for both sets of trees. It then computes the per-fixture
+log-loss difference (candidate − deployed), its mean, standard error and
+paired z. Sanity check from the first local run: scoring the deployed
+weights through the trainer's own predictor reproduced the stored figure to
+four decimals (0.9880), so the two models are being read through identical
+arithmetic.
+
+**Policy.** `GATE_POLICY` in `gbdt-train.js`, default `'non-inferiority'`:
+the candidate is adopted unless it is *worse* than the deployed model on the
+paired window — significantly (paired z ≥ 1.645, one-sided p < 0.05) or
+materially (mean diff ≥ 0.002 log-loss). Rationale: the weekly walk-forward
+cycle exists to fold newly-resolved fixtures into a fixed recipe; two
+candidates a week apart are statistically indistinguishable (a week adds a
+few hundred fixtures to ~50k), so any superiority test freezes the model
+indefinitely, which is what had happened. `'superiority'` keeps the old
+semantics (adopt only if better by `GATE_BETTER_MARGIN` = 0.001) on the
+now-correct window, for anyone who prefers the model to change rarely. The
+cost of non-inferiority is that the version will usually change weekly, so
+per-version live tallies (`byModelVersion`) fill slowly — the archive below
+is what makes that acceptable. Training is unseeded (stochastic
+subsampling), so two runs on identical data differ slightly; the gate's
+tolerances absorb that.
+
+**Version archive.** Every version that has ever been deployed is kept
+under `DATA_DIR/model-archive/`: one `gbdt-weights-<trainedAt>.json` per
+version plus `index.json` (version, trainN/testN, tree boundary,
+validation metrics, `status` deployed|superseded, `supersededBy`).
+Archiving is idempotent and happens *before* anything can overwrite the live
+file, so the currently-deployed version is archived on the first run
+whatever the gate decides. Rejected candidates are not archived; their full
+stats go to `retrain-gate-result.json`. Purpose: any past fixture can be
+re-scored with exactly the version that scored it live (the shared scorer
+needs this), and a version change is reversible by copying the archived
+file over `gbdt-weights.json` on the disk — deliberately a manual act, not
+an endpoint.
+
+**Where to read it.**
+- `GET /api/admin/retrain-gate` — the last gate result (policy, decision,
+  reason, paired window n/from/to/boundary, both log-losses on that window,
+  mean diff, SE, z, the deployed model's old stored figure for contrast).
+- `GET /api/admin/model-archive` — the index with `isCurrent` and
+  `fileExists` per version.
+- `weekly-retrain-log.json` entries and `retrain-status.json` now carry the
+  same `gate` block; the deployed weights file carries `gate` describing the
+  decision that put it live and which version it replaced.
+
+**First live cycle under the new gate:** Monday 2026-09-14 05:15 UTC.
+
 ## The train/test "merge" decision
 
 Once [Addendum 12](tier-calibration-analysis.md)'s final pre-retrain baseline
