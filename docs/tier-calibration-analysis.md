@@ -8796,7 +8796,7 @@ pool no longer needs. **Wiring it into pool features is not done**: that
 changes a feature definition (pool: constant 50 → real) and waits on the
 shared scorer's Stage B, then a retrain through the new gate. Tag: pipeline
 (data never pooled), with the model question (does it carry signal beyond the
-market?) untested until then. First run: a 300-call test was kicked at 11:55 UTC on 2026-09-09 (session expired before its status was read); Phase 2b takes over nightly until the ~15–17k target fixtures are on disk.
+market?) untested until then. Target 12,790 fixtures. First run (500-call manual test, 2026-09-09 12:06 UTC): 500 fixtures stored, 491 with entries, 9 empty, 0 errors, 12,290 remaining; Phase 2b takes over nightly (5,000 calls) until the rest are on disk. The manual trigger had to be exempted from the nightly 05:00 UTC cutoff guard, which stopped a daytime run at 0 calls.
 
 ### U — manager tenures pooled
 
@@ -8805,7 +8805,7 @@ team in the historical pool (national teams excluded), keeping each coach's
 spells at that team and the current open spell. Nightly chain Phase 6 (weekly
 cadence), `POST /api/backfill/coaches`, `GET /api/backfill/coaches/status?team=`.
 Data only; the "manager change within N days" feature is a separate,
-evidence-gated test. First production run reached 650 teams (623 with a current coach) before the 11:54 UTC deploy restarted the server; re-triggered at 11:55 UTC and resumes from disk (saves every 50 teams). Phase 6 also re-runs when the store holds fewer teams than the pool, not only on the weekly age check.
+evidence-gated test. First production run completed 12:08 UTC on 2026-09-09 after two deploy restarts: 948 club teams pooled, 895 with a current open spell (sample: Bristol Rovers, 8 spells, Steve Evans since 2025-08-01). The script now resumes by skipping teams pooled within 7 days, and Phase 6 also re-runs when the store holds fewer teams than the pool, not only on the weekly age check.
 
 ### R — corrected: there is no 238-venue seed
 

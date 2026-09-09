@@ -6952,7 +6952,7 @@ app.post('/api/backfill/injuries', (req, res) => {
 app.get('/api/backfill/injuries/status', (_req, res) => {
   const store = getInjuryHistory();
   const vals = Object.values(store);
-  res.json({ ..._injuriesBackfillStatus, onDisk: vals.length, withEntries: vals.filter(v => v.n > 0).length, leagues: [...INJURY_HISTORY_LEAGUES], seasons: [...INJURY_HISTORY_SEASONS] });
+  res.json({ ..._injuriesBackfillStatus, onDisk: vals.length, onDiskWithEntries: vals.filter(v => v.n > 0).length, leagues: [...INJURY_HISTORY_LEAGUES], seasons: [...INJURY_HISTORY_SEASONS] });
 });
 
 app.post('/api/backfill/lineups', async (req, res) => {
