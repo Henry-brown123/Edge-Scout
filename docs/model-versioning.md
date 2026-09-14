@@ -355,7 +355,19 @@ an endpoint.
   same `gate` block; the deployed weights file carries `gate` describing the
   decision that put it live and which version it replaced.
 
-**First live cycle under the new gate:** Monday 2026-09-14 05:15 UTC.
+**First live cycle under the new gate:** Monday 2026-09-14 05:15 UTC —
+candidate rejected, z 3.55 on 10,956 paired fixtures (Addendum 50).
+
+**Breakdown (added 2026-09-14 for the 21 September cycle).** The paired
+result's `pairedWindow.breakdown` now carries, for the same window, cells by
+league, by the deployed model's top-pick probability band (a fixed reference
+the candidate cannot move), by context and by fixture year: n, mean diff, SE,
+z, both log-losses and the cell's share of the total difference (n × mean
+diff over the window total). Sorted by absolute contribution. The trainer
+prints the top eight per axis; the full lists are in
+`retrain-gate-result.json`, the weekly log entry and `GET /api/admin/retrain-gate`.
+Purpose: a rejection or adoption names where it sits. It does not diagnose
+causes; that is a separate decision once the shape is known.
 
 ## The train/test "merge" decision
 

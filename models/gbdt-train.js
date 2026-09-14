@@ -120,23 +120,61 @@ function probFnFromWeights(w) {
 
 // Paired per-fixture log-loss comparison of two probability functions on the
 // same records. diff = candidate − deployed, so negative means candidate better.
-function pairedLogLoss(records, candFn, depFn) {
-  const diffs = [];
+function _summariseDiffs(rows) {
+  const n = rows.length;
+  if (!n) return { n: 0 };
   let llC = 0, llD = 0;
+  for (const r of rows) { llC += r.lc; llD += r.ld; }
+  const meanDiff = rows.reduce((a, r) => a + r.d, 0) / n;
+  const varDiff  = n > 1 ? rows.reduce((a, r) => a + (r.d - meanDiff) ** 2, 0) / (n - 1) : 0;
+  const se       = n > 1 ? Math.sqrt(varDiff / n) : null;
+  const z        = se ? meanDiff / se : null;
+  return { n, candidateLogLoss: llC / n, deployedLogLoss: llD / n, meanDiff, se, z };
+}
+
+// 2026-09-14 (Addendum 50 follow-through): the first live run rejected the
+// candidate at z 3.55 without saying WHERE the regression sat. The paired
+// result now carries a breakdown by league, by the deployed model's top-pick
+// probability band (a fixed reference the candidate cannot move), by context
+// and by fixture year, each with n / mean diff / SE / z and the cell's share of
+// the total difference (n × meanDiff over the window total), so a rejection
+// or adoption names its shape. Diagnosis of causes is a separate decision.
+function _breakdown(rows, keyFn, totalDiffSum) {
+  const groups = new Map();
+  for (const r of rows) { const k = keyFn(r); if (k == null) continue; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); }
+  const out = [];
+  for (const [key, list] of groups) {
+    const sm = _summariseDiffs(list);
+    out.push({ key, n: sm.n, meanDiff: sm.meanDiff, se: sm.se, z: sm.z, candidateLogLoss: sm.candidateLogLoss, deployedLogLoss: sm.deployedLogLoss,
+               shareOfTotalDiff: totalDiffSum ? (sm.meanDiff * sm.n) / totalDiffSum : null });
+  }
+  out.sort((a, b) => Math.abs((b.meanDiff || 0) * b.n) - Math.abs((a.meanDiff || 0) * a.n));
+  return out;
+}
+
+function pairedLogLoss(records, candFn, depFn) {
+  const rows = [];
   for (const r of records) {
     const pc = candFn(r), pd = depFn(r);
     const yc = r.y === 'home' ? pc.home : r.y === 'draw' ? pc.draw : pc.away;
     const yd = r.y === 'home' ? pd.home : r.y === 'draw' ? pd.draw : pd.away;
     const lc = -Math.log(Math.max(EPS, yc)), ld = -Math.log(Math.max(EPS, yd));
-    llC += lc; llD += ld; diffs.push(lc - ld);
+    const depTop = Math.max(pd.home, pd.draw, pd.away);
+    rows.push({ lc, ld, d: lc - ld, leagueId: r.leagueId, context: r.context, year: String(r.date || '').slice(0, 4) || null,
+                depBand: depTop < 0.40 ? '<40%' : depTop < 0.50 ? '40-50%' : depTop < 0.60 ? '50-60%' : depTop < 0.70 ? '60-70%' : '70%+' });
   }
-  const n = diffs.length;
-  if (!n) return { n: 0 };
-  const meanDiff = diffs.reduce((a, b) => a + b, 0) / n;
-  const varDiff  = n > 1 ? diffs.reduce((a, d) => a + (d - meanDiff) ** 2, 0) / (n - 1) : 0;
-  const se       = n > 1 ? Math.sqrt(varDiff / n) : null;
-  const z        = se ? meanDiff / se : null;
-  return { n, candidateLogLoss: llC / n, deployedLogLoss: llD / n, meanDiff, se, z };
+  const total = _summariseDiffs(rows);
+  if (!total.n) return { n: 0 };
+  const totalDiffSum = total.meanDiff * total.n;
+  return {
+    ...total,
+    breakdown: {
+      byLeague:  _breakdown(rows, r => String(r.leagueId), totalDiffSum),
+      byBand:    _breakdown(rows, r => r.depBand, totalDiffSum),
+      byContext: _breakdown(rows, r => r.context, totalDiffSum),
+      byYear:    _breakdown(rows, r => r.year, totalDiffSum),
+    },
+  };
 }
 
 // 2026-08-24 (calibration-rules.md rule 15): no rule-10 holdout stays fully/
@@ -612,12 +650,18 @@ function bandAccuracy(records, probFn) {
       meanDiff: paired.meanDiff ?? null,   // candidate − deployed; negative = candidate better
       se: paired.se ?? null,
       z:  paired.z ?? null,
+      breakdown: paired.breakdown ?? null, // by league / deployed top-pick band / context / fixture year
     };
 
     console.log('\n  Paired gate (same window, both models):');
     console.log(`    window n=${paired.n} (${gateResult.pairedWindow.from} → ${gateResult.pairedWindow.to}; deployed boundary ${deployedBoundary ?? 'unknown'} [${boundarySource}]; ${gateResult.pairedWindow.excludedAsInSampleForDeployed} excluded as in-sample for deployed)`);
     console.log(`    candidate ${paired.candidateLogLoss?.toFixed(4)} vs deployed ${paired.deployedLogLoss?.toFixed(4)} on this window (deployed's stored own-slice figure: ${gateResult.deployedStoredLogLoss?.toFixed?.(4) ?? 'n/a'})`);
     console.log(`    mean paired diff ${paired.meanDiff?.toFixed(5)} ± ${paired.se?.toFixed(5)} (z ${paired.z?.toFixed(2)}), policy ${GATE_POLICY}`);
+    const fmtCell = c => `${String(c.key).padEnd(14)} n=${String(c.n).padStart(5)}  diff ${(c.meanDiff >= 0 ? '+' : '') + c.meanDiff.toFixed(4)} ± ${c.se ? c.se.toFixed(4) : 'n/a'}  z ${c.z != null ? c.z.toFixed(2) : 'n/a'}  share ${c.shareOfTotalDiff != null ? (c.shareOfTotalDiff * 100).toFixed(0) + '%' : 'n/a'}`;
+    for (const [label, cells] of Object.entries(paired.breakdown || {})) {
+      console.log(`    ${label} (largest contribution first):`);
+      for (const c of cells.slice(0, 8)) console.log(`      ${fmtCell(c)}`);
+    }
 
     let adopt, reason;
     if (!paired.n) {
