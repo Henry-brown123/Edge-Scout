@@ -8897,3 +8897,57 @@ Side note: the 14 September audit entry shows `newFixturesSinceLastCycle
 −13,190`. That is the one-off effect of the mirror fix in Addendum 49 (the
 7 September snapshot had over-counted 136/141/79 pre-cutoff fixtures);
 the trainer itself was unaffected both weeks.
+
+### Part 2 — Where the regression sits (dry-run breakdown, 2026-09-14 19:14 UTC)
+
+The morning's rejected candidate was not kept (rejected candidates are archived
+from now on), so a dry-run retrain (`GATE_DRY_RUN=1`: same pool, same recipe,
+full paired gate, weights never written, candidate archived as `dry-run`) was
+run on production. It reproduced the rejection: candidate 1.0002 vs deployed
+0.9976 on the same 10,956-fixture window, mean diff +0.0026 ± 0.0008, z 3.26
+(morning: +0.0029, z 3.55 — the gap between the two is the sampling noise
+expected from unseeded subsampling).
+
+| Axis | Cell | n | Diff (cand − dep) ± SE | z | Share of total |
+|---|---|---|---|---|---|
+| Context | club_european | 2,418 | +0.0155 ± 0.0029 | **5.40** | 132% |
+| Context | club_domestic | 7,601 | −0.0012 ± 0.0006 | −1.84 | −32% |
+| Context | international | 937 | 0.0000 ± 0.0019 | −0.03 | 0% |
+| League | Conference League (848) | 1,062 | +0.0161 ± 0.0040 | 4.05 | 60% |
+| League | Champions League (2) | 697 | +0.0188 ± 0.0058 | 3.22 | 46% |
+| League | Europa League (3) | 659 | +0.0109 ± 0.0056 | 1.95 | 25% |
+| League | Premier League (39) | 1,059 | −0.0061 ± 0.0019 | **−3.16** | −23% |
+| League | League Two (42) | 72 | +0.0092 ± 0.0092 | 1.00 | 2% |
+| Band (deployed top pick) | 40–50% | 4,519 | +0.0036 ± 0.0014 | 2.62 | 58% |
+| Band | 50–60% | 2,669 | +0.0032 ± 0.0017 | 1.93 | 30% |
+| Band | 60–70% | 1,316 | +0.0041 ± 0.0019 | 2.16 | 19% |
+| Band | <40% / 70%+ | 1,645 / 807 | −0.0012 / +0.0002 | −0.69 / 0.08 | −7% / 0% |
+| Year | 2025 | 3,810 | +0.0040 ± 0.0014 | 2.81 | 54% |
+| Year | 2024 | 4,011 | +0.0026 ± 0.0013 | 2.04 | 37% |
+| Year | 2026 / 2023 | 2,622 / 513 | +0.0009 / +0.0006 | 0.58 / 0.18 | 9% / 1% |
+
+Reading, without investigating causes (held back by instruction):
+
+- **The whole regression is the three European club competitions.** Their
+  share is 132% of the total because the domestic leagues moved the other way:
+  the candidate is *better* on club_domestic (z −1.84), and clearly better on
+  the Premier League (z −3.16). International is unchanged to four decimals.
+- **League Two contributes nothing** (n=72 post-cutoff fixtures, z 1.0, 2%).
+  The redirect to a League-Two-specific build is not built on League Two data
+  that is poisoning the pool; that part of the concern is closed.
+- **The damage is in the middle bands (40–70%)**, not in the tails, and in
+  2024–25 fixtures rather than the newest season.
+- **A domestic-only gate would have adopted this candidate.** The pooled gate
+  correctly refused it because the pooled model serves European fixtures too.
+  This is the concrete form of the pocket-based argument: one shared model
+  and one shared gate make a domestic improvement hostage to a European
+  regression, and vice versa.
+
+Candidate causes, listed only so the later investigation starts from the
+right place: what changed in European training records since 2026-08-08
+(the domestic-blend timeline gained Serie B / Segunda / 2. Bundesliga on
+2026-09-04; older Eredivisie and Primeira seasons were backfilled, which
+rescores the standing inputs of Dutch and Portuguese clubs' European
+fixtures); the training boundary moving from 2022-11 to 2023-11; the
+2026-27 qualifying rounds (thin-data clubs) entering the pool. Nothing here
+is tested. Not a League Two item.
