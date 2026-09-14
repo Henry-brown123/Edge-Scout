@@ -8826,3 +8826,74 @@ operational window as the open decision. The watchdog brief includes the
 honest power arithmetic: at ~77 League Two bets a season, a fall from +5.9pp
 to 0 is not detectable inside a season; its fast role is catching pipeline
 breaks, and its slow role is accumulating the season-end evidence.
+
+## Addendum 50 — Shadow-period midpoint read and the first live run of the paired retrain gate (2026-09-14)
+
+### Shadow (Stage A, Addendum 48), 7–14 September
+
+150 locked bets carry `scorerVersion shared-stageA-2026-09-06` (first
+2026-09-07 15:45 UTC, last 2026-09-14 18:09 UTC). Max `scorerShadowMaxDiff`
+across all 150: **0**. None above 1e-12, none missing the field. All 150 were
+scored by the same model version (2026-08-08), so the shadow has not yet been
+exercised across a version change (see the gate below for why).
+
+| Branch | Status | Evidence |
+|---|---|---|
+| Tournament fixtures | **covered** | 9 Champions League locks (matchday 1), diff 0; plus 2 Carabao Cup |
+| Neutral venue / international override / host boost | not covered | no international fixtures in the window; next FIFA window is October |
+| Late lineups → WOWY | not covered, by construction | the lock still runs T-45..75 and API-Sports publishes at ~T-28 (Addendum 44); brief J is the fix, not the shadow |
+| Weather on totals | not exercisable | all 150 locks are 1X2; no totals picks are locked live, so the totals-weather branch has no live traffic to shadow |
+| Rank anchor | cannot be determined from bet records | fires only when `rankScale > 0` and data confidence < 1; neither is stored on the bet |
+| Correction layer | covered | `correctionVersion 2026-08-19` present on the League Two locks (league-two-50plus) |
+| Team-profile modifiers (home/away multiplier, transfer, H2H anomaly) | covered in aggregate, not itemised | both paths run the same `applyTeamProfileModifiers`; the per-bet notes live only on watching entries, of which one exists today. 150 club locks at diff 0 cover whatever fired |
+| 14 September retrain cycle | ran; version unchanged (gate rejected) | 8 locks since 05:24 UTC, all diff 0, all still on 2026-08-08 |
+| Nightly chains | running | Phase 1b closing odds 00:11 UTC today (no error); Phase 2b injuries 00:12 UTC (12,870 fixtures on disk, target reached); coaches 948 teams. Individual nights are not enumerated anywhere; the 10th and 14th are directly evidenced |
+
+Verdict: **on track**, but the gap is not "the European round". The
+European round is already in. What remains unproven are the branches that
+need international fixtures (override, host boost) and the two that have no
+live traffic at all (WOWY on lineups, weather on totals). The 21 September
+read will not change the last two; they are structural until J and until a
+totals pick is ever locked.
+
+### Item I, first live run: the gate rejected the candidate — and that is the correct outcome
+
+The 05:15 UTC cycle trained a candidate on the current pool (54,779 eligible;
+train 43,823 / test 10,956) and passed all three quality gates against the
+linear baseline. The paired gate then scored candidate and deployed on the
+same 10,956-fixture window (2023-11-19 → 2026-09-13, out-of-sample for both;
+the deployed model's boundary is the pinned 2022-11-14):
+
+| | Log-loss on the paired window |
+|---|---|
+| Candidate (2026-09-14) | 1.0005 |
+| Deployed (2026-08-08) | 0.9976 |
+| Mean paired diff (cand − dep) | +0.00285 ± 0.00080, **z 3.55** |
+| Deployed's *stored* own-slice figure | 0.9861 |
+
+Decision: rejected under non-inferiority (both the z and the absolute
+thresholds tripped). Version unchanged; the archive now holds the deployed
+version (index entry created by this run). Two things follow:
+
+1. **The old gate really was comparing different windows.** The deployed
+   model's stored figure (0.9861) is 0.0115 better than its actual log-loss on
+   the current window (0.9976). Every weekly candidate was being held to a
+   number the deployed model itself no longer achieves.
+2. **The candidate is genuinely worse, not noise-worse.** Local runs on
+   identical data differed by ±0.0008 (z ≈ 1); this is +0.0029 at z 3.55 on
+   ~11k fixtures. A model trained on a year more data and the same recipe
+   should not lose to its predecessor out of sample. Candidate causes, none
+   yet tested: the pool has changed since August (older Eredivisie/Primeira
+   seasons and other backfills added, several league rescoring fixes), which
+   moves the 80% boundary from 2022-11 to 2023-11 and changes the training
+   mix; stale-blend fallback factor values in the backfilled seasons; the
+   Platt fit. Diagnosis needed before anything else: per-league and per-band
+   paired differences, which the gate result does not yet break out. That
+   breakdown is a small addition to the trainer's gate output and should be
+   made before the 21 September cycle, so the next rejection (or adoption)
+   says *where* the difference sits.
+
+Side note: the 14 September audit entry shows `newFixturesSinceLastCycle
+−13,190`. That is the one-off effect of the mirror fix in Addendum 49 (the
+7 September snapshot had over-counted 136/141/79 pre-cutoff fixtures);
+the trainer itself was unaffected both weeks.
