@@ -4157,7 +4157,7 @@ let _retrainProcess = null;
 // entry with the actual resulting trainN/trainedAt rather than just the trigger
 // moment. The manual POST /api/admin/trigger-retrain path doesn't pass one; its
 // callers already poll GET /api/admin/retrain-status instead.
-function runGbdtRetrain(reason, onComplete) {
+function runGbdtRetrain(reason, onComplete, extraEnv = {}) {
   if (_retrainProcess) {
     return { success: false, error: 'A retrain is already in progress.' };
   }
@@ -4168,7 +4168,7 @@ function runGbdtRetrain(reason, onComplete) {
   const { spawn } = require('child_process');
   const child = spawn('node', ['scripts/gbdt-train.js'], {
     cwd: __dirname,
-    env: { ...process.env, DATA_DIR: process.env.DATA_DIR },
+    env: { ...process.env, DATA_DIR: process.env.DATA_DIR, ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   _retrainProcess = child;
@@ -9884,8 +9884,18 @@ app.get('/api/admin/model-archive', (_req, res) => {
   });
 });
 
-app.get('/api/admin/retrain-gate', (_req, res) => {
-  res.json({ last: readJSON('retrain-gate-result.json') || null });
+app.get('/api/admin/retrain-gate', (req, res) => {
+  res.json({ last: readJSON(req.query.dryrun === 'true' ? 'retrain-gate-dryrun.json' : 'retrain-gate-result.json') || null });
+});
+
+// 2026-09-14: on-demand gate diagnostic. Trains a candidate from the current
+// pool with the same recipe and runs the full paired gate + breakdown, but the
+// trainer runs with GATE_DRY_RUN=1 and never writes gbdt-weights.json (the
+// candidate is archived as 'dry-run'). Same single-process lock as a real
+// retrain; poll GET /api/admin/retrain-status, read GET /api/admin/retrain-gate?dryrun=true.
+app.post('/api/admin/retrain-dryrun', (_req, res) => {
+  const r = runGbdtRetrain('manual dry-run (gate diagnostic, no deploy)', null, { GATE_DRY_RUN: '1' });
+  res.json(r);
 });
 
 app.get('/api/admin/weekly-retrain-log', (_req, res) => {

@@ -55,6 +55,11 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../data');
 // which policy decided.
 const ARCHIVE_DIR        = path.join(DATA_DIR, 'model-archive');
 const GATE_POLICY        = 'non-inferiority'; // | 'superiority'
+// GATE_DRY_RUN=1 (2026-09-14): train a candidate, run the full paired gate with
+// its breakdown, archive the candidate as 'dry-run', write the result to
+// retrain-gate-dryrun.json — and never touch gbdt-weights.json. Exists so a
+// rejection can be diagnosed on demand without risking a deploy.
+const GATE_DRY_RUN       = process.env.GATE_DRY_RUN === '1';
 const GATE_WORSE_Z       = 1.645;  // reject if candidate worse with one-sided p<0.05
 const GATE_WORSE_ABS     = 0.002;  // reject if candidate worse by this much regardless of z
 const GATE_BETTER_MARGIN = 0.001;  // superiority policy only: adopt if better by this much
@@ -103,7 +108,8 @@ function archiveVersion(weights, status, extra = {}) {
 }
 
 function writeGateResult(result) {
-  fs.writeFileSync(path.join(DATA_DIR, 'retrain-gate-result.json'), JSON.stringify(result, null, 2));
+  const file = GATE_DRY_RUN ? 'retrain-gate-dryrun.json' : 'retrain-gate-result.json';
+  fs.writeFileSync(path.join(DATA_DIR, file), JSON.stringify({ ...result, dryRun: GATE_DRY_RUN }, null, 2));
 }
 
 // Prediction function for an arbitrary weights object (deployed or archived),
@@ -165,7 +171,9 @@ function pairedLogLoss(records, candFn, depFn) {
   }
   const total = _summariseDiffs(rows);
   if (!total.n) return { n: 0 };
-  const totalDiffSum = total.meanDiff * total.n;
+  // Shares are only meaningful when the window-level difference is material;
+  // below 1e-4 mean log-loss they would be ratios of noise to noise.
+  const totalDiffSum = Math.abs(total.meanDiff) >= 1e-4 ? total.meanDiff * total.n : 0;
   return {
     ...total,
     breakdown: {
@@ -611,8 +619,25 @@ function bandAccuracy(records, probFn) {
     try { deployed = JSON.parse(fs.readFileSync(outPath, 'utf8')); } catch (e) { console.warn(`  [Gate] Could not read deployed weights: ${e.message}`); }
   }
 
+  // Candidate weights object, built before the decision so a rejected or
+  // dry-run candidate can be archived for diagnosis (2026-09-14: the first
+  // live rejection could not be broken down afterwards because the candidate
+  // was gone).
+  const candidateOut = {
+    trainedAt,
+    trainN:      train.length,
+    testN:       test.length,
+    treeBoundary,
+    hyperparams: { nTrees: N_TREES, depth: DEPTH, lr: LR, minLeaf: MIN_LEAF },
+    validation:  { logLoss: llGBDT, brier: bsGBDT, logLossLinear: llLinear, brierLinear: bsLinear },
+    metrics:     { logLossLinear: llLinear, logLossGBDT: llGBDT, brierLinear: bsLinear, brierGBDT: bsGBDT },
+    classifiers,
+    platt,
+  };
+
   const gateResult = {
     at: trainedAt,
+    dryRun: GATE_DRY_RUN,
     candidateVersion: trainedAt,
     deployedVersion: deployed?.trainedAt ?? null,
     policy: GATE_POLICY,
@@ -679,8 +704,15 @@ function bandAccuracy(records, probFn) {
     }
     gateResult.decision = adopt ? 'adopted' : 'rejected';
     gateResult.reason = reason;
+    if (GATE_DRY_RUN) {
+      archiveVersion(candidateOut, 'dry-run', { gateDecisionWouldBe: gateResult.decision, gateReason: reason, comparedTo: deployed.trainedAt });
+      writeGateResult(gateResult);
+      console.log(`\n  [GBDT] DRY RUN — gate would have ${gateResult.decision.toUpperCase()} (${reason}). gbdt-weights.json untouched; candidate archived as dry-run; result in retrain-gate-dryrun.json.`);
+      process.exit(0);
+    }
     if (!adopt) {
-      console.log(`\n  [GBDT] Gate: REJECTED — ${reason}. Keeping deployed version ${deployed.trainedAt}.`);
+      archiveVersion(candidateOut, 'rejected', { gateReason: reason, comparedTo: deployed.trainedAt });
+      console.log(`\n  [GBDT] Gate: REJECTED — ${reason}. Keeping deployed version ${deployed.trainedAt}; candidate archived as rejected.`);
       writeGateResult(gateResult);
       process.exit(0);
     }
@@ -688,21 +720,14 @@ function bandAccuracy(records, probFn) {
   } else {
     gateResult.decision = 'adopted';
     gateResult.reason = deployed ? 'deployed weights unreadable/incomplete — nothing to compare against' : 'no deployed weights — first version';
+    if (GATE_DRY_RUN) { writeGateResult(gateResult); console.log(`\n  [GBDT] DRY RUN — ${gateResult.reason}; nothing written.`); process.exit(0); }
     console.log(`\n  [GBDT] Gate: ${gateResult.reason}; writing weights.`);
   }
 
   // ── Write weights ──
   const weightsOut = {
-    trainedAt,
-    trainN:      train.length,
-    testN:       test.length,
-    treeBoundary, // see the split above — read by server.js getModelTreeBoundary()
-    hyperparams: { nTrees: N_TREES, depth: DEPTH, lr: LR, minLeaf: MIN_LEAF },
-    validation:  { logLoss: llGBDT, brier: bsGBDT, logLossLinear: llLinear, brierLinear: bsLinear },
-    metrics:     { logLossLinear: llLinear, logLossGBDT: llGBDT, brierLinear: bsLinear, brierGBDT: bsGBDT },
+    ...candidateOut, // treeBoundary is read by server.js getModelTreeBoundary()
     gate:        { policy: GATE_POLICY, decision: gateResult.decision, reason: gateResult.reason, pairedWindow: gateResult.pairedWindow, replaced: deployed?.trainedAt ?? null },
-    classifiers,
-    platt,
   };
   fs.writeFileSync(outPath, JSON.stringify(weightsOut));
   console.log(`\n  Written: ${outPath} (${(fs.statSync(outPath).size / 1024).toFixed(0)} KB)`);
