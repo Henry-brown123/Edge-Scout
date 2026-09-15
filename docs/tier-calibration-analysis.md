@@ -8951,3 +8951,96 @@ rescores the standing inputs of Dutch and Portuguese clubs' European
 fixtures); the training boundary moving from 2022-11 to 2023-11; the
 2026-27 qualifying rounds (thin-data clubs) entering the pool. Nothing here
 is tested. Not a League Two item.
+
+## Addendum 51 — H cutover; tournament and international football retired from every domestic pocket; first domestic-only model adopted through the paired gate (2026-09-15)
+
+Direction set 2026-09-15 (two decisions: retire tournament/international
+football entirely from domestic pockets; replace the post-look freeze with
+pre-registration plus continuous learning). This addendum records steps 1
+and 2 of the approved sequence. The rules rewrite is step 5 and is recorded
+separately when it lands.
+
+### Step 1 — H cutover
+
+`settings.scorerPath` switched 'legacy' → 'shared' at 15:59 UTC via
+`PUT /api/settings` (the runtime switch; `PUT {scorerPath:'legacy'}` is the
+rollback and needs no deploy). `scorerShadow` stays true, so the legacy path
+now runs in shadow behind the shared one and every lock keeps recording
+`scorerShadowMaxDiff`. Basis: 150 tagged locks 7–14 Sep at max diff 0
+(Addendum 50); the unexercised branches are timing (international) or
+structural (late lineups, totals) rather than uncertainty. Bet and watching
+records now also store `scorerPath`, and the hourly rescan stamps the same
+tags, so the cutover is verifiable on real traffic. First real lock after the
+switch: Rayo Vallecano v Espanyol, locked 16:04 UTC, `scorerPath:'shared'`,
+`scorerShadowMaxDiff: 0` (legacy in shadow agreed exactly), still on model
+2026-08-08 because the domestic-only retrain below landed three minutes
+later. Locks from 17:00 UTC onward carry the new model version; the diff
+is unaffected by a version change since both paths score the same weights.
+
+### Step 2 — Retirement, layer one (commit d40ad78)
+
+`RETIRED_LEAGUE_IDS` (scoring.js) = World Cup, Champions League, Europa
+League, Conference League, Carabao Cup, and every international competition
+(qualifiers, Nations League, friendlies, Euros). What changed:
+
+| Concern | Before | Now |
+|---|---|---|
+| Trainer pool (`gbdt-train.js`, proxy) | all contexts | `club_domestic` rows only; retired ids excluded — the paired gate window is domestic by construction |
+| Audit mirrors (`isWeeklyRetrainExcluded`, `getEligibleTrainingSnapshot`, `isFixtureTrainingHoldout`) | not retired-aware | retired → excluded / holdout |
+| Historical scoredRecords | 71k incl. ~27% non-domestic | retired rows hidden at the single read point (`readHistoricalCached`); the nightly loop no longer scores retired fixtures; hidden rows drop from the file on the next nightly save |
+| Fixtures | — | **unchanged**: retired competitions' fixtures stay in the store as schedule context (rest days, historical form windows). Ingestion continues (~57 calls a night) |
+| Scanning / locks | `settings.activeLeagues` incl. 1, 2, 3, 848, 48 | stripped on boot and at every read (`getActiveLeagues`); `leagueModes` report 'retired' |
+| Closing-odds capture, lineups, PIR, transfers | included tournaments | skipped |
+| Calibration cohort "Tournaments & cups ×1.06" | existed | gone; retired rows carry factor source `RETIRED` and form no cohort |
+| League grid / audit / UI | tournament rows | `COMPETITION_TYPE` 'retired', `CALIBRATION_AUDIT` status 'retired' (previous status kept), hidden from `/api/state` leagues; Champions League removed from the pooled validated-leagues Live figure; Carabao Cup removed from the unseen-population display |
+
+Live verification after deploy: active leagues = 14 domestic ids; league
+modes 'retired' for 1/2/3/48/848; four cohorts (League Two staked; EFL
+observation; continental second tiers; top divisions) and no tournament
+cohort; `/api/state` lists 14 leagues. Local proof of the pool filter: the
+8,316-row scratch pool became 5,338 domestic rows, zero European, zero
+international. Production after the verification deploy (16:09 UTC):
+13,181 retired scoredRecords hidden (80,841 of 94,022 fixtures remain
+visible as scored rows), while the retired competitions' fixtures are all
+still on disk as context — Champions League 3,326, Europa League 4,275,
+Conference League 2,160, League Cup 1,127, Friendlies 1,098, WC qualifying
+852, Nations League 343 — the same 13,181, so nothing was deleted and
+nothing retired is scored.
+
+**Rest-days and form-window context, honestly.** The historical scorer's
+form windows and rest-day computation read the full fixture list, so cup
+and European matches still count there. The live path has always built
+domestic form from the league-only scoring pool, so live rest days and form
+windows never saw cups — one of the definition mismatches Stage B unifies
+for League Two in step 3, where the League Two decision (Carabao Cup in
+windows or not) is made explicitly.
+
+### Step 2, continued — first domestic-only candidate through the paired gate
+
+`POST /api/admin/trigger-weekly-retrain` at 16:00 UTC (the normal cycle, not
+a dry run). Eligible pool 42,708 (was 54,779); train 34,166 / test 8,542.
+Quality gates 1–3 passed against the linear baseline. Paired gate, domestic
+window 2023-05-27 → 2026-09-14, out-of-sample for both models:
+
+| | Log-loss |
+|---|---|
+| Candidate (2026-09-15) | 0.9929 |
+| Deployed (2026-08-08) | 0.9941 |
+| Mean paired diff | −0.00118 ± 0.00089, z −1.32 |
+
+**Adopted** under non-inferiority. The model changed for the first time since
+8 August, through the gate. Version 2026-09-15T16:07:44Z is live; the 8 August
+version is archived as superseded (archive: 3 entries incl. yesterday's
+dry-run candidate).
+
+Shape: better on Primeira Liga (−0.0045, z −1.94), Premier League (−0.0033),
+La Liga, Scottish Premiership; worse on Ligue 1 (+0.0035, z 1.27); League Two
+n=72 immaterial. By year: better on 2024 and 2026 fixtures, flat on 2025.
+Read plainly: a small, consistent domestic improvement, not a large one —
+z −1.32 means "not worse, probably better", which is exactly the threshold
+the walk-forward cycle is meant to clear with a fixed recipe.
+
+Note for step 3: the League Two 13/45 cell must be re-measured on this
+model's probabilities (a fixed rule re-measured on the same population is
+legitimate; a new rule chosen there is not), and the review states whether
+the signal still sits at 13%/45% or has moved.
