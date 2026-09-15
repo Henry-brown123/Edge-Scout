@@ -9143,3 +9143,102 @@ cell (edge ≥9%, probability ≥45%) is the natural candidate to pre-register
 as a *paper* track accumulating forward evidence from today, alongside the
 existing reserved-set candidates; it is not staked on the strength of this
 grid.
+
+## Addendum 53 — League Two: the two fixes (pocket-aware gate; the correction layer's floor), and the full disciplined threshold search on the corrected foundation (2026-09-15)
+
+### Fix 1 — re-expressing the correction layer's floor: there is no single-threshold re-expression
+
+Rule 17 asks for a factor and its dependent floor to move together, using the
+Addendum 40 method (find the floor on the new scale that reproduces the old
+rule's membership). Isolating the layer on the current foundation (unified
+definitions, 2026-09-15 model): the 13%/45% cell *without* the layer has 200
+bets; the best-overlapping cell *with* the layer is 7%/45% at Jaccard 0.41
+(recall 60%), and every other cell is lower. Compare 0.93 for Addendum 40's
+pure scale change. The layer only moves picks whose raw probability is
+≥50%, so lowering the floor to catch them admits sub-50% picks with 7–13%
+edges that were never in the rule. The floor therefore cannot be
+re-expressed by moving a threshold; it has to be re-decided together with
+the layer, which is the search below. Recorded here so the miss and its
+resolution sit side by side.
+
+### Fix 2 — pocket-aware retrain gate (commit b511ca6)
+
+`POCKET_GATES` in `gbdt-train.js`: for League Two a candidate must also be
+non-inferior on League Two's own records — hard: paired log-loss over every
+League Two scored record (pre-cutoff rows never train, so the window is
+out-of-sample for both models), same thresholds as the main gate; soft: the
+live rule's beyond-market residual on the matched pre-cutoff rows must not
+fall by more than 2 SE against the deployed model's reading. Chain is the
+live one (model → bias → correction layer). A pocket-gate failure vetoes an
+otherwise-adopted candidate; the result is logged and stored. Local dry run
+exercised the code path (no League Two rows in the local pool → gate skipped
+cleanly). Production dry run started 18:35 UTC; its pocket-gate reading is
+appended below once read (the session expired mid-run; the result persists
+in `retrain-gate-dryrun.json`).
+
+### The search (`diag-l2-grid`)
+
+Population: League Two pre-cutoff, 3,330 matched with Pinnacle closing
+(2020-06 → 2026-05, six seasons); live chain; factor 0.93. Split 2024-09-16
+(Addendum 47's): train 2,289, test 1,041. Grid: edge 3–20% × probability
+35–65%. **Selection on train only**, pre-registered objective = flat-stake
+total return per season (ROI at close × bets per season) among cells with
+train n ≥ 60 and train beyond-market z ≥ 1.5; shortlist = top 5 by total
+return, top 3 by z (all inside the top 5), the fixed live cell and the
+Addendum 52 candidate. **One test look** for the shortlist. Out-of-window:
+four equal-n sequential blocks over the whole population (Addendum 47's
+check). Volume is normalised to six full seasons.
+
+Honesty first: this population was grid-searched in Addendum 47 on the same
+split and read again in Addendum 52. The split is a mechanical guard against
+fitting the selection to the whole population, not a claim that the test
+rows were unread. The only genuinely unread League Two data is the 72
+post-cutoff fixtures, which stay reserved.
+
+| Cell | Whole n | Bets/season | ROI at close [95% CI] | Beyond market ± SE | z | Train (n, ROI, z) | **Test (one look)** (n, ROI, z) | Blocks +ROI / +bm | Total return/season |
+|---|---|---|---|---|---|---|---|---|---|
+| 7% / 35% | 405 | 68 | +28.7% [+11, +46] | +6.2 ± 2.4 | 2.61 | 293, +29%, 2.18 | 112, +27%, 1.42 | 4/4, 4/4 | **~19 u** |
+| 8% / 35% | 336 | 56 | +31.3% [+12, +51] | +6.6 ± 2.6 | 2.53 | 248, +33%, 2.26 | 88, +25%, 1.13 | 4/4, 3/4 | ~18 u |
+| 7% / 40% | 319 | 53 | +30.0% [+10, +50] | +5.8 ± 2.7 | 2.13 | 234, +28%, 1.56 | 85, +35%, 1.54 | 4/4, 3/4 | ~16 u |
+| 9% / 35% | 264 | 44 | +35.5% [+13, +59] | +7.3 ± 2.9 | 2.49 | 194, +35%, 2.04 | 70, +36%, 1.43 | 4/4, 4/4 | ~16 u |
+| 8% / 40% | 267 | 45 | +34.7% [+12, +57] | +6.7 ± 3.0 | 2.24 | 199, +34%, 1.75 | 68, +38%, 1.45 | 4/4, 3/4 | ~15 u |
+| **9% / 45%** | 155 | 26 | +50.3% [+19, +81] | +9.5 ± 4.0 | 2.39 | 115, +45%, 1.62 | **40, +66% [+7, +124], 1.94** | 4/4, 4/4 | **~13 u** |
+| 13% / 45% (live) | 65 | 11 | +82.1% [+25, +139] | +12.6 ± 6.2 | 2.04 | 48, +81%, 1.52 | 17, +85%, 1.41 | 4/4, 4/4 | ~9 u |
+
+Units are flat one-unit stakes at the Pinnacle closing price.
+
+### Reading
+
+- **Maximum total return** points to the broad, shallow cells: 7%/35% earns
+  about 19 units a season from ~68 bets at +29% ROI, z 2.61 on the whole
+  population and all four blocks positive on both measures. Its test look is
+  the weakest of the shortlist per bet (z 1.42), though still +27%.
+- **Maximum confidence per bet** points to the narrow cells: 13%/45% at +82%
+  ROI, but ~11 bets a season and a test look of 17 bets.
+- **9%/45% is the balance.** Twice the volume of 13%/45%, the strongest test
+  look on the shortlist (+66% on 40 bets, z 1.94), positive in all four
+  blocks on both measures, ~13 units a season. Its train reading (z 1.62)
+  is the weakest part of its case; the test and blocks carry it.
+- The two objectives do point to different answers. Total return favours
+  7%/35% by roughly six units a season over 9%/45%, bought with 42 more bets
+  a season at less than half the per-bet edge and a weaker out-of-sample
+  read. Per-bet confidence favours 9%/45% over 13%/45% because the extra
+  volume comes with the best held-out result in the table, not a worse one.
+
+### Recommendation
+
+**9%/45% at 0.93 on the live chain** as the League Two rule for the go/no-go
+review: ~26 bets a season, ROI at close +50% [+19, +81], +9.5pp beyond
+market (z 2.39), test +66% (z 1.94), 4/4 blocks. It is the only cell that
+improves on both the fixed cell's volume and its out-of-sample evidence at
+once. 7%/35% is the higher expected-return choice only if the user is
+content with a weaker per-bet case and 68 manual placements a season; it is
+the natural second pre-registration, as a paper track accumulating forward
+evidence from today. 13%/45% is retired as the live rule when the user
+confirms: it is a strict subset of 9%/45% on the corrected scale.
+
+Rule 17: factor stays 0.93; the floor moves from 13% to 9% in one documented
+step with this addendum, once confirmed. Pre-registered from confirmation:
+the live rule is 9%/45%, read forward at any time; changes need a fresh
+registration. The `POCKET_GATES` entry and `RESERVED_TEST_SETS` candidates
+are updated to the same cell in the same commit.
