@@ -9,7 +9,7 @@
 
 const path = require('path');
 const fs   = require('fs');
-const { computeModelProb, WEIGHTS_BY_CONTEXT, LEAGUE_CONFIG, RETIRED_LEAGUE_IDS } = require('../scoring');
+const { computeModelProb, WEIGHTS_BY_CONTEXT, LEAGUE_CONFIG, RETIRED_LEAGUE_IDS, applyLeagueBiasCorrection, applyVariableCorrectionLayer, CORRECTION_LAYER_RULES, marginStrippedImplied } = require('../scoring');
 const { buildFeatures } = require('./gbdt');
 
 // ─── HYPERPARAMETERS ─────────────────────────────────────────────────────────
@@ -66,6 +66,72 @@ const GATE_BETTER_MARGIN = 0.001;  // superiority policy only: adopt if better b
 // Mirrors server.js KNOWN_TREE_BOUNDARIES: the one deployed version that
 // predates the treeBoundary field (Addendum 14's reproduction of its split).
 const KNOWN_TREE_BOUNDARIES = { '2026-08-08T20:56:33.315Z': '2022-11-14T00:00:00Z' };
+
+// ─── POCKET-AWARE GATE (2026-09-15, Addendum 53) ──────────────────────────────
+// The domestic paired gate cannot see a league that contributes a few dozen rows
+// to the window (League Two: 72), so a candidate can be adopted while measurably
+// worse on the one league real money depends on. For every entry here the
+// candidate must ALSO be non-inferior on that league's own population:
+//   hard: paired log-loss on every scored record of the league (pre-cutoff rows
+//         are out-of-sample for both models — they never train), same thresholds
+//         as the main gate;
+//   soft: the live pocket rule's beyond-market residual (actual − Pinnacle
+//         margin-stripped closing probability) on the matched rows must not fall
+//         by more than 2 SE against the deployed model's own reading.
+// The probability chain is the live one for a unified league: model → league
+// bias correction → deployed correction layer (settings.deployedCorrectionRuleIds).
+// Mirrors server.js's rule constants for the league (kept in lockstep by hand).
+const POCKET_GATES = [
+  { leagueId: 42, label: 'League Two live rule', factor: 0.93, edgeMin: 0.13, probMin: 0.45, cutoff: '2026-08-11T09:00:00Z' },
+];
+
+function loadPocketRecords(leagueId) {
+  const raw = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'backfill-historical.json'), 'utf8'));
+  return (raw.scoredRecords || [])
+    .filter(r => parseInt(r.leagueId, 10) === leagueId && r.context === 'club_domestic' && r.homeFactors && r.awayFactors && r.actualOutcome && r.date)
+    .map(r => ({ x: buildFeatures(r.homeFactors, r.awayFactors, r.context), y: r.actualOutcome, date: r.date, context: r.context, leagueId: r.leagueId, fixtureId: r.fixtureId }));
+}
+
+function pocketGate(gate, candFn, depFn) {
+  const recs = loadPocketRecords(gate.leagueId);
+  if (!recs.length) return { ...gate, skipped: 'no records' };
+  let closing = {}, settings = {};
+  try { closing = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'closing-odds.json'), 'utf8')); } catch {}
+  try { settings = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'settings.json'), 'utf8')); } catch {}
+  const rules = (settings.deployedCorrectionRuleIds || []).length ? CORRECTION_LAYER_RULES.filter(r => settings.deployedCorrectionRuleIds.includes(r.id)) : [];
+  const chain = (raw) => { let p = applyLeagueBiasCorrection(raw, gate.leagueId, LEAGUE_CONFIG); if (rules.some(r => r.leagues.includes(gate.leagueId))) p = applyVariableCorrectionLayer(p, gate.leagueId, rules); return p; };
+  // hard: paired log-loss on the league's own records (raw model probabilities, same currency as the main gate)
+  const ll = pairedLogLoss(recs, candFn, depFn);
+  // soft: pocket residual under the live chain on matched pre-cutoff rows
+  const cell = (fn) => {
+    const rows = [];
+    for (const r of recs) {
+      if (r.date >= gate.cutoff) continue;
+      const co = closing[r.fixtureId] || closing[String(r.fixtureId)];
+      if (!co || co.bookmaker !== 'pinnacle' || !(co.homeOdds > 1 && co.drawOdds > 1 && co.awayOdds > 1)) continue;
+      const p = chain(fn(r));
+      const pick = p.home >= p.draw && p.home >= p.away ? 'home' : p.away >= p.draw ? 'away' : 'draw';
+      const calProb = Math.min(0.97, p[pick] * gate.factor);
+      const stripped = marginStrippedImplied(co);
+      if (!(calProb - stripped[pick] >= gate.edgeMin && p[pick] >= gate.probMin)) continue;
+      const won = r.y === pick;
+      rows.push({ bm: (won ? 1 : 0) - stripped[pick], pnl: won ? co[`${pick}Odds`] - 1 : -1 });
+    }
+    const n = rows.length; if (!n) return { n: 0 };
+    const bm = rows.reduce((a, x) => a + x.bm, 0) / n;
+    const sd = Math.sqrt(rows.reduce((a, x) => a + (x.bm - bm) ** 2, 0) / Math.max(1, n - 1));
+    return { n, beyondMarketPp: +(bm * 100).toFixed(2), sePp: +((sd / Math.sqrt(n)) * 100).toFixed(2), roiClosePct: +((rows.reduce((a, x) => a + x.pnl, 0) / n) * 100).toFixed(1) };
+  };
+  const cand = cell(candFn), dep = cell(depFn);
+  const hardWorse = ll.n && ((ll.z != null && ll.z >= GATE_WORSE_Z) || ll.meanDiff >= GATE_WORSE_ABS);
+  let softWorse = false, softNote = 'n/a';
+  if (cand.n >= 30 && dep.n >= 30) {
+    const tol = 2 * Math.sqrt(cand.sePp ** 2 + dep.sePp ** 2);
+    softWorse = (dep.beyondMarketPp - cand.beyondMarketPp) > tol;
+    softNote = `deployed ${dep.beyondMarketPp}pp (n=${dep.n}) vs candidate ${cand.beyondMarketPp}pp (n=${cand.n}); tolerance ${tol.toFixed(1)}pp`;
+  } else softNote = `cell too thin to gate (candidate n=${cand.n}, deployed n=${dep.n})`;
+  return { ...gate, records: recs.length, logLoss: { n: ll.n, candidate: ll.candidateLogLoss, deployed: ll.deployedLogLoss, meanDiff: ll.meanDiff, se: ll.se, z: ll.z }, pocket: { candidate: cand, deployed: dep, note: softNote }, hardWorse, softWorse, pass: !(hardWorse || softWorse) };
+}
 
 function safeVersionName(v) { return String(v).replace(/[^0-9A-Za-z._-]/g, '_'); }
 
@@ -704,6 +770,16 @@ function bandAccuracy(records, probFn) {
       reason = adopt
         ? `candidate not inferior on the paired window (diff ${paired.meanDiff.toFixed(5)}, z ${paired.z?.toFixed(2)})`
         : `candidate worse: ${sigWorse ? `z ${paired.z.toFixed(2)} ≥ ${GATE_WORSE_Z}` : ''}${sigWorse && absWorse ? '; ' : ''}${absWorse ? `diff ${paired.meanDiff.toFixed(4)} ≥ ${GATE_WORSE_ABS}` : ''}`;
+    }
+    // Pocket-aware gates (Addendum 53): each must pass as well.
+    gateResult.pocketGates = [];
+    for (const g of POCKET_GATES) {
+      try {
+        const pg = pocketGate(g, gbdtProb, probFnFromWeights(deployed));
+        gateResult.pocketGates.push(pg);
+        console.log(`  Pocket gate — ${pg.label}: ${pg.skipped ? pg.skipped : `log-loss diff ${pg.logLoss.meanDiff?.toFixed(5)} ± ${pg.logLoss.se?.toFixed(5)} (z ${pg.logLoss.z?.toFixed(2)}, n=${pg.logLoss.n}); pocket ${pg.pocket.note} → ${pg.pass ? 'PASS' : 'FAIL'}`}`);
+        if (adopt && pg.pass === false) { adopt = false; reason = `pocket gate failed (${pg.label}): ${pg.hardWorse ? 'worse log-loss on the league' : 'pocket residual materially worse'}`; }
+      } catch (e) { gateResult.pocketGates.push({ ...g, error: e.message }); console.warn(`  Pocket gate — ${g.label}: error ${e.message}`); }
     }
     gateResult.decision = adopt ? 'adopted' : 'rejected';
     gateResult.reason = reason;

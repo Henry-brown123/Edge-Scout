@@ -10109,6 +10109,91 @@ app.get('/api/admin/diag-l2-remeasure', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message, stack: (e.stack || '').split('\n').slice(0, 4) }); }
 });
 
+// Step 2 of the 2026-09-15 League Two task (Addendum 53): full, disciplined
+// threshold search on the corrected foundation (unified definitions, live
+// model, correction layer on). Pre-cutoff matched population only.
+//   selection: TRAIN rows only (date < split), pre-registered objective =
+//     flat-stake total return per season (ROI at close × bets per season)
+//     among cells with train n >= 60 and train beyond-market z >= 1.5;
+//     shortlist = top 5 by total return + top 3 by z + the fixed live cell
+//     + the Addendum 52 descriptive candidate (9%/45%);
+//   test: ONE look at the shortlist on rows >= split;
+//   out-of-window: four equal-n sequential blocks over the whole population
+//     for the shortlist (Addendum 47's check).
+// Honesty: this population was grid-searched in Addendum 47 (same split) and
+// read again in Addendum 52; the split is a mechanical guard against fitting the
+// selection to the whole population, not a claim that the test rows are unread.
+app.get('/api/admin/diag-l2-grid', async (req, res) => {
+  try {
+    const leagueId = parseInt(req.query.league, 10) || 42;
+    const factor = parseFloat(req.query.factor) || getCalFactorForLeague(getSettings(), leagueId);
+    const split = req.query.split || '2024-09-16T00:00:00Z';
+    const cutoff = DATE_SPLIT_HOLDOUT_CUTOFFS.get(leagueId) || '2026-08-11T09:00:00Z';
+    const { classifyFixture, WEIGHTS_BY_CONTEXT, CONTEXT_CONFIG, LEAGUE_CONFIG: LC } = require('./scoring');
+    const settings = getSettings();
+    const hist = readHistoricalCached() || {};
+    const closing = getClosingOdds();
+    const recs = (hist.scoredRecords || []).filter(r => parseInt(r.leagueId, 10) === leagueId && r.homeFactors && r.awayFactors && r.actualOutcome && r.date < cutoff);
+    const rows = []; let i = 0;
+    for (const r of recs) {
+      if (++i % 300 === 0) await new Promise(rr => setImmediate(rr));
+      const co = closing[r.fixtureId] || closing[String(r.fixtureId)];
+      if (!co || co.bookmaker !== 'pinnacle' || !(co.homeOdds > 1 && co.drawOdds > 1 && co.awayOdds > 1)) continue;
+      const context = r.context || classifyFixture(leagueId);
+      const probs = scoreProbabilities({ homeF: r.homeFactors, awayF: r.awayFactors, weights: WEIGHTS_BY_CONTEXT[context], context, leagueId, leagueConfig: LC[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: true, rankAdjust: false, hostBoost: false, modifiers: false } }).probs;
+      const stripped = marginStrippedImplied(co);
+      const pick = probs.home >= probs.draw && probs.home >= probs.away ? 'home' : probs.away >= probs.draw ? 'away' : 'draw';
+      const calProb = Math.min(0.97, probs[pick] * factor);
+      const won = r.actualOutcome === pick;
+      const d = new Date(r.date); const season = d.getUTCMonth() >= 6 ? d.getUTCFullYear() : d.getUTCFullYear() - 1;
+      rows.push({ date: r.date, season, pick, prob: probs[pick], edge: calProb - stripped[pick], market: stripped[pick], won, pnl: won ? co[`${pick}Odds`] - 1 : -1, bm: (won ? 1 : 0) - stripped[pick] });
+    }
+    rows.sort((a, b) => a.date < b.date ? -1 : 1);
+    const seasonsIn = (list) => new Set(list.map(r => r.season)).size;
+    const summarise = (list, seasons) => {
+      const n = list.length; if (!n) return { n: 0 };
+      const wins = list.filter(x => x.won).length;
+      const roi = list.reduce((a, x) => a + x.pnl, 0) / n;
+      const bm = list.reduce((a, x) => a + x.bm, 0) / n;
+      const sd = Math.sqrt(list.reduce((a, x) => a + (x.bm - bm) ** 2, 0) / Math.max(1, n - 1));
+      const pnlSd = Math.sqrt(list.reduce((a, x) => a + (x.pnl - roi) ** 2, 0) / Math.max(1, n - 1));
+      const perSeason = seasons ? n / seasons : null;
+      return { n, winRate: +(wins / n).toFixed(3), roiClosePct: +(roi * 100).toFixed(1), roiCi95: [+((roi - 1.96 * pnlSd / Math.sqrt(n)) * 100).toFixed(1), +((roi + 1.96 * pnlSd / Math.sqrt(n)) * 100).toFixed(1)], beyondMarketPp: +(bm * 100).toFixed(1), sePp: +((sd / Math.sqrt(n)) * 100).toFixed(1), z: +(bm / (sd / Math.sqrt(n))).toFixed(2), betsPerSeason: perSeason != null ? +perSeason.toFixed(1) : null, totalReturnPerSeasonUnits: perSeason != null ? +(roi * perSeason).toFixed(1) : null, avgOdds: +(list.reduce((a, x) => a + (x.won ? x.pnl + 1 : 1 / Math.max(0.01, x.market)), 0) / n).toFixed(2) };
+    };
+    const train = rows.filter(r => r.date < split), test = rows.filter(r => r.date >= split);
+    const trainSeasons = seasonsIn(train), testSeasons = Math.max(1, seasonsIn(test));
+    const cellRows = (list, e, p) => list.filter(r => r.edge >= e - 1e-9 && r.prob >= p - 1e-9);
+    const edges = []; for (let e = 0.03; e <= 0.201; e += 0.01) edges.push(+e.toFixed(2));
+    const probs = [0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65];
+    const trainGrid = [];
+    for (const e of edges) for (const p of probs) { const sm = summarise(cellRows(train, e, p), trainSeasons); trainGrid.push({ edgeMin: e, probMin: p, ...sm }); }
+    // pre-registered selection on train
+    const eligible = trainGrid.filter(c => c.n >= 60 && c.z >= 1.5);
+    const byReturn = [...eligible].sort((a, b) => b.totalReturnPerSeasonUnits - a.totalReturnPerSeasonUnits).slice(0, 5);
+    const byZ = [...eligible].sort((a, b) => b.z - a.z).slice(0, 3);
+    const forced = [{ edgeMin: 0.13, probMin: 0.45, why: 'fixed live cell' }, { edgeMin: 0.09, probMin: 0.45, why: 'Addendum 52 descriptive candidate' }];
+    const key = c => `${c.edgeMin.toFixed(2)}/${c.probMin.toFixed(2)}`;
+    const shortlist = new Map();
+    for (const c of byReturn) shortlist.set(key(c), { edgeMin: c.edgeMin, probMin: c.probMin, why: 'top-5 train total return' });
+    for (const c of byZ) if (!shortlist.has(key(c))) shortlist.set(key(c), { edgeMin: c.edgeMin, probMin: c.probMin, why: 'top-3 train z' });
+    for (const c of forced) if (!shortlist.has(key(c))) shortlist.set(key(c), c);
+    // blocks: four equal-n sequential blocks over the whole population
+    const q = Math.floor(rows.length / 4);
+    const blocks = [rows.slice(0, q), rows.slice(q, 2 * q), rows.slice(2 * q, 3 * q), rows.slice(3 * q)];
+    const results = [];
+    for (const [k, c] of shortlist) {
+      const tr = summarise(cellRows(train, c.edgeMin, c.probMin), trainSeasons);
+      const te = summarise(cellRows(test, c.edgeMin, c.probMin), testSeasons);
+      const all = summarise(cellRows(rows, c.edgeMin, c.probMin), seasonsIn(rows));
+      const bl = blocks.map((b, bi) => { const sm = summarise(cellRows(b, c.edgeMin, c.probMin), null); return { block: bi + 1, from: b[0]?.date?.slice(0, 10), to: b[b.length - 1]?.date?.slice(0, 10), n: sm.n, roiClosePct: sm.roiClosePct ?? null, beyondMarketPp: sm.beyondMarketPp ?? null }; });
+      results.push({ cell: k, why: c.why, train: tr, test: te, whole: all, blocks: bl, blocksPositiveRoi: bl.filter(b => b.roiClosePct != null && b.roiClosePct > 0).length, blocksPositiveBm: bl.filter(b => b.beyondMarketPp != null && b.beyondMarketPp > 0).length });
+    }
+    res.json({ leagueId, factor, split, cutoff, matched: rows.length, train: { n: train.length, seasons: trainSeasons, from: train[0]?.date, to: train[train.length - 1]?.date }, test: { n: test.length, seasons: testSeasons, from: test[0]?.date, to: test[test.length - 1]?.date },
+      selectionRule: 'train-only; eligible = n>=60 & z>=1.5; shortlist = top-5 total return/season + top-3 z + forced (13/45, 9/45); ONE test look; 4 sequential blocks',
+      shortlist: results, trainGrid: trainGrid.filter(c => c.n >= 30) });
+  } catch (e) { res.status(500).json({ error: e.message, stack: (e.stack || '').split('\n').slice(0, 4) }); }
+});
+
 app.get('/api/admin/retrain-gate', (req, res) => {
   res.json({ last: readJSON(req.query.dryrun === 'true' ? 'retrain-gate-dryrun.json' : 'retrain-gate-result.json') || null });
 });
