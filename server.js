@@ -10177,6 +10177,13 @@ app.get('/api/admin/diag-l2-grid', async (req, res) => {
     for (const c of byReturn) shortlist.set(key(c), { edgeMin: c.edgeMin, probMin: c.probMin, why: 'top-5 train total return' });
     for (const c of byZ) if (!shortlist.has(key(c))) shortlist.set(key(c), { edgeMin: c.edgeMin, probMin: c.probMin, why: 'top-3 train z' });
     for (const c of forced) if (!shortlist.has(key(c))) shortlist.set(key(c), c);
+    // ?cells=0.07/0.45,0.08/0.45 — additional cells read on request. Each is a
+    // further look at the test slice beyond the pre-registered rule; the response
+    // labels them so the extra read is visible in the record.
+    for (const spec of String(req.query.cells || '').split(',').filter(Boolean)) {
+      const [e, p] = spec.split('/').map(Number);
+      if (Number.isFinite(e) && Number.isFinite(p)) { const c = { edgeMin: +e.toFixed(2), probMin: +p.toFixed(2), why: 'requested (extra test look)' }; if (!shortlist.has(key(c))) shortlist.set(key(c), c); }
+    }
     // blocks: four equal-n sequential blocks over the whole population
     const q = Math.floor(rows.length / 4);
     const blocks = [rows.slice(0, q), rows.slice(q, 2 * q), rows.slice(2 * q, 3 * q), rows.slice(3 * q)];
@@ -10190,7 +10197,7 @@ app.get('/api/admin/diag-l2-grid', async (req, res) => {
     }
     res.json({ leagueId, factor, split, cutoff, matched: rows.length, train: { n: train.length, seasons: trainSeasons, from: train[0]?.date, to: train[train.length - 1]?.date }, test: { n: test.length, seasons: testSeasons, from: test[0]?.date, to: test[test.length - 1]?.date },
       selectionRule: 'train-only; eligible = n>=60 & z>=1.5; shortlist = top-5 total return/season + top-3 z + forced (13/45, 9/45); ONE test look; 4 sequential blocks',
-      shortlist: results, trainGrid: trainGrid.filter(c => c.n >= 30) });
+      shortlist: results, trainGrid: trainGrid.filter(c => c.n >= 30), wholeGrid: (() => { const out = []; for (const e of edges) for (const p of probs) { const sm = summarise(cellRows(rows, e, p), seasonsIn(rows)); if (sm.n >= 30) out.push({ edgeMin: e, probMin: p, ...sm }); } return out; })() });
   } catch (e) { res.status(500).json({ error: e.message, stack: (e.stack || '').split('\n').slice(0, 4) }); }
 });
 
