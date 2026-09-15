@@ -18,7 +18,7 @@
 
 const {
   formScore, homeAdvScore, xgScore, h2hScore, defenseScore, momentumScore,
-  injuryScore, standingsScore, stalenessMultiplier, applyStalenessPull,
+  injuryScore, standingsScore, stalenessMultiplier, applyStalenessPull, rankToProxyScore,
   internationalFormScore, internationalQualityScore,
   applyLeagueBiasCorrection, LEAGUE_CONFIG,
   CORRECTION_LAYER_RULES, applyVariableCorrectionLayer,
@@ -31,7 +31,7 @@ const SCORER_VERSION = 'shared-stageA-2026-09-06';
 
 // What each path computes today (Stage A records; Stage B unifies).
 const FEATURE_SPEC = {
-  version: 'stageA-2026-09-06',
+  version: 'stageB-L2-2026-09-15',
   live: {
     formWindow: 'settings.formWindow league-only fixtures (API last-60 x 2 seasons + pool leagueBackfill); cups excluded; international: pool of international leagues',
     xg: 'StatsBomb/Understat lookup -> API-Sports statistics (statsCache, fetched for the 15 most recent league fixtures) -> shots-on x0.33 -> goals',
@@ -48,6 +48,17 @@ const FEATURE_SPEC = {
     injuries: 'constant 50',
     standings: 'resolveStandingsScore(): own snapshot at fixture date if played >= 1, else domestic-blend timeline, else 50',
     staleness: 'none',
+    awayHomeAdv: 50,
+  },
+  // Step 3 (2026-09-15): pool definitions for UNIFIED_LEAGUE_IDS (League Two)
+  // rewritten to match the live column above, one line each:
+  unified: {
+    formWindow: 'settings.formWindow (6) league-only pool fixtures strictly before the fixture, most recent first — cups excluded, as live',
+    xg: 'StatsBomb/Understat lookup -> fixture-stats.json (API-Sports statistics, real xG else shots-on x0.33) -> goals — the live tier chain; stats pooled back to 2019 for League Two',
+    h2h: 'last 5 meetings in the pool, any league (live: API headtohead last 5, any competition — residual difference: FA Cup / EFL Trophy meetings are absent from the pool)',
+    injuries: 'constant 50 (League Two has no /injuries coverage, so live is 50 too)',
+    standings: 'own in-season snapshot if played >= 1, else the same league\'s previous-season final table for the team (live: lastSeasonStandings proxy), else 50 — no domestic-blend',
+    staleness: 'applyStalenessPull as-of the fixture kickoff, same thresholds as live',
     awayHomeAdv: 50,
   },
 };
@@ -144,6 +155,64 @@ function buildPoolFactors(p) {
   return { homeFactors, awayFactors };
 }
 
+// ── Factors: unified pool path (step 3, League Two) ──────────────────────────
+// Same helper functions as buildLiveFactors, fed the way live feeds them: a
+// league-only window, the fixture-stats tier for xG, the previous-season table
+// as the early-season standings proxy, and the staleness pull as-of kickoff.
+function buildUnifiedPoolFactors(p) {
+  const { fix, teamIndex, standingsIndex, statsCache = {}, fw = 6, d = 0.05, hw = 5 } = p;
+  const lid = parseInt(fix.league?.id, 10);
+  const season = fix.league?.season;
+  const fid = fix.fixture?.id, fixDate = fix.fixture?.date;
+  const homeId = fix.teams?.home?.id, awayId = fix.teams?.away?.id;
+  const prior = (teamId) => (teamIndex[teamId] || []).filter(f => f.fixture?.id !== fid && f.fixture?.date < fixDate);
+  const homeAll = prior(homeId), awayAll = prior(awayId);
+  const homeFixtures = homeAll.filter(f => parseInt(f.league?.id, 10) === lid);
+  const awayFixtures = awayAll.filter(f => parseInt(f.league?.id, 10) === lid);
+  const h2h = homeAll.filter(f => f.teams?.home?.id === awayId || f.teams?.away?.id === awayId).slice(0, 5);
+
+  const ownSnap = standingsIndex?.byFixture?.get(fid);
+  const lastSeason = standingsIndex?.seasonEnd?.get(`${lid}_${season - 1}`);
+  const standingFor = (teamId, isHome) => {
+    if (ownSnap) {
+      const played = isHome ? ownSnap.homeGamesPlayed : ownSnap.awayGamesPlayed;
+      if (played >= 1) return rankToProxyScore(isHome ? ownSnap.homeRank : ownSnap.awayRank, ownSnap.leagueSize);
+    }
+    const prev = lastSeason?.get(String(teamId));
+    if (prev) return rankToProxyScore(prev.rank, prev.leagueSize);
+    return 50;
+  };
+
+  const homeFactors = {
+    form:      formScore(homeFixtures, homeId, fw, d),
+    homeAdv:   homeAdvScore(homeFixtures, homeId, d),
+    xg:        xgScore(homeFixtures, homeId, statsCache, d),
+    h2h:       h2hScore(h2h, homeId, hw, d),
+    defense:   defenseScore(homeFixtures, homeId, d),
+    momentum:  momentumScore(homeFixtures, homeId),
+    injuries:  50,
+    standings: standingFor(homeId, true),
+  };
+  const awayFactors = {
+    form:      formScore(awayFixtures, awayId, fw, d),
+    homeAdv:   50,
+    xg:        xgScore(awayFixtures, awayId, statsCache, d),
+    h2h:       100 - homeFactors.h2h,
+    defense:   defenseScore(awayFixtures, awayId, d),
+    momentum:  momentumScore(awayFixtures, awayId),
+    injuries:  50,
+    standings: standingFor(awayId, false),
+  };
+  const asOf = Date.parse(fixDate);
+  const hs = stalenessMultiplier(homeFixtures[0]?.fixture?.date || null, asOf);
+  const as = stalenessMultiplier(awayFixtures[0]?.fixture?.date || null, asOf);
+  for (const k of ['form', 'momentum', 'defense', 'xg']) {
+    homeFactors[k] = applyStalenessPull(homeFactors[k], hs);
+    awayFactors[k] = applyStalenessPull(awayFactors[k], as);
+  }
+  return { homeFactors, awayFactors, homeFormCount: homeFixtures.length, awayFormCount: awayFixtures.length };
+}
+
 // ── Probabilities (verbatim from scoreOneFixture, model -> bias -> correction ->
 //    rank anchor -> host boost -> team-profile modifiers). Each stage can be
 //    switched off through `options` so the validation path can reproduce exactly
@@ -234,6 +303,10 @@ function scoreProbabilities(p) {
     );
     probs = r.probs;
     teamIntel = r.teamIntel;
+  } else {
+    // Modifiers switched off for this league (unified leagues, step 3): keep the
+    // shape downstream code reads so nothing dereferences null.
+    teamIntel = { home: null, away: null, modifierNotes: ['team-profile modifiers disabled for this league (unified definitions)'], modifierApplied: false, neutralVenue: !!neutralVenue };
   }
 
   return { rawProbs, probs, correctionVersion, teamIntel };
@@ -251,4 +324,4 @@ function diffScores(a, b) {
   return { maxDiff: max, where: where.slice(-3) };
 }
 
-module.exports = { SCORER_VERSION, FEATURE_SPEC, buildLiveFactors, buildPoolFactors, scoreProbabilities, diffScores };
+module.exports = { SCORER_VERSION, FEATURE_SPEC, buildLiveFactors, buildPoolFactors, buildUnifiedPoolFactors, scoreProbabilities, diffScores };

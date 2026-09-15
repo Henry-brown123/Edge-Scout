@@ -87,6 +87,12 @@ const TOURNAMENT_LEAGUE_IDS = new Set([1, 2, 3, 48, 848]); // FIFA World Cup, Ch
 // TOURNAMENT_LEAGUE_IDS and teamProfiles.js INTERNATIONAL_LEAGUE_IDS.
 const RETIRED_LEAGUE_IDS = new Set([1, 2, 3, 48, 848, 4, 5, 6, 7, 8, 9, 10, 31, 32, 33, 34, 960]);
 function isRetiredLeague(leagueId) { return RETIRED_LEAGUE_IDS.has(parseInt(leagueId, 10)); }
+// 2026-09-15 (Addendum 52, step 3): leagues whose historical (pool) factor
+// definitions have been unified with the live definitions, so the validated
+// number and the live number are one calculation. League Two first; a league
+// is added here only after its own re-measurement is recorded.
+const UNIFIED_LEAGUE_IDS = new Set([42]);
+function isUnifiedLeague(leagueId) { return UNIFIED_LEAGUE_IDS.has(parseInt(leagueId, 10)); }
 // UEFA's competition reform (Champions League, Europa League, Conference League all
 // moved from group-of-4 stages to a single 36-team league-phase table) took effect
 // the 2024-25 season — API-Sports' own `season` field uses the year a season starts,
@@ -334,9 +340,11 @@ function standingsScore(standings, teamId, fixtureContext, lastSeasonStandings) 
 // game-to-game, but has no notion of calendar time — a 76-day-old game at index 0
 // (e.g. the only data available at season start) gets full weight otherwise, same
 // class of problem the standings games-played guard addresses.
-function stalenessMultiplier(mostRecentDate) {
+function stalenessMultiplier(mostRecentDate, asOfMs = Date.now()) {
   if (!mostRecentDate) return 0.5; // no data — pull to neutral
-  const daysSince = (Date.now() - new Date(mostRecentDate)) / 86400000;
+  // asOfMs (2026-09-15): the historical scorer passes the fixture's own kickoff so
+  // the pull is computed as-of the match, exactly as live computes it as-of now.
+  const daysSince = (asOfMs - new Date(mostRecentDate)) / 86400000;
   if (daysSince < 14) return 1.0;  // fresh — full confidence
   if (daysSince < 30) return 0.85; // slightly stale
   if (daysSince < 60) return 0.65; // moderately stale
@@ -1028,6 +1036,7 @@ module.exports = {
   CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND, DOMESTIC_LEAGUE_IDS_FOR_BLEND, UEFA_SINGLE_PHASE_SEASON_FLOOR,
   TOURNAMENT_LEAGUE_IDS,
   RETIRED_LEAGUE_IDS, isRetiredLeague,
+  UNIFIED_LEAGUE_IDS, isUnifiedLeague,
   EURO_COMPETITION_PHASE_GAMES_FLOOR,
   recencyAvg, outcomePoints,
   formScore, homeAdvScore, xgScore, defenseScore,

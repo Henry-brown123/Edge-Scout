@@ -23,7 +23,7 @@ const {
   scoreGoalsMarkets,
   stalenessMultiplier, applyStalenessPull,
   CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND, DOMESTIC_LEAGUE_IDS_FOR_BLEND, TOURNAMENT_LEAGUE_IDS,
-  RETIRED_LEAGUE_IDS, isRetiredLeague,
+  RETIRED_LEAGUE_IDS, isRetiredLeague, UNIFIED_LEAGUE_IDS, isUnifiedLeague,
   UEFA_SINGLE_PHASE_SEASON_FLOOR, EURO_COMPETITION_PHASE_GAMES_FLOOR, rankToProxyScore, lookupStandingScore,
   pickTopCandidateByProbability,
   marginStrippedImplied,
@@ -1827,7 +1827,21 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     return { rawProbs, probs, correctionVersion, teamIntel };
   };
   const probInputs = () => ({ homeF, awayF, weights, context, leagueId, leagueConfig, settings, cfg, dataConf, homeName, awayName, neutralVenue, competitionPhase, homeId, awayId, homeProfile, awayProfile, homeDays, awayDays, weatherForModifier, homeMatchday, awayMatchday, currentSeason, rankToQuality });
-  const activeProbs = scorerPath === 'shared' ? scoreProbabilities(probInputs()) : legacyProbs();
+  // Step 3 (2026-09-15): for unified leagues the live chain is model -> bias ->
+  // correction layer, exactly what the validation path computes; team-profile
+  // modifiers are switched off there and recorded in shadow (modifierShadow) so
+  // their effect can be paired-tested later, never assumed.
+  const unifiedLeague = isUnifiedLeague(leagueId);
+  const activeProbs = scorerPath === 'shared'
+    ? scoreProbabilities({ ...probInputs(), options: unifiedLeague ? { modifiers: false } : {} })
+    : legacyProbs();
+  let modifierShadow = null;
+  if (unifiedLeague && scorerPath === 'shared') {
+    try {
+      const withMods = scoreProbabilities(probInputs());
+      modifierShadow = { probs: withMods.probs, notes: withMods.teamIntel?.modifierNotes || [], maxDiff: diffScores({ probs: withMods.probs }, { probs: activeProbs.probs }).maxDiff };
+    } catch (e) { modifierShadow = { error: e.message }; }
+  }
   let probs = activeProbs.probs;
   const correctionVersion = activeProbs.correctionVersion;
   const teamIntel = activeProbs.teamIntel;
@@ -2061,7 +2075,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     teamIntel, paperTradeOnly, isTrainingHoldout, betMode,
     isClassifiedLeague, isDomesticTierLeague, tierCandidate, clearsPaperMoneyRule, meetsPaperMoneyRule, isFakeMoney,
     goalsCandidates, modelVersion, correctionVersion, domesticBlendFixtures,
-    scorerPath, scorerVersion: SCORER_VERSION, featureSpecVersion: `live-${FEATURE_SPEC.version}`, scorerShadow,
+    scorerPath, scorerVersion: SCORER_VERSION, featureSpecVersion: `live-${FEATURE_SPEC.version}`, scorerShadow, modifierShadow,
   };
 }
 
@@ -2171,7 +2185,7 @@ async function runMorningScan(leagueIds) {
             scoredAt:     new Date().toISOString(),
             successScore:    best.successScore,
             modelVersion:    scored.modelVersion,
-            scorerPath: scored.scorerPath, scorerVersion: scored.scorerVersion, featureSpecVersion: scored.featureSpecVersion, scorerShadowMaxDiff: scored.scorerShadow?.maxDiff ?? null,
+            modifierShadow: scored.modifierShadow ?? null, scorerPath: scored.scorerPath, scorerVersion: scored.scorerVersion, featureSpecVersion: scored.featureSpecVersion, scorerShadowMaxDiff: scored.scorerShadow?.maxDiff ?? null,
             correctionVersion: scored.correctionVersion,
             projectedBet:    best.displayLabel || best.bet,
             projectedBetKey: best.bet,
@@ -2542,7 +2556,7 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
       watchingStageModelProb: watchingEntry?.modelProb ?? null,
       watchingStageScoredAt:  watchingEntry?.scoredAt ?? null,
       modelVersion: scored.modelVersion,
-      scorerPath: scored.scorerPath, scorerVersion: scored.scorerVersion, featureSpecVersion: scored.featureSpecVersion, scorerShadowMaxDiff: scored.scorerShadow?.maxDiff ?? null,
+      modifierShadow: scored.modifierShadow ?? null, scorerPath: scored.scorerPath, scorerVersion: scored.scorerVersion, featureSpecVersion: scored.featureSpecVersion, scorerShadowMaxDiff: scored.scorerShadow?.maxDiff ?? null,
       correctionVersion: scored.correctionVersion,
       bookOdds:     best.bookOdds,
       // Raw Pinnacle price at lock time, separate from bookOdds (which is a generic
@@ -2834,7 +2848,7 @@ async function runHourlyRescan() {
             isTrainingHoldout: scored.isTrainingHoldout,
             // Addendum 51: the rescan re-scores through the live path, so it stamps
             // the same scorer tags a lock does (verifies the H cutover hourly).
-            scorerPath: scored.scorerPath, scorerVersion: scored.scorerVersion, featureSpecVersion: scored.featureSpecVersion, scorerShadowMaxDiff: scored.scorerShadow?.maxDiff ?? null,
+            modifierShadow: scored.modifierShadow ?? null, scorerPath: scored.scorerPath, scorerVersion: scored.scorerVersion, featureSpecVersion: scored.featureSpecVersion, scorerShadowMaxDiff: scored.scorerShadow?.maxDiff ?? null,
           };
           refreshed++;
         } catch (e) {
@@ -3749,7 +3763,7 @@ function stripFixture(f) {
 let _historicalBackfillRunning = false;
 let _historicalBackfillStatus  = null; // in-progress status for polling
 
-async function runHistoricalBackfill({ rescore = false, skipOptimise = false, onProgress } = {}) {
+async function runHistoricalBackfill({ rescore = false, skipOptimise = false, onProgress, rescoreLeagueIds = null } = {}) {
   if (_historicalBackfillRunning) return { error: 'already_running' };
   _historicalBackfillRunning = true;
   const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -3789,6 +3803,13 @@ async function runHistoricalBackfill({ rescore = false, skipOptimise = false, on
       existing.optimisedWeights = null;
       existing.accuracy         = null;
       console.log('[HistoricalBackfill] rescore=true — cleared scored records, will re-score all fixtures');
+    } else if (Array.isArray(rescoreLeagueIds) && rescoreLeagueIds.length) {
+      // Step 3 (2026-09-15): per-league rescore after a definition change — only
+      // these leagues' records are cleared and re-scored; everything else is kept.
+      const set = new Set(rescoreLeagueIds.map(Number));
+      const before = existing.scoredRecords.length;
+      existing.scoredRecords = existing.scoredRecords.filter(r => !set.has(parseInt(r.leagueId, 10)));
+      console.log(`[HistoricalBackfill] rescoreLeagueIds=${[...set].join(',')} — cleared ${before - existing.scoredRecords.length} records for re-scoring`);
     }
 
     // Teams whose fixture history actually changed this run (a fixture of theirs
@@ -3925,7 +3946,7 @@ async function runHistoricalBackfill({ rescore = false, skipOptimise = false, on
       const filteredDomesticTimeline = buildDomesticTimeline(filteredDomesticTimelineFixtures);
       const fullDomesticTimeline     = buildDomesticTimeline(allFixtures);
       let   scored         = 0;
-      const _sc = getSettings(); const scorerOpts = { scorerPath: _sc.scorerPath === 'shared' ? 'shared' : 'legacy', shadow: _sc.scorerShadow !== false };
+      const _sc = getSettings(); const scorerOpts = { scorerPath: _sc.scorerPath === 'shared' ? 'shared' : 'legacy', shadow: _sc.scorerShadow !== false, statsCache: getFixtureStats(), fw: _sc.formWindow ?? 6, d: _sc.decay ?? 0.05, hw: _sc.h2hWindow ?? 5 }; // step 3: unified leagues read the stats tier and live windows
       let shadowMax = 0, shadowOver = 0, shadowN = 0;
       const checkpointEvery = isLargeRun ? LARGE_RUN_PERSIST_EVERY : OPTIMISE_EVERY;
       let   nextCheckpointAt = Math.ceil(scoredMap.size / checkpointEvery) * checkpointEvery;
@@ -6067,9 +6088,10 @@ app.post('/api/backfill/historical', async (req, res) => {
     return res.json({ started: false, message: 'Already running', status: _historicalBackfillStatus });
   }
   const rescore      = req.query.rescore === 'true';
+  const rescoreLeagueIds = req.query.rescoreLeagues ? String(req.query.rescoreLeagues).split(',').map(Number).filter(Boolean) : null;
   const skipOptimise = req.query.skipOptimise === 'true';
   res.json({ started: true, rescore, skipOptimise, message: `Historical backfill running (rescore=${rescore}, skipOptimise=${skipOptimise}) — poll /api/backfill/historical/status` });
-  runHistoricalBackfill({ rescore, skipOptimise }).catch(e => console.error('[HistoricalBackfill]', e.message));
+  runHistoricalBackfill({ rescore, skipOptimise, rescoreLeagueIds }).catch(e => console.error('[HistoricalBackfill]', e.message));
 });
 
 app.get('/api/backfill/historical/status', (_req, res) => {
@@ -8411,6 +8433,80 @@ function startupCheck() {
 }
 
 // Extracted backfill logic callable without HTTP context
+// Step 3 (2026-09-15): targeted stats pool for one league over a season range —
+// League Two needs API-Sports statistics back to 2019 (coverage probe: none for
+// 2012/2015/2017, full from 2019) so the unified xG tier chain has the same
+// inputs historically that live has at lock. Cutoff-exempt (manual, daytime).
+let _statsLeagueStatus = { running: false, leagueId: null, seasons: null, startedAt: null, completedAt: null, calls: 0, fetched: 0, empty: 0, errors: 0, remaining: null, stoppedBy: null };
+async function runFixtureStatsForLeague({ leagueId, seasons, budget = 8000 }) {
+  if (_statsLeagueStatus.running) return _statsLeagueStatus;
+  const st = _statsLeagueStatus = { running: true, leagueId, seasons, startedAt: new Date().toISOString(), completedAt: null, calls: 0, fetched: 0, empty: 0, errors: 0, remaining: null, stoppedBy: null };
+  try {
+    const historical = readHistoricalCached();
+    const db = getFixtureStats();
+    const seasonSet = new Set(seasons);
+    const targets = (historical?.fixtures || []).filter(f => parseInt(f.league?.id, 10) === leagueId && seasonSet.has(f.league?.season) && ['FT','AET','PEN'].includes(f.fixture?.status?.short) && !db[String(f.fixture?.id)]);
+    st.remaining = targets.length;
+    console.log(`[StatsLeague] league ${leagueId} seasons ${[...seasonSet].join(',')}: ${targets.length} fixtures need stats (budget ${budget})`);
+    for (const fix of targets) {
+      if (st.calls >= budget) { st.stoppedBy = 'budget'; break; }
+      if (isRateLimited()) { st.stoppedBy = 'rate-limited'; break; }
+      const fid = String(fix.fixture?.id);
+      try {
+        const { data } = await apiSports.get('/fixtures/statistics', { params: { fixture: fid } });
+        st.calls++;
+        if (data?.errors?.requests) { setRateLimited(); st.stoppedBy = 'rate-limited'; break; }
+        if (data?.response?.length >= 2) {
+          const parseStats = ts => {
+            const find = t => ts.statistics?.find(x => x.type === t)?.value;
+            const xgRaw = find('expected_goals') ?? find('Expected Goals');
+            const shotsOn = parseInt(find('Shots on Goal') ?? 0) || 0;
+            const totalShots = parseInt(find('Total Shots') ?? 0) || 0;
+            const possession = parseFloat(String(find('Ball Possession') ?? '50%').replace('%','')) / 100;
+            const xg = xgRaw != null ? parseFloat(xgRaw) || null : (shotsOn || totalShots) ? computeXGProxy({ shotsOn, totalShots, possession }, fix.league?.id) : null;
+            return { xg, shotsOn, totalShots, possession };
+          };
+          db[fid] = { home: parseStats(data.response[0]), away: parseStats(data.response[1]) };
+          st.fetched++;
+        } else {
+          db[fid] = { home: null, away: null, empty: true }; // remembered so it is never refetched
+          st.empty++;
+        }
+      } catch { st.errors++; }
+      if (st.calls % 100 === 0) saveFixtureStats(db);
+      await new Promise(r => setTimeout(r, 250));
+    }
+    saveFixtureStats(db);
+    st.remaining = Math.max(0, targets.length - st.calls);
+    console.log(`[StatsLeague] Done — ${st.calls} calls, ${st.fetched} fetched, ${st.empty} empty, ${st.errors} errors, ${st.remaining} remaining${st.stoppedBy ? ` (stopped: ${st.stoppedBy})` : ''}`);
+  } catch (e) { st.error = e.message; console.error('[StatsLeague] Fatal:', e.message); }
+  finally { st.running = false; st.completedAt = new Date().toISOString(); }
+  return st;
+}
+
+app.post('/api/backfill/fixture-stats/league', (req, res) => {
+  const leagueId = parseInt(req.query.league, 10);
+  const from = parseInt(req.query.from, 10), to = parseInt(req.query.to, 10);
+  if (!leagueId || !from || !to || to < from) return res.status(400).json({ error: 'league, from, to required (seasons)' });
+  if (_statsLeagueStatus.running) return res.json({ error: 'already_running', status: _statsLeagueStatus });
+  const seasons = []; for (let y = from; y <= to; y++) seasons.push(y);
+  const budget = Math.max(1, Math.min(30000, parseInt(req.query.budget, 10) || 8000));
+  runFixtureStatsForLeague({ leagueId, seasons, budget }).catch(e => console.error('[StatsLeague]', e.message));
+  res.json({ started: true, leagueId, seasons, budget });
+});
+app.get('/api/backfill/fixture-stats/league/status', (req, res) => {
+  const db = getFixtureStats();
+  const lid = parseInt(req.query.league, 10);
+  const out = { ..._statsLeagueStatus };
+  if (lid) {
+    const hist = readHistoricalCached();
+    const bySeason = {};
+    for (const f of (hist?.fixtures || [])) { if (parseInt(f.league?.id, 10) !== lid) continue; const sea = f.league?.season; const has = !!db[String(f.fixture?.id)] && !db[String(f.fixture?.id)]?.empty; (bySeason[sea] = bySeason[sea] || { fixtures: 0, withStats: 0 }); bySeason[sea].fixtures++; if (has) bySeason[sea].withStats++; }
+    out.coverageBySeason = bySeason;
+  }
+  res.json(out);
+});
+
 async function runFixtureStatsBackfillFn({ budget = 2000 } = {}) {
   const historical = readHistoricalCached();
   if (!historical?.fixtures?.length) return;
@@ -9178,7 +9274,7 @@ async function computeMatchedEdgeFixtures() {
     // Stage A: identical quantity on either path (model + bias correction only, this
     // path's long-standing definition); Stage B decides what else joins it.
     const probs = settings.scorerPath === 'shared'
-      ? scoreProbabilities({ homeF: rec.homeFactors, awayF: rec.awayFactors, weights, context, leagueId, leagueConfig: LEAGUE_CONFIG[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: false, rankAdjust: false, hostBoost: false, modifiers: false } }).probs
+      ? scoreProbabilities({ homeF: rec.homeFactors, awayF: rec.awayFactors, weights, context, leagueId, leagueConfig: LEAGUE_CONFIG[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: isUnifiedLeague(leagueId), rankAdjust: false, hostBoost: false, modifiers: false } }).probs
       : applyLeagueBiasCorrection(model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]), leagueId, LEAGUE_CONFIG);
 
     let topOutcome, modelProb, pinnacleOdds;
@@ -9503,7 +9599,7 @@ async function runEvCalibrationConsensus() {
     // Stage A: identical quantity on either path (model + bias correction only, this
     // path's long-standing definition); Stage B decides what else joins it.
     const probs = settings.scorerPath === 'shared'
-      ? scoreProbabilities({ homeF: rec.homeFactors, awayF: rec.awayFactors, weights, context, leagueId, leagueConfig: LEAGUE_CONFIG[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: false, rankAdjust: false, hostBoost: false, modifiers: false } }).probs
+      ? scoreProbabilities({ homeF: rec.homeFactors, awayF: rec.awayFactors, weights, context, leagueId, leagueConfig: LEAGUE_CONFIG[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: isUnifiedLeague(leagueId), rankAdjust: false, hostBoost: false, modifiers: false } }).probs
       : applyLeagueBiasCorrection(model.predict(rec.homeFactors, rec.awayFactors, weights, context, LEAGUE_CONFIG[leagueId]), leagueId, LEAGUE_CONFIG);
 
     let topOutcome, modelProb, bookOdds;
@@ -9924,6 +10020,67 @@ app.get('/api/admin/model-archive', (_req, res) => {
     archiveDir: dir,
     versions: index.map(e => ({ ...e, isCurrent: e.version === current?.trainedAt, fileExists: fs.existsSync(path.join(dir, e.file || '')) })),
   });
+});
+
+// Step 3 (2026-09-15, Addendum 52): re-measure League Two's banked cell on the
+// unified probabilities. Fixed rule re-measured on the same population (legitimate);
+// the neighbourhood grid is DESCRIPTIVE — a cell chosen there would need its own
+// pre-registration and forward validation, never adoption from this population.
+// Pre-cutoff only; the reserved post-cutoff population is counted, never read.
+app.get('/api/admin/diag-l2-remeasure', async (req, res) => {
+  try {
+    const leagueId = parseInt(req.query.league, 10) || 42;
+    const factor = parseFloat(req.query.factor) || getCalFactorForLeague(getSettings(), leagueId);
+    const edgeMin = parseFloat(req.query.edgeMin) || 0.13, probMin = parseFloat(req.query.probMin) || 0.45;
+    const cutoff = req.query.cutoff || (DATE_SPLIT_HOLDOUT_CUTOFFS.get(leagueId) || '2026-08-11T09:00:00Z');
+    const { classifyFixture, WEIGHTS_BY_CONTEXT, CONTEXT_CONFIG, LEAGUE_CONFIG: LC } = require('./scoring');
+    const settings = getSettings();
+    const hist = readHistoricalCached() || {};
+    const closing = getClosingOdds();
+    const recs = (hist.scoredRecords || []).filter(r => parseInt(r.leagueId, 10) === leagueId && r.homeFactors && r.awayFactors && r.actualOutcome);
+    const specs = {}; for (const r of recs) specs[r.featureSpecVersion || 'untagged'] = (specs[r.featureSpecVersion || 'untagged'] || 0) + 1;
+    // optional: score with an archived model version too
+    let archived = null;
+    if (req.query.compareVersion) {
+      try {
+        const idx = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'model-archive', 'index.json'), 'utf8'));
+        const e = idx.find(v => v.version === req.query.compareVersion);
+        if (e) archived = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'model-archive', e.file), 'utf8'));
+      } catch {}
+    }
+    const { buildFeatures } = require('./models/gbdt');
+    const sig = z => 1 / (1 + Math.exp(-z));
+    const walk = (node, x) => node.leaf ? node.value : (x[node.feature] <= node.threshold ? walk(node.left, x) : walk(node.right, x));
+    const ens = (c, x) => { let F = c.initValue; for (const t of c.trees) F += c.lr * walk(t, x); return F; };
+    const predictArchived = (homeF, awayF, context) => { const x = buildFeatures(homeF, awayF, context); const h = sig(archived.platt.home.A * ens(archived.classifiers.home, x) + archived.platt.home.B), d = sig(archived.platt.draw.A * ens(archived.classifiers.draw, x) + archived.platt.draw.B), a = sig(archived.platt.away.A * ens(archived.classifiers.away, x) + archived.platt.away.B); const s = h + d + a; return { home: h / s, draw: d / s, away: a / s }; };
+    const activeRules = (settings.deployedCorrectionRuleIds || []).length ? CORRECTION_LAYER_RULES.filter(r => settings.deployedCorrectionRuleIds.includes(r.id)) : [];
+    const chainArchived = (raw) => { let p = applyLeagueBiasCorrection(raw, leagueId, LC); if (activeRules.some(r => r.leagues.includes(leagueId))) p = applyVariableCorrectionLayer(p, leagueId, activeRules); return p; };
+
+    const rows = []; let postCutoff = 0, unmatched = 0, i = 0;
+    for (const r of recs) {
+      if (++i % 300 === 0) await new Promise(rr => setImmediate(rr));
+      if (r.date >= cutoff) { postCutoff++; continue; }
+      const co = closing[r.fixtureId] || closing[String(r.fixtureId)];
+      if (!co || co.bookmaker !== 'pinnacle' || !(co.homeOdds > 1 && co.drawOdds > 1 && co.awayOdds > 1)) { unmatched++; continue; }
+      const context = r.context || classifyFixture(leagueId);
+      const probsNew = scoreProbabilities({ homeF: r.homeFactors, awayF: r.awayFactors, weights: WEIGHTS_BY_CONTEXT[context], context, leagueId, leagueConfig: LC[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: true, rankAdjust: false, hostBoost: false, modifiers: false } }).probs;
+      const probsOld = archived ? chainArchived(predictArchived(r.homeFactors, r.awayFactors, context)) : null;
+      const stripped = marginStrippedImplied(co);
+      const mk = (probs) => { const pick = probs.home >= probs.draw && probs.home >= probs.away ? 'home' : probs.away >= probs.draw ? 'away' : 'draw'; const calProb = Math.min(0.97, probs[pick] * factor); const edge = calProb - stripped[pick]; const odds = co[`${pick}Odds`]; const won = r.actualOutcome === pick; return { pick, prob: probs[pick], calProb, edge, market: stripped[pick], odds, won, pnl: won ? odds - 1 : -1, bm: (won ? 1 : 0) - stripped[pick] }; };
+      rows.push({ date: r.date, n: mk(probsNew), o: probsOld ? mk(probsOld) : null });
+    }
+    const summarise = (list) => { const n = list.length; if (!n) return { n: 0 }; const wins = list.filter(x => x.won).length; const roi = list.reduce((a, x) => a + x.pnl, 0) / n; const bm = list.reduce((a, x) => a + x.bm, 0) / n; const sd = Math.sqrt(list.reduce((a, x) => a + (x.bm - bm) ** 2, 0) / Math.max(1, n - 1)); const se = sd / Math.sqrt(n); const pnlSd = Math.sqrt(list.reduce((a, x) => a + (x.pnl - roi) ** 2, 0) / Math.max(1, n - 1)); return { n, wins, winRate: +(wins / n).toFixed(3), roiClose: +(roi * 100).toFixed(1), roiCi95: [+((roi - 1.96 * pnlSd / Math.sqrt(n)) * 100).toFixed(1), +((roi + 1.96 * pnlSd / Math.sqrt(n)) * 100).toFixed(1)], beyondMarketPp: +(bm * 100).toFixed(1), bmSePp: +(se * 100).toFixed(1), z: se ? +(bm / se).toFixed(2) : null, avgModel: +(list.reduce((a, x) => a + x.calProb, 0) / n).toFixed(3), avgMarket: +(list.reduce((a, x) => a + x.market, 0) / n).toFixed(3) }; };
+    const cell = (key, e, p) => summarise(rows.map(r => r[key]).filter(x => x && x.edge >= e && x.prob >= p));
+    const grid = (key) => { const out = []; for (let e = 0.07; e <= 0.201; e += 0.01) for (const p of [0.35, 0.40, 0.45, 0.50, 0.55, 0.60]) { const c = cell(key, +e.toFixed(2), p); out.push({ edgeMin: +e.toFixed(2), probMin: p, n: c.n, roiClose: c.roiClose ?? null, beyondMarketPp: c.beyondMarketPp ?? null, z: c.z ?? null }); } return out; };
+    const perYear = (key) => { const g = {}; for (const r of rows) { const x = r[key]; if (!x || !(x.edge >= edgeMin && x.prob >= probMin)) continue; const y = r.date.slice(0, 4); (g[y] = g[y] || []).push(x); } return Object.fromEntries(Object.entries(g).sort().map(([y, l]) => [y, summarise(l)])); };
+    res.json({
+      leagueId, factor, cutoff, records: recs.length, matchedPreCutoff: rows.length, postCutoffReservedCount: postCutoff, unmatchedPreCutoff: unmatched, featureSpecVersions: specs,
+      liveModelVersion: model.getVersion ? model.getVersion() : null, compareVersion: archived ? archived.trainedAt : null,
+      fixedCell: { edgeMin, probMin, newModelUnified: cell('n', edgeMin, probMin), oldModelUnified: archived ? cell('o', edgeMin, probMin) : null, perYearNew: perYear('n') },
+      allMatched: { newModelUnified: summarise(rows.map(r => r.n)), oldModelUnified: archived ? summarise(rows.map(r => r.o).filter(Boolean)) : null },
+      neighbourhoodGrid: { note: 'DESCRIPTIVE ONLY — pre-cutoff population is spent for selection; a different cell needs pre-registration and forward validation', newModelUnified: grid('n'), oldModelUnified: archived ? grid('o') : null },
+    });
+  } catch (e) { res.status(500).json({ error: e.message, stack: (e.stack || '').split('\n').slice(0, 4) }); }
 });
 
 app.get('/api/admin/retrain-gate', (req, res) => {

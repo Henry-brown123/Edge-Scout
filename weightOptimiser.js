@@ -4,9 +4,8 @@ const {
   formScore, homeAdvScore, xgScore, defenseScore, momentumScore,
   h2hScore, classifyFixture, WEIGHTS_BY_CONTEXT, computeModelProb,
   CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND, DOMESTIC_LEAGUE_IDS_FOR_BLEND,
-  UEFA_SINGLE_PHASE_SEASON_FLOOR, EURO_COMPETITION_PHASE_GAMES_FLOOR, rankToProxyScore,
-} = require('./scoring');
-const { buildPoolFactors, FEATURE_SPEC, diffScores } = require('./sharedScorer');
+  UEFA_SINGLE_PHASE_SEASON_FLOOR, EURO_COMPETITION_PHASE_GAMES_FLOOR, rankToProxyScore, isUnifiedLeague } = require('./scoring');
+const { buildPoolFactors, FEATURE_SPEC, diffScores, buildUnifiedPoolFactors } = require('./sharedScorer');
 
 // ─── RECENCY WEIGHT ───────────────────────────────────────────────────────────
 
@@ -293,10 +292,15 @@ function scoreFixtureFromPool(fix, teamIndex, standingsIndex, domesticTimeline, 
   };
   const sharedInputs = { homeFixtures, awayFixtures, h2h, homeId, awayId, homeStandings, awayStandings };
   const scorerPath = opts.scorerPath === 'shared' ? 'shared' : 'legacy';
-  const active = scorerPath === 'shared' ? buildPoolFactors(sharedInputs) : legacyFactors();
+  // Step 3 (2026-09-15): unified leagues use the live definitions; no shadow diff
+  // (divergence from the legacy pool definition is the point).
+  const unified = isUnifiedLeague(fix.league?.id);
+  const active = unified
+    ? buildUnifiedPoolFactors({ fix, teamIndex, standingsIndex, statsCache: opts.statsCache || {}, fw: opts.fw ?? 6, d: opts.d ?? 0.05, hw: opts.hw ?? 5 })
+    : (scorerPath === 'shared' ? buildPoolFactors(sharedInputs) : legacyFactors());
   const { homeFactors, awayFactors } = active;
   let shadowMaxDiff = null;
-  if (opts.shadow) {
+  if (opts.shadow && !unified) {
     const other = scorerPath === 'shared' ? legacyFactors() : buildPoolFactors(sharedInputs);
     shadowMaxDiff = diffScores({ homeF: active.homeFactors, awayF: active.awayFactors }, { homeF: other.homeFactors, awayF: other.awayFactors }).maxDiff;
   }
@@ -318,12 +322,12 @@ function scoreFixtureFromPool(fix, teamIndex, standingsIndex, domesticTimeline, 
     // (fixtures in the team's own pool, already computed above for form/xg/etc),
     // so dataConf can be computed historically via computeDataConf() with the
     // exact same definition live uses, not a read-time approximation.
-    homeFormCount: homeFixtures.length,
-    awayFormCount: awayFixtures.length,
+    homeFormCount: unified ? active.homeFormCount : homeFixtures.length,
+    awayFormCount: unified ? active.awayFormCount : awayFixtures.length,
     actualOutcome: hg > ag ? 'home' : hg < ag ? 'away' : 'draw',
     goals:         { home: hg, away: ag },
     recencyWeight: recencyWeight(fix.fixture?.date),
-    featureSpecVersion: `pool-${FEATURE_SPEC.version}`,
+    featureSpecVersion: unified ? `pool-unified-${FEATURE_SPEC.version}` : `pool-${FEATURE_SPEC.version}`,
     scorerPath,
     ...(shadowMaxDiff != null ? { _scorerShadowMaxDiff: shadowMaxDiff } : {}),
   };
