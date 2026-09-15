@@ -10033,6 +10033,7 @@ app.get('/api/admin/diag-l2-remeasure', async (req, res) => {
     const factor = parseFloat(req.query.factor) || getCalFactorForLeague(getSettings(), leagueId);
     const edgeMin = parseFloat(req.query.edgeMin) || 0.13, probMin = parseFloat(req.query.probMin) || 0.45;
     const cutoff = req.query.cutoff || (DATE_SPLIT_HOLDOUT_CUTOFFS.get(leagueId) || '2026-08-11T09:00:00Z');
+    const useCorrection = req.query.correction !== 'false'; // attribution: definitions vs correction layer
     const { classifyFixture, WEIGHTS_BY_CONTEXT, CONTEXT_CONFIG, LEAGUE_CONFIG: LC } = require('./scoring');
     const settings = getSettings();
     const hist = readHistoricalCached() || {};
@@ -10054,7 +10055,7 @@ app.get('/api/admin/diag-l2-remeasure', async (req, res) => {
     const ens = (c, x) => { let F = c.initValue; for (const t of c.trees) F += c.lr * walk(t, x); return F; };
     const predictArchived = (homeF, awayF, context) => { const x = buildFeatures(homeF, awayF, context); const h = sig(archived.platt.home.A * ens(archived.classifiers.home, x) + archived.platt.home.B), d = sig(archived.platt.draw.A * ens(archived.classifiers.draw, x) + archived.platt.draw.B), a = sig(archived.platt.away.A * ens(archived.classifiers.away, x) + archived.platt.away.B); const s = h + d + a; return { home: h / s, draw: d / s, away: a / s }; };
     const activeRules = (settings.deployedCorrectionRuleIds || []).length ? CORRECTION_LAYER_RULES.filter(r => settings.deployedCorrectionRuleIds.includes(r.id)) : [];
-    const chainArchived = (raw) => { let p = applyLeagueBiasCorrection(raw, leagueId, LC); if (activeRules.some(r => r.leagues.includes(leagueId))) p = applyVariableCorrectionLayer(p, leagueId, activeRules); return p; };
+    const chainArchived = (raw) => { let p = applyLeagueBiasCorrection(raw, leagueId, LC); if (useCorrection && activeRules.some(r => r.leagues.includes(leagueId))) p = applyVariableCorrectionLayer(p, leagueId, activeRules); return p; };
 
     const rows = []; let postCutoff = 0, unmatched = 0, i = 0;
     for (const r of recs) {
@@ -10063,7 +10064,7 @@ app.get('/api/admin/diag-l2-remeasure', async (req, res) => {
       const co = closing[r.fixtureId] || closing[String(r.fixtureId)];
       if (!co || co.bookmaker !== 'pinnacle' || !(co.homeOdds > 1 && co.drawOdds > 1 && co.awayOdds > 1)) { unmatched++; continue; }
       const context = r.context || classifyFixture(leagueId);
-      const probsNew = scoreProbabilities({ homeF: r.homeFactors, awayF: r.awayFactors, weights: WEIGHTS_BY_CONTEXT[context], context, leagueId, leagueConfig: LC[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: true, rankAdjust: false, hostBoost: false, modifiers: false } }).probs;
+      const probsNew = scoreProbabilities({ homeF: r.homeFactors, awayF: r.awayFactors, weights: WEIGHTS_BY_CONTEXT[context], context, leagueId, leagueConfig: LC[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: useCorrection, rankAdjust: false, hostBoost: false, modifiers: false } }).probs;
       const probsOld = archived ? chainArchived(predictArchived(r.homeFactors, r.awayFactors, context)) : null;
       const stripped = marginStrippedImplied(co);
       const mk = (probs) => { const pick = probs.home >= probs.draw && probs.home >= probs.away ? 'home' : probs.away >= probs.draw ? 'away' : 'draw'; const calProb = Math.min(0.97, probs[pick] * factor); const edge = calProb - stripped[pick]; const odds = co[`${pick}Odds`]; const won = r.actualOutcome === pick; return { pick, prob: probs[pick], calProb, edge, market: stripped[pick], odds, won, pnl: won ? odds - 1 : -1, bm: (won ? 1 : 0) - stripped[pick] }; };
@@ -10074,7 +10075,7 @@ app.get('/api/admin/diag-l2-remeasure', async (req, res) => {
     const grid = (key) => { const out = []; for (let e = 0.07; e <= 0.201; e += 0.01) for (const p of [0.35, 0.40, 0.45, 0.50, 0.55, 0.60]) { const c = cell(key, +e.toFixed(2), p); out.push({ edgeMin: +e.toFixed(2), probMin: p, n: c.n, roiClose: c.roiClose ?? null, beyondMarketPp: c.beyondMarketPp ?? null, z: c.z ?? null }); } return out; };
     const perYear = (key) => { const g = {}; for (const r of rows) { const x = r[key]; if (!x || !(x.edge >= edgeMin && x.prob >= probMin)) continue; const y = r.date.slice(0, 4); (g[y] = g[y] || []).push(x); } return Object.fromEntries(Object.entries(g).sort().map(([y, l]) => [y, summarise(l)])); };
     res.json({
-      leagueId, factor, cutoff, records: recs.length, matchedPreCutoff: rows.length, postCutoffReservedCount: postCutoff, unmatchedPreCutoff: unmatched, featureSpecVersions: specs,
+      leagueId, factor, cutoff, correctionLayerApplied: useCorrection, records: recs.length, matchedPreCutoff: rows.length, postCutoffReservedCount: postCutoff, unmatchedPreCutoff: unmatched, featureSpecVersions: specs,
       liveModelVersion: model.getVersion ? model.getVersion() : null, compareVersion: archived ? archived.trainedAt : null,
       fixedCell: { edgeMin, probMin, newModelUnified: cell('n', edgeMin, probMin), oldModelUnified: archived ? cell('o', edgeMin, probMin) : null, perYearNew: perYear('n') },
       allMatched: { newModelUnified: summarise(rows.map(r => r.n)), oldModelUnified: archived ? summarise(rows.map(r => r.o).filter(Boolean)) : null },
