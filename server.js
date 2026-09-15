@@ -23,6 +23,7 @@ const {
   scoreGoalsMarkets,
   stalenessMultiplier, applyStalenessPull,
   CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND, DOMESTIC_LEAGUE_IDS_FOR_BLEND, TOURNAMENT_LEAGUE_IDS,
+  RETIRED_LEAGUE_IDS, isRetiredLeague,
   UEFA_SINGLE_PHASE_SEASON_FLOOR, EURO_COMPETITION_PHASE_GAMES_FLOOR, rankToProxyScore, lookupStandingScore,
   pickTopCandidateByProbability,
   marginStrippedImplied,
@@ -452,12 +453,19 @@ function saveOddsHistory(list)  { writeJSON('odds-history.json', list); }
 function getRealBets()          { return readJSON('real-bets.json') || []; }
 function saveRealBets(list)     { writeJSON('real-bets.json', list); }
 
+// Addendum 51: retired leagues are stripped from the active list everywhere the
+// scan/lock/backfill paths read it, whatever settings.json on disk still holds.
+function getActiveLeagues() {
+  return (getSettings().activeLeagues || []).filter(id => !isRetiredLeague(id));
+}
+
 function getLeagueModes() {
   const settings = getSettings();
   const modes = { ...SETTINGS_DEFAULTS.leagueModes, ...(settings.leagueModes || {}) };
   // Sync paperTradeOnly array into leagueModes as paper_only
   const paperOnly = settings.paperTradeOnly || [];
   for (const lid of paperOnly) modes[String(lid)] = 'paper_only';
+  for (const lid of RETIRED_LEAGUE_IDS) modes[String(lid)] = 'retired'; // Addendum 51
   return modes;
 }
 
@@ -540,6 +548,7 @@ const DATE_SPLIT_HOLDOUT_CUTOFFS = new Map([
 
 function isFixtureTrainingHoldout(leagueId, kickoffIso) {
   const lid = parseInt(leagueId, 10);
+  if (RETIRED_LEAGUE_IDS.has(lid)) return true; // Addendum 51: never training-eligible
   if (TRAINING_HOLDOUT_LEAGUE_IDS.has(lid)) return true;
   const cutoff = DATE_SPLIT_HOLDOUT_CUTOFFS.get(lid);
   if (cutoff !== undefined) {
@@ -719,6 +728,7 @@ function getCalFactorForLeague(_settings, leagueId) {
 }
 function getCalFactorSource(leagueId) {
   const lid = parseInt(leagueId, 10);
+  if (RETIRED_LEAGUE_IDS.has(lid)) return 'RETIRED'; // Addendum 51: no cohort; numeric factor kept only so a stale record cannot NaN
   if (TOURNAMENT_LEAGUE_IDS.has(lid)) return 'TOURNAMENT_CALIBRATION_FACTOR';
   if (RULE12_CALIBRATION_LEAGUE_IDS.has(lid)) return 'RULE12_CALIBRATION_FACTOR';
   if (TOP_DIVISION_CALIBRATION_LEAGUE_IDS.has(lid)) return 'TOP_DIVISION_CALIBRATION_FACTOR';
@@ -871,23 +881,23 @@ apiSports.interceptors.response.use(
 // a real gap in the safeguard's coverage, not a bug in the check itself
 // (LEAGUES didn't exist as a registry entry at all). Closed below.
 const LEAGUES = {
-  '1':   { name: 'FIFA World Cup',      season: 2026, sport: 'soccer_fifa_world_cup' },
+  '1':   { name: 'FIFA World Cup',      season: 2026, sport: 'soccer_fifa_world_cup' , retired: true },
   '39':  { name: 'Premier League',      season: 2026, sport: 'soccer_epl' },
   '140': { name: 'La Liga',             season: 2026, sport: 'soccer_spain_la_liga' },
   '78':  { name: 'Bundesliga',          season: 2026, sport: 'soccer_germany_bundesliga' },
   '135': { name: 'Serie A',             season: 2026, sport: 'soccer_italy_serie_a' },
   '61':  { name: 'Ligue 1',             season: 2026, sport: 'soccer_france_ligue_one' },
-  '2':   { name: 'Champions League',      season: 2026, sport: 'soccer_uefa_champs_league' },
+  '2':   { name: 'Champions League',      season: 2026, sport: 'soccer_uefa_champs_league' , retired: true },
   '179': { name: 'Scottish Premiership',  season: 2026, sport: 'soccer_spl' },
   '88':  { name: 'Eredivisie',            season: 2026, sport: 'soccer_netherlands_eredivisie' },
   '94':  { name: 'Primeira Liga',         season: 2026, sport: 'soccer_portugal_primeira_liga' },
-  '3':   { name: 'Europa League',         season: 2026, sport: 'soccer_uefa_europa_league' },
-  '848': { name: 'Conference League',     season: 2026, sport: 'soccer_uefa_europa_conference_league' },
+  '3':   { name: 'Europa League',         season: 2026, sport: 'soccer_uefa_europa_league' , retired: true },
+  '848': { name: 'Conference League',     season: 2026, sport: 'soccer_uefa_europa_conference_league' , retired: true },
   // Added 2026-08-10, paper-only — see LEAGUE_CONFIG[48] in scoring.js for why no
   // base-rate calibration is set. API-Sports id 48 ("League Cup", England) is the
   // Carabao Cup's official league name in that API; confirmed via /leagues?search=
   // "League Cup" and cross-checked against live Round of 128 fixtures.
-  '48':  { name: 'Carabao Cup',           season: 2026, sport: 'soccer_england_efl_cup' },
+  '48':  { name: 'Carabao Cup',           season: 2026, sport: 'soccer_england_efl_cup' , retired: true },
   // Added 2026-08-10, paper-only — see LEAGUE_CONFIG[41]/[42] in scoring.js. IDs and
   // sport keys confirmed via /leagues?search=League+One / League+Two and
   // /api/odds/sports, cross-checked against real current-season and mid-season-2025
@@ -2161,7 +2171,7 @@ async function runMorningScan(leagueIds) {
             scoredAt:     new Date().toISOString(),
             successScore:    best.successScore,
             modelVersion:    scored.modelVersion,
-            scorerVersion: scored.scorerVersion, featureSpecVersion: scored.featureSpecVersion, scorerShadowMaxDiff: scored.scorerShadow?.maxDiff ?? null,
+            scorerPath: scored.scorerPath, scorerVersion: scored.scorerVersion, featureSpecVersion: scored.featureSpecVersion, scorerShadowMaxDiff: scored.scorerShadow?.maxDiff ?? null,
             correctionVersion: scored.correctionVersion,
             projectedBet:    best.displayLabel || best.bet,
             projectedBetKey: best.bet,
@@ -2532,7 +2542,7 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
       watchingStageModelProb: watchingEntry?.modelProb ?? null,
       watchingStageScoredAt:  watchingEntry?.scoredAt ?? null,
       modelVersion: scored.modelVersion,
-      scorerVersion: scored.scorerVersion, featureSpecVersion: scored.featureSpecVersion, scorerShadowMaxDiff: scored.scorerShadow?.maxDiff ?? null,
+      scorerPath: scored.scorerPath, scorerVersion: scored.scorerVersion, featureSpecVersion: scored.featureSpecVersion, scorerShadowMaxDiff: scored.scorerShadow?.maxDiff ?? null,
       correctionVersion: scored.correctionVersion,
       bookOdds:     best.bookOdds,
       // Raw Pinnacle price at lock time, separate from bookOdds (which is a generic
@@ -3307,7 +3317,7 @@ function setupScheduler() {
     const t0 = Date.now();
     console.log('[Cron:MorningScan] 07:00 UTC — starting morning scan');
     try {
-      const leagues = getSettings().activeLeagues || ['1','39','140','78','135','61','2'];
+      const leagues = getActiveLeagues();
       await runMorningScan(leagues);
       console.log(`[Cron:MorningScan] Complete in ${Math.round((Date.now() - t0) / 1000)}s`);
     } catch (e) {
@@ -3629,7 +3639,7 @@ const HISTORICAL_BACKFILL_CONFIG = [
 // this, the lineup-timing redesign would deliver lineups to a modifier with nothing
 // to apply. ~1,650 fixtures x 3 leagues x 5 seasons, filled by the nightly chain's
 // 5,000-call phase over a few nights plus a manual run today.
-const LINEUP_LEAGUES = new Set([39, 2, 140, 135, 78, 61, 40, 41, 42]); // PL, CL, La Liga, Serie A, Bundesliga, Ligue 1, Championship, League One, League Two
+const LINEUP_LEAGUES = new Set([39, 140, 135, 78, 61, 40, 41, 42]); // PL, La Liga, Serie A, Bundesliga, Ligue 1, Championship, League One, League Two (CL removed 2026-09-15, Addendum 51)
 const STATS_LEAGUES  = LINEUP_LEAGUES;
 const LINEUP_SEASONS = new Set([2022, 2023, 2024, 2025, 2026]);
 const STATS_SEASONS  = LINEUP_SEASONS;
@@ -3937,6 +3947,7 @@ async function runHistoricalBackfill({ rescore = false, skipOptimise = false, on
       let sinceYield = 0;
       for (const fix of allFixtures) {
         if (scoredMap.has(fix.fixture?.id)) continue;
+        if (isRetiredLeague(fix.league?.id)) continue; // Addendum 51: context only, never a scoring row
         // One malformed fixture (e.g. from an older season with unexpected API shape)
         // must not silently kill the whole batch — isolate per-fixture so a single bad
         // record is skipped and logged rather than aborting everything after it.
@@ -4359,6 +4370,7 @@ const WEEKLY_RETRAIN_DATE_SPLIT_CUTOFFS = new Map([
 
 function isWeeklyRetrainExcluded(leagueId, date) {
   const lid = parseInt(leagueId, 10);
+  if (RETIRED_LEAGUE_IDS.has(lid)) return true; // Addendum 51
   if (WEEKLY_RETRAIN_FULLY_EXCLUDED_LEAGUE_IDS.has(lid)) return true;
   const cutoff = WEEKLY_RETRAIN_DATE_SPLIT_CUTOFFS.get(lid);
   if (cutoff !== undefined) {
@@ -4372,7 +4384,7 @@ function getEligibleTrainingSnapshot() {
   const hist = readHistoricalCached() || {};
   const records = hist.scoredRecords || [];
   const eligible = records.filter(r =>
-    r.homeFactors && r.awayFactors && r.actualOutcome && r.context &&
+    r.homeFactors && r.awayFactors && r.actualOutcome && r.context === 'club_domestic' &&
     !isWeeklyRetrainExcluded(r.leagueId, r.date)
   );
   const byLeague = {};
@@ -5075,7 +5087,7 @@ app.get('/api/state', (_req, res) => {
     bets:        getBets(),
     watching,
     settings,
-    leagues:     LEAGUES,
+    leagues:     Object.fromEntries(Object.entries(LEAGUES).filter(([id]) => !isRetiredLeague(id))), // Addendum 51: retired leagues hidden from the UI
     phase2Ready: !!scanMeta.phase2Ready,
   });
 });
@@ -5569,7 +5581,7 @@ const COMPETITION_TYPE = {
   39: 'league', 140: 'league', 135: 'league', 78: 'league', 61: 'league',
   179: 'league', 88: 'league', 94: 'league', 41: 'league', 42: 'league', 40: 'league',
   136: 'league', 141: 'league', 79: 'league',
-  2: 'tournament', 3: 'tournament', 848: 'tournament', 48: 'tournament',
+  2: 'retired', 3: 'retired', 848: 'retired', 48: 'retired', // Addendum 51 (were 'tournament')
 };
 // Every league with a genuine train/test split as of 2026-08-07 — the original
 // four (PL, Ligue 1, Champions League, Serie A) plus Scottish Premiership,
@@ -5580,12 +5592,12 @@ const COMPETITION_TYPE = {
 // it would silently change those pooled numbers, not just add display columns.
 // TIER_PERF_GRID_LEAGUES (below) is the separate, wider set used only for the
 // grid's per-league Live breakdown.
-const TIER_PERF_VALIDATED_LEAGUES = new Set([39, 61, 2, 135, 179, 78, 140, 88, 94]);
+const TIER_PERF_VALIDATED_LEAGUES = new Set([39, 61, 135, 179, 78, 140, 88, 94]); // Champions League (2) removed 2026-09-15, Addendum 51
 // All grid-eligible competitions (League/Tournament toggle) — used only to widen
 // byLeagueForTier's per-column breakdown below. Does not touch validatedBets/
 // otherBets/row.live/status/otherLeagueActivity, which stay scoped to
 // TIER_PERF_VALIDATED_LEAGUES exactly as before.
-const TIER_PERF_GRID_LEAGUES = new Set(Object.keys(COMPETITION_TYPE).map(Number));
+const TIER_PERF_GRID_LEAGUES = new Set(Object.keys(COMPETITION_TYPE).map(Number).filter(id => COMPETITION_TYPE[id] !== 'retired'));
 // Same threshold the codebase already uses to decide a league has "enough" live
 // paper-trade evidence (see runEvCalibration()'s MIN_LIVE_PAPER_TRADES) — reused
 // here so "enough live data to say something" means the same thing everywhere.
@@ -5998,7 +6010,7 @@ app.delete('/api/bets/:id', (req, res) => {
 
 // Trigger morning scan manually
 app.post('/api/scan/morning', async (req, res) => {
-  const leagues = req.body.leagues || getSettings().activeLeagues;
+  const leagues = (req.body.leagues || getSettings().activeLeagues || []).filter(id => !isRetiredLeague(id));
   res.json({ started: true, leagues });
   runMorningScan(leagues).catch(e => console.error('[ManualMorningScan]', e.message));
 });
@@ -6503,6 +6515,7 @@ async function runClosingOddsBackfill({ budgetCredits = 80000, leagueIds = null,
     let scanIdx = 0;
     for (const fix of hist.fixtures) {
       if (++scanIdx % 500 === 0) await new Promise(r => setImmediate(r));
+      if (isRetiredLeague(fix.league?.id)) continue; // Addendum 51: no pricing for retired competitions
       const fid   = fix.fixture?.id;
       const lid   = String(fix.league?.id);
       const sport = CLOSING_ODDS_SPORT_MAP[lid];
@@ -7321,7 +7334,7 @@ function buildWalkForwardMatrix() {
 // imply a validated edge.
 // Serie B / Segunda División / 2. Bundesliga (136/141/79) added 2026-09-04 on the
 // same 'real-backtest-no-edge' display-only basis as Championship (Addendum 43).
-const UNSEEN_POPULATION_DISPLAY_IDS = new Set([48, 41, 42, 40, 136, 141, 79]);
+const UNSEEN_POPULATION_DISPLAY_IDS = new Set([41, 42, 40, 136, 141, 79]); // Carabao Cup (48) retired 2026-09-15, Addendum 51
 const UNSEEN_POPULATION_CONFIRMED_IDS = new Set([48, 41, 42]);
 
 async function buildUnseenPopulationMatrix() {
@@ -7456,7 +7469,7 @@ app.get('/api/league-tier-matrix', async (_req, res) => {
     scope: {
       leagues: gridLeagues,
       // One entry per cohort with a grid-eligible league; display metadata only.
-      cohorts: calibrationCohorts.map(c => ({ ...c, leagueIds: c.leagueIds.filter(id => COMPETITION_TYPE[id]) })).filter(c => c.leagueIds.length),
+      cohorts: calibrationCohorts.map(c => ({ ...c, leagueIds: c.leagueIds.filter(id => COMPETITION_TYPE[id] && COMPETITION_TYPE[id] !== 'retired') })).filter(c => c.leagueIds.length),
       validatedLeagues: leagueIds.filter(id => !UNSEEN_POPULATION_LEAGUES.has(id)).map(id => ({ id, name: LEAGUE_TIER_MATRIX[id].name })),
       unseenPopulationLeagues: leagueIds.filter(id => UNSEEN_POPULATION_LEAGUES.has(id)).map(id => ({ id, name: LEAGUE_TIER_MATRIX[id].name })),
       tierLabels: LEAGUE_TIER_MATRIX_TIER_ORDER,
@@ -8746,6 +8759,11 @@ const CALIBRATION_AUDIT = {
   141: { reliable: false, status: 'backtested_no_edge', note: 'Single disciplined backtest completed 2026-09-04 20:35 UTC on the full rule-10-protected, never-trained-on population (11 seasons, 4,709 fixtures scored, 2,962 matched with closing odds 2020-06 → 2026-08; 116 misses). Scoring model 2026-08-08 (tree boundary 2022-11-14 is date-only; this league was never in any training pool). Calibration overconfident from the mid tiers up (e.g. 55-60%: predicted 57.3% vs actual 48.8%; 65-70%: 67.4% vs 55.8%). Pooled ROI on posEdge>=5% bets at the 1.02 starting factor: n=1,510 (clears rule-6), ROI -4.80%, 95% CI [-11.39%, +1.79%] — spans zero, no confirmed edge. Per-league Brier optimum 0.92; shares 0.90 with the other two continental second tiers (cost vs own 0.00007, inside the 0.0002 bar; the EFL 0.93 costs 0.00004) — rule 17, Addendum 43 Part 3. Train-only 1% grid at 0.90 with a single test look found no threshold that survives out of window (Part 4). NOT added to UNSEEN_POPULATION_CONFIRMED_IDS; shown in the grid as real-backtest-no-edge for review only. Converted to a rule-12 date-split at 2026-09-04T21:00:00Z per rule 15 the same evening; this reading never changes.' },
   79:  { reliable: false, status: 'backtested_no_edge', note: 'Single disciplined backtest completed 2026-09-04 20:35 UTC on the full rule-10-protected, never-trained-on population (16 seasons, 4,628 fixtures scored, 1,911 matched with closing odds 2020-06 → 2026-09; 111 misses). Scoring model 2026-08-08 (tree boundary 2022-11-14 is date-only; this league was never in any training pool). Calibration overconfident from the mid tiers up (e.g. 60-65%: predicted 62.3% vs actual 51.2%; 65-70%: 67.2% vs 55.9%). Pooled ROI on posEdge>=5% bets at the 1.02 starting factor: n=932 (clears rule-6), ROI -0.47%, 95% CI [-8.46%, +7.51%] — spans zero, no confirmed edge. Per-league Brier optimum 0.91; shares 0.90 with the other two continental second tiers (cost vs own 0.00001, inside the 0.0002 bar; the EFL 0.93 costs 0.00014) — rule 17, Addendum 43 Part 3. Train-only 1% grid at 0.90 with a single test look found no threshold that survives out of window (Part 4). NOT added to UNSEEN_POPULATION_CONFIRMED_IDS; shown in the grid as real-backtest-no-edge for review only. Converted to a rule-12 date-split at 2026-09-04T21:00:00Z per rule 15 the same evening; this reading never changes.' },
 };
+// Addendum 51 (2026-09-15): retired competitions keep their historical notes but
+// no longer carry an evidentiary status any domestic pocket can inherit.
+for (const id of RETIRED_LEAGUE_IDS) {
+  if (CALIBRATION_AUDIT[id]) { CALIBRATION_AUDIT[id].previousStatus = CALIBRATION_AUDIT[id].status; CALIBRATION_AUDIT[id].status = 'retired'; CALIBRATION_AUDIT[id].retiredAt = '2026-09-15'; }
+}
 
 // Correction-layer-backtest readings (calibration-rules.md rules 13/14).
 // Distinct from CALIBRATION_AUDIT above: CALIBRATION_AUDIT describes the CORE
@@ -9729,6 +9747,17 @@ function readHistoricalCached() {
   try { mtimeMs = fs.statSync(p).mtimeMs; } catch { return null; }
   if (_histFileCache.data && _histFileCache.mtimeMs === mtimeMs) return _histFileCache.data;
   const data = readJSON('backfill-historical.json');
+  // 2026-09-15 (Addendum 51): retired (tournament/international) scoredRecords are
+  // hidden from every reader — trainer mirrors, matched-edge builders, calibration,
+  // the nightly scoring loop's "already scored" map. Fixtures are untouched (schedule
+  // context). Because the nightly loop saves scoredRecords back from this view, the
+  // hidden rows drop out of the file on its next save — intended, and reversible
+  // only by re-scoring, which the loop no longer does for retired leagues.
+  if (data && Array.isArray(data.scoredRecords)) {
+    const before = data.scoredRecords.length;
+    data.scoredRecords = data.scoredRecords.filter(r => r.context === 'club_domestic' && !isRetiredLeague(r.leagueId));
+    data._retiredScoredRecordsHidden = before - data.scoredRecords.length;
+  }
   _histFileCache = { mtimeMs, data };
   return data;
 }
@@ -9958,7 +9987,7 @@ function getCalibrationCohorts() {
   const settings = getSettings();
   const rows = Object.keys(LEAGUE_CONFIG).map(id => { const lid = parseInt(id, 10); return {
     leagueId: lid, name: LEAGUE_CONFIG[id].name,
-    tier: TOURNAMENT_LEAGUE_IDS.has(lid) ? 'tournament' : DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(lid) ? 'domestic' : 'unclassified',
+    tier: RETIRED_LEAGUE_IDS.has(lid) ? 'retired' : DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(lid) ? 'domestic' : 'unclassified',
     calibrationFactor: getCalFactorForLeague(settings, lid),
     factorSource: getCalFactorSource(lid),
     paperEdgeMin: DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(lid) ? getPaperMoneyEdgeMin(lid) : null,
@@ -9967,6 +9996,7 @@ function getCalibrationCohorts() {
   }; });
   const cohortMap = {};
   for (const r of rows) {
+    if (r.tier === 'retired') continue; // Addendum 51: retired leagues form no cohort
     const key = [r.tier, r.factorSource, r.calibrationFactor, r.paperEdgeMin, r.paperProbMin, r.paperStakeEligible].join('|');
     if (!cohortMap[key]) cohortMap[key] = { id: key.replace(/[^a-z0-9]+/gi, '-').toLowerCase(), label: (COHORT_LABELS[r.factorSource] || `${r.tier} @ ${r.calibrationFactor}`) + (rows.some(o => o.factorSource === r.factorSource && o.paperStakeEligible !== r.paperStakeEligible) ? (r.paperStakeEligible ? ' — staked' : ' — observation') : ''), tier: r.tier, calibrationFactor: r.calibrationFactor, factorSource: r.factorSource, paperEdgeMin: r.paperEdgeMin, paperProbMin: r.paperProbMin, paperStakeEligible: r.paperStakeEligible, leagueIds: [], leagues: [] };
     cohortMap[key].leagueIds.push(r.leagueId); cohortMap[key].leagues.push(r.name);
@@ -10202,13 +10232,14 @@ app.listen(PORT, () => {
   // on the persistent disk can never silently fall behind the code's league list.
   {
     const settings           = getSettings();
-    const configuredLeagues  = Object.keys(LEAGUE_CONFIG);
+    const configuredLeagues  = Object.keys(LEAGUE_CONFIG).filter(id => !isRetiredLeague(id)); // Addendum 51
     const activeLeagues      = settings.activeLeagues || [];
+    const retiredStillActive = activeLeagues.filter(id => isRetiredLeague(id));
     const missingFromActive  = configuredLeagues.filter(id => !activeLeagues.includes(id));
-    if (missingFromActive.length > 0) {
-      console.warn(`[Startup] WARNING: ${missingFromActive.length} leagues in LEAGUE_CONFIG but missing from activeLeagues: ${missingFromActive.join(', ')}`);
-      console.warn(`[Startup] Auto-adding missing leagues to activeLeagues: ${missingFromActive.join(', ')}`);
-      settings.activeLeagues = [...new Set([...activeLeagues, ...missingFromActive])];
+    if (missingFromActive.length > 0 || retiredStillActive.length > 0) {
+      if (missingFromActive.length) console.warn(`[Startup] Auto-adding missing leagues to activeLeagues: ${missingFromActive.join(', ')}`);
+      if (retiredStillActive.length) console.warn(`[Startup] Removing retired leagues from activeLeagues (Addendum 51): ${retiredStillActive.join(', ')}`);
+      settings.activeLeagues = [...new Set([...activeLeagues.filter(id => !isRetiredLeague(id)), ...missingFromActive])];
       saveSettings(settings);
     }
   }
@@ -10223,7 +10254,7 @@ app.listen(PORT, () => {
   if (!scanMeta || scanMeta.date !== today || !scanMeta.completedAt) {
     if (!isRateLimited()) {
       console.log('[Startup] No completed scan for today — running morning scan…');
-      runMorningScan(getSettings().activeLeagues).catch(e => console.error('[Startup:MorningScan]', e.message));
+      runMorningScan(getActiveLeagues()).catch(e => console.error('[Startup:MorningScan]', e.message));
     } else {
       console.log('[Startup] Morning scan deferred — API rate limited (quota resets midnight UTC)');
     }

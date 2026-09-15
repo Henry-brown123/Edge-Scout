@@ -28,7 +28,7 @@
 
 const path = require('path');
 const fs   = require('fs');
-const { computeModelProb, WEIGHTS_BY_CONTEXT, LEAGUE_CONFIG, applyLeagueBiasCorrection, computeUnifiedEdge } = require('../scoring');
+const { computeModelProb, WEIGHTS_BY_CONTEXT, LEAGUE_CONFIG, applyLeagueBiasCorrection, computeUnifiedEdge, RETIRED_LEAGUE_IDS } = require('../scoring');
 const { buildFeatures } = require('./gbdt-proxy');
 
 const HOLDOUT_START = '2024-08-07T00:00:00.000Z';
@@ -109,6 +109,8 @@ function loadData() {
   const records = raw.scoredRecords || [];
   return records
     .filter(r => r.homeFactors && r.awayFactors && r.actualOutcome && r.context && r.date)
+    // 2026-09-15 (Addendum 51): domestic club football only — mirrors gbdt-train.js.
+    .filter(r => r.context === 'club_domestic' && !RETIRED_LEAGUE_IDS.has(parseInt(r.leagueId, 10)))
     .filter(r => !isTrainingExcluded(r.leagueId, r.date))
     .map(r => ({
       x:        buildFeatures(r.homeFactors, r.awayFactors, r.context),

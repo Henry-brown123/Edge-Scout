@@ -28,9 +28,6 @@ const TRANSFER_LEAGUES = [
   { id: 179, season: CURRENT_SEASON, name: 'Scottish Prem'    },
   { id: 88,  season: CURRENT_SEASON, name: 'Eredivisie'       },
   { id: 94,  season: CURRENT_SEASON, name: 'Primeira Liga'    },
-  { id: 2,   season: CURRENT_SEASON, name: 'Champions League' },
-  { id: 3,   season: CURRENT_SEASON, name: 'Europa League'    },
-  { id: 848, season: CURRENT_SEASON, name: 'Conference League' },
 ];
 
 const apiSports = axios.create({

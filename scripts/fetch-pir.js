@@ -25,9 +25,6 @@ const PIR_LEAGUES = [
   { id: 179, season: 2024, name: 'Scottish Prem'     },
   { id: 88,  season: 2024, name: 'Eredivisie'        },
   { id: 94,  season: 2024, name: 'Primeira Liga'     },
-  { id: 2,   season: 2024, name: 'Champions League'  },
-  { id: 3,   season: 2024, name: 'Europa League'     },
-  { id: 848, season: 2024, name: 'Conference League' },
 ];
 
 const apiSports = axios.create({

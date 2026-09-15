@@ -9,7 +9,7 @@
 
 const path = require('path');
 const fs   = require('fs');
-const { computeModelProb, WEIGHTS_BY_CONTEXT, LEAGUE_CONFIG } = require('../scoring');
+const { computeModelProb, WEIGHTS_BY_CONTEXT, LEAGUE_CONFIG, RETIRED_LEAGUE_IDS } = require('../scoring');
 const { buildFeatures } = require('./gbdt');
 
 // ─── HYPERPARAMETERS ─────────────────────────────────────────────────────────
@@ -252,6 +252,9 @@ function loadData() {
   const records = raw.scoredRecords || [];
   return records
     .filter(r => r.homeFactors && r.awayFactors && r.actualOutcome && r.context)
+    // 2026-09-15 (Addendum 51): domestic club football only. Tournament and
+    // international rows never train, never sit in the gate window.
+    .filter(r => r.context === 'club_domestic' && !RETIRED_LEAGUE_IDS.has(parseInt(r.leagueId, 10)))
     .filter(r => !isTrainingExcluded(r.leagueId, r.date))
     .map(r => ({
       x:        buildFeatures(r.homeFactors, r.awayFactors, r.context),

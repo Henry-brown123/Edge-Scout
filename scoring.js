@@ -79,6 +79,14 @@ const DOMESTIC_LEAGUE_IDS_FOR_BLEND = new Set([39, 140, 135, 78, 61, 179, 88, 94
 // DOES include the World Cup. The two sets overlap but are not the same thing —
 // do not merge them.
 const TOURNAMENT_LEAGUE_IDS = new Set([1, 2, 3, 48, 848]); // FIFA World Cup, Champions League, Europa League, Carabao Cup, Conference League
+// 2026-09-15 (Addendum 51, decision 1): tournament AND international football is
+// retired from every domestic pocket — never a training row, a scoring row, a
+// gate row or a calibration cohort, and never scanned or priced. Their FIXTURES
+// stay in the historical store as schedule context only (rest days, form
+// windows for domestic clubs that play in Europe or cups). Union of
+// TOURNAMENT_LEAGUE_IDS and teamProfiles.js INTERNATIONAL_LEAGUE_IDS.
+const RETIRED_LEAGUE_IDS = new Set([1, 2, 3, 48, 848, 4, 5, 6, 7, 8, 9, 10, 31, 32, 33, 34, 960]);
+function isRetiredLeague(leagueId) { return RETIRED_LEAGUE_IDS.has(parseInt(leagueId, 10)); }
 // UEFA's competition reform (Champions League, Europa League, Conference League all
 // moved from group-of-4 stages to a single 36-team league-phase table) took effect
 // the 2024-25 season — API-Sports' own `season` field uses the year a season starts,
@@ -1019,6 +1027,7 @@ module.exports = {
   DEFAULT_WEIGHTS,
   CUP_LEAGUE_IDS_FOR_DOMESTIC_BLEND, DOMESTIC_LEAGUE_IDS_FOR_BLEND, UEFA_SINGLE_PHASE_SEASON_FLOOR,
   TOURNAMENT_LEAGUE_IDS,
+  RETIRED_LEAGUE_IDS, isRetiredLeague,
   EURO_COMPETITION_PHASE_GAMES_FLOOR,
   recencyAvg, outcomePoints,
   formScore, homeAdvScore, xgScore, defenseScore,
