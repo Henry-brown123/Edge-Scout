@@ -9242,3 +9242,76 @@ step with this addendum, once confirmed. Pre-registered from confirmation:
 the live rule is 9%/45%, read forward at any time; changes need a fresh
 registration. The `POCKET_GATES` entry and `RESERVED_TEST_SETS` candidates
 are updated to the same cell in the same commit.
+
+### Part 2 — the full 40% and 45% columns, and a volume-weighted revision (2026-09-15, later)
+
+The user asked whether the grid was genuinely two-dimensional and for the
+45% column at lower edge floors. It was two-dimensional (18 edge floors ×
+7 probability floors, all on train); the cells below were simply not in the
+pre-registered shortlist, so their test look is a **second read of the test
+slice** for cells the rule did not pick. Recorded as such. Bets/season here
+= whole n ÷ 6 full seasons.
+
+| Cell | Whole n | Bets/season | ROI at close [95% CI] | Beyond market | z | Train z | Test (n, ROI, z) | Blocks +ROI / +bm | Total/season |
+|---|---|---|---|---|---|---|---|---|---|
+| 5% / 45% | 287 | 48 | +28.1% [+9, +48] | +6.3 | 2.16 | 1.04 | 78, +44%, 2.43 | 4/4, 2/4 | ~13 u |
+| 6% / 45% | 250 | 42 | +30.4% [+9, +52] | +6.2 | 1.98 | 0.91 | 66, +50%, 2.32 | 4/4, 3/4 | ~13 u |
+| 7% / 45% | 212 | 35 | +36.2% [+12, +61] | +7.0 | 2.07 | 1.33 | 55, +48%, 1.80 | 4/4, 3/4 | ~13 u |
+| 8% / 45% | 181 | 30 | +42.5% [+15, +70] | +8.0 | 2.18 | 1.58 | 45, +53%, 1.60 | 4/4, 3/4 | ~13 u |
+| 9% / 45% | 155 | 26 | +50.3% [+19, +81] | +9.5 | 2.39 | 1.62 | 40, +66%, 1.94 | 4/4, 4/4 | ~13 u |
+| 10% / 45% | 125 | 21 | +60.5% [+24, +97] | +10.8 | 2.43 | 1.45 | 33, +84%, 2.29 | 4/4, 4/4 | ~13 u |
+| 11% / 45% | 98 | 16 | +68.3% [+25, +112] | +10.8 | 2.17 | 1.42 | 27, +84%, 1.78 | 3/4, 3/4 | ~11 u |
+| 13% / 45% | 65 | 11 | +82.1% [+25, +139] | +12.6 | 2.04 | 1.52 | 17, +85%, 1.41 | 4/4, 4/4 | ~9 u |
+| 6% / 40% | 386 | 64 | +24.8% [+8, +42] | +5.0 | 2.04 | 1.05 | 104, +38%, 2.18 | 4/4, 2/4 | ~16 u |
+| 7% / 40% | 319 | 53 | +30.0% [+10, +50] | +5.8 | 2.13 | 1.56 | 85, +35%, 1.54 | 4/4, 3/4 | ~16 u |
+| 8% / 40% | 267 | 45 | +34.7% [+12, +57] | +6.7 | 2.24 | 1.75 | 68, +38%, 1.45 | 4/4, 3/4 | ~15 u |
+| **9% / 40%** | 211 | 35 | +42.6% [+17, +69] | +8.3 | **2.49** | 1.88 | 55, +50%, 1.70 | **4/4, 4/4** | **~15 u** |
+| 10% / 40% | 166 | 28 | +44.5% [+14, +75] | +7.7 | 2.07 | 1.38 | 42, +53%, 1.71 | 4/4, 4/4 | ~12 u |
+| 11% / 40% | 134 | 22 | +52.4% [+17, +88] | +8.5 | 2.04 | 1.58 | 35, +52%, 1.31 | 4/4, 4/4 | ~12 u |
+| 7% / 35% | 405 | 68 | +28.7% [+11, +46] | +6.2 | 2.61 | 2.18 | 112, +27%, 1.42 | 4/4, 4/4 | ~19 u |
+
+Shape of the surface: along the 45% column total return per season is flat
+at ~13 units from 5% to 10% edge — lowering the floor adds bets at exactly
+the rate it loses per-bet edge — while the evidence weakens below 9%
+(train z falls to ~1.0, and block 2 turns negative on beyond-market at 5–8%).
+Along the 40% column the same flatness holds at ~15–16 units from 6% to 9%,
+and **9%/40% is the point where volume is highest without any of the
+evidence measures giving way**: z 2.49 (the highest of any cell with more
+than 150 bets except 7%/35%), train z 1.88 (second-highest on the table),
+all four blocks positive on both measures, test +50% on 55 bets (z 1.70).
+7%/45% offers the same 35 bets a season with a weaker case (train z 1.33,
+one block negative beyond market); 9%/40% dominates it.
+
+### Revised recommendation
+
+**9%/40% at 0.93 on the live chain**: ~35 bets a season (36% more than
+9%/45%, three times the current rule), ROI at close +42.6% [+17, +69], +8.3pp
+beyond market (z 2.49), test +50% (z 1.70), 4/4 blocks on both measures,
+~15 units a season. It meets the user's stated principle — more bets at
+comparable confidence and comparable-or-better total return — without
+reaching into the region where the evidence thins. Next notch out, 8%/40%
+(45 bets, z 2.24, test z 1.45, one block negative on beyond-market), is
+defensible but weaker; 7%/35% (68 bets, ~19 units) remains the
+high-volume paper track. 9%/45% and 13%/45% are strict subsets of 9%/40%.
+
+### Part 3 — pocket gate's first live reading, and the rule change (2026-09-15 19:15 UTC)
+
+Production dry run (started 18:53 UTC, no deploy in between): main gate
++0.00019 ± 0.0002 (z 0.97) on 8,542 domestic fixtures (would adopt);
+**pocket gate — League Two: paired log-loss −0.00026 ± 0.00021 (z −1.25) on
+8,292 League Two records; pocket residual candidate +13.1pp (n=60) vs
+deployed +12.6pp (n=65), tolerance 17.8pp → PASS.** Weights untouched. At
+the old rule's volume the soft tolerance is loose (2 SE at n≈60 ≈ 18pp); at
+9%/40%'s ~211 it is ≈10pp. Recorded so the gate's strength is not
+overstated.
+
+Rule change, one commit: `LEAGUE_TWO_EDGE_MIN = 0.09`,
+`LEAGUE_TWO_PROB_MIN = 0.40` (factor unchanged at 0.93, rule 17);
+Championship / League One keep 13%/45% as observation; `POCKET_GATES`
+moved to 9/40; `RESERVED_TEST_SETS` gains the live rule (from
+2026-09-15T19:15Z, read forward at any time) and the 7%/35% paper track;
+the former 13/45 cell is kept for the record; UI labels updated; rule 18
+added to `calibration-rules.md` (League Two history closed for selection).
+The go/no-go review is `docs/league-two-go-no-go-2026-09-15.md`, written
+against 9%/40% and explicit about the three successive searches of this
+population.

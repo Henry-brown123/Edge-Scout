@@ -531,12 +531,12 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     </div>
   </div>
 
-  <!-- Green-flagged (domestic paper-money rule: edge ≥13% EFL / ≥18% top flights, 45%+ prob) subset — dedicated tiles -->
+  <!-- Green-flagged (domestic paper-money rule: League Two 9%/40%; Championship/League One 13%/45% observation; top flights 20%/45% observation) subset — dedicated tiles -->
   <div class="grid-2" id="scout-stats-paper" style="margin-bottom:16px">
     <div class="stat-tile" style="background:rgba(0,255,135,.06);border:1px solid rgba(0,255,135,.25)">
       <div class="stat-label" style="color:var(--green)">Paper-Money Watching</div>
       <div class="stat-value c-green" id="s-watching-paper">0</div>
-      <div class="stat-sub">League Two only · clears 13%+ edge · 45%+ prob</div>
+      <div class="stat-sub">League Two only · clears 9%+ edge · 40%+ prob</div>
     </div>
     <div class="stat-tile" style="background:rgba(0,255,135,.06);border:1px solid rgba(0,255,135,.25)">
       <div class="stat-label" style="color:var(--green)">Paper-Money Locked</div>
@@ -549,7 +549,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
   <div class="card" id="recommended-card">
     <div class="card-header">
       <span class="card-title">Locked Bets — Paper (Staked)</span>
-      <span style="font-size:11px;color:var(--muted)">League Two only · 13%+ edge · 45%+ prob · Live odds</span>
+      <span style="font-size:11px;color:var(--muted)">League Two only · 9%+ edge · 40%+ prob · Live odds</span>
     </div>
     <!-- Pending Placement sub-section -->
     <div id="pending-section" style="display:none">
@@ -2632,7 +2632,7 @@ function renderScout() {
   document.getElementById('s-winrate').textContent  = resolved.length ? `${((wins/(wins+losses||1))*100).toFixed(0)}%` : '—';
   document.getElementById('s-record').textContent   = `${wins}W ${losses}L`;
 
-  // Green-flagged (domestic paper-money rule: edge ≥13% EFL / ≥18% top flights, 45%+ prob) subset, dedicated tiles
+  // Green-flagged (domestic paper-money rule: League Two 9%/40%; Championship/League One 13%/45% observation; top flights 20%/45% observation) subset, dedicated tiles
   const lockedPaper = locked.filter(b => !b.isFakeMoney);
   const lockedZero  = locked.filter(b => b.isFakeMoney);
   document.getElementById('s-watching-paper').textContent = todayW.filter(w => w.meetsPaperMoneyRule).length;

@@ -386,3 +386,26 @@ Related: rule 1's note on the two meanings of "for every league"; rule 13
 the figure). See `docs/tier-calibration-analysis.md` Addenda 23 and 39, and
 `getCalFactorForLeague()` in `server.js` for where the sharing currently
 lives.
+
+## 18. League Two's historical population is closed for selection (2026-09-15). Validation of any further change to its rule or its model uses forward data only.
+
+The pre-cutoff League Two population (3,330 fixtures matched with Pinnacle
+closing, 2020-06 → 2026-08-11) was grid-searched in Addendum 47, read again
+in Addendum 52 and searched with an expanded shortlist in Addendum 53, whose
+9%/40% rule went live on 2026-09-15. Three successive searches of one test
+slice is as much as it can honestly bear. From that date:
+
+- No further threshold, cell, calibration-factor or model choice for League
+  Two is selected or validated on that population. It may still be
+  re-measured for a *fixed* rule (a re-measurement is not a selection).
+- Every change is pre-registered before the data that judges it arrives, and
+  judged on forward data only: live locks from the registration date, and the
+  reserved post-cutoff population for model candidates at their one look.
+- Forward reads may happen at any time (there is no post-look freeze on
+  live data — the holdout philosophy of 2026-09-15), but a *decision* from a
+  forward read uses a pre-registered sequential test, not the first z that
+  crosses 1.96.
+
+This is the League Two instance of the lifecycle rule that replaces rules
+10/12/15 (rewrite pending); it is recorded here first because League Two is
+live on it.

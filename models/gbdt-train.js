@@ -82,7 +82,7 @@ const KNOWN_TREE_BOUNDARIES = { '2026-08-08T20:56:33.315Z': '2022-11-14T00:00:00
 // bias correction → deployed correction layer (settings.deployedCorrectionRuleIds).
 // Mirrors server.js's rule constants for the league (kept in lockstep by hand).
 const POCKET_GATES = [
-  { leagueId: 42, label: 'League Two live rule', factor: 0.93, edgeMin: 0.13, probMin: 0.45, cutoff: '2026-08-11T09:00:00Z' },
+  { leagueId: 42, label: 'League Two live rule 9/40', factor: 0.93, edgeMin: 0.09, probMin: 0.40, cutoff: '2026-08-11T09:00:00Z' }, // Addendum 53 (2026-09-15)
 ];
 
 function loadPocketRecords(leagueId) {

@@ -568,8 +568,21 @@ function isFixtureTrainingHoldout(leagueId, kickoffIso) {
 // promotion — not a permanent, unchangeable pair of numbers.
 const PAPER_MONEY_EDGE_MIN = 0.18;          // unclassified domestic fallback, on the pooled settings scale (1.02)
 const PAPER_MONEY_EDGE_MIN_TOP = 0.20;      // the eight top divisions, on their live 1.06 scale (Addendum 41: same fixtures as 18% at 1.02, Jaccard 0.95)
-const PAPER_MONEY_EDGE_MIN_RULE12 = 0.13;   // Championship / League One / League Two, on their live 0.93 scale
+const PAPER_MONEY_EDGE_MIN_RULE12 = 0.13;   // Championship / League One (observation), on their live 0.93 scale
 const PAPER_MONEY_PROB_MIN = 0.45;
+// 2026-09-15 (Addendum 53, adopted): League Two's own rule on the corrected
+// live chain (model -> bias -> league-two-50plus, no modifiers). Chosen by the
+// disciplined grid in Addendum 53 Part 2 — train-only selection, one test look
+// (a second read for this cell, stated), four sequential blocks — weighted
+// toward volume at comparable confidence: 211 bets / ~35 a season, ROI at close
+// +42.6% [+17, +69], +8.3pp beyond market (z 2.49), test +50% (z 1.70), 4/4
+// blocks. Rule 17: factor stays 0.93, the floor moves 13%/45% -> 9%/40% in this
+// one step. From this commit League Two's history is closed for selection
+// (calibration-rules.md rule 18): every future change to this rule or to the
+// model serving it is pre-registered and judged on forward data only.
+const LEAGUE_TWO_EDGE_MIN = 0.09;
+const LEAGUE_TWO_PROB_MIN = 0.40;
+const LEAGUE_TWO_RULE_FROM = '2026-09-15T19:15:00Z';
 // 2026-09-04 (Addendum 40, adopted): the edge floor is expressed on each league
 // group's own live calibration scale. 18% was selected and validated on the
 // pooled 1.02 scale; when leagues 40/41/42 moved to 0.93 (RULE12_CALIBRATION_FACTOR)
@@ -580,12 +593,16 @@ const PAPER_MONEY_PROB_MIN = 0.45;
 // factor changes again, its floor is re-expressed in the same step.
 function getPaperMoneyEdgeMin(leagueId) {
   const lid = parseInt(leagueId, 10);
+  if (lid === 42) return LEAGUE_TWO_EDGE_MIN;
   if (RULE12_CALIBRATION_LEAGUE_IDS.has(lid)) return PAPER_MONEY_EDGE_MIN_RULE12;
   if (TOP_DIVISION_CALIBRATION_LEAGUE_IDS.has(lid)) return PAPER_MONEY_EDGE_MIN_TOP;
   // Continental second tiers: no paper-money rule at all (Addendum 43 Part 4 —
   // no edge/probability cell survived its single test look). null, never 0.18.
   if (CONTINENTAL_SECOND_TIER_LEAGUE_IDS.has(lid)) return null;
   return PAPER_MONEY_EDGE_MIN;
+}
+function getPaperMoneyProbMin(leagueId) {
+  return parseInt(leagueId, 10) === 42 ? LEAGUE_TWO_PROB_MIN : PAPER_MONEY_PROB_MIN;
 }
 // 2026-09-04 (Addendum 38, adopted): paper-with-stake is limited to the leagues
 // whose backtest support actually carries the rule — Championship / League One /
@@ -679,9 +696,9 @@ const TOP_DIVISION_CALIBRATION_FACTOR = 1.06;
 // post-cutoff population is the only genuinely unseen League Two evidence left.
 const RESERVED_TEST_SETS = [
   { id: 'l2-post-cutoff-2026', leagueId: 42, league: 'League Two', from: '2026-08-11T09:00:00Z', registered: '2026-09-06',
-    purpose: 'Market-residual model test set for League Two; first candidate pocket edge>=10% at 0.93 AND modelProb>=40% (Addendum 47), alongside the live 13%/45% rule',
+    purpose: 'League Two forward population. Model candidates (season-end look) and the live rule 9%/40% at 0.93 on the corrected chain (Addendum 53, from 2026-09-15; read forward at any time — rule 18). Earlier cells kept for the record.',
     lookRule: 'One look, at the end of the 2026-27 season (target >=500 matched fixtures with Pinnacle closing). Report beyond-market residual and closing ROI for the pre-registered cells only. No interim reads.',
-    candidates: [{ label: 'edge>=10 & prob>=40 at 0.93', edgeMin: 0.10, probMin: 0.40 }, { label: 'live rule 13/45 at 0.93', edgeMin: 0.13, probMin: 0.45 },
+    candidates: [{ label: 'LIVE RULE 9/40 at 0.93 on the corrected chain (Addendum 53)', edgeMin: 0.09, probMin: 0.40, from: '2026-09-15T19:15:00Z' }, { label: 'PAPER TRACK 7/35 at 0.93 — high-volume candidate (Addendum 53)', edgeMin: 0.07, probMin: 0.35, from: '2026-09-15T19:15:00Z' }, { label: 'edge>=10 & prob>=40 at 0.93', edgeMin: 0.10, probMin: 0.40 }, { label: 'former live rule 13/45 at 0.93 (retired 2026-09-15)', edgeMin: 0.13, probMin: 0.45 },
       // F (Addendum 47), declared 2026-09-06: clean start 2026-09-07 because resolved League Two bets
       // from 15 Aug–6 Sep were partially read in Addendum 45 section 0. Every cell above is also
       // reported on the from-2026-09-07 subset at the look, for the same reason.
@@ -2038,7 +2055,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     && tierCandidate.hasRealOdds
     && tierCandidate.edge != null
     && tierCandidate.edge >= paperEdgeMin
-    && tierCandidate.modelProb >= PAPER_MONEY_PROB_MIN;
+    && tierCandidate.modelProb >= getPaperMoneyProbMin(leagueId);
   // Stake only where the rule's evidence lives — see PAPER_STAKE_ELIGIBLE_LEAGUE_IDS.
   const meetsPaperMoneyRule = clearsPaperMoneyRule && PAPER_STAKE_ELIGIBLE_LEAGUE_IDS.has(lidNum);
 
@@ -10279,7 +10296,7 @@ function getCalibrationCohorts() {
     calibrationFactor: getCalFactorForLeague(settings, lid),
     factorSource: getCalFactorSource(lid),
     paperEdgeMin: DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(lid) ? getPaperMoneyEdgeMin(lid) : null,
-    paperProbMin: DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(lid) ? PAPER_MONEY_PROB_MIN : null,
+    paperProbMin: DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(lid) ? getPaperMoneyProbMin(lid) : null,
     paperStakeEligible: PAPER_STAKE_ELIGIBLE_LEAGUE_IDS.has(lid),
   }; });
   const cohortMap = {};
