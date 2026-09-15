@@ -9044,3 +9044,102 @@ Note for step 3: the League Two 13/45 cell must be re-measured on this
 model's probabilities (a fixed rule re-measured on the same population is
 legitimate; a new rule chosen there is not), and the review states whether
 the signal still sits at 13%/45% or has moved.
+
+## Addendum 52 — Step 3: League Two definition unification, and the re-measurement of the banked 13%/45% cell on the unified probabilities (2026-09-15)
+
+### What was unified (commit 2c919d5)
+
+`UNIFIED_LEAGUE_IDS = {42}`. For a unified league the historical scorer
+(`buildUnifiedPoolFactors`, sharedScorer.js) uses the live definitions:
+league-only form windows of `settings.formWindow` (6) fixtures, cups excluded;
+the live xG tier chain (imported xG → API-Sports statistics from
+`fixture-stats.json` → shots-on ×0.33 → goals); the previous-season final
+table of the same league as the early-season standings proxy (no domestic
+blend); the staleness pull computed as-of the fixture's kickoff. Injuries
+stay 50 on both sides (League Two has no coverage). Residual difference
+left in place and documented in `FEATURE_SPEC.unified`: head-to-head reads
+pool meetings (FA Cup / EFL Trophy meetings are absent), live reads the API.
+
+The live chain for a unified league is now model → league bias correction →
+deployed correction layer, and nothing else. Team-profile modifiers are
+switched off for League Two and recorded on every lock as `modifierShadow`
+(probabilities with modifiers, notes, max diff) so their effect can be
+paired-tested later, never assumed. The validation path applies the same
+correction layer for unified leagues, so the validated number and the live
+number are one calculation. The Stage A shadow diffing is off (divergence
+from the legacy path is now intended); the legacy path stays selectable.
+
+Data: API-Sports statistics pooled for League Two 2019–2026 (coverage probe:
+none before 2019; 1,852 fixtures fetched, 77 empty, 0 errors), so the xG tier
+has the same inputs historically that live has at lock; 2011–2018 stay on the
+goals tier. All 8,292 League Two records re-scored (`rescoreLeagues=42`),
+every one tagged `pool-unified-stageB-L2-2026-09-15`.
+
+### Re-measurement (pre-cutoff population, 3,330 matched with Pinnacle closing; the 72 post-cutoff fixtures were counted, not read)
+
+Fixed cell = edge ≥13% at 0.93 and probability ≥45%, the live rule. Beyond
+market = actual − Pinnacle margin-stripped closing probability; ROI at the
+closing price. Four configurations, so the change can be attributed:
+
+| Definitions | Model | Correction layer | n | Win | Market | Beyond market ± SE | z | ROI at close [95% CI] |
+|---|---|---|---|---|---|---|---|---|
+| legacy (reconstructed) | 2026-08-08 | off | 233 | 42.9% | 36.9% | +6.0 ± 3.3 | 1.81 | +33.6% [+11, +56] |
+| legacy (reconstructed) | 2026-09-15 | off | 252 | 39.7% | 37.0% | +2.7 ± 3.1 | 0.87 | +22.3% [+1, +43] |
+| unified | 2026-08-08 | off | 174 | 43.7% | 35.9% | +7.8 ± 3.8 | 2.06 | +39.0% [+12, +66] |
+| unified | 2026-09-15 | off | 200 | 41.0% | 35.8% | +5.2 ± 3.5 | 1.48 | +32.5% [+8, +57] |
+| unified | 2026-08-08 | **on** | 53 | 35.8% | 28.6% | +7.3 ± 6.6 | 1.10 | +63.6% [−1, +128] |
+| unified | 2026-09-15 | **on (= live chain)** | **65** | 41.5% | 28.9% | **+12.6 ± 6.2** | **2.04** | **+82.1% [+25, +139]** |
+
+Row 1 reproduces Addendum 47's banked cell (236, 42.8%, 36.9%, +5.9pp, z 1.89),
+which confirms the legacy reconstruction is faithful.
+
+**Attribution.**
+- Definitions alone (row 1 → row 3): 233 → 174 bets, residual +6.0 → +7.8. A
+  modest shrink, slightly stronger residual. The unification did not break
+  the cell.
+- Model alone on the old definitions (row 1 → row 2): 233 → 252 bets,
+  residual +6.0 → +2.7. The domestic-only model adopted this afternoon is
+  weaker on League Two's old cell. League Two contributes 72 rows to the
+  gate window, so the gate could not see this; step 4's pocket-aware gate is
+  the fix.
+- **The correction layer is the dominant driver** (row 3 → row 5, row 4 →
+  row 6): 174 → 53 and 200 → 65. `league-two-50plus` pushes every raw
+  probability ≥50% down (fitted for calibration, Addenda 25/26, live since
+  2026-08-19). Those picks were the strongest part of the old cell (13%/50%
+  without the layer: 143 bets, +10.1pp, z 2.36) and after the push their
+  edge falls below 13%, so they leave the cell. The corrected probability
+  still beats the market; it just no longer clears the floor.
+
+**Does the signal still sit at 13%/45%?** On the live chain the fixed cell
+is 65 bets over 5.5 seasons (about 12 a season), +12.6pp beyond market
+(z 2.04), ROI at close +82% [+25, +139], positive in every calendar year.
+It is real and thinner. It is **not** a re-expression of the old rule: the
+Addendum 40 membership test (Jaccard of fixture sets) gives at most 0.32
+between the banked 233-bet cell and any cell on the live-chain grid, and
+only 55% of the old bets appear anywhere in the edge ≥7% region. Compare
+Addendum 40's 0.93 for a pure scale change. The combined change reshuffles
+which fixtures qualify; the old rule cannot be mapped onto the new scale by
+moving a threshold.
+
+**Descriptive neighbourhood (live chain, new model; not a selection):** the
+whole region edge ≥7–13% × probability ≥40–45% is positive — for example
+9%/45%: 155 bets, +9.5pp, z 2.39, ROI +50%; 10%/45%: 125, +10.8pp, z 2.43;
+7%/45%: 212, +7.0pp, z 2.07. Same broad-shallow shape Addendum 47 found. Any
+cell chosen here is a new rule on a spent population and needs
+pre-registration and forward evidence before it is staked.
+
+**A rule-17 miss, recorded.** The correction layer was deployed on
+2026-08-19 without re-expressing the League Two edge floor on its scale.
+Since that date the live 13%/45% rule has selected roughly 12 bets a season,
+not the ~40 the backtest described — which is why only 3 League Two locks
+have cleared the rule since 11 August.
+
+### Consequence for step 4
+
+The go/no-go review is written against **13%/45% at 0.93 on the live chain**
+(model → bias → correction layer, no modifiers): the only combination the
+re-measurement confirms, with its honest volume (~12 a season). A broader
+cell (edge ≥9%, probability ≥45%) is the natural candidate to pre-register
+as a *paper* track accumulating forward evidence from today, alongside the
+existing reserved-set candidates; it is not staked on the strength of this
+grid.

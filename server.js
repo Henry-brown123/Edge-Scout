@@ -3398,6 +3398,7 @@ function setupScheduler() {
     const getOffset = getLockOffsetMinutes;
     // Lock window: T-(60+offset) to T-(55+offset) — fires for 5 consecutive minutes
     const toScan = watching.filter(w => {
+      if (isRetiredLeague(w.leagueId)) return false; // Addendum 51: never lock a retired competition
       const m = (new Date(w.kickoff).getTime() - now) / 60000;
       const off = getOffset(w);
       return m <= (60 + off) && m > (55 + off);
@@ -10421,6 +10422,23 @@ app.listen(PORT, () => {
   if (!readJSON('tournament-seeds.json')) {
     saveTournamentSeeds(WC_2026_SEEDS);
     console.log('[Startup] Seeded tournament-seeds.json with WC 2026 seedings for', Object.keys(WC_2026_SEEDS.teams).length, 'teams');
+  }
+
+  // 5d-bis (Addendum 51/52, 2026-09-15): retired competitions must never sit in
+  // the watching list (the T-60 cron would lock them) and any lock that slipped
+  // through between the retirement deploy and the cron fix is voided, not left
+  // in the tallies. One-off on every boot; a no-op once clean.
+  {
+    const watching = getWatching();
+    const keep = watching.filter(w => !isRetiredLeague(w.leagueId));
+    if (keep.length !== watching.length) { console.warn(`[Startup] Removing ${watching.length - keep.length} retired-league watching entries`); saveWatching(keep); }
+    const bets = getBets(); let voided = 0;
+    for (const b of bets) {
+      if (!isRetiredLeague(b.leagueId)) continue;
+      if ((b.lockedAt || '') < '2026-09-15T15:57:00Z' || b.result) continue;
+      b.result = 'void'; b.pnl = 0; b.voidReason = 'retired-league (Addendum 51) — locked from a pre-retirement watching entry'; b.resolvedAt = new Date().toISOString(); voided++;
+    }
+    if (voided) { console.warn(`[Startup] Voided ${voided} retired-league locks made after the retirement deploy`); saveBets(bets); }
   }
 
   // 5e. Consistency check — auto-sync activeLeagues with LEAGUE_CONFIG so settings.json
