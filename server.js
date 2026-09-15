@@ -2832,6 +2832,9 @@ async function runHourlyRescan() {
             weatherCondition: scored.weatherCondition,
             paperTradeOnly:   scored.paperTradeOnly,
             isTrainingHoldout: scored.isTrainingHoldout,
+            // Addendum 51: the rescan re-scores through the live path, so it stamps
+            // the same scorer tags a lock does (verifies the H cutover hourly).
+            scorerPath: scored.scorerPath, scorerVersion: scored.scorerVersion, featureSpecVersion: scored.featureSpecVersion, scorerShadowMaxDiff: scored.scorerShadow?.maxDiff ?? null,
           };
           refreshed++;
         } catch (e) {
@@ -6075,6 +6078,16 @@ app.get('/api/backfill/historical/status', (_req, res) => {
   }
   const meta = readJSON('backfill-historical-meta.json');
   if (!meta) return res.json({ status: 'not_run' });
+  // Addendum 51 (2026-09-15): per-league fixture counts and the number of retired
+  // scoredRecords hidden from readers, so "fixtures kept as context, rows retired"
+  // is verifiable from the outside.
+  const hist = readHistoricalCached() || {};
+  const fixturesByLeague = {};
+  for (const f of (hist.fixtures || [])) { const k = `${f.league?.id}:${f.league?.name || ''}`; fixturesByLeague[k] = (fixturesByLeague[k] || 0) + 1; }
+  const retiredFixtures = Object.fromEntries(Object.entries(fixturesByLeague).filter(([k]) => isRetiredLeague(k.split(':')[0])));
+  meta.contextOnlyRetiredFixtures = retiredFixtures;
+  meta.retiredScoredRecordsHidden = hist._retiredScoredRecordsHidden ?? null;
+  meta.scoredRecordsVisible = (hist.scoredRecords || []).length;
   // Track A fix (2026-08-14): a run writes status:'running' the moment it
   // starts (before any real work), then overwrites it with a real completion
   // or error on the way out. If status is still 'running' here, this process
