@@ -294,7 +294,7 @@ function scoreFixtureFromPool(fix, teamIndex, standingsIndex, domesticTimeline, 
   const scorerPath = opts.scorerPath === 'shared' ? 'shared' : 'legacy';
   // Step 3 (2026-09-15): unified leagues use the live definitions; no shadow diff
   // (divergence from the legacy pool definition is the point).
-  const unified = isUnifiedLeague(fix.league?.id);
+  const unified = isUnifiedLeague(fix.league?.id) && !opts.forceLegacyDefs; // forceLegacyDefs: diagnostics reconstruct the pre-unification definitions
   const active = unified
     ? buildUnifiedPoolFactors({ fix, teamIndex, standingsIndex, statsCache: opts.statsCache || {}, fw: opts.fw ?? 6, d: opts.d ?? 0.05, hw: opts.hw ?? 5 })
     : (scorerPath === 'shared' ? buildPoolFactors(sharedInputs) : legacyFactors());

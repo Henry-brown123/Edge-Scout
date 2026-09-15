@@ -10034,11 +10034,31 @@ app.get('/api/admin/diag-l2-remeasure', async (req, res) => {
     const edgeMin = parseFloat(req.query.edgeMin) || 0.13, probMin = parseFloat(req.query.probMin) || 0.45;
     const cutoff = req.query.cutoff || (DATE_SPLIT_HOLDOUT_CUTOFFS.get(leagueId) || '2026-08-11T09:00:00Z');
     const useCorrection = req.query.correction !== 'false'; // attribution: definitions vs correction layer
+    // defs=legacy reconstructs the pre-unification (Addendum 47) factor definitions on
+    // the fly for the same fixtures, so the change can be attributed: definitions vs
+    // model vs correction layer. Cached per process (heavy: rebuilds the pool indexes).
+    const useLegacyDefs = req.query.defs === 'legacy';
     const { classifyFixture, WEIGHTS_BY_CONTEXT, CONTEXT_CONFIG, LEAGUE_CONFIG: LC } = require('./scoring');
     const settings = getSettings();
     const hist = readHistoricalCached() || {};
     const closing = getClosingOdds();
-    const recs = (hist.scoredRecords || []).filter(r => parseInt(r.leagueId, 10) === leagueId && r.homeFactors && r.awayFactors && r.actualOutcome);
+    let recs = (hist.scoredRecords || []).filter(r => parseInt(r.leagueId, 10) === leagueId && r.homeFactors && r.awayFactors && r.actualOutcome);
+    if (useLegacyDefs) {
+      if (!global._legacyDefsCache || global._legacyDefsCache.leagueId !== leagueId || global._legacyDefsCache.mtime !== hist._mtime) {
+        const { buildTeamIndex, buildStandingsIndex, buildDomesticTimeline, scoreFixtureFromPool } = require('./weightOptimiser');
+        const ft = (hist.fixtures || []).filter(f => ['FT','AET','PEN'].includes(f.fixture?.status?.short));
+        const teamIndex = buildTeamIndex(ft), standingsIndex = buildStandingsIndex(ft), timeline = buildDomesticTimeline(ft);
+        const out = []; let k = 0;
+        for (const f of ft) {
+          if (parseInt(f.league?.id, 10) !== leagueId) continue;
+          if (++k % 200 === 0) await new Promise(rr => setImmediate(rr));
+          const rec = scoreFixtureFromPool(f, teamIndex, standingsIndex, timeline, { scorerPath: 'shared', forceLegacyDefs: true });
+          if (rec) out.push(rec);
+        }
+        global._legacyDefsCache = { leagueId, mtime: hist._mtime, recs: out };
+      }
+      recs = global._legacyDefsCache.recs;
+    }
     const specs = {}; for (const r of recs) specs[r.featureSpecVersion || 'untagged'] = (specs[r.featureSpecVersion || 'untagged'] || 0) + 1;
     // optional: score with an archived model version too
     let archived = null;
@@ -10068,14 +10088,18 @@ app.get('/api/admin/diag-l2-remeasure', async (req, res) => {
       const probsOld = archived ? chainArchived(predictArchived(r.homeFactors, r.awayFactors, context)) : null;
       const stripped = marginStrippedImplied(co);
       const mk = (probs) => { const pick = probs.home >= probs.draw && probs.home >= probs.away ? 'home' : probs.away >= probs.draw ? 'away' : 'draw'; const calProb = Math.min(0.97, probs[pick] * factor); const edge = calProb - stripped[pick]; const odds = co[`${pick}Odds`]; const won = r.actualOutcome === pick; return { pick, prob: probs[pick], calProb, edge, market: stripped[pick], odds, won, pnl: won ? odds - 1 : -1, bm: (won ? 1 : 0) - stripped[pick] }; };
-      rows.push({ date: r.date, n: mk(probsNew), o: probsOld ? mk(probsOld) : null });
+      rows.push({ fid: String(r.fixtureId), date: r.date, n: mk(probsNew), o: probsOld ? mk(probsOld) : null });
     }
     const summarise = (list) => { const n = list.length; if (!n) return { n: 0 }; const wins = list.filter(x => x.won).length; const roi = list.reduce((a, x) => a + x.pnl, 0) / n; const bm = list.reduce((a, x) => a + x.bm, 0) / n; const sd = Math.sqrt(list.reduce((a, x) => a + (x.bm - bm) ** 2, 0) / Math.max(1, n - 1)); const se = sd / Math.sqrt(n); const pnlSd = Math.sqrt(list.reduce((a, x) => a + (x.pnl - roi) ** 2, 0) / Math.max(1, n - 1)); return { n, wins, winRate: +(wins / n).toFixed(3), roiClose: +(roi * 100).toFixed(1), roiCi95: [+((roi - 1.96 * pnlSd / Math.sqrt(n)) * 100).toFixed(1), +((roi + 1.96 * pnlSd / Math.sqrt(n)) * 100).toFixed(1)], beyondMarketPp: +(bm * 100).toFixed(1), bmSePp: +(se * 100).toFixed(1), z: se ? +(bm / se).toFixed(2) : null, avgModel: +(list.reduce((a, x) => a + x.calProb, 0) / n).toFixed(3), avgMarket: +(list.reduce((a, x) => a + x.market, 0) / n).toFixed(3) }; };
     const cell = (key, e, p) => summarise(rows.map(r => r[key]).filter(x => x && x.edge >= e && x.prob >= p));
     const grid = (key) => { const out = []; for (let e = 0.07; e <= 0.201; e += 0.01) for (const p of [0.35, 0.40, 0.45, 0.50, 0.55, 0.60]) { const c = cell(key, +e.toFixed(2), p); out.push({ edgeMin: +e.toFixed(2), probMin: p, n: c.n, roiClose: c.roiClose ?? null, beyondMarketPp: c.beyondMarketPp ?? null, z: c.z ?? null }); } return out; };
     const perYear = (key) => { const g = {}; for (const r of rows) { const x = r[key]; if (!x || !(x.edge >= edgeMin && x.prob >= probMin)) continue; const y = r.date.slice(0, 4); (g[y] = g[y] || []).push(x); } return Object.fromEntries(Object.entries(g).sort().map(([y, l]) => [y, summarise(l)])); };
     res.json({
-      leagueId, factor, cutoff, correctionLayerApplied: useCorrection, records: recs.length, matchedPreCutoff: rows.length, postCutoffReservedCount: postCutoff, unmatchedPreCutoff: unmatched, featureSpecVersions: specs,
+      leagueId, factor, cutoff, correctionLayerApplied: useCorrection, definitions: useLegacyDefs ? 'legacy (reconstructed)' : 'unified', records: recs.length,
+      // membership of the fixed cell (fixture ids) so a caller can compute overlap
+      // (Jaccard) between configurations — the Addendum 40 re-expression method.
+      fixedCellMembers: { newModel: rows.filter(r => r.n.edge >= edgeMin && r.n.prob >= probMin).map(r => r.fid), oldModel: archived ? rows.filter(r => r.o && r.o.edge >= edgeMin && r.o.prob >= probMin).map(r => r.fid) : null },
+      gridMembersNew: Object.fromEntries([0.07,0.08,0.09,0.10,0.11,0.12,0.13].flatMap(e => [0.40,0.45].map(pm => [`${e.toFixed(2)}/${pm.toFixed(2)}`, rows.filter(r => r.n.edge >= e && r.n.prob >= pm).map(r => r.fid)]))), matchedPreCutoff: rows.length, postCutoffReservedCount: postCutoff, unmatchedPreCutoff: unmatched, featureSpecVersions: specs,
       liveModelVersion: model.getVersion ? model.getVersion() : null, compareVersion: archived ? archived.trainedAt : null,
       fixedCell: { edgeMin, probMin, newModelUnified: cell('n', edgeMin, probMin), oldModelUnified: archived ? cell('o', edgeMin, probMin) : null, perYearNew: perYear('n') },
       allMatched: { newModelUnified: summarise(rows.map(r => r.n)), oldModelUnified: archived ? summarise(rows.map(r => r.o).filter(Boolean)) : null },
