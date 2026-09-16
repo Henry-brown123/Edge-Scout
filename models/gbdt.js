@@ -41,6 +41,34 @@ function loadModel() {
   return _model;
 }
 
+// Standalone per-league models (2026-09-16, Addendum 54): gbdt-weights-<id>.json,
+// same shape as the pooled file, same mtime-based reload. null when absent.
+const _leagueModels = {};
+function loadLeagueModel(leagueId) {
+  const lid = parseInt(leagueId, 10);
+  const p = path.join(DATA_DIR, `gbdt-weights-${lid}.json`);
+  let mtimeMs;
+  try { mtimeMs = fs.statSync(p).mtimeMs; } catch { return null; }
+  const c = _leagueModels[lid];
+  if (c && c.mtimeMs === mtimeMs) return c.model;
+  const model = JSON.parse(fs.readFileSync(p, 'utf8'));
+  _leagueModels[lid] = { mtimeMs, model };
+  console.log(`[model] standalone league ${lid} model (re)loaded — trainedAt=${model.trainedAt} trainN=${model.trainN}`);
+  return model;
+}
+function predictWith(m, homeFactors, awayFactors, context) {
+  const x = buildFeatures(homeFactors, awayFactors, context);
+  const pHome = plattCalibrate(ensemblePredict(m.classifiers.home, x), m.platt.home);
+  const pDraw = plattCalibrate(ensemblePredict(m.classifiers.draw, x), m.platt.draw);
+  const pAway = plattCalibrate(ensemblePredict(m.classifiers.away, x), m.platt.away);
+  const sum = pHome + pDraw + pAway;
+  return { home: pHome / sum, draw: pDraw / sum, away: pAway / sum };
+}
+function predictLeague(leagueId, homeFactors, awayFactors, context = 'club_domestic') {
+  const m = loadLeagueModel(leagueId);
+  return m ? { probs: predictWith(m, homeFactors, awayFactors, context), version: m.trainedAt } : null;
+}
+
 // 24 features: 16 raw factors (home+away, normalised 0-1), 5 deltas, 3 context OHE
 function buildFeatures(homeFactors, awayFactors, context) {
   const h = homeFactors;
@@ -108,4 +136,4 @@ function getVersion() {
   return m.trainedAt;
 }
 
-module.exports = { predict, buildFeatures, getVersion };
+module.exports = { predict, buildFeatures, getVersion, predictLeague, loadLeagueModel };

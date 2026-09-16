@@ -125,8 +125,14 @@ excluded forever to keep that backtest valid. It can split by fixture
 **kickoff date** instead of by league:
 
 - Everything with a kickoff strictly before the cutoff stays excluded from
-  training forever — preserving exactly the population the backtest was
-  computed against, permanently.
+  training of the **pooled** model while that model's banked backtest is the
+  live rule's basis. **Amended 2026-09-16 (Addendum 54):** the "forever"
+  reading is retired. A banked backtest is immutable through the model
+  archive (rule 16 records which version scored it), so nothing is lost by
+  training a *different* model on those rows — in particular a league's own
+  standalone model, which has no other rows to train on. What stays
+  protected is the *read*: no selection or validation on that population
+  beyond what rule 18 permits.
 - Everything with a kickoff at or after the cutoff becomes training-eligible
   once it resolves, same as every other league on the weekly retrain cycle.
 
@@ -396,8 +402,13 @@ in Addendum 52 and searched with an expanded shortlist in Addendum 53, whose
 slice is as much as it can honestly bear. From that date:
 
 - No further threshold, cell, calibration-factor or model choice for League
-  Two is selected or validated on that population. It may still be
+  Two is selected or validated on the **test slice** of that population
+  (2024-09-16 → 2026-08-11) or on the whole population. It may still be
   re-measured for a *fixed* rule (a re-measurement is not a selection).
+  **Clarified 2026-09-16:** a new standalone model may train on all League
+  Two rows and choose its pre-registered candidate cell on the **train rows
+  only** (< 2024-09-16); that cell is then judged forward, never on the test
+  slice.
 - Every change is pre-registered before the data that judges it arrives, and
   judged on forward data only: live locks from the registration date, and the
   reserved post-cutoff population for model candidates at their one look.

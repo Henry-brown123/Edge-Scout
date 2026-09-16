@@ -52,4 +52,10 @@ function getVersion() {
   return activeModel().getVersion();
 }
 
-module.exports = { predict, getVersion };
+// Standalone per-league models (Addendum 54). predictLeague returns null when the
+// league has no standalone weights file; callers decide the fallback explicitly.
+function predictLeague(leagueId, homeFactors, awayFactors, context) {
+  return gbdt.predictLeague(leagueId, homeFactors, awayFactors, context);
+}
+
+module.exports = { predict, getVersion, predictLeague };

@@ -583,6 +583,26 @@ const PAPER_MONEY_PROB_MIN = 0.45;
 const LEAGUE_TWO_EDGE_MIN = 0.09;
 const LEAGUE_TWO_PROB_MIN = 0.40;
 const LEAGUE_TWO_RULE_FROM = '2026-09-15T19:15:00Z';
+// ─── Standalone per-league models (2026-09-16, Addendum 54) ────────────────
+// Default architecture for every future pocket: a league's model trains and
+// gates on its own rows only (models/gbdt-train.js LEAGUE_ID mode). Pooling is
+// an evidenced fallback for a league too thin to train alone, never a default.
+// STANDALONE_TRAIN_LEAGUE_IDS: retrained weekly after the pooled cycle.
+// STANDALONE_SHADOW_LEAGUE_IDS: their standalone model is scored in shadow on
+// every lock (standaloneShadow on the record) while the live stake stays on the
+// validated chain; STANDALONE_ACTIVE_LEAGUE_IDS: the standalone model IS the
+// live chain (model -> factor only, no bias correction, no correction layer).
+// Cutover from shadow to active is a pre-registered forward decision (see
+// docs/league-two-go-no-go-2026-09-15.md follow-up and Addendum 54).
+const STANDALONE_TRAIN_LEAGUE_IDS  = [42];
+const STANDALONE_SHADOW_LEAGUE_IDS = new Set([42]);
+const STANDALONE_ACTIVE_LEAGUE_IDS = new Set([]);
+// Candidate cell per standalone league, chosen on TRAIN rows only (< 2024-09-16)
+// of that league's own model outputs (rule 18: the test slice is closed); the
+// shadow reports whether each lock clears it. null until the train-only grid
+// has been run for that model version.
+const STANDALONE_CANDIDATE_CELLS = { 42: null };
+const STANDALONE_FACTOR = { 42: 1.0 }; // own Platt calibration; a factor is a rule-13/17 decision on forward data
 // 2026-09-04 (Addendum 40, adopted): the edge floor is expressed on each league
 // group's own live calibration scale. 18% was selected and validated on the
 // pooled 1.02 scale; when leagues 40/41/42 moved to 0.93 (RULE12_CALIBRATION_FACTOR)
@@ -1859,6 +1879,22 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
       modifierShadow = { probs: withMods.probs, notes: withMods.teamIntel?.modifierNotes || [], maxDiff: diffScores({ probs: withMods.probs }, { probs: activeProbs.probs }).maxDiff };
     } catch (e) { modifierShadow = { error: e.message }; }
   }
+  // Standalone per-league model in shadow (Addendum 54): its own probabilities,
+  // pick and edge against the same Pinnacle market, recorded beside the live values.
+  let standaloneShadow = null;
+  if (STANDALONE_SHADOW_LEAGUE_IDS.has(parseInt(leagueId, 10)) && model.predictLeague) {
+    try {
+      const sp = model.predictLeague(leagueId, homeF, awayF, context);
+      if (sp) {
+        const p = sp.probs;
+        const pick = p.home >= p.draw && p.home >= p.away ? 'home' : p.away >= p.draw ? 'away' : 'draw';
+        const f = STANDALONE_FACTOR[parseInt(leagueId, 10)] ?? 1.0;
+        const calProb = Math.min(0.97, p[pick] * f);
+        const cell = STANDALONE_CANDIDATE_CELLS[parseInt(leagueId, 10)];
+        standaloneShadow = { version: sp.version, probs: p, pick, prob: p[pick], calProb, factor: f, cell: cell || null, clearsCell: null };
+      }
+    } catch (e) { standaloneShadow = { error: e.message }; }
+  }
   let probs = activeProbs.probs;
   const correctionVersion = activeProbs.correctionVersion;
   const teamIntel = activeProbs.teamIntel;
@@ -2092,7 +2128,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     teamIntel, paperTradeOnly, isTrainingHoldout, betMode,
     isClassifiedLeague, isDomesticTierLeague, tierCandidate, clearsPaperMoneyRule, meetsPaperMoneyRule, isFakeMoney,
     goalsCandidates, modelVersion, correctionVersion, domesticBlendFixtures,
-    scorerPath, scorerVersion: SCORER_VERSION, featureSpecVersion: `live-${FEATURE_SPEC.version}`, scorerShadow, modifierShadow,
+    scorerPath, scorerVersion: SCORER_VERSION, featureSpecVersion: `live-${FEATURE_SPEC.version}`, scorerShadow, modifierShadow, standaloneShadow,
   };
 }
 
@@ -2202,7 +2238,7 @@ async function runMorningScan(leagueIds) {
             scoredAt:     new Date().toISOString(),
             successScore:    best.successScore,
             modelVersion:    scored.modelVersion,
-            modifierShadow: scored.modifierShadow ?? null, scorerPath: scored.scorerPath, scorerVersion: scored.scorerVersion, featureSpecVersion: scored.featureSpecVersion, scorerShadowMaxDiff: scored.scorerShadow?.maxDiff ?? null,
+            standaloneShadow: scored.standaloneShadow ?? null, modifierShadow: scored.modifierShadow ?? null, scorerPath: scored.scorerPath, scorerVersion: scored.scorerVersion, featureSpecVersion: scored.featureSpecVersion, scorerShadowMaxDiff: scored.scorerShadow?.maxDiff ?? null,
             correctionVersion: scored.correctionVersion,
             projectedBet:    best.displayLabel || best.bet,
             projectedBetKey: best.bet,
@@ -2573,7 +2609,7 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
       watchingStageModelProb: watchingEntry?.modelProb ?? null,
       watchingStageScoredAt:  watchingEntry?.scoredAt ?? null,
       modelVersion: scored.modelVersion,
-      modifierShadow: scored.modifierShadow ?? null, scorerPath: scored.scorerPath, scorerVersion: scored.scorerVersion, featureSpecVersion: scored.featureSpecVersion, scorerShadowMaxDiff: scored.scorerShadow?.maxDiff ?? null,
+      standaloneShadow: scored.standaloneShadow ?? null, modifierShadow: scored.modifierShadow ?? null, scorerPath: scored.scorerPath, scorerVersion: scored.scorerVersion, featureSpecVersion: scored.featureSpecVersion, scorerShadowMaxDiff: scored.scorerShadow?.maxDiff ?? null,
       correctionVersion: scored.correctionVersion,
       bookOdds:     best.bookOdds,
       // Raw Pinnacle price at lock time, separate from bookOdds (which is a generic
@@ -2865,7 +2901,7 @@ async function runHourlyRescan() {
             isTrainingHoldout: scored.isTrainingHoldout,
             // Addendum 51: the rescan re-scores through the live path, so it stamps
             // the same scorer tags a lock does (verifies the H cutover hourly).
-            modifierShadow: scored.modifierShadow ?? null, scorerPath: scored.scorerPath, scorerVersion: scored.scorerVersion, featureSpecVersion: scored.featureSpecVersion, scorerShadowMaxDiff: scored.scorerShadow?.maxDiff ?? null,
+            standaloneShadow: scored.standaloneShadow ?? null, modifierShadow: scored.modifierShadow ?? null, scorerPath: scored.scorerPath, scorerVersion: scored.scorerVersion, featureSpecVersion: scored.featureSpecVersion, scorerShadowMaxDiff: scored.scorerShadow?.maxDiff ?? null,
           };
           refreshed++;
         } catch (e) {
@@ -4257,13 +4293,13 @@ function runGbdtRetrain(reason, onComplete, extraEnv = {}) {
       console.log('[GBDT] Retraining complete — new weights will be picked up on next predict()');
       writeJSON('retrain-pending.json', { pending: false });
       let weights = null, gate = null;
-      try { weights = readJSON('gbdt-weights.json'); } catch {}
+      try { weights = readJSON(extraEnv.LEAGUE_ID ? `gbdt-weights-${extraEnv.LEAGUE_ID}.json` : 'gbdt-weights.json'); } catch {}
       // Item I (2026-09-09): gbdt-train.js writes retrain-gate-result.json on
       // every completed run (adopted or rejected) — the paired like-for-like
       // comparison against the deployed version. Only trust it if it belongs to
       // this run (startedAt precedes its timestamp), so a stale file from an
       // earlier run never gets attributed to a failed/short-circuited one.
-      try { const g = readJSON('retrain-gate-result.json'); if (g?.at && g.at >= startedAt) gate = g; } catch {}
+      try { const g = readJSON(extraEnv.LEAGUE_ID ? `retrain-gate-result-${extraEnv.LEAGUE_ID}.json` : 'retrain-gate-result.json'); if (g?.at && g.at >= startedAt) gate = g; } catch {}
       writeJSON('retrain-status.json', { status: 'success', reason, startedAt, finishedAt, error: null, exitCode: code, gate, tail: output.slice(-4000) });
       onComplete?.({ success: true, trainedAt: weights?.trainedAt, trainN: weights?.trainN, testN: weights?.testN, gate });
     } else {
@@ -4507,6 +4543,18 @@ async function runWeeklyRetrainCycle() {
       error: result.success ? null : result.error,
     });
     console.log(`[WeeklyRetrain] Cycle complete — success=${result.success} versionChanged=${result.success && result.trainedAt !== previousVersion} trainN=${result.trainN ?? 'n/a'}`);
+    // Addendum 54: standalone per-league models retrain after the pooled cycle,
+    // sequentially, each through its own gate. Independent of the pooled result.
+    const queue = [...STANDALONE_TRAIN_LEAGUE_IDS];
+    const next = () => {
+      const lid = queue.shift(); if (!lid) return;
+      const r = runGbdtRetrain(`weekly standalone league ${lid} (${cycleAt})`, (res2) => {
+        appendWeeklyRetrainLog({ cycleAt, standaloneLeagueId: lid, decision: res2.success ? 'retrained' : 'failed', newVersion: res2.trainedAt ?? null, trainN: res2.trainN ?? null, testN: res2.testN ?? null, gate: res2.gate ? { decision: res2.gate.decision, reason: res2.gate.reason, pairedWindow: res2.gate.pairedWindow ? { n: res2.gate.pairedWindow.n, meanDiff: res2.gate.pairedWindow.meanDiff, z: res2.gate.pairedWindow.z } : null } : null, error: res2.success ? null : res2.error });
+        setTimeout(next, 2000);
+      }, { LEAGUE_ID: String(lid) });
+      if (!r.success) { console.warn(`[WeeklyRetrain] standalone league ${lid} could not start: ${r.error}`); setTimeout(next, 5000); }
+    };
+    setTimeout(next, 5000);
   });
 }
 
@@ -10027,11 +10075,11 @@ app.post('/api/admin/trigger-weekly-retrain', (_req, res) => {
 // lists the index with which entry is live now. Read-only — restoring a
 // version is a deliberate manual act (copy the archived file over
 // gbdt-weights.json on the disk), not an endpoint.
-app.get('/api/admin/model-archive', (_req, res) => {
-  const dir = path.join(DATA_DIR, 'model-archive');
+app.get('/api/admin/model-archive', (req, res) => {
+  const dir = req.query.league ? path.join(DATA_DIR, 'model-archive', `league-${parseInt(req.query.league, 10)}`) : path.join(DATA_DIR, 'model-archive');
   let index = [];
   try { index = JSON.parse(fs.readFileSync(path.join(dir, 'index.json'), 'utf8')); } catch {}
-  const current = readJSON('gbdt-weights.json');
+  const current = readJSON(req.query.league ? `gbdt-weights-${parseInt(req.query.league, 10)}.json` : 'gbdt-weights.json');
   res.json({
     currentVersion: current?.trainedAt ?? null,
     currentGate: current?.gate ?? null,
@@ -10143,9 +10191,16 @@ app.get('/api/admin/diag-l2-remeasure', async (req, res) => {
 app.get('/api/admin/diag-l2-grid', async (req, res) => {
   try {
     const leagueId = parseInt(req.query.league, 10) || 42;
-    const factor = parseFloat(req.query.factor) || getCalFactorForLeague(getSettings(), leagueId);
+    const factor0 = parseFloat(req.query.factor) || getCalFactorForLeague(getSettings(), leagueId);
     const split = req.query.split || '2024-09-16T00:00:00Z';
     const cutoff = DATE_SPLIT_HOLDOUT_CUTOFFS.get(leagueId) || '2026-08-11T09:00:00Z';
+    // model=standalone: the league's own standalone model, chain = model -> factor
+    // only (no bias correction, no correction layer). trainOnly=true: rule 18 —
+    // grid and shortlist on train rows only; the test slice and blocks are not read.
+    const useStandalone = req.query.model === 'standalone';
+    const factor = factorParam ?? (useStandalone ? (STANDALONE_FACTOR[leagueId] ?? 1.0) : factor0);
+    const trainOnly = req.query.trainOnly === 'true';
+    const factorParam = req.query.factor ? parseFloat(req.query.factor) : null;
     const { classifyFixture, WEIGHTS_BY_CONTEXT, CONTEXT_CONFIG, LEAGUE_CONFIG: LC } = require('./scoring');
     const settings = getSettings();
     const hist = readHistoricalCached() || {};
@@ -10157,7 +10212,9 @@ app.get('/api/admin/diag-l2-grid', async (req, res) => {
       const co = closing[r.fixtureId] || closing[String(r.fixtureId)];
       if (!co || co.bookmaker !== 'pinnacle' || !(co.homeOdds > 1 && co.drawOdds > 1 && co.awayOdds > 1)) continue;
       const context = r.context || classifyFixture(leagueId);
-      const probs = scoreProbabilities({ homeF: r.homeFactors, awayF: r.awayFactors, weights: WEIGHTS_BY_CONTEXT[context], context, leagueId, leagueConfig: LC[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: true, rankAdjust: false, hostBoost: false, modifiers: false } }).probs;
+      let probs;
+      if (useStandalone) { const sp = model.predictLeague(leagueId, r.homeFactors, r.awayFactors, context); if (!sp) throw new Error(`no standalone model for league ${leagueId}`); probs = sp.probs; }
+      else probs = scoreProbabilities({ homeF: r.homeFactors, awayF: r.awayFactors, weights: WEIGHTS_BY_CONTEXT[context], context, leagueId, leagueConfig: LC[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: true, rankAdjust: false, hostBoost: false, modifiers: false } }).probs;
       const stripped = marginStrippedImplied(co);
       const pick = probs.home >= probs.draw && probs.home >= probs.away ? 'home' : probs.away >= probs.draw ? 'away' : 'draw';
       const calProb = Math.min(0.97, probs[pick] * factor);
@@ -10207,19 +10264,80 @@ app.get('/api/admin/diag-l2-grid', async (req, res) => {
     const results = [];
     for (const [k, c] of shortlist) {
       const tr = summarise(cellRows(train, c.edgeMin, c.probMin), trainSeasons);
+      if (trainOnly) { results.push({ cell: k, why: c.why, train: tr, test: 'NOT READ (trainOnly, rule 18)', whole: null, blocks: null }); continue; }
       const te = summarise(cellRows(test, c.edgeMin, c.probMin), testSeasons);
       const all = summarise(cellRows(rows, c.edgeMin, c.probMin), seasonsIn(rows));
       const bl = blocks.map((b, bi) => { const sm = summarise(cellRows(b, c.edgeMin, c.probMin), null); return { block: bi + 1, from: b[0]?.date?.slice(0, 10), to: b[b.length - 1]?.date?.slice(0, 10), n: sm.n, roiClosePct: sm.roiClosePct ?? null, beyondMarketPp: sm.beyondMarketPp ?? null }; });
       results.push({ cell: k, why: c.why, train: tr, test: te, whole: all, blocks: bl, blocksPositiveRoi: bl.filter(b => b.roiClosePct != null && b.roiClosePct > 0).length, blocksPositiveBm: bl.filter(b => b.beyondMarketPp != null && b.beyondMarketPp > 0).length });
     }
-    res.json({ leagueId, factor, split, cutoff, matched: rows.length, train: { n: train.length, seasons: trainSeasons, from: train[0]?.date, to: train[train.length - 1]?.date }, test: { n: test.length, seasons: testSeasons, from: test[0]?.date, to: test[test.length - 1]?.date },
+    res.json({ leagueId, factor, model: useStandalone ? `standalone ${model.predictLeague(leagueId, {}, {}, 'club_domestic')?.version ?? ''}`.trim() : 'pooled chain (model -> bias -> correction)', trainOnly, split, cutoff, matched: rows.length, train: { n: train.length, seasons: trainSeasons, from: train[0]?.date, to: train[train.length - 1]?.date }, test: { n: test.length, seasons: testSeasons, from: test[0]?.date, to: test[test.length - 1]?.date },
       selectionRule: 'train-only; eligible = n>=60 & z>=1.5; shortlist = top-5 total return/season + top-3 z + forced (13/45, 9/45); ONE test look; 4 sequential blocks',
-      shortlist: results, trainGrid: trainGrid.filter(c => c.n >= 30), wholeGrid: (() => { const out = []; for (const e of edges) for (const p of probs) { const sm = summarise(cellRows(rows, e, p), seasonsIn(rows)); if (sm.n >= 30) out.push({ edgeMin: e, probMin: p, ...sm }); } return out; })() });
+      shortlist: results, trainGrid: trainGrid.filter(c => c.n >= 30), wholeGrid: trainOnly ? null : (() => { const out = []; for (const e of edges) for (const p of probs) { const sm = summarise(cellRows(rows, e, p), seasonsIn(rows)); if (sm.n >= 30) out.push({ edgeMin: e, probMin: p, ...sm }); } return out; })() });
   } catch (e) { res.status(500).json({ error: e.message, stack: (e.stack || '').split('\n').slice(0, 4) }); }
 });
 
+// Addendum 54: forward comparison for a shadow league — on every post-cutoff
+// matched fixture (all fixtures, not just bets), the pooled live chain's top pick
+// vs the standalone model's top pick, beyond-market residual and closing ROI,
+// paired. This is the pre-registered cutover measure (>=300 fixtures, standalone
+// within 1pp of pooled or better, own cell non-negative). Forward data: readable
+// at any time (rule 18).
+app.get('/api/admin/diag-standalone-forward', async (req, res) => {
+  try {
+    const leagueId = parseInt(req.query.league, 10) || 42;
+    const cutoff = DATE_SPLIT_HOLDOUT_CUTOFFS.get(leagueId) || '2026-08-11T09:00:00Z';
+    const { classifyFixture, WEIGHTS_BY_CONTEXT, CONTEXT_CONFIG, LEAGUE_CONFIG: LC } = require('./scoring');
+    const settings = getSettings();
+    const hist = readHistoricalCached() || {};
+    const closing = getClosingOdds();
+    const recs = (hist.scoredRecords || []).filter(r => parseInt(r.leagueId, 10) === leagueId && r.homeFactors && r.awayFactors && r.actualOutcome && r.date >= cutoff);
+    const fS = STANDALONE_FACTOR[leagueId] ?? 1.0, fP = getCalFactorForLeague(settings, leagueId);
+    const cell = STANDALONE_CANDIDATE_CELLS[leagueId];
+    const rows = [];
+    for (const r of recs) {
+      const co = closing[r.fixtureId] || closing[String(r.fixtureId)];
+      if (!co || co.bookmaker !== 'pinnacle' || !(co.homeOdds > 1 && co.drawOdds > 1 && co.awayOdds > 1)) continue;
+      const context = r.context || classifyFixture(leagueId);
+      const pooled = scoreProbabilities({ homeF: r.homeFactors, awayF: r.awayFactors, weights: WEIGHTS_BY_CONTEXT[context], context, leagueId, leagueConfig: LC[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: true, rankAdjust: false, hostBoost: false, modifiers: false } }).probs;
+      const sp = model.predictLeague(leagueId, r.homeFactors, r.awayFactors, context);
+      if (!sp) continue;
+      const stripped = marginStrippedImplied(co);
+      const mk = (p, f) => { const pick = p.home >= p.draw && p.home >= p.away ? 'home' : p.away >= p.draw ? 'away' : 'draw'; const won = r.actualOutcome === pick; return { pick, prob: p[pick], edge: Math.min(0.97, p[pick] * f) - stripped[pick], bm: (won ? 1 : 0) - stripped[pick], pnl: won ? co[`${pick}Odds`] - 1 : -1 }; };
+      rows.push({ date: r.date, pooled: mk(pooled, fP), standalone: mk(sp.probs, fS) });
+    }
+    const sm = (list) => { const n = list.length; if (!n) return { n: 0 }; const bm = list.reduce((a, x) => a + x.bm, 0) / n; const sd = Math.sqrt(list.reduce((a, x) => a + (x.bm - bm) ** 2, 0) / Math.max(1, n - 1)); return { n, beyondMarketPp: +(bm * 100).toFixed(2), sePp: +((sd / Math.sqrt(n)) * 100).toFixed(2), roiClosePct: +((list.reduce((a, x) => a + x.pnl, 0) / n) * 100).toFixed(1) }; };
+    const diffs = rows.map(r => r.standalone.bm - r.pooled.bm);
+    const n = diffs.length, md = n ? diffs.reduce((a, b) => a + b, 0) / n : null, sdd = n > 1 ? Math.sqrt(diffs.reduce((a, d) => a + (d - md) ** 2, 0) / (n - 1)) : null;
+    res.json({ leagueId, cutoff, matchedForward: rows.length, standaloneVersion: model.predictLeague(leagueId, {}, {}, 'club_domestic')?.version ?? null,
+      allTopPicks: { pooled: sm(rows.map(r => r.pooled)), standalone: sm(rows.map(r => r.standalone)), pairedDiffPp: md != null ? +(md * 100).toFixed(2) : null, pairedSePp: sdd ? +((sdd / Math.sqrt(n)) * 100).toFixed(2) : null, samePick: rows.filter(r => r.pooled.pick === r.standalone.pick).length },
+      liveRule9_40_pooled: sm(rows.filter(r => r.pooled.edge >= 0.09 && r.pooled.prob >= 0.40).map(r => r.pooled)),
+      standaloneCell: cell ? { cell, ...sm(rows.filter(r => r.standalone.edge >= cell.edgeMin && r.standalone.prob >= cell.probMin).map(r => r.standalone)) } : { cell: null, note: 'no candidate cell registered yet' },
+      cutoverRule: 'standalone forward top-pick residual >= pooled − 1pp over >= 300 matched fixtures AND its own cell non-negative; then STANDALONE_ACTIVE_LEAGUE_IDS gains the league and the rule is re-registered on its outputs' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/admin/retrain-gate', (req, res) => {
-  res.json({ last: readJSON(req.query.dryrun === 'true' ? 'retrain-gate-dryrun.json' : 'retrain-gate-result.json') || null });
+  const suffix = req.query.league ? `-${parseInt(req.query.league, 10)}` : '';
+  res.json({ last: readJSON(req.query.dryrun === 'true' ? `retrain-gate-dryrun${suffix}.json` : `retrain-gate-result${suffix}.json`) || null });
+});
+
+// Standalone per-league training (Addendum 54): POST /api/admin/train-league?league=42[&dryrun=true]
+// Same single-process lock as every other training run.
+app.post('/api/admin/train-league', (req, res) => {
+  const lid = parseInt(req.query.league, 10);
+  if (!lid || isRetiredLeague(lid)) return res.status(400).json({ error: 'league required and must not be retired' });
+  const dry = req.query.dryrun === 'true';
+  const r = runGbdtRetrain(`standalone league ${lid}${dry ? ' (dry run)' : ''}`, null, { LEAGUE_ID: String(lid), ...(dry ? { GATE_DRY_RUN: '1' } : {}) });
+  res.json({ ...r, leagueId: lid, dryRun: dry });
+});
+app.get('/api/admin/standalone-models', (_req, res) => {
+  const out = {};
+  for (const lid of new Set([...STANDALONE_TRAIN_LEAGUE_IDS, ...STANDALONE_SHADOW_LEAGUE_IDS, ...STANDALONE_ACTIVE_LEAGUE_IDS])) {
+    const w = readJSON(`gbdt-weights-${lid}.json`);
+    let index = []; try { index = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'model-archive', `league-${lid}`, 'index.json'), 'utf8')); } catch {}
+    out[lid] = { hasModel: !!w, version: w?.trainedAt ?? null, trainN: w?.trainN ?? null, testN: w?.testN ?? null, validation: w?.validation ?? null, treeBoundary: w?.treeBoundary ?? null, shadow: STANDALONE_SHADOW_LEAGUE_IDS.has(lid), active: STANDALONE_ACTIVE_LEAGUE_IDS.has(lid), candidateCell: STANDALONE_CANDIDATE_CELLS[lid] ?? null, factor: STANDALONE_FACTOR[lid] ?? 1.0, archive: index.map(v => ({ version: v.version, status: v.status, trainN: v.trainN })) };
+  }
+  res.json(out);
 });
 
 // 2026-09-14: on-demand gate diagnostic. Trains a candidate from the current

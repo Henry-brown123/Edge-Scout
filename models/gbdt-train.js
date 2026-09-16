@@ -53,7 +53,18 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../data');
 // (adopt only if better by GATE_BETTER_MARGIN) on the now like-for-like
 // window. Flip the one constant to change policy; the gate result records
 // which policy decided.
-const ARCHIVE_DIR        = path.join(DATA_DIR, 'model-archive');
+// ─── STANDALONE PER-LEAGUE MODE (2026-09-16, Addendum 54) ───────────────────
+// LEAGUE_ID=<id> trains a model on that league's rows ONLY (every season,
+// including rows before its rule-12 cutoff — the "excluded from training
+// forever" clause is retired: banked backtests are immutable via the archive),
+// writes gbdt-weights-<id>.json, keeps its own archive under
+// model-archive/league-<id>/, gates only against its own previous version on
+// its own out-of-sample window, and never touches the domestic aggregate or
+// the pocket gates. No other league's rows or performance enter its path.
+const LEAGUE_ID          = process.env.LEAGUE_ID ? parseInt(process.env.LEAGUE_ID, 10) : null;
+const STANDALONE         = Number.isFinite(LEAGUE_ID);
+const WEIGHTS_FILE       = STANDALONE ? `gbdt-weights-${LEAGUE_ID}.json` : 'gbdt-weights.json';
+const ARCHIVE_DIR        = STANDALONE ? path.join(DATA_DIR, 'model-archive', `league-${LEAGUE_ID}`) : path.join(DATA_DIR, 'model-archive');
 const GATE_POLICY        = 'non-inferiority'; // | 'superiority'
 // GATE_DRY_RUN=1 (2026-09-14): train a candidate, run the full paired gate with
 // its breakdown, archive the candidate as 'dry-run', write the result to
@@ -174,7 +185,8 @@ function archiveVersion(weights, status, extra = {}) {
 }
 
 function writeGateResult(result) {
-  const file = GATE_DRY_RUN ? 'retrain-gate-dryrun.json' : 'retrain-gate-result.json';
+  const suffix = STANDALONE ? `-${LEAGUE_ID}` : '';
+  const file = GATE_DRY_RUN ? `retrain-gate-dryrun${suffix}.json` : `retrain-gate-result${suffix}.json`;
   fs.writeFileSync(path.join(DATA_DIR, file), JSON.stringify({ ...result, dryRun: GATE_DRY_RUN }, null, 2));
 }
 
@@ -321,7 +333,9 @@ function loadData() {
     // 2026-09-15 (Addendum 51): domestic club football only. Tournament and
     // international rows never train, never sit in the gate window.
     .filter(r => r.context === 'club_domestic' && !RETIRED_LEAGUE_IDS.has(parseInt(r.leagueId, 10)))
-    .filter(r => !isTrainingExcluded(r.leagueId, r.date))
+    // Standalone: this league's rows only, all seasons (cutoffs do not apply —
+    // the model IS the league's own). Pooled: the usual date-split exclusions.
+    .filter(r => STANDALONE ? parseInt(r.leagueId, 10) === LEAGUE_ID : !isTrainingExcluded(r.leagueId, r.date))
     .map(r => ({
       x:        buildFeatures(r.homeFactors, r.awayFactors, r.context),
       y:        r.actualOutcome,   // 'home' | 'draw' | 'away'
@@ -558,7 +572,7 @@ function bandAccuracy(records, probFn) {
   console.log('║  GBDT + Platt Scaling — Training & Validation   ║');
   console.log('╚══════════════════════════════════════════════════╝\n');
 
-  console.log(`Loading data... (DATA_DIR=${DATA_DIR}, env DATA_DIR=${process.env.DATA_DIR ?? '(unset)'})`);
+  console.log(`Loading data... (DATA_DIR=${DATA_DIR}, env DATA_DIR=${process.env.DATA_DIR ?? '(unset)'}${STANDALONE ? `, STANDALONE league ${LEAGUE_ID} -> ${WEIGHTS_FILE}` : ', pooled domestic'})`);
   const all    = loadData();
   const { train, test } = splitData(all);
   console.log(`  Total: ${all.length}  |  Train: ${train.length}  |  Test (held-out): ${test.length}`);
@@ -672,16 +686,16 @@ function bandAccuracy(records, probFn) {
   console.log(`  [${gate3 ? '✓' : '✗'}] Gate 3: No regression on <40% or 60–70% bands`);
 
   const allGatesMet = gate1 && gate2 && gate3;
-  console.log(`\n  Verdict: ${allGatesMet ? '✅ ALL GATES MET — writing gbdt-weights.json' : '❌ GATES NOT MET — keeping linear model'}`);
+  console.log(`\n  Verdict: ${allGatesMet ? `✅ ALL GATES MET — writing ${WEIGHTS_FILE}` : `❌ GATES NOT MET — ${STANDALONE ? 'no standalone model for this league (predictLeague stays null)' : 'keeping linear model'}`}`);
 
   if (!allGatesMet) {
-    console.log('\n  gbdt-weights.json NOT written. interface.js continues to point to linear model.');
+    console.log(`\n  ${WEIGHTS_FILE} NOT written.`);
     process.exit(0);
   }
 
   // ── Improvement gate: paired, like-for-like comparison against the deployed weights ──
   // (see the RETRAIN GATE + VERSION ARCHIVE block at the top of this file)
-  const outPath   = path.join(DATA_DIR, 'gbdt-weights.json');
+  const outPath   = path.join(DATA_DIR, WEIGHTS_FILE);
   const trainedAt = new Date().toISOString();
   let deployed = null;
   if (fs.existsSync(outPath)) {
@@ -694,6 +708,7 @@ function bandAccuracy(records, probFn) {
   // was gone).
   const candidateOut = {
     trainedAt,
+    standaloneLeagueId: STANDALONE ? LEAGUE_ID : null,
     trainN:      train.length,
     testN:       test.length,
     treeBoundary,
@@ -706,6 +721,8 @@ function bandAccuracy(records, probFn) {
 
   const gateResult = {
     at: trainedAt,
+    standaloneLeagueId: STANDALONE ? LEAGUE_ID : null,
+    weightsFile: WEIGHTS_FILE,
     dryRun: GATE_DRY_RUN,
     candidateVersion: trainedAt,
     deployedVersion: deployed?.trainedAt ?? null,
@@ -773,7 +790,7 @@ function bandAccuracy(records, probFn) {
     }
     // Pocket-aware gates (Addendum 53): each must pass as well.
     gateResult.pocketGates = [];
-    for (const g of POCKET_GATES) {
+    for (const g of (STANDALONE ? [] : POCKET_GATES)) { // standalone models have no pocket gates: the whole gate is the league
       try {
         const pg = pocketGate(g, gbdtProb, probFnFromWeights(deployed));
         gateResult.pocketGates.push(pg);
