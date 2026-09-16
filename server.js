@@ -10186,6 +10186,21 @@ app.get('/api/admin/diag-l2-remeasure', async (req, res) => {
     const summarise = (list) => { const n = list.length; if (!n) return { n: 0 }; const wins = list.filter(x => x.won).length; const roi = list.reduce((a, x) => a + x.pnl, 0) / n; const bm = list.reduce((a, x) => a + x.bm, 0) / n; const sd = Math.sqrt(list.reduce((a, x) => a + (x.bm - bm) ** 2, 0) / Math.max(1, n - 1)); const se = sd / Math.sqrt(n); const pnlSd = Math.sqrt(list.reduce((a, x) => a + (x.pnl - roi) ** 2, 0) / Math.max(1, n - 1)); return { n, wins, winRate: +(wins / n).toFixed(3), roiClose: +(roi * 100).toFixed(1), roiCi95: [+((roi - 1.96 * pnlSd / Math.sqrt(n)) * 100).toFixed(1), +((roi + 1.96 * pnlSd / Math.sqrt(n)) * 100).toFixed(1)], beyondMarketPp: +(bm * 100).toFixed(1), bmSePp: +(se * 100).toFixed(1), z: se ? +(bm / se).toFixed(2) : null, avgModel: +(list.reduce((a, x) => a + x.calProb, 0) / n).toFixed(3), avgMarket: +(list.reduce((a, x) => a + x.market, 0) / n).toFixed(3) }; };
     const cell = (key, e, p) => summarise(rows.map(r => r[key]).filter(x => x && x.edge >= e && x.prob >= p));
     const grid = (key) => { const out = []; for (let e = 0.07; e <= 0.201; e += 0.01) for (const p of [0.35, 0.40, 0.45, 0.50, 0.55, 0.60]) { const c = cell(key, +e.toFixed(2), p); out.push({ edgeMin: +e.toFixed(2), probMin: p, n: c.n, roiClose: c.roiClose ?? null, beyondMarketPp: c.beyondMarketPp ?? null, z: c.z ?? null }); } return out; };
+    // Stress-test splits for the fixed cell (Addendum 55): by pick side, by market
+    // band, calibration inside the cell (avg calibrated prob vs win rate), and by
+    // season-half — the checks that separate beaten-the-market signal from the
+    // model's own overconfidence (Addendum 47 Part C for League Two).
+    const splits = (key) => {
+      const inCell = rows.filter(r => r[key] && r[key].edge >= edgeMin && r[key].prob >= probMin);
+      const g = (fn) => { const m = {}; for (const r of inCell) { const k = fn(r); (m[k] = m[k] || []).push(r[key]); } return Object.fromEntries(Object.entries(m).map(([k, l]) => [k, summarise(l)])); };
+      return {
+        byPick: g(r => r[key].pick),
+        byMarketBand: g(r => { const p = r[key].market; return p < 0.30 ? '<30%' : p < 0.45 ? '30-45%' : p < 0.60 ? '45-60%' : '>=60%'; }),
+        byModelBand: g(r => { const p = r[key].prob; return p < 0.50 ? '45-50%' : p < 0.55 ? '50-55%' : p < 0.60 ? '55-60%' : '>=60%'; }),
+        bySeasonHalf: g(r => { const m = new Date(r.date).getUTCMonth(); return (m >= 7 && m <= 11) ? 'Aug-Dec' : 'Jan-May'; }),
+        calibration: inCell.length ? { n: inCell.length, avgCalProb: +(inCell.reduce((a, r) => a + r[key].calProb, 0) / inCell.length).toFixed(3), winRate: +(inCell.filter(r => r[key].won).length / inCell.length).toFixed(3), avgMarket: +(inCell.reduce((a, r) => a + r[key].market, 0) / inCell.length).toFixed(3) } : null,
+      };
+    };
     const perYear = (key) => { const g = {}; for (const r of rows) { const x = r[key]; if (!x || !(x.edge >= edgeMin && x.prob >= probMin)) continue; const y = r.date.slice(0, 4); (g[y] = g[y] || []).push(x); } return Object.fromEntries(Object.entries(g).sort().map(([y, l]) => [y, summarise(l)])); };
     res.json({
       leagueId, factor, cutoff, correctionLayerApplied: useCorrection, definitions: useLegacyDefs ? 'legacy (reconstructed)' : 'unified', records: recs.length,
@@ -10194,7 +10209,7 @@ app.get('/api/admin/diag-l2-remeasure', async (req, res) => {
       fixedCellMembers: { newModel: rows.filter(r => r.n.edge >= edgeMin && r.n.prob >= probMin).map(r => r.fid), oldModel: archived ? rows.filter(r => r.o && r.o.edge >= edgeMin && r.o.prob >= probMin).map(r => r.fid) : null },
       gridMembersNew: Object.fromEntries([0.07,0.08,0.09,0.10,0.11,0.12,0.13].flatMap(e => [0.40,0.45].map(pm => [`${e.toFixed(2)}/${pm.toFixed(2)}`, rows.filter(r => r.n.edge >= e && r.n.prob >= pm).map(r => r.fid)]))), matchedPreCutoff: rows.length, postCutoffReservedCount: postCutoff, unmatchedPreCutoff: unmatched, featureSpecVersions: specs,
       liveModelVersion: model.getVersion ? model.getVersion() : null, compareVersion: archived ? archived.trainedAt : null,
-      fixedCell: { edgeMin, probMin, newModelUnified: cell('n', edgeMin, probMin), oldModelUnified: archived ? cell('o', edgeMin, probMin) : null, perYearNew: perYear('n') },
+      fixedCell: { edgeMin, probMin, newModelUnified: cell('n', edgeMin, probMin), oldModelUnified: archived ? cell('o', edgeMin, probMin) : null, perYearNew: perYear('n'), perYearOld: archived ? perYear('o') : null, splitsNew: splits('n'), splitsOld: archived ? splits('o') : null },
       allMatched: { newModelUnified: summarise(rows.map(r => r.n)), oldModelUnified: archived ? summarise(rows.map(r => r.o).filter(Boolean)) : null },
       neighbourhoodGrid: { note: 'DESCRIPTIVE ONLY — pre-cutoff population is spent for selection; a different cell needs pre-registration and forward validation', newModelUnified: grid('n'), oldModelUnified: archived ? grid('o') : null },
     });
