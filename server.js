@@ -749,7 +749,16 @@ const RESERVED_TEST_SETS = [
   { id: 'l1-pooled-6-45-2026', leagueId: 41, league: 'League One', from: '2026-09-16T15:30:00Z', registered: '2026-09-16',
     purpose: 'League One paper track on the pooled chain (model -> bias, no correction layer, factor 0.93): the cell its own investigation selected. Read forward at any time; no stake until the pooling-fallback decision is taken.',
     lookRule: 'Forward data only (rule 18). Decisions use a pre-registered sequential test.',
-    candidates: [{ label: 'PAPER TRACK 6/45 at 0.93 on the pooled chain (Addendum 54)', edgeMin: 0.06, probMin: 0.45 }, { label: 'runner-up 7/45 (train z 2.89, test z 1.58)', edgeMin: 0.07, probMin: 0.45 }] },
+    // Addendum 55 (2026-09-16): stress-tested — NO-GO for real money now, PARKED (not a
+    // clean negative). Fails the pre-window (2020-06 -> 2021-07: -5.8pp, ROI -19.6%),
+    // whole-history z 1.68, effect confined to home picks and to Jan-May. Paper
+    // tracking continues on the fixed cell; the two structural splits are recorded
+    // as pre-registered forward hypotheses, not rules. Revisit trigger: 100 forward
+    // paper bets on the fixed cell, or a gated model change that moves its surface.
+    status: 'PARKED — not yet (Addendum 55); distinct from a clean negative',
+    candidates: [{ label: 'PAPER TRACK 6/45 at 0.93 on the pooled chain (Addendum 54) — PARKED, no stake (Addendum 55)', edgeMin: 0.06, probMin: 0.45 }, { label: 'runner-up 7/45 (train z 2.89, test z 1.58)', edgeMin: 0.07, probMin: 0.45 },
+      { label: 'forward hypothesis: 6/45 HOME picks only (whole-history +6.2pp z 2.16 vs away -2.0pp)', edgeMin: 0.06, probMin: 0.45, side: 'home', from: '2026-09-16T16:00:00Z' },
+      { label: 'forward hypothesis: 6/45 in Jan-May only (whole-history +10.7pp z 2.89 vs Aug-Dec -1.3pp)', edgeMin: 0.06, probMin: 0.45, monthsFrom: 1, monthsTo: 5, from: '2026-09-16T16:00:00Z' }] },
   // G (Addendum 46 Part C): League One's market-level home-favourite bias. Found on the
   // whole pre-cutoff population, which is spent; this is its fresh, unread population.
   { id: 'l1-home-favourite-2026', leagueId: 41, league: 'League One', from: '2026-09-07T00:00:00Z', registered: '2026-09-06',

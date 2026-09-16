@@ -9440,3 +9440,113 @@ Asked only now that both independent results exist: Championship shows no
 pocket and League One a broad positive surface, on the same chain and the
 same windows. **They do not behave alike and are not clustered.** The old
 13%/45% EFL rule is retired for both.
+
+## Addendum 55 — League One 6%/45%: historical stress-test and go/no-go for real money (2026-09-16)
+
+Asked for: a confident decision from the strongest historical reading, not
+from forward accumulation. Fixed cell throughout: edge ≥6% at 0.93 and
+probability ≥45% on the pooled chain (model 2026-09-15 → league bias
+correction; no correction layer applies to League One). Population: League
+One pre-cutoff, 3,284 fixtures matched with Pinnacle closing, 2020-06 →
+2026-08-11. Exposure, stated up front: this test slice was read in Addenda
+39/40 (pooled EFL grids), once in Addendum 54 (its permitted search), and
+the stress-test below reads the population several more ways. Every figure
+here is a re-measurement of the fixed cell, not a selection, but the
+population is not fresh.
+
+### 1. The whole-history read under the current chain
+
+| Window | n | Bets/season | Win | Model (cal.) | Market | Beyond market ± SE | z | ROI at close [95% CI] |
+|---|---|---|---|---|---|---|---|---|
+| 2020-06 → 2026-08 (all) | 386 | 64 | 45.1% | 52.9% | 40.9% | +4.2 ± 2.5 | 1.68 | +7.4% [−5.1, +20.0] |
+| Pre-window 2020-06 → 2021-07 (unread under this chain) | 93 | | 34.4% | 52.7% | 40.2% | **−5.8 ± 4.8** | −1.20 | **−19.6% [−42.9, +3.8]** |
+| 2021-08 → 2026-08 (four sequential blocks) | 293 | 59 | | | | +7.3 ± 2.9 | 2.54 | +16.0% [+1.3, +30.7] |
+| Addendum 54 selection window 2022-09 → 2024-09 | 105 | | | | | +11.8 ± 4.9 | 2.41 | +31.9% |
+| Addendum 54 test 2024-09 → 2026-08 | 125 | | | | | +8.7 ± 4.3 | 2.01 | +12.2% |
+
+Per calendar year, beyond market: 2020 −4.8, 2021 −5.0, 2022 +0.5, 2023 +9.0,
+2024 +10.8, 2025 +12.0, 2026 +10.1. Blocks from 2021-08: +0.1 / +7.8 / +11.7 /
++10.1pp. The signal begins in late 2022 and is absent or negative before it.
+
+**Pre-window verification fails.** In the one window this chain had never
+been read on, the cell loses 19.6% at the closing price and sits 5.8 points
+below the market. No mechanism has been established: the closed-doors
+season is the obvious candidate, but League Two's own cell was *positive*
+in the same calendar years (Addendum 47: 2020 +11.5, 2021 +7.3), so "no
+crowds" does not explain a League One-specific failure.
+
+### 2. Market-residual framing and calibration inside the cell
+
+The model claims 52.9% on average in the cell; the market says 40.9%; the
+picks win 45.1%. So of the 12-point claimed edge, 7.8 points are the
+model's overconfidence and 4.2 points are a genuine beaten-market residual
+(z 1.68 on the whole history). This is the League Two check, and League One
+passes it only weakly: the residual is real in direction but not decision-
+grade over the full history.
+
+### 3. Structural splits (whole history, fixed cell)
+
+| Split | n | Beyond market | z | ROI at close |
+|---|---|---|---|---|
+| Home picks | 293 | +6.2 ± 2.9 | 2.16 | +11.5% |
+| Away picks | 93 | −2.0 ± 5.1 | −0.40 | −5.4% |
+| Jan–May fixtures | 177 | **+10.7 ± 3.7** | **2.89** | **+23.5% [+4.9, +42.2]** |
+| Aug–Dec fixtures | 209 | −1.3 ± 3.3 | −0.40 | −6.2% |
+| Market 30–45% | 258 | +5.0 ± 3.1 | 1.62 | +8.7% |
+| Market 45–60% | 88 | +1.9 ± 5.3 | 0.35 | −0.3% |
+| Model 45–50 / 50–55 / 55–60 / ≥60% | 96 / 85 / 75 / 130 | +5.2 / +0.7 / +4.9 / +5.3 | | |
+
+The whole effect lives in home picks and in the second half of the season;
+away picks and August–December are flat to negative. Two independent
+splits that each carry the entire effect is the signature of a structured,
+regime-dependent signal, not a broad one — the opposite of League Two,
+whose surface was positive across sides, bands and years.
+
+### 4. Why the new read differs from the banked −2.4%
+
+Reproduced: the old population (edge ≥5%, any probability; legacy
+definitions; 2026-08-08 model) gives n=622, beyond market +0.4pp (z 0.21),
+ROI −1.8% — the banked read. Attribution of the fixed 6%/45% cell on the
+whole history:
+
+| Definitions | Model | n | Beyond market | z | ROI |
+|---|---|---|---|---|---|
+| legacy | 2026-08-08 | 556 | +1.1 | 0.54 | −0.1% |
+| unified | 2026-08-08 | 395 | +0.2 | 0.10 | −3.4% |
+| legacy | 2026-09-15 | 517 | +2.9 | 1.38 | +2.0% |
+| unified | 2026-09-15 | 386 | +4.2 | 1.68 | +7.4% |
+
+The model change adds ~2–3 points, the unified definitions ~1 point, and
+neither makes the whole-history cell strong. The "strong" read in Addendum
+54 (z 3.1) came from the selection-window design starting in 2022-09, which
+is where the signal lives. The old read was not wrong; it averaged a
+negative 2020–22 with a positive 2023–26 under a weaker chain.
+
+### 5. Sensitivity
+
+Alternative split (select 2022-09 → 2023-09, test 2023-09 → 2026-08): test
+n=175, +17.4% ROI, +8.4pp, z 2.25 — the post-2023 signal is robust to where
+the split falls. It is not robust to including 2020–22.
+
+### Decision: NO-GO for real money now. PARKED, not closed.
+
+The strongest honest reading: League One's 6%/45% cell has beaten the
+market since late 2022 (z ≈ 2.5 on ~290 bets, every block since 2021-08
+positive) but fails its pre-window outright, is not decision-grade over its
+full history (z 1.68, ROI interval spanning zero), carries two-thirds of its
+claimed edge as model overconfidence, and concentrates the whole effect in
+home picks and in January–May. Against League Two's case at go-live — whole-
+history z 2.49, positive across sides, bands and every year including
+2020–21 — this is materially weaker and structurally fragile. Real money on
+it now would be a bet that the 2023–26 regime is the permanent one, which
+the pre-window says has not always been true.
+
+**Recorded as "not yet, revisit"**, distinct from Championship's clean
+negative (no signal under any model or window). League One stays on paper
+staking for the fixed 6%/45% cell. Forward tracking is for maintenance and
+discovery, not to re-litigate this decision on a trickle; the revisit
+triggers are 100 forward paper bets on the fixed cell, or a gated model
+change that visibly moves League One's surface. The two structural splits
+are pre-registered as forward hypotheses (home picks only; January–May
+only) on the League One reserved set — hypotheses, not rules, because they
+were found by splitting this population after the fact.
