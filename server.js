@@ -456,7 +456,7 @@ function saveRealBets(list)     { writeJSON('real-bets.json', list); }
 // Addendum 51: retired leagues are stripped from the active list everywhere the
 // scan/lock/backfill paths read it, whatever settings.json on disk still holds.
 function getActiveLeagues() {
-  return (getSettings().activeLeagues || []).filter(id => !isRetiredLeague(id));
+  return (getSettings().activeLeagues || []).filter(id => !isRetiredLeague(id) && !SCANNING_PAUSED_LEAGUE_IDS.has(parseInt(id, 10)));
 }
 
 function getLeagueModes() {
@@ -594,9 +594,18 @@ const LEAGUE_TWO_RULE_FROM = '2026-09-15T19:15:00Z';
 // live chain (model -> factor only, no bias correction, no correction layer).
 // Cutover from shadow to active is a pre-registered forward decision (see
 // docs/league-two-go-no-go-2026-09-15.md follow-up and Addendum 54).
-const STANDALONE_TRAIN_LEAGUE_IDS  = [42, 40, 41]; // Championship and League One: standalone models for their independent investigations
-const STANDALONE_SHADOW_LEAGUE_IDS = new Set([42, 40, 41]);
+// 2026-09-16 (Addendum 54 results): Championship's standalone found no pocket and
+// its scanning is paused; League One's standalone build failed its own gate 2
+// (50-60% band bias 5.3pp vs the 5.0pp bar) at 4,700 training rows, so it has
+// no standalone model — its pooled-chain candidate is a paper track pending the
+// user's evidenced fallback decision. League Two alone keeps a standalone model.
+const STANDALONE_TRAIN_LEAGUE_IDS  = [42];
+const STANDALONE_SHADOW_LEAGUE_IDS = new Set([42]);
 const STANDALONE_ACTIVE_LEAGUE_IDS = new Set([]);
+// Leagues whose own investigation found no pocket (Addendum 54): scanning paused,
+// data ingestion and blends untouched, records kept. Re-enabled only by a new
+// pre-registered investigation on forward data.
+const SCANNING_PAUSED_LEAGUE_IDS = new Set([40]); // Championship, 2026-09-16
 // Candidate cell per standalone league, chosen on TRAIN rows only (< 2024-09-16)
 // of that league's own model outputs (rule 18: the test slice is closed); the
 // shadow reports whether each lock clears it. null until the train-only grid
@@ -730,6 +739,17 @@ const RESERVED_TEST_SETS = [
       // from 15 Aug–6 Sep were partially read in Addendum 45 section 0. Every cell above is also
       // reported on the from-2026-09-07 subset at the look, for the same reason.
       { label: 'F: home pick, market-implied < 30%', side: 'home', marketImpliedMax: 0.30, from: '2026-09-07T00:00:00Z' }] },
+  // League One pooled-chain candidate (Addendum 54, 2026-09-16): found by League One's
+  // own investigation on its out-of-sample window (2022-09 -> 2024-09 selection, one
+  // test look 2024-09 -> 2026-08): 6%/45% at 0.93 on the pooled chain, OOS n=230,
+  // +21.1% ROI at close, +10.2pp beyond market (z 3.13), test z 2.01, 4/4 blocks,
+  // ~57 bets a season. PAPER TRACK ONLY, no stake: League One's standalone model
+  // failed its own gate, so staking this depends on the user's evidenced decision
+  // to fall back to the pooled model for this league. History closed (rule 18).
+  { id: 'l1-pooled-6-45-2026', leagueId: 41, league: 'League One', from: '2026-09-16T15:30:00Z', registered: '2026-09-16',
+    purpose: 'League One paper track on the pooled chain (model -> bias, no correction layer, factor 0.93): the cell its own investigation selected. Read forward at any time; no stake until the pooling-fallback decision is taken.',
+    lookRule: 'Forward data only (rule 18). Decisions use a pre-registered sequential test.',
+    candidates: [{ label: 'PAPER TRACK 6/45 at 0.93 on the pooled chain (Addendum 54)', edgeMin: 0.06, probMin: 0.45 }, { label: 'runner-up 7/45 (train z 2.89, test z 1.58)', edgeMin: 0.07, probMin: 0.45 }] },
   // G (Addendum 46 Part C): League One's market-level home-favourite bias. Found on the
   // whole pre-cutoff population, which is spent; this is its fresh, unread population.
   { id: 'l1-home-favourite-2026', leagueId: 41, league: 'League One', from: '2026-09-07T00:00:00Z', registered: '2026-09-06',

@@ -9374,4 +9374,69 @@ were read in Addenda 39/40 as part of the pooled EFL grid; this is stated
 as each league's last historical search, after which its history closes
 (rule 18 generalised).
 
-RESULTS_PLACEHOLDER
+### Results — Championship (2026-09-16 15:09 UTC)
+
+Standalone walk-forward model (trees on 6,201 rows before 2022-09-01,
+gates passed: log-loss 1.0570 vs linear 1.0702). Selection window 2022-09 →
+2024-09: 1,092 matched fixtures; test 2024-09 → 2026-08: 1,063.
+
+| Configuration | Selection window | Eligible cells (n ≥ 60, z ≥ 1.5) | All top picks (edge ≥ 3%) | Best cell on selection |
+|---|---|---|---|---|
+| Standalone (own model, factor 1.0) | 1,092 | **0** | n=416, ROI −8.3%, −1.8pp, z −0.78 | 10%/45%: n=78, +1.4pp, z 0.27 |
+| Pooled chain (model → bias, 0.93) | 1,092 | **0** | n=324, ROI −3.3%, −0.1pp, z −0.05 | 3%/60%: n=54, +8.3pp, z 1.23 |
+
+Forced cells on the one test look were flat to mildly positive after
+negative selection reads (e.g. standalone 13%/45%: train −4.8pp, test
++11.1pp on 47 bets; pooled 7%/45%: train −2.2pp, test +9.3pp) — a test-only
+positive after a negative selection read is not a finding. **Verdict: no
+pocket, under its own model or the pooled one.** Championship scanning is
+paused (`SCANNING_PAUSED_LEAGUE_IDS`); ingestion and blends continue; its
+history is closed. 13%/45% is retired for it.
+
+### Results — League One (2026-09-16 15:09 UTC)
+
+**Standalone walk-forward build failed its own quality gate 2**: log-loss
+1.0498 beat the linear 1.0661 (gate 1) and gate 3 held, but the 50–60% band
+bias was 5.3pp against the 5.0pp bar. No standalone weights were written;
+League One has no standalone model at the fixed recipe on 4,700 training
+rows.
+
+Pooled chain (model → bias, factor 0.93; League One's pre-cutoff rows never
+trained the pooled model, so the window is out-of-sample), selection window
+2022-09 → 2024-09 n=1,024 matched, test 2024-09 → 2026-08:
+
+| Cell | Selection (n, ROI, bm, z) | **Test, one look** (n, ROI, bm, z) | OOS whole (n, ROI, bm, z) | Blocks +ROI / +bm | Bets/season (OOS) |
+|---|---|---|---|---|---|
+| 3% / 35% (all picks) | 262, +14.3%, +5.4, 1.80 | 299, +8.4%, +6.3, 2.28 | 561, +11.1%, +5.9, 2.89 | 3/4, 3/4 | 140 |
+| 5% / 35% | 199, +15.8%, +6.0, 1.73 | 229, +8.6%, +6.9, 2.20 | 428, +12.0%, +6.5, 2.78 | 3/4 | 107 |
+| **6% / 45%** | 105, +31.9%, +11.8, 2.41 | **125, +12.2%, +8.7, 2.01** | 230, +21.1%, +10.2, 3.13 | **4/4, 4/4** | **57** |
+| 7% / 45% | 83, +40.6%, +15.6, 2.89 | 109, +9.4%, +7.4, 1.58 | 192, +22.9%, +10.9, 3.10 | 4/4 | 48 |
+| 9% / 45% | 57, +31.1%, +10.5, 1.60 | 88, +13.7%, +10.2, 2.00 | 145, +20.5%, +10.3, 2.57 | 4/4 | 36 |
+| 13% / 45% (former rule) | 23, +61.3%, +20.1, 1.97 | 47, +28.4%, +16.4, 2.38 | 70, +39.2%, +17.6, 3.10 | 4/4 | 17 |
+
+Thirteen eligible cells on the selection window; the surface is positive
+across the board and holds on the one test look. By the volume principle
+the balance is **6%/45%**: ~57 bets a season, +21% ROI at close, +10.2pp
+beyond market, test z 2.01, every block positive on both measures.
+
+Two honest cautions. First, this contradicts League One's banked
+whole-history read (Addendum 19/24/27: ROI −2.4% on 2,227 positive-edge bets,
+2011–2026, old definitions, old model); the new read is 2022-09 onward on
+unified definitions and yesterday's model, so it is era-limited and
+forward data is the arbiter. Second, the test slice was read in Addenda
+39/40 as part of the pooled EFL grid.
+
+**Verdict: a candidate pocket under the pooled chain, none under its own
+model.** Registered as a **paper track** (`l1-pooled-6-45-2026`, from
+2026-09-16T15:30Z, no stake). Whether League One may *stake* on a pooled
+model is the evidenced fallback decision the architecture reserves for the
+user: the evidence for it is the gate-2 miss at 4,700 rows and the surface
+above; the evidence against is that League One's own model has not been
+given a second recipe. History closed either way.
+
+### Clustering
+
+Asked only now that both independent results exist: Championship shows no
+pocket and League One a broad positive surface, on the same chain and the
+same windows. **They do not behave alike and are not clustered.** The old
+13%/45% EFL rule is retired for both.

@@ -420,3 +420,10 @@ slice is as much as it can honestly bear. From that date:
 This is the League Two instance of the lifecycle rule that replaces rules
 10/12/15 (rewrite pending); it is recorded here first because League Two is
 live on it.
+
+**Generalised 2026-09-16 (Addendum 54):** Championship and League One each
+had their one permitted historical search on their own data (walk-forward
+build, selection window 2022-09 → 2024-09, one test look) and both
+histories are now closed on the same terms as League Two's. The rule for
+every league from here: one disciplined search of its own history at most,
+stated as such, then forward data only.
