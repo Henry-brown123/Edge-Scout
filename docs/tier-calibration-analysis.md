@@ -9550,3 +9550,81 @@ change that visibly moves League One's surface. The two structural splits
 are pre-registered as forward hypotheses (home picks only; January–May
 only) on the League One reserved set — hypotheses, not rules, because they
 were found by splitting this population after the fact.
+
+## Addendum 56 — League One pocket-space search: every structural candidate on equal footing (2026-09-16)
+
+Standing approach from here (user direction): the candidate space for a
+league is pick side × time window × edge/probability, searched upfront, each
+candidate stress-tested independently, decided from history, then tracked
+forward for maintenance and discovery. `diag-pocket-search` implements it:
+the candidate list is fixed in code before any test row is read; each
+candidate gets its own train-only edge/probability search (train n ≥ 40,
+z ≥ 1.5, best by total return per season), one test look (≥ 2024-09-16),
+four sequential blocks over its own rows, its pre-window (rows before its
+own start) as-is, segment splits of the selected cell, and fixture ids for
+overlap. Population: League One matched pre-cutoff, 3,284 fixtures, pooled
+chain at 0.93. Exposure: the test slice has now been read once per candidate
+here (eight reads) on top of Addenda 39/40/54/55.
+
+| Candidate | Selected cell (train) | Whole: n, bets/season, ROI [95% CI], beyond market, z | Test (one look) | Blocks +bm | Pre-window / bad era | Carried by | Total/season |
+|---|---|---|---|---|---|---|---|---|
+| **C1 full history, all picks** | **12% / 50%** | 121, 20, +27.7% [+3.3, +52.0], +12.2, **2.74** | 43, +28.1%, z 2.39 | **4/4** (block 1 Jul 2020–Mar 2021: +5.7%, +5.0pp) | home 95 (+13.5, z 2.7), away 26 (+7.4); Jan–May +14.0, Aug–Dec +12.2 — **even** | ~5.6 u |
+| C1 fixed 6%/45% | — | 386, 64, +7.4% [−5.1, +20.0], +4.2, 1.68 | 125, +12.2%, z 2.01 | | 2020–21 negative | home only; Jan–May only | ~4.8 u |
+| C2a recent from Aug 2021 | 7% / 45% | 253, 51, +16.8% [+0.7, +32.8], +7.6, 2.44 | 109, +9.4%, z 1.58 | 3/4 (block 1 Aug 2021–Sep 2022: −2.1%, −2.5pp) | pre: −23.1%, −7.4pp | **Jan–May +17.8 (z 3.86) vs Aug–Dec −0.1**; home +8.7 vs away +4.6 | ~8.5 u |
+| C2b recent from Sep 2022 | 3% / 35% (all picks) | 561, 140, +11.1% [0.0, +22.2], +5.9, 2.89 | 299, +8.4%, z 2.28 | 3/4 (last block −1.1% ROI) | pre: −13.6%, −3.0pp | **Jan–May +10.6 (z 3.67) vs Aug–Dec +1.2**; both sides positive | ~15.6 u |
+| **C3 Jan–May only, full history** | **5% / 45%** | 208, 35, +22.4% [+5.7, +39.1], +10.6, **3.09** | 75, +23.7%, z 2.47 | 3/4 (block 1 = Jan–May 2021: −17.3%, −5.1pp) | (none: full history) | home 153 (+11.8, z 3.0), away 55 (+7.2, z 1.0) | ~7.8 u |
+| C3 fixed 6%/45% | — | 174, 29, +25.7% [+6.8, +44.5], +11.5, 3.07 | 65, +26.3%, z 2.41 | | | | ~7.4 u |
+| C4 home picks only, year-round | no eligible cell on train | fixed 6/45: 293, 49, +11.5% [−2.8, +25.8], +6.2, 2.16 | 88, z 1.81 | | | | — |
+| C5 home + Jan–May | 5% / 45% | 153, 26, +23.2% [+4.4, +41.9], +11.8, 3.00 | 49, +20.9%, z 2.13 | 3/4 (Jan–Apr 2021 negative) | | strict subset of C3 (Jaccard 0.74) | ~5.9 u |
+| C6 away picks only (control) | no eligible cell | fixed 6/45: 93, −5.4%, −2.0pp | | | | | — |
+| C7 Aug–Dec only (control) | 13% / 50% (3 eligible cells, n=61) | 61, 10, +31.7% [−2.4, +65.8], +14.3, 2.31 | 18, z 1.43 | 3/4 | | too thin; fixed 6/45 Aug–Dec: −6.2%, −1.3pp | ~3.2 u |
+
+### Readings
+
+- **The recent-window pooled candidates are carried by one segment.** C2a's
+  7%/45% earns +42.7% ROI in January–May (z 3.86) and −2.7% in
+  August–December; C2b's all-picks cell earns +21.5% in January–May and
+  +0.9% in August–December. Exactly the pattern the user anticipated: the
+  pooled recent-window number sits on top of a seasonal pocket. Neither is
+  an honest rule in its own right.
+- **C1's 12%/50% is the cleanest pocket in the space.** It is the only
+  candidate that passes every check including the 2020–21 era (block 1
+  positive), it is even across season halves (+14.0 vs +12.2) and not
+  dependent on away picks (26 bets, +7.4). Cost: ~20 bets a season, ~5.6
+  units. Selected from 8 eligible cells, so multiplicity is modest.
+- **C3's January–May 5%/45% is the strongest by confidence** (z 3.09, test
+  z 2.47, ROI +22.4% with the interval clear of zero) at ~35 bets a season,
+  ~7.8 units. Its one negative block is spring 2021, the closed-doors
+  spring. Its structure was noticed post hoc in Addendum 55 and this is its
+  formal test on the same population, so it carries that exposure. C5 is a
+  strict subset with less volume and no more confidence; C3 dominates it.
+- Home-only year-round (C4) does not select a cell on train and its fixed
+  cell is weak; away-only and August–December confirm as controls (nothing,
+  or too thin).
+
+### Overlap of the two survivors
+
+C1 (12%/50%, year-round) and C3 (5%/45%, January–May) share 52 of their
+121 and 208 fixtures (Jaccard 0.19): **meaningfully additive**. The union is
+about 277 bets over six seasons, ~46 a season, roughly 11 units a season at
+flat stakes after removing the double-counted overlap.
+
+### Go/no-go, per candidate
+
+- C1 fixed 6%/45%: **no-go** (Addendum 55 stands).
+- **C1 selected 12%/50%, year-round: GO** at modest real stakes — passes
+  every historical check available, including the era that fails everything
+  else. Thin volume is the price.
+- C2a, C2b (recent-window pooled): **no-go as rules**; their signal is C3.
+- **C3 January–May 5%/45%: GO** at modest real stakes, effective from
+  January 2027 by construction, with the exposure caveat stated; between now
+  and January it costs nothing to decide and forward August–December data is
+  irrelevant to it.
+- C4, C5 (subsumed), C6, C7: no-go.
+
+Both GO cells are fixed from here (rule 18): forward data is maintenance and
+discovery, never re-optimisation. Implementation on confirmation, in one
+commit: League One joins the staked set with a two-cell rule (edge ≥12% and
+probability ≥50% year-round; OR January–May with edge ≥5% and probability
+≥45%), pocket gates for both cells, reserved-set entries, and its own
+go/no-go document with the pre-registered stop rule.
