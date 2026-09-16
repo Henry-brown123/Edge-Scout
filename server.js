@@ -594,15 +594,15 @@ const LEAGUE_TWO_RULE_FROM = '2026-09-15T19:15:00Z';
 // live chain (model -> factor only, no bias correction, no correction layer).
 // Cutover from shadow to active is a pre-registered forward decision (see
 // docs/league-two-go-no-go-2026-09-15.md follow-up and Addendum 54).
-const STANDALONE_TRAIN_LEAGUE_IDS  = [42];
-const STANDALONE_SHADOW_LEAGUE_IDS = new Set([42]);
+const STANDALONE_TRAIN_LEAGUE_IDS  = [42, 40, 41]; // Championship and League One: standalone models for their independent investigations
+const STANDALONE_SHADOW_LEAGUE_IDS = new Set([42, 40, 41]);
 const STANDALONE_ACTIVE_LEAGUE_IDS = new Set([]);
 // Candidate cell per standalone league, chosen on TRAIN rows only (< 2024-09-16)
 // of that league's own model outputs (rule 18: the test slice is closed); the
 // shadow reports whether each lock clears it. null until the train-only grid
 // has been run for that model version.
-const STANDALONE_CANDIDATE_CELLS = { 42: null };
-const STANDALONE_FACTOR = { 42: 1.0 }; // own Platt calibration; a factor is a rule-13/17 decision on forward data
+const STANDALONE_CANDIDATE_CELLS = { 42: null, 40: null, 41: null };
+const STANDALONE_FACTOR = { 42: 1.0, 40: 1.0, 41: 1.0 }; // own Platt calibration; a factor is a rule-13/17 decision on forward data
 // 2026-09-04 (Addendum 40, adopted): the edge floor is expressed on each league
 // group's own live calibration scale. 18% was selected and validated on the
 // pooled 1.02 scale; when leagues 40/41/42 moved to 0.93 (RULE12_CALIBRATION_FACTOR)
@@ -10198,9 +10198,9 @@ app.get('/api/admin/diag-l2-grid', async (req, res) => {
     // only (no bias correction, no correction layer). trainOnly=true: rule 18 —
     // grid and shortlist on train rows only; the test slice and blocks are not read.
     const useStandalone = req.query.model === 'standalone';
-    const factor = factorParam ?? (useStandalone ? (STANDALONE_FACTOR[leagueId] ?? 1.0) : factor0);
     const trainOnly = req.query.trainOnly === 'true';
     const factorParam = req.query.factor ? parseFloat(req.query.factor) : null;
+    const factor = factorParam ?? (useStandalone ? (STANDALONE_FACTOR[leagueId] ?? 1.0) : factor0);
     const { classifyFixture, WEIGHTS_BY_CONTEXT, CONTEXT_CONFIG, LEAGUE_CONFIG: LC } = require('./scoring');
     const settings = getSettings();
     const hist = readHistoricalCached() || {};

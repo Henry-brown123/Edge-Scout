@@ -91,7 +91,7 @@ function isRetiredLeague(leagueId) { return RETIRED_LEAGUE_IDS.has(parseInt(leag
 // definitions have been unified with the live definitions, so the validated
 // number and the live number are one calculation. League Two first; a league
 // is added here only after its own re-measurement is recorded.
-const UNIFIED_LEAGUE_IDS = new Set([42]);
+const UNIFIED_LEAGUE_IDS = new Set([42, 40, 41]); // Championship and League One unified 2026-09-16 for their independent investigations (Addendum 54)
 function isUnifiedLeague(leagueId) { return UNIFIED_LEAGUE_IDS.has(parseInt(leagueId, 10)); }
 // UEFA's competition reform (Champions League, Europa League, Conference League all
 // moved from group-of-4 stages to a single 36-team league-phase table) took effect
