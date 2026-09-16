@@ -10378,6 +10378,105 @@ app.get('/api/admin/diag-standalone-forward', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Addendum 56 (2026-09-16): pocket-space search for one league. Every candidate
+// is a structural filter (pick side × month window × date window) over the
+// league's matched pre-cutoff population; each gets the identical treatment:
+//   fixed cell (6/45 by default) measured as-is;
+//   its own edge/probability searched on TRAIN rows only ([selectFrom, split)),
+//   objective = flat-stake total return per season among cells with train n >= minN
+//   and beyond-market z >= 1.5; ONE test look (>= split) for the selected cell;
+//   four sequential blocks over the candidate's out-of-sample rows; the
+//   pre-window (rows before the candidate's own start, if any) reported as-is;
+//   volume normalised to seasons covered; fixture ids kept for overlap.
+// The candidate list is fixed in code before any test row is read. Reading the
+// test slice once per candidate is stated multiplicity, not hidden.
+app.get('/api/admin/diag-pocket-search', async (req, res) => {
+  try {
+    const leagueId = parseInt(req.query.league, 10) || 41;
+    const factor = parseFloat(req.query.factor) || getCalFactorForLeague(getSettings(), leagueId);
+    const split = req.query.split || '2024-09-16T00:00:00Z';
+    const cutoff = DATE_SPLIT_HOLDOUT_CUTOFFS.get(leagueId) || '2026-08-11T09:00:00Z';
+    const fixedE = parseFloat(req.query.edgeMin) || 0.06, fixedP = parseFloat(req.query.probMin) || 0.45;
+    const minN = parseInt(req.query.minN, 10) || 40;
+    const { classifyFixture, WEIGHTS_BY_CONTEXT, CONTEXT_CONFIG, LEAGUE_CONFIG: LC } = require('./scoring');
+    const settings = getSettings();
+    const hist = readHistoricalCached() || {};
+    const closing = getClosingOdds();
+    const recs = (hist.scoredRecords || []).filter(r => parseInt(r.leagueId, 10) === leagueId && r.homeFactors && r.awayFactors && r.actualOutcome && r.date < cutoff);
+    const rows = []; let i = 0;
+    for (const r of recs) {
+      if (++i % 300 === 0) await new Promise(rr => setImmediate(rr));
+      const co = closing[r.fixtureId] || closing[String(r.fixtureId)];
+      if (!co || co.bookmaker !== 'pinnacle' || !(co.homeOdds > 1 && co.drawOdds > 1 && co.awayOdds > 1)) continue;
+      const context = r.context || classifyFixture(leagueId);
+      const probs = scoreProbabilities({ homeF: r.homeFactors, awayF: r.awayFactors, weights: WEIGHTS_BY_CONTEXT[context], context, leagueId, leagueConfig: LC[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: true, rankAdjust: false, hostBoost: false, modifiers: false } }).probs;
+      const stripped = marginStrippedImplied(co);
+      const pick = probs.home >= probs.draw && probs.home >= probs.away ? 'home' : probs.away >= probs.draw ? 'away' : 'draw';
+      const calProb = Math.min(0.97, probs[pick] * factor);
+      const won = r.actualOutcome === pick;
+      const d = new Date(r.date); const month = d.getUTCMonth() + 1; const season = d.getUTCMonth() >= 6 ? d.getUTCFullYear() : d.getUTCFullYear() - 1;
+      rows.push({ fid: String(r.fixtureId), date: r.date, month, season, pick, prob: probs[pick], edge: calProb - stripped[pick], market: stripped[pick], won, pnl: won ? co[`${pick}Odds`] - 1 : -1, bm: (won ? 1 : 0) - stripped[pick] });
+    }
+    rows.sort((a, b) => a.date < b.date ? -1 : 1);
+    const seasonsIn = (list) => new Set(list.map(r => r.season)).size || 1;
+    const summarise = (list, seasons) => {
+      const n = list.length; if (!n) return { n: 0 };
+      const wins = list.filter(x => x.won).length;
+      const roi = list.reduce((a, x) => a + x.pnl, 0) / n;
+      const bm = list.reduce((a, x) => a + x.bm, 0) / n;
+      const sd = Math.sqrt(list.reduce((a, x) => a + (x.bm - bm) ** 2, 0) / Math.max(1, n - 1));
+      const pnlSd = Math.sqrt(list.reduce((a, x) => a + (x.pnl - roi) ** 2, 0) / Math.max(1, n - 1));
+      const perSeason = n / (seasons || 1);
+      return { n, winRate: +(wins / n).toFixed(3), roiClosePct: +(roi * 100).toFixed(1), roiCi95: [+((roi - 1.96 * pnlSd / Math.sqrt(n)) * 100).toFixed(1), +((roi + 1.96 * pnlSd / Math.sqrt(n)) * 100).toFixed(1)], beyondMarketPp: +(bm * 100).toFixed(1), sePp: +((sd / Math.sqrt(n)) * 100).toFixed(1), z: sd ? +(bm / (sd / Math.sqrt(n))).toFixed(2) : null, avgModel: +(list.reduce((a, x) => a + x.prob * factor, 0) / n).toFixed(3), avgMarket: +(list.reduce((a, x) => a + x.market, 0) / n).toFixed(3), betsPerSeason: +perSeason.toFixed(1), totalReturnPerSeasonUnits: +(roi * perSeason).toFixed(1) };
+    };
+    const inCell = (list, e, p) => list.filter(r => r.edge >= e - 1e-9 && r.prob >= p - 1e-9);
+    const edges = []; for (let e = 0.03; e <= 0.201; e += 0.01) edges.push(+e.toFixed(2));
+    const probsG = [0.35, 0.40, 0.45, 0.50, 0.55, 0.60];
+    // Pre-registered candidate list (structural filters only; edge/prob searched on train)
+    const CANDIDATES = [
+      { id: 'C1 full-history all', from: null, side: null, months: null },
+      { id: 'C2a recent from 2021-08', from: '2021-08-01T00:00:00Z', side: null, months: null },
+      { id: 'C2b recent from 2022-09', from: '2022-09-01T00:00:00Z', side: null, months: null },
+      { id: 'C3 Jan-May only, full history', from: null, side: null, months: [1, 5] },
+      { id: 'C4 home picks only, full history', from: null, side: 'home', months: null },
+      { id: 'C5 home picks + Jan-May, full history', from: null, side: 'home', months: [1, 5] },
+      { id: 'C6 away picks only, full history (control)', from: null, side: 'away', months: null },
+      { id: 'C7 Aug-Dec only, full history (control)', from: null, side: null, months: [8, 12] },
+    ];
+    const filt = (c) => rows.filter(r => (!c.from || r.date >= c.from) && (!c.side || r.pick === c.side) && (!c.months || (r.month >= c.months[0] && r.month <= c.months[1])));
+    const out = [];
+    const memberSets = {};
+    for (const c of CANDIDATES) {
+      const all = filt(c);
+      const pre = c.from ? rows.filter(r => r.date < c.from && (!c.side || r.pick === c.side) && (!c.months || (r.month >= c.months[0] && r.month <= c.months[1]))) : [];
+      const train = all.filter(r => r.date < split), test = all.filter(r => r.date >= split);
+      const seasonsAll = seasonsIn(all), seasonsTrain = seasonsIn(train), seasonsTest = seasonsIn(test);
+      // fixed cell
+      const fixed = { cell: `${fixedE}/${fixedP}`, whole: summarise(inCell(all, fixedE, fixedP), seasonsAll), train: summarise(inCell(train, fixedE, fixedP), seasonsTrain), test: summarise(inCell(test, fixedE, fixedP), seasonsTest), preWindow: c.from ? summarise(inCell(pre, fixedE, fixedP), seasonsIn(pre)) : null };
+      // train-only search
+      const grid = [];
+      for (const e of edges) for (const p of probsG) { const sm = summarise(inCell(train, e, p), seasonsTrain); if (sm.n >= minN) grid.push({ edgeMin: e, probMin: p, ...sm }); }
+      const eligible = grid.filter(g => g.z != null && g.z >= 1.5);
+      const best = eligible.sort((a, b) => b.totalReturnPerSeasonUnits - a.totalReturnPerSeasonUnits)[0] || null;
+      let selected = null;
+      if (best) {
+        const cellAll = inCell(all, best.edgeMin, best.probMin);
+        const q = Math.floor(cellAll.length / 4);
+        const blocks = [cellAll.slice(0, q), cellAll.slice(q, 2 * q), cellAll.slice(2 * q, 3 * q), cellAll.slice(3 * q)].map((b, bi) => { const sm = summarise(b, null); return { block: bi + 1, from: b[0]?.date?.slice(0, 10), to: b[b.length - 1]?.date?.slice(0, 10), n: sm.n, roi: sm.roiClosePct ?? null, bm: sm.beyondMarketPp ?? null }; });
+        const testRows = inCell(test, best.edgeMin, best.probMin);
+        selected = { cell: `${best.edgeMin}/${best.probMin}`, eligibleCells: eligible.length, train: best, test: summarise(testRows, seasonsTest), whole: summarise(cellAll, seasonsAll), preWindow: c.from ? summarise(inCell(pre, best.edgeMin, best.probMin), seasonsIn(pre)) : null, blocks, blocksPositiveBm: blocks.filter(b => b.bm != null && b.bm > 0).length, blocksPositiveRoi: blocks.filter(b => b.roi != null && b.roi > 0).length,
+          segments: { bySide: Object.fromEntries(['home', 'away', 'draw'].map(sd => [sd, summarise(cellAll.filter(r => r.pick === sd), seasonsAll)])), byMonths: { 'Jan-May': summarise(cellAll.filter(r => r.month >= 1 && r.month <= 5), seasonsAll), 'Aug-Dec': summarise(cellAll.filter(r => r.month >= 8 && r.month <= 12), seasonsAll) } } };
+        memberSets[c.id] = new Set(cellAll.map(r => r.fid));
+      }
+      out.push({ ...c, rowsAll: all.length, rowsTrain: train.length, rowsTest: test.length, seasons: seasonsAll, fixed, selected });
+    }
+    // overlap between selected cells (Jaccard on fixture ids, whole history)
+    const ids = Object.keys(memberSets); const overlap = [];
+    for (let a = 0; a < ids.length; a++) for (let b = a + 1; b < ids.length; b++) { const A = memberSets[ids[a]], B = memberSets[ids[b]]; let inter = 0; for (const x of A) if (B.has(x)) inter++; overlap.push({ a: ids[a], b: ids[b], nA: A.size, nB: B.size, inter, jaccard: +(inter / (A.size + B.size - inter)).toFixed(3) }); }
+    res.json({ leagueId, factor, split, cutoff, matched: rows.length, minN, selectionRule: 'train-only; eligible = n>=minN & z>=1.5; best by total return/season; ONE test look per candidate (stated multiplicity: one read per candidate)', candidates: out, overlap });
+  } catch (e) { res.status(500).json({ error: e.message, stack: (e.stack || '').split('\n').slice(0, 4) }); }
+});
+
 app.get('/api/admin/retrain-gate', (req, res) => {
   const suffix = req.query.league ? `-${parseInt(req.query.league, 10)}` : '';
   res.json({ last: readJSON(req.query.dryrun === 'true' ? `retrain-gate-dryrun${suffix}.json` : `retrain-gate-result${suffix}.json`) || null });
