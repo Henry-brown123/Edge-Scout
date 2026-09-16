@@ -10477,6 +10477,54 @@ app.get('/api/admin/diag-pocket-search', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message, stack: (e.stack || '').split('\n').slice(0, 4) }); }
 });
 
+// Addendum 57 (2026-09-17): era deep-dive for a league — per season-half timeline
+// of a fixed cell and of all top picks (beyond market, ROI at close, n), the
+// league's actual home-win rate per half against what Pinnacle priced, a
+// closed-doors flag (English football: 2020-06-17 -> 2021-05-17 without crowds),
+// and recency-weighted residuals (exponential, half-life in seasons, anchored at
+// the cutoff) reported as DESCRIPTIVE statistics, never as significance.
+app.get('/api/admin/diag-era', async (req, res) => {
+  try {
+    const leagueId = parseInt(req.query.league, 10) || 41;
+    const factor = parseFloat(req.query.factor) || getCalFactorForLeague(getSettings(), leagueId);
+    const cutoff = DATE_SPLIT_HOLDOUT_CUTOFFS.get(leagueId) || '2026-08-11T09:00:00Z';
+    const cells = String(req.query.cells || '0.06/0.45').split(',').map(x => { const [e, p] = x.split('/').map(Number); return { e, p, key: x }; });
+    const halfLife = parseFloat(req.query.halfLife) || 2;
+    const { classifyFixture, WEIGHTS_BY_CONTEXT, CONTEXT_CONFIG, LEAGUE_CONFIG: LC } = require('./scoring');
+    const settings = getSettings();
+    const hist = readHistoricalCached() || {};
+    const closing = getClosingOdds();
+    const recs = (hist.scoredRecords || []).filter(r => parseInt(r.leagueId, 10) === leagueId && r.homeFactors && r.awayFactors && r.actualOutcome && r.date < cutoff);
+    const rows = []; let i = 0;
+    for (const r of recs) {
+      if (++i % 300 === 0) await new Promise(rr => setImmediate(rr));
+      const co = closing[r.fixtureId] || closing[String(r.fixtureId)];
+      if (!co || co.bookmaker !== 'pinnacle' || !(co.homeOdds > 1 && co.drawOdds > 1 && co.awayOdds > 1)) continue;
+      const context = r.context || classifyFixture(leagueId);
+      const probs = scoreProbabilities({ homeF: r.homeFactors, awayF: r.awayFactors, weights: WEIGHTS_BY_CONTEXT[context], context, leagueId, leagueConfig: LC[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: true, rankAdjust: false, hostBoost: false, modifiers: false } }).probs;
+      const stripped = marginStrippedImplied(co);
+      const pick = probs.home >= probs.draw && probs.home >= probs.away ? 'home' : probs.away >= probs.draw ? 'away' : 'draw';
+      const calProb = Math.min(0.97, probs[pick] * factor);
+      const won = r.actualOutcome === pick;
+      const d = new Date(r.date); const m = d.getUTCMonth() + 1; const season = d.getUTCMonth() >= 6 ? d.getUTCFullYear() : d.getUTCFullYear() - 1;
+      const half = (m >= 7 && m <= 12) ? 'H1' : 'H2';
+      const closedDoors = r.date >= '2020-06-17' && r.date < '2021-05-17';
+      rows.push({ date: r.date, season, half, key: `${season}-${half}`, closedDoors, pick, prob: probs[pick], edge: calProb - stripped[pick], market: stripped[pick], won, pnl: won ? co[`${pick}Odds`] - 1 : -1, bm: (won ? 1 : 0) - stripped[pick], homeWon: r.actualOutcome === 'home', homeMarket: stripped.home, homeModel: probs.home });
+    }
+    const sm = (list) => { const n = list.length; if (!n) return { n: 0 }; const bm = list.reduce((a, x) => a + x.bm, 0) / n; const roi = list.reduce((a, x) => a + x.pnl, 0) / n; return { n, bmPp: +(bm * 100).toFixed(1), roiPct: +(roi * 100).toFixed(1) }; };
+    const keys = [...new Set(rows.map(r => r.key))].sort();
+    const timeline = keys.map(k => { const all = rows.filter(r => r.key === k); const o = { period: k, closedDoorsShare: +(all.filter(r => r.closedDoors).length / all.length).toFixed(2), fixtures: all.length, homeWinRate: +(all.filter(r => r.homeWon).length / all.length).toFixed(3), homePricedByMarket: +(all.reduce((a, r) => a + r.homeMarket, 0) / all.length).toFixed(3), homeByModel: +(all.reduce((a, r) => a + r.homeModel, 0) / all.length).toFixed(3), allTopPicks: sm(all) }; for (const c of cells) o[`cell ${c.key}`] = sm(all.filter(r => r.edge >= c.e - 1e-9 && r.prob >= c.p - 1e-9)); return o; });
+    const byDoors = { closedDoors: {}, openDoors: {} };
+    for (const [label, flag] of [['closedDoors', true], ['openDoors', false]]) { const all = rows.filter(r => r.closedDoors === flag); byDoors[label] = { fixtures: all.length, homeWinRate: +(all.filter(r => r.homeWon).length / all.length).toFixed(3), homePricedByMarket: +(all.reduce((a, r) => a + r.homeMarket, 0) / all.length).toFixed(3), allTopPicks: sm(all), homePicks: sm(all.filter(r => r.pick === 'home')), awayPicks: sm(all.filter(r => r.pick === 'away')) }; for (const c of cells) byDoors[label][`cell ${c.key}`] = sm(all.filter(r => r.edge >= c.e - 1e-9 && r.prob >= c.p - 1e-9)); }
+    // recency-weighted residual: weight = 0.5^(seasonsBeforeCutoff / halfLife)
+    const cutoffSeason = new Date(cutoff).getUTCMonth() >= 6 ? new Date(cutoff).getUTCFullYear() : new Date(cutoff).getUTCFullYear() - 1;
+    const rw = (list) => { let w = 0, bm = 0, pnl = 0; for (const r of list) { const wt = Math.pow(0.5, (cutoffSeason - r.season) / halfLife); w += wt; bm += wt * r.bm; pnl += wt * r.pnl; } return w ? { n: list.length, effectiveN: +w.toFixed(1), weightedBmPp: +((bm / w) * 100).toFixed(1), weightedRoiPct: +((pnl / w) * 100).toFixed(1), unweightedBmPp: +((list.reduce((a, r) => a + r.bm, 0) / list.length) * 100).toFixed(1) } : { n: 0 }; };
+    const recency = { halfLifeSeasons: halfLife, allTopPicks: rw(rows) };
+    for (const c of cells) recency[`cell ${c.key}`] = rw(rows.filter(r => r.edge >= c.e - 1e-9 && r.prob >= c.p - 1e-9));
+    res.json({ leagueId, factor, matched: rows.length, closedDoorsWindow: '2020-06-17 -> 2021-05-17', timeline, byDoors, recency });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/admin/retrain-gate', (req, res) => {
   const suffix = req.query.league ? `-${parseInt(req.query.league, 10)}` : '';
   res.json({ last: readJSON(req.query.dryrun === 'true' ? `retrain-gate-dryrun${suffix}.json` : `retrain-gate-result${suffix}.json`) || null });
