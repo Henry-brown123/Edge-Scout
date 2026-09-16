@@ -63,7 +63,14 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../data');
 // the pocket gates. No other league's rows or performance enter its path.
 const LEAGUE_ID          = process.env.LEAGUE_ID ? parseInt(process.env.LEAGUE_ID, 10) : null;
 const STANDALONE         = Number.isFinite(LEAGUE_ID);
-const WEIGHTS_FILE       = STANDALONE ? `gbdt-weights-${LEAGUE_ID}.json` : 'gbdt-weights.json';
+// TRAIN_BEFORE=<iso>: cap the rows the model sees (trees AND Platt) at this date.
+// Walk-forward design for a standalone league's investigation: trees on rows
+// before TRAIN_BEFORE, cell selection on a later window that the trees never
+// saw, one test look after that. The final live model is then retrained on all
+// rows with the same fixed recipe; the forward shadow validates model + cell.
+const TRAIN_BEFORE       = process.env.TRAIN_BEFORE || null;
+const WEIGHTS_SUFFIX     = TRAIN_BEFORE ? `-wf${TRAIN_BEFORE.slice(0, 10)}` : '';
+const WEIGHTS_FILE       = STANDALONE ? `gbdt-weights-${LEAGUE_ID}${WEIGHTS_SUFFIX}.json` : 'gbdt-weights.json';
 const ARCHIVE_DIR        = STANDALONE ? path.join(DATA_DIR, 'model-archive', `league-${LEAGUE_ID}`) : path.join(DATA_DIR, 'model-archive');
 const GATE_POLICY        = 'non-inferiority'; // | 'superiority'
 // GATE_DRY_RUN=1 (2026-09-14): train a candidate, run the full paired gate with
@@ -336,6 +343,7 @@ function loadData() {
     // Standalone: this league's rows only, all seasons (cutoffs do not apply —
     // the model IS the league's own). Pooled: the usual date-split exclusions.
     .filter(r => STANDALONE ? parseInt(r.leagueId, 10) === LEAGUE_ID : !isTrainingExcluded(r.leagueId, r.date))
+    .filter(r => !TRAIN_BEFORE || r.date < TRAIN_BEFORE)
     .map(r => ({
       x:        buildFeatures(r.homeFactors, r.awayFactors, r.context),
       y:        r.actualOutcome,   // 'home' | 'draw' | 'away'

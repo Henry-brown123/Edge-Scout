@@ -45,7 +45,8 @@ function loadModel() {
 // same shape as the pooled file, same mtime-based reload. null when absent.
 const _leagueModels = {};
 function loadLeagueModel(leagueId) {
-  const lid = parseInt(leagueId, 10);
+  // leagueId may be a plain id (42) or a key with a build suffix ('42-wf2022-09-01')
+  const lid = /^\d+$/.test(String(leagueId)) ? parseInt(leagueId, 10) : String(leagueId);
   const p = path.join(DATA_DIR, `gbdt-weights-${lid}.json`);
   let mtimeMs;
   try { mtimeMs = fs.statSync(p).mtimeMs; } catch { return null; }

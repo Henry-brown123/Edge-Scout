@@ -601,7 +601,14 @@ const STANDALONE_ACTIVE_LEAGUE_IDS = new Set([]);
 // of that league's own model outputs (rule 18: the test slice is closed); the
 // shadow reports whether each lock clears it. null until the train-only grid
 // has been run for that model version.
-const STANDALONE_CANDIDATE_CELLS = { 42: null, 40: null, 41: null };
+// League Two (2026-09-16): the first train-only grid on the standalone's outputs was
+// IN-SAMPLE (its trees were built on those same rows) and is discarded. The
+// candidate is therefore the live rule's shape on the standalone's own scale,
+// pre-registered without any historical selection and judged forward only.
+const STANDALONE_CANDIDATE_CELLS = {
+  42: { edgeMin: 0.09, probMin: 0.40, registered: '2026-09-16T14:30:00Z', basis: 'pre-registered forward candidate: live rule shape (9/40) on the standalone scale at factor 1.0; no historical selection' },
+  40: null, 41: null,
+};
 const STANDALONE_FACTOR = { 42: 1.0, 40: 1.0, 41: 1.0 }; // own Platt calibration; a factor is a rule-13/17 decision on forward data
 // 2026-09-04 (Addendum 40, adopted): the edge floor is expressed on each league
 // group's own live calibration scale. 18% was selected and validated on the
@@ -10199,6 +10206,13 @@ app.get('/api/admin/diag-l2-grid', async (req, res) => {
     // grid and shortlist on train rows only; the test slice and blocks are not read.
     const useStandalone = req.query.model === 'standalone';
     const trainOnly = req.query.trainOnly === 'true';
+    // selectFrom: walk-forward design for standalone models — selection rows are
+    // [selectFrom, split), which must lie AFTER the model's tree boundary; rows
+    // before selectFrom are the trees' own training data and are never used for
+    // selection. The response reports the model's tree boundary so this can be checked.
+    const selectFrom = req.query.selectFrom || null;
+    // modelKey: '42' or '42-wf2022-09-01' (a walk-forward build) — resolves gbdt-weights-<key>.json
+    const modelKey = req.query.modelKey || String(leagueId);
     const factorParam = req.query.factor ? parseFloat(req.query.factor) : null;
     const factor = factorParam ?? (useStandalone ? (STANDALONE_FACTOR[leagueId] ?? 1.0) : factor0);
     const { classifyFixture, WEIGHTS_BY_CONTEXT, CONTEXT_CONFIG, LEAGUE_CONFIG: LC } = require('./scoring');
@@ -10213,7 +10227,7 @@ app.get('/api/admin/diag-l2-grid', async (req, res) => {
       if (!co || co.bookmaker !== 'pinnacle' || !(co.homeOdds > 1 && co.drawOdds > 1 && co.awayOdds > 1)) continue;
       const context = r.context || classifyFixture(leagueId);
       let probs;
-      if (useStandalone) { const sp = model.predictLeague(leagueId, r.homeFactors, r.awayFactors, context); if (!sp) throw new Error(`no standalone model for league ${leagueId}`); probs = sp.probs; }
+      if (useStandalone) { const sp = model.predictLeague(modelKey, r.homeFactors, r.awayFactors, context); if (!sp) throw new Error(`no standalone model file for ${modelKey}`); probs = sp.probs; }
       else probs = scoreProbabilities({ homeF: r.homeFactors, awayF: r.awayFactors, weights: WEIGHTS_BY_CONTEXT[context], context, leagueId, leagueConfig: LC[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: true, rankAdjust: false, hostBoost: false, modifiers: false } }).probs;
       const stripped = marginStrippedImplied(co);
       const pick = probs.home >= probs.draw && probs.home >= probs.away ? 'home' : probs.away >= probs.draw ? 'away' : 'draw';
@@ -10234,7 +10248,7 @@ app.get('/api/admin/diag-l2-grid', async (req, res) => {
       const perSeason = seasons ? n / seasons : null;
       return { n, winRate: +(wins / n).toFixed(3), roiClosePct: +(roi * 100).toFixed(1), roiCi95: [+((roi - 1.96 * pnlSd / Math.sqrt(n)) * 100).toFixed(1), +((roi + 1.96 * pnlSd / Math.sqrt(n)) * 100).toFixed(1)], beyondMarketPp: +(bm * 100).toFixed(1), sePp: +((sd / Math.sqrt(n)) * 100).toFixed(1), z: +(bm / (sd / Math.sqrt(n))).toFixed(2), betsPerSeason: perSeason != null ? +perSeason.toFixed(1) : null, totalReturnPerSeasonUnits: perSeason != null ? +(roi * perSeason).toFixed(1) : null, avgOdds: +(list.reduce((a, x) => a + (x.won ? x.pnl + 1 : 1 / Math.max(0.01, x.market)), 0) / n).toFixed(2) };
     };
-    const train = rows.filter(r => r.date < split), test = rows.filter(r => r.date >= split);
+    const train = rows.filter(r => r.date < split && (!selectFrom || r.date >= selectFrom)), test = rows.filter(r => r.date >= split);
     const trainSeasons = seasonsIn(train), testSeasons = Math.max(1, seasonsIn(test));
     const cellRows = (list, e, p) => list.filter(r => r.edge >= e - 1e-9 && r.prob >= p - 1e-9);
     const edges = []; for (let e = 0.03; e <= 0.201; e += 0.01) edges.push(+e.toFixed(2));
@@ -10259,18 +10273,22 @@ app.get('/api/admin/diag-l2-grid', async (req, res) => {
       if (Number.isFinite(e) && Number.isFinite(p)) { const c = { edgeMin: +e.toFixed(2), probMin: +p.toFixed(2), why: 'requested (extra test look)' }; if (!shortlist.has(key(c))) shortlist.set(key(c), c); }
     }
     // blocks: four equal-n sequential blocks over the whole population
-    const q = Math.floor(rows.length / 4);
-    const blocks = [rows.slice(0, q), rows.slice(q, 2 * q), rows.slice(2 * q, 3 * q), rows.slice(3 * q)];
+    // Blocks run over the out-of-sample rows only: with selectFrom set, rows before it
+    // are the trees' training data and are excluded from the block check as well.
+    const oosRows = selectFrom ? rows.filter(r => r.date >= selectFrom) : rows;
+    const q = Math.floor(oosRows.length / 4);
+    const blocks = [oosRows.slice(0, q), oosRows.slice(q, 2 * q), oosRows.slice(2 * q, 3 * q), oosRows.slice(3 * q)];
     const results = [];
     for (const [k, c] of shortlist) {
       const tr = summarise(cellRows(train, c.edgeMin, c.probMin), trainSeasons);
       if (trainOnly) { results.push({ cell: k, why: c.why, train: tr, test: 'NOT READ (trainOnly, rule 18)', whole: null, blocks: null }); continue; }
       const te = summarise(cellRows(test, c.edgeMin, c.probMin), testSeasons);
-      const all = summarise(cellRows(rows, c.edgeMin, c.probMin), seasonsIn(rows));
+      const all = summarise(cellRows(oosRows, c.edgeMin, c.probMin), seasonsIn(oosRows));
       const bl = blocks.map((b, bi) => { const sm = summarise(cellRows(b, c.edgeMin, c.probMin), null); return { block: bi + 1, from: b[0]?.date?.slice(0, 10), to: b[b.length - 1]?.date?.slice(0, 10), n: sm.n, roiClosePct: sm.roiClosePct ?? null, beyondMarketPp: sm.beyondMarketPp ?? null }; });
       results.push({ cell: k, why: c.why, train: tr, test: te, whole: all, blocks: bl, blocksPositiveRoi: bl.filter(b => b.roiClosePct != null && b.roiClosePct > 0).length, blocksPositiveBm: bl.filter(b => b.beyondMarketPp != null && b.beyondMarketPp > 0).length });
     }
-    res.json({ leagueId, factor, model: useStandalone ? `standalone ${model.predictLeague(leagueId, {}, {}, 'club_domestic')?.version ?? ''}`.trim() : 'pooled chain (model -> bias -> correction)', trainOnly, split, cutoff, matched: rows.length, train: { n: train.length, seasons: trainSeasons, from: train[0]?.date, to: train[train.length - 1]?.date }, test: { n: test.length, seasons: testSeasons, from: test[0]?.date, to: test[test.length - 1]?.date },
+    const standaloneMeta = useStandalone ? (readJSON(`gbdt-weights-${modelKey}.json`) || {}) : null;
+    res.json({ leagueId, factor, selectFrom, treeBoundary: standaloneMeta ? standaloneMeta.treeBoundary : getModelTreeBoundary(), inSampleWarning: (useStandalone && standaloneMeta?.treeBoundary?.firstTestFixtureDate && (!selectFrom || selectFrom < standaloneMeta.treeBoundary.firstTestFixtureDate)) ? 'selection rows overlap the trees\' training data — results are IN-SAMPLE and must not be used for selection' : null, model: useStandalone ? `standalone ${modelKey} ${standaloneMeta?.trainedAt ?? ''}`.trim() : 'pooled chain (model -> bias -> correction)', trainOnly, split, cutoff, matched: rows.length, train: { n: train.length, seasons: trainSeasons, from: train[0]?.date, to: train[train.length - 1]?.date }, test: { n: test.length, seasons: testSeasons, from: test[0]?.date, to: test[test.length - 1]?.date },
       selectionRule: 'train-only; eligible = n>=60 & z>=1.5; shortlist = top-5 total return/season + top-3 z + forced (13/45, 9/45); ONE test look; 4 sequential blocks',
       shortlist: results, trainGrid: trainGrid.filter(c => c.n >= 30), wholeGrid: trainOnly ? null : (() => { const out = []; for (const e of edges) for (const p of probs) { const sm = summarise(cellRows(rows, e, p), seasonsIn(rows)); if (sm.n >= 30) out.push({ edgeMin: e, probMin: p, ...sm }); } return out; })() });
   } catch (e) { res.status(500).json({ error: e.message, stack: (e.stack || '').split('\n').slice(0, 4) }); }
@@ -10327,7 +10345,8 @@ app.post('/api/admin/train-league', (req, res) => {
   const lid = parseInt(req.query.league, 10);
   if (!lid || isRetiredLeague(lid)) return res.status(400).json({ error: 'league required and must not be retired' });
   const dry = req.query.dryrun === 'true';
-  const r = runGbdtRetrain(`standalone league ${lid}${dry ? ' (dry run)' : ''}`, null, { LEAGUE_ID: String(lid), ...(dry ? { GATE_DRY_RUN: '1' } : {}) });
+  const tb = req.query.trainBefore || null; // walk-forward build: caps rows, writes gbdt-weights-<lid>-wf<date>.json
+  const r = runGbdtRetrain(`standalone league ${lid}${tb ? ` trained before ${tb}` : ''}${dry ? ' (dry run)' : ''}`, null, { LEAGUE_ID: String(lid), ...(tb ? { TRAIN_BEFORE: tb } : {}), ...(dry ? { GATE_DRY_RUN: '1' } : {}) });
   res.json({ ...r, leagueId: lid, dryRun: dry });
 });
 app.get('/api/admin/standalone-models', (_req, res) => {

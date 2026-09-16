@@ -9315,3 +9315,63 @@ added to `calibration-rules.md` (League Two history closed for selection).
 The go/no-go review is `docs/league-two-go-no-go-2026-09-15.md`, written
 against 9%/40% and explicit about the three successive searches of this
 population.
+
+## Addendum 54 — Standalone per-league models: architecture, League Two v1 in shadow, and the independent Championship / League One investigations (2026-09-16)
+
+### Architecture (standing, from the user's direction of 2026-09-15/16)
+
+Every future pocket gets its league's own model, trained and gated on that
+league's rows only; pooling or clustering is an evidenced fallback for a
+league too thin to train alone, never a starting design. League Two's live
+real-money rule (9%/40% at 0.93 on the pooled chain, Addendum 53) is kept as
+validated; the standalone architecture applies to how pockets are built
+from here.
+
+Implementation (commits 233ca44, 4684cfe and this one): `gbdt-train.js`
+`LEAGUE_ID` mode — the league's rows only, all seasons (rule 12's "forever"
+clause retired), own chronological split, own Platt, own quality gates
+against the linear baseline, own paired gate against its own previous
+version, own weights file `gbdt-weights-<id>.json` and archive
+`model-archive/league-<id>/`, no pocket gates, no domestic aggregate
+anywhere in its path. `models/gbdt.js` per-league registry
+(`predictLeague`), `POST /api/admin/train-league`, standalone models
+retrained weekly after the pooled cycle, `standaloneShadow` on every lock
+for shadow leagues, `diag-standalone-forward` as the pre-registered cutover
+measure (all post-cutoff matched fixtures, paired top-pick residual;
+standalone within 1pp of pooled or better over ≥300 fixtures and its own
+cell non-negative → the league joins `STANDALONE_ACTIVE_LEAGUE_IDS` and its
+rule is re-registered on its outputs).
+
+### League Two v1
+
+Trained 14:20 UTC on all 8,292 League Two rows (train 6,633 / held-out
+1,659): log-loss 1.0633 vs linear 1.0703, Brier 0.6417 vs 0.6466, all three
+quality gates met, first version (no prior to gate against). In shadow on
+every League Two lock from this deploy.
+
+**A mistake caught before it was registered.** The first train-only grid on
+the standalone's outputs (rows < 2024-09-16) showed z ≈ 6 everywhere and
+ROI +26% to +92%. Those rows are the standalone's own tree-training data
+(its trees are built on the oldest 80%), so the grid was in-sample — the
+rule-16 leak in a new form. Discarded. League Two's standalone candidate is
+therefore **pre-registered without any historical selection**: the live
+rule's shape, edge ≥9% and probability ≥40%, at factor 1.0 on the
+standalone's own scale, judged forward only (`STANDALONE_CANDIDATE_CELLS`).
+Rule 18 already forbade reading the test slice; this adds the obvious
+corollary that a model's own training rows cannot select its rule either.
+
+### Walk-forward design for a league whose history may still be searched once
+
+For Championship and League One, whose one permitted historical search is
+still to come: a standalone model trained with `TRAIN_BEFORE=2022-09-01`
+(trees and Platt on rows before that date, written as
+`gbdt-weights-<id>-wf2022-09-01.json`); cell selection on the out-of-sample
+window 2022-09-01 → 2024-09-16 (`selectFrom`); one test look on 2024-09-16 →
+cutoff; four blocks over the out-of-sample rows only. The final live model
+is then retrained on all rows with the same fixed recipe, and the forward
+shadow validates model + cell together. Honesty: both leagues' test slices
+were read in Addenda 39/40 as part of the pooled EFL grid; this is stated
+as each league's last historical search, after which its history closes
+(rule 18 generalised).
+
+RESULTS_PLACEHOLDER
