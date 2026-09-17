@@ -9712,3 +9712,28 @@ total-return objective narrows the cell. Both searches were complete.
 Recommendation unchanged from Addendum 56, now with the era explained: GO on
 12%/50% year-round and on January–May 5%/45%, both fixed, awaiting the
 user's confirmation for the one-commit implementation.
+
+### Part 2 — 12%/50% by half, and home-only year-round (2026-09-17, later)
+
+**12%/50% is positive in every open-doors half on both measures**, autumn
+included: July–December 2021–25 +12.4 / +21.2 / +27.2 / +7.9 / +18.5pp
+(ROI +27% / +45% / +149% / +19% / +27%); January–June 2022–26 +1.4 / +13.4 /
++28.8 / +19.5 / +17.3pp. Not held up by spring; only thin per half (3–13
+bets).
+
+**Home-only year-round (6%/45%, open doors, 218 bets, +9.9pp, ROI +21.7%).**
+By half, beyond market: July–December 2021–25 +3.1 / −0.7 / +3.9 / +0.1 /
++6.6pp (ROI +10% / −10% / +22% / 0% / +2%); January–June 2022–26 +15.1 /
++25.2 / +35.1 / +23.4 / +6.3pp. Restricting to home removes the autumn
+*negative* (the away autumn picks were the drag) but leaves autumn flat:
+Aug–Dec segment +1.7pp (z 0.44, ROI +1.8%) against Jan–May +12.7pp
+(z 2.92, ROI +26%). Its train z was 1.40, which is why it failed the 1.5
+eligibility bar in Addendum 56; test z 1.81, whole z 2.16, blocks 3/4 (the
+closed-doors block negative). Recency-weighted +7.9 vs +6.2 unweighted.
+
+Reading: home-only year-round is the January–May home pocket plus ~27
+autumn bets a season at roughly break-even (+0.5 units a season). On the
+volume principle — more bets at *comparable* confidence — the autumn home
+bets fail the comparable-confidence half (z 0.44). No separate home-only
+year-round rule; note that 12%/50% is already 78% home picks (95 of 121)
+and is positive in autumn on its own. The two GO cells stand.
