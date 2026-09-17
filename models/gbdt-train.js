@@ -69,7 +69,14 @@ const STANDALONE         = Number.isFinite(LEAGUE_ID);
 // saw, one test look after that. The final live model is then retrained on all
 // rows with the same fixed recipe; the forward shadow validates model + cell.
 const TRAIN_BEFORE       = process.env.TRAIN_BEFORE || null;
-const WEIGHTS_SUFFIX     = TRAIN_BEFORE ? `-wf${TRAIN_BEFORE.slice(0, 10)}` : '';
+// RECENCY_HALF_LIFE=<seasons> (2026-09-17, Addendum 62): sample weight
+// 0.5^(ageSeasons / halfLife), anchored at the newest TRAINING row, applied to the
+// Newton gradients and hessians (and the class prior). Evaluation (Platt fit,
+// quality gates, paired gate) stays unweighted — a test must not down-weight the
+// evidence it dislikes. Unset = every row weight 1 (the recipe as it always was).
+const RECENCY_HALF_LIFE  = process.env.RECENCY_HALF_LIFE ? parseFloat(process.env.RECENCY_HALF_LIFE) : null;
+const RUN_TAG            = process.env.RUN_TAG || '';
+const WEIGHTS_SUFFIX     = (TRAIN_BEFORE ? `-wf${TRAIN_BEFORE.slice(0, 10)}` : '') + (RECENCY_HALF_LIFE ? `-hl${RECENCY_HALF_LIFE}` : '') + (RUN_TAG ? `-${RUN_TAG}` : '');
 const WEIGHTS_FILE       = STANDALONE ? `gbdt-weights-${LEAGUE_ID}${WEIGHTS_SUFFIX}.json` : 'gbdt-weights.json';
 const ARCHIVE_DIR        = STANDALONE ? path.join(DATA_DIR, 'model-archive', `league-${LEAGUE_ID}`) : path.join(DATA_DIR, 'model-archive');
 const GATE_POLICY        = 'non-inferiority'; // | 'superiority'
@@ -195,7 +202,7 @@ function archiveVersion(weights, status, extra = {}) {
 }
 
 function writeGateResult(result) {
-  const suffix = STANDALONE ? `-${LEAGUE_ID}` : '';
+  const suffix = (STANDALONE ? `-${LEAGUE_ID}` : '') + (RUN_TAG ? `-${RUN_TAG}` : '');
   const file = GATE_DRY_RUN ? `retrain-gate-dryrun${suffix}.json` : `retrain-gate-result${suffix}.json`;
   fs.writeFileSync(path.join(DATA_DIR, file), JSON.stringify({ ...result, dryRun: GATE_DRY_RUN }, null, 2));
 }
@@ -443,11 +450,13 @@ function treePredict(node, x) {
 // SIGKILL from hitting the memory ceiling lands between trees rather than mid-
 // tree, and gives the OS a chance to reclaim per-iteration garbage (subX/subG/
 // subH/allIdx are all rebuilt fresh every tree) before the next allocation.
-async function trainClassifier(samples, classLabel) {
+async function trainClassifier(samples, classLabel, sampleW = null) {
   const X = samples.map(s => s.x);
   const y = samples.map(s => s.y === classLabel ? 1 : 0);
   const n = X.length;
-  const prior = y.reduce((s, v) => s + v, 0) / n;
+  const W = sampleW || new Float64Array(n).fill(1);
+  const wSum = W.reduce((s, v) => s + v, 0);
+  const prior = y.reduce((s, v, i) => s + v * W[i], 0) / wSum;
   const initValue = Math.log((prior + 1e-6) / (1 - prior + 1e-6));
 
   const F = new Float64Array(n).fill(initValue);
@@ -458,8 +467,8 @@ async function trainClassifier(samples, classLabel) {
   for (let t = 0; t < N_TREES; t++) {
     const probs = F.map(f => sigmoid(f));
     // Newton gradients (residuals) and hessians for log-loss
-    const gradients = y.map((yi, i) => yi - probs[i]);       // first derivative
-    const hessians  = probs.map(p => p * (1 - p));           // second derivative
+    const gradients = y.map((yi, i) => (yi - probs[i]) * W[i]);   // first derivative × sample weight
+    const hessians  = probs.map((p, i) => p * (1 - p) * W[i]);     // second derivative × sample weight
 
     // Stochastic subsampling: random subset of indices
     const allIdx = Array.from({length: n}, (_, i) => i);
@@ -607,10 +616,20 @@ function bandAccuracy(records, probFn) {
 
   // ── Train classifiers ──
   console.log(`Training (${N_TREES} trees, depth ${DEPTH}, lr ${LR})...`);
+  // Recency weights (Addendum 62): anchored at the newest training row.
+  let sampleW = null, effectiveN = train.length;
+  if (RECENCY_HALF_LIFE) {
+    const anchorMs = Math.max(...train.map(r => new Date(r.date).getTime()));
+    sampleW = new Float64Array(train.length);
+    for (let i = 0; i < train.length; i++) { const age = (anchorMs - new Date(train[i].date).getTime()) / (365.25 * 86400000); sampleW[i] = Math.pow(0.5, age / RECENCY_HALF_LIFE); }
+    const sw = sampleW.reduce((a, b) => a + b, 0), sw2 = sampleW.reduce((a, b) => a + b * b, 0);
+    effectiveN = Math.round(sw * sw / sw2);
+    console.log(`  Recency weighting: half-life ${RECENCY_HALF_LIFE} seasons, anchor ${new Date(anchorMs).toISOString().slice(0, 10)}, effective n ${effectiveN} of ${train.length}`);
+  }
   const classifiers = {
-    home: await trainClassifier(train, 'home'),
-    draw: await trainClassifier(train, 'draw'),
-    away: await trainClassifier(train, 'away'),
+    home: await trainClassifier(train, 'home', sampleW),
+    draw: await trainClassifier(train, 'draw', sampleW),
+    away: await trainClassifier(train, 'away', sampleW),
   };
 
   // ── Fit Platt scaling on validation set ──
@@ -720,6 +739,7 @@ function bandAccuracy(records, probFn) {
   const candidateOut = {
     trainedAt,
     standaloneLeagueId: STANDALONE ? LEAGUE_ID : null,
+    recipe: { halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, tag: RUN_TAG || null, effectiveN },
     trainN:      train.length,
     testN:       test.length,
     treeBoundary,
@@ -734,6 +754,7 @@ function bandAccuracy(records, probFn) {
     at: trainedAt,
     standaloneLeagueId: STANDALONE ? LEAGUE_ID : null,
     weightsFile: WEIGHTS_FILE,
+    recipe: { halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, tag: RUN_TAG || null },
     dryRun: GATE_DRY_RUN,
     candidateVersion: trainedAt,
     deployedVersion: deployed?.trainedAt ?? null,
@@ -812,7 +833,7 @@ function bandAccuracy(records, probFn) {
     gateResult.decision = adopt ? 'adopted' : 'rejected';
     gateResult.reason = reason;
     if (GATE_DRY_RUN) {
-      archiveVersion(candidateOut, 'dry-run', { gateDecisionWouldBe: gateResult.decision, gateReason: reason, comparedTo: deployed.trainedAt });
+      archiveVersion(candidateOut, 'dry-run', { gateDecisionWouldBe: gateResult.decision, gateReason: reason, comparedTo: deployed.trainedAt, tag: RUN_TAG || null, halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE });
       writeGateResult(gateResult);
       console.log(`\n  [GBDT] DRY RUN — gate would have ${gateResult.decision.toUpperCase()} (${reason}). gbdt-weights.json untouched; candidate archived as dry-run; result in retrain-gate-dryrun.json.`);
       process.exit(0);

@@ -10827,6 +10827,67 @@ app.get('/api/admin/diag-modifiers', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message, stack: (e.stack || '').split('\n').slice(0, 3) }); }
 });
 
+// Addendum 62: sequential dry-run batch (recency-weighting test). Each run is a
+// normal runGbdtRetrain with GATE_DRY_RUN=1 and its own tag; results land in
+// retrain-gate-dryrun[-<league>]-<tag>.json and the archive (status dry-run, tag).
+let _trainBatch = { running: false, runs: [], current: null, startedAt: null, finishedAt: null };
+app.post('/api/admin/train-batch', (req, res) => {
+  if (_trainBatch.running) return res.json({ error: 'batch already running', batch: _trainBatch });
+  const runs = (req.body?.runs || []).filter(r => r && r.tag).map(r => ({ tag: r.tag, leagueId: r.leagueId || null, trainBefore: r.trainBefore || null, halfLife: r.halfLife || null, status: 'queued', startedAt: null, finishedAt: null, error: null, trainedAt: null }));
+  if (!runs.length) return res.status(400).json({ error: 'runs required' });
+  _trainBatch = { running: true, runs, current: null, startedAt: new Date().toISOString(), finishedAt: null };
+  writeJSON('train-batch-status.json', _trainBatch);
+  const next = () => {
+    const r = _trainBatch.runs.find(x => x.status === 'queued');
+    if (!r) { _trainBatch.running = false; _trainBatch.current = null; _trainBatch.finishedAt = new Date().toISOString(); writeJSON('train-batch-status.json', _trainBatch); console.log('[TrainBatch] complete'); return; }
+    const env = { GATE_DRY_RUN: '1', RUN_TAG: r.tag, ...(r.leagueId ? { LEAGUE_ID: String(r.leagueId) } : {}), ...(r.trainBefore ? { TRAIN_BEFORE: r.trainBefore } : {}), ...(r.halfLife ? { RECENCY_HALF_LIFE: String(r.halfLife) } : {}) };
+    const started = runGbdtRetrain(`batch ${r.tag}`, (result) => { r.status = result.success ? 'done' : 'failed'; r.finishedAt = new Date().toISOString(); r.error = result.success ? null : result.error; r.trainedAt = result.trainedAt || null; writeJSON('train-batch-status.json', _trainBatch); setTimeout(next, 3000); }, env);
+    if (!started.success) { r.status = 'failed'; r.error = started.error; writeJSON('train-batch-status.json', _trainBatch); setTimeout(next, 15000); return; }
+    r.status = 'running'; r.startedAt = new Date().toISOString(); _trainBatch.current = r.tag; writeJSON('train-batch-status.json', _trainBatch);
+  };
+  res.json({ started: true, runs: runs.length });
+  setTimeout(next, 500);
+});
+app.get('/api/admin/train-batch', (_req, res) => res.json(_trainBatch.running || _trainBatch.runs.length ? _trainBatch : (readJSON('train-batch-status.json') || _trainBatch)));
+
+// Addendum 62: paired comparison of two archived models on any window of scored
+// records. leagueScope 'pooled' (domestic, non-retired, all leagues) or a league id
+// (that league's records). a/b are archive tags (or trainedAt versions).
+function _loadArchived(scope, key) {
+  const dir = scope === 'pooled' ? path.join(DATA_DIR, 'model-archive') : path.join(DATA_DIR, 'model-archive', `league-${scope}`);
+  let index = []; try { index = JSON.parse(fs.readFileSync(path.join(dir, 'index.json'), 'utf8')); } catch {}
+  const e = index.find(v => v.tag === key) || index.find(v => v.version === key) || (key === 'deployed' ? index.find(v => v.status === 'deployed') : null);
+  if (!e) return null;
+  try { return { entry: e, weights: JSON.parse(fs.readFileSync(path.join(dir, e.file), 'utf8')) }; } catch { return null; }
+}
+app.get('/api/admin/diag-compare-models', async (req, res) => {
+  try {
+    const scope = req.query.scope || 'pooled';
+    const A = _loadArchived(scope, req.query.a), B = _loadArchived(scope, req.query.b);
+    if (!A || !B) return res.status(404).json({ error: 'model not found', a: !!A, b: !!B });
+    const from = req.query.from || '0000', to = req.query.to || '9999';
+    const { buildFeatures } = require('./models/gbdt');
+    const sig = z => 1 / (1 + Math.exp(-Math.max(-500, Math.min(500, z))));
+    const walk = (node, x) => node.leaf ? node.value : (x[node.feature] <= node.threshold ? walk(node.left, x) : walk(node.right, x));
+    const ens = (c, x) => { let F = c.initValue; for (const t of c.trees) F += c.lr * walk(t, x); return F; };
+    const predict = (w, x) => { const h = sig(w.platt.home.A * ens(w.classifiers.home, x) + w.platt.home.B), d = sig(w.platt.draw.A * ens(w.classifiers.draw, x) + w.platt.draw.B), a = sig(w.platt.away.A * ens(w.classifiers.away, x) + w.platt.away.B); const s = h + d + a; return { home: h / s, draw: d / s, away: a / s }; };
+    const hist = readHistoricalCached() || {};
+    const recs = (hist.scoredRecords || []).filter(r => r.homeFactors && r.awayFactors && r.actualOutcome && r.context === 'club_domestic' && !isRetiredLeague(r.leagueId) && r.date >= from && r.date < to && (scope === 'pooled' || parseInt(r.leagueId, 10) === parseInt(scope, 10)));
+    const rows = []; let i = 0;
+    for (const r of recs) {
+      if (++i % 500 === 0) await new Promise(rr => setImmediate(rr));
+      const x = buildFeatures(r.homeFactors, r.awayFactors, r.context);
+      const pa = predict(A.weights, x), pb = predict(B.weights, x);
+      const ya = pa[r.actualOutcome], yb = pb[r.actualOutcome];
+      const la = -Math.log(Math.max(1e-9, ya)), lb = -Math.log(Math.max(1e-9, yb));
+      rows.push({ d: la - lb, la, lb, year: r.date.slice(0, 4), league: String(r.leagueId), homeA: pa.home, homeB: pb.home, homeWon: r.actualOutcome === 'home' });
+    }
+    const sm = (list) => { const n = list.length; if (!n) return { n: 0 }; const m = list.reduce((s, r) => s + r.d, 0) / n; const v = n > 1 ? list.reduce((s, r) => s + (r.d - m) ** 2, 0) / (n - 1) : 0; const se = n > 1 ? Math.sqrt(v / n) : null; return { n, aLogLoss: +(list.reduce((s, r) => s + r.la, 0) / n).toFixed(4), bLogLoss: +(list.reduce((s, r) => s + r.lb, 0) / n).toFixed(4), meanDiff: +m.toFixed(5), se: se != null ? +se.toFixed(5) : null, z: se ? +(m / se).toFixed(2) : null, homeRateActual: +(list.filter(r => r.homeWon).length / n).toFixed(3), homeExpectedA: +(list.reduce((s, r) => s + r.homeA, 0) / n).toFixed(3), homeExpectedB: +(list.reduce((s, r) => s + r.homeB, 0) / n).toFixed(3) }; };
+    const by = (fn) => { const g = {}; for (const r of rows) (g[fn(r)] = g[fn(r)] || []).push(r); return Object.fromEntries(Object.entries(g).sort().map(([k, l]) => [k, sm(l)])); };
+    res.json({ scope, a: { tag: A.entry.tag, version: A.entry.version, recipe: A.weights.recipe || null }, b: { tag: B.entry.tag, version: B.entry.version, recipe: B.weights.recipe || null }, window: { from, to, n: rows.length }, note: 'diff = A − B log-loss per fixture; negative = A better', overall: sm(rows), byYear: by(r => r.year), byLeague: scope === 'pooled' ? by(r => r.league) : undefined });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/admin/retrain-gate', (req, res) => {
   const suffix = req.query.league ? `-${parseInt(req.query.league, 10)}` : '';
   res.json({ last: readJSON(req.query.dryrun === 'true' ? `retrain-gate-dryrun${suffix}.json` : `retrain-gate-result${suffix}.json`) || null });
