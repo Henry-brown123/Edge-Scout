@@ -6413,7 +6413,7 @@ function previewRealStake(label, modelProb, bookOdds, caveat, leagueId) {
   const fracKelly  = Math.max(0, fullKelly * realFrac);
   const stake      = Math.round(fracKelly * realBr * 100) / 100;
   const msg = stake > 0
-    ? `${label} — real stake preview: £${stake.toFixed(2)} (odds ${bookOdds.toFixed(2)}, ¼-Kelly, real bankroll £${realBr.toFixed(2)})${caveat ? ' — ' + caveat : ''}`
+    ? `${label} — real stake preview: £${stake.toFixed(2)} (odds ${bookOdds.toFixed(2)}, ${realFrac}× Kelly, real bankroll £${realBr.toFixed(2)})${caveat ? ' — ' + caveat : ''}`
     : `${label} — no positive edge at current real odds/settings, real stake would be £0${caveat ? ' — ' + caveat : ''}`;
   toast(msg, stake > 0 ? 'info' : 'error');
 }
