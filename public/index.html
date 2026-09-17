@@ -606,10 +606,10 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
 <div class="tab-panel" id="tab-performance">
   <div class="card" style="margin-bottom:16px">
     <div class="card-header">
-      <span class="card-title">Pockets — real money and League Two V2 (paper)</span>
+      <span class="card-title">Pockets — three real money, two paper-staked</span>
       <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;cursor:pointer" title="Cohort tables, league × tier grids, calibration matrices and correction-layer backtests — research views, hidden by default"><input type="checkbox" id="research-toggle" onchange="toggleResearch(this.checked)"> Research views</label>
     </div>
-    <div style="padding:12px 16px 4px;font-size:11px;color:var(--muted)">Everything else keeps feeding the model, the paper bet log and the paper bankroll below; only these four are broken out.</div>
+    <div style="padding:12px 16px 4px;font-size:11px;color:var(--muted)">Everything else keeps feeding the model and the logs in the background; only these five are broken out.</div>
     <div class="bucket-strip" id="perf-bucket-strip" style="padding:0 16px 12px;margin:0"></div>
   </div>
 
@@ -2603,7 +2603,9 @@ function contextBadge(ctx) {
 
 // ─── RENDER SCOUT ─────────────────────────────────────────────────────────────
 // ── Part 3 (Addendum 59): buckets, grouped cards, research toggle ─────────────
-const POCKET_LABELS = { 'l2-9-40': 'League Two 9%/40%', 'l1-12-50': 'League One 12%/50%', 'l1-jan-may-5-45': 'League One Jan–May 5%/45%' };
+const POCKET_LABELS = { 'l2-9-40': 'League Two 9%/40%', 'l1-12-50': 'League One 12%/50%', 'l1-jan-may-5-45': 'League One Jan–May 5%/45%', 'l2-v2-9-40': 'League Two V2 (paper)', 'l1-6-45-paper': 'League One 6%/45% (paper)' };
+const REAL_POCKETS = new Set(['l2-9-40', 'l1-12-50', 'l1-jan-may-5-45']);
+const isRealPocket = id => REAL_POCKETS.has(id);
 let _bucketsCache = null;
 async function renderBuckets() {
   try { _bucketsCache = await apiFetch('/api/buckets'); } catch (e) { return; }
@@ -2612,9 +2614,9 @@ async function renderBuckets() {
     const rec = st.resolved ? `${st.wins}W ${st.losses}L` : '—';
     const bm = st.beyondMarketPp != null ? `${st.beyondMarketPp >= 0 ? '+' : ''}${st.beyondMarketPp}pp${st.bmSePp != null ? ` ±${st.bmSePp}` : ''}` : '—';
     const roi = st.flatRoiPct != null ? `${st.flatRoiPct >= 0 ? '+' : ''}${st.flatRoiPct}%` : '—';
-    const real = bk.kind === 'real' ? `<div class="bt-row"><span>Real: confirmed / P&L</span><span class="${st.realPnl > 0 ? 'c-green' : st.realPnl < 0 ? 'c-red' : ''}">${st.realConfirmed} / ${st.realResolved ? `${st.realPnl >= 0 ? '+' : ''}£${st.realPnl.toFixed(2)}` : '—'}</span></div>` : `<div class="bt-row"><span>Never staked · shadow of the standalone model</span><span></span></div>`;
-    return `<div class="bucket-tile kind-${bk.kind}">
-      <div class="bt-label">${bk.label}${bk.kind === 'paper-shadow' ? ' <span class="badge badge-paper">PAPER</span>' : ' <span class="badge badge-real">REAL £</span>'}</div>
+    const real = bk.kind === 'real' ? `<div class="bt-row"><span>Real: confirmed / P&L</span><span class="${st.realPnl > 0 ? 'c-green' : st.realPnl < 0 ? 'c-red' : ''}">${st.realConfirmed} / ${st.realResolved ? `${st.realPnl >= 0 ? '+' : ''}£${st.realPnl.toFixed(2)}` : '—'}</span></div>` : `<div class="bt-row"><span>Paper P&L / staked</span><span class="${st.paperPnl > 0 ? 'c-green' : st.paperPnl < 0 ? 'c-red' : ''}">${st.resolved ? `${st.paperPnl >= 0 ? '+' : ''}£${(st.paperPnl||0).toFixed(2)} / £${(st.paperStaked||0).toFixed(2)}` : '—'}</span></div>`;
+    return `<div class="bucket-tile kind-${bk.kind === 'paper' ? 'paper-shadow' : bk.kind}">
+      <div class="bt-label">${bk.label}${bk.kind === 'paper' ? ' <span class="badge badge-paper">PAPER</span>' : ' <span class="badge badge-real">REAL £</span>'}</div>
       <div class="bt-rule">${bk.rule} · from ${(bk.from || '').slice(0, 10)}</div>
       <div class="bt-row"><span>Bets (open / resolved)</span><span>${st.n} (${st.open} / ${st.resolved})</span></div>
       <div class="bt-row"><span>Record · last 10</span><span>${rec} · ${st.last10 || '—'}</span></div>
@@ -2628,9 +2630,9 @@ async function renderBuckets() {
 // Locked cards grouped by pocket first; everything else under a collapsed group.
 function groupedCards(list, otherLabel = 'Other — paper, background') {
   const groups = [];
-  for (const id of Object.keys(POCKET_LABELS)) { const items = list.filter(b => b.pocketId === id); if (items.length) groups.push({ label: POCKET_LABELS[id], items, real: true }); }
+  for (const id of Object.keys(POCKET_LABELS)) { const items = list.filter(b => b.pocketId === id); if (items.length) groups.push({ label: POCKET_LABELS[id], items, real: isRealPocket(id) }); }
   const other = list.filter(b => !POCKET_LABELS[b.pocketId]);
-  let html = groups.map(g => `<div class="bucket-group-head" style="color:var(--green)">${g.label} <span style="color:var(--muted);font-weight:400">${g.items.length}</span></div>${g.items.map(b => recommendedCard(b)).join('')}`).join('');
+  let html = groups.map(g => `<div class="bucket-group-head" style="color:${g.real ? 'var(--green)' : '#4ea8ff'}">${g.label} <span style="color:var(--muted);font-weight:400">${g.items.length}</span></div>${g.items.map(b => recommendedCard(b)).join('')}`).join('');
   if (other.length) html += `<details ${groups.length ? '' : 'open'}><summary class="bucket-group-head" style="color:var(--muted);cursor:pointer;list-style:none">${otherLabel} <span style="font-weight:400">${other.length}</span></summary>${other.map(b => recommendedCard(b)).join('')}</details>`;
   return html;
 }
@@ -2653,8 +2655,8 @@ function renderScout() {
   const todayW = watching.filter(w => w.kickoff?.startsWith(today) && !w.isFakeMoney);
   // Real = a pocket lock (or a bet converted to real); paper = everything else,
   // including observation/no-stake locks, which keep their NO STAKE badge.
-  const isRealBet = b => !!b.pocketId || b.mode === 'real';
-  const realW = todayW.filter(w => !!w.pocketId), paperW = todayW.filter(w => !w.pocketId);
+  const isRealBet = b => isRealPocket(b.pocketId) || b.mode === 'real';
+  const realW = todayW.filter(w => isRealPocket(w.pocketId)), paperW = todayW.filter(w => !isRealPocket(w.pocketId));
   const realL = locked.filter(isRealBet),          paperL = locked.filter(b => !isRealBet(b));
   const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
   set('s-paper-watching', paperW.length); set('s-paper-locked', paperL.length);
@@ -2665,7 +2667,7 @@ function renderScout() {
   set('s-real-locked-sub', `${confirmed} confirmed · ${awaiting} awaiting confirmation`);
   const fill = (listId, emptyId, html) => { const l = document.getElementById(listId), e = document.getElementById(emptyId); if (!l) return; l.innerHTML = html; if (e) e.style.display = html ? 'none' : 'block'; };
   fill('paper-watching-list', 'paper-watching-empty', paperW.map(w => watchingCard(w)).join(''));
-  fill('paper-locked-list',   'paper-locked-empty',   paperL.map(b => recommendedCard(b)).join(''));
+  fill('paper-locked-list',   'paper-locked-empty',   groupedCards(paperL, 'Paper — outside a pocket'));
   fill('real-watching-list',  'real-watching-empty',  realW.map(w => watchingCard(w)).join(''));
   fill('real-locked-list',    'real-locked-empty',    groupedCards(realL, 'Real — outside a pocket'));
 }
@@ -2772,7 +2774,8 @@ function recommendedCard(b) {
       ${isGenericPaperOnly ? `<div style="background:rgba(255,170,0,0.12);border-bottom:1px solid rgba(255,170,0,0.3);padding:6px 14px;font-size:11px;font-weight:700;color:#ffaa00;border-radius:8px 8px 0 0;margin:-12px -12px 10px">⚠ PAPER ONLY — zero real-money stake (manual lock or calibration flag).</div>` : ''}
       ${isFakeMoney ? `<div style="background:rgba(148,163,184,0.1);border-bottom:1px solid rgba(148,163,184,0.28);padding:6px 14px;font-size:11px;font-weight:700;color:var(--muted);border-radius:8px 8px 0 0;margin:-12px -12px 10px">NO STAKE — observation only. Logged for future review, excluded from Paper P&L.</div>` : ''}
       ${isTrainingHoldout ? `<div style="background:rgba(122,162,255,0.1);border-bottom:1px solid rgba(122,162,255,0.28);padding:6px 14px;font-size:11px;font-weight:700;color:#7aa2ff;border-radius:8px 8px 0 0;margin:-12px -12px 10px">${isDateSplitLeague ? 'Training-excluded fixture — kicked off before the cutoff, so this result stays permanently out of the model by design (not pending).' : 'Training-excluded league — results kept permanently clean for backtesting by design (not pending).'} ${stakeIsZeroed ? 'Paper only (zero real-money stake).' : 'Real betting fully enabled.'}</div>` : ''}
-      ${(b.pocketId && b.mode !== 'real' && !b.result) ? `<div style="background:rgba(245,166,35,0.14);border-bottom:1px solid rgba(245,166,35,0.4);padding:6px 14px;font-size:11px;font-weight:700;color:#f5a623;border-radius:8px 8px 0 0;margin:-12px -12px 10px;display:flex;justify-content:space-between;align-items:center"><span>● ${POCKET_LABELS[b.pocketId] || b.pocketId} — ${b.displayState === 'awaiting' ? 'awaiting confirmation' : 'not confirmed (paper)'}</span><button class="btn btn-sm" style="background:#f5a623;color:#111;border:none;padding:3px 10px;font-weight:700" onclick="event.stopPropagation();openBmPanel('${b.id}')">Confirm placed</button></div>` : ''}
+      ${(isRealPocket(b.pocketId) && b.mode !== 'real' && !b.result) ? `<div style="background:rgba(245,166,35,0.14);border-bottom:1px solid rgba(245,166,35,0.4);padding:6px 14px;font-size:11px;font-weight:700;color:#f5a623;border-radius:8px 8px 0 0;margin:-12px -12px 10px;display:flex;justify-content:space-between;align-items:center"><span>● ${POCKET_LABELS[b.pocketId] || b.pocketId} — ${b.displayState === 'awaiting' ? 'awaiting confirmation' : 'not confirmed (paper)'}</span><button class="btn btn-sm" style="background:#f5a623;color:#111;border:none;padding:3px 10px;font-weight:700" onclick="event.stopPropagation();openBmPanel('${b.id}')">Confirm placed</button></div>` : ''}
+      ${(b.pocketId && !isRealPocket(b.pocketId)) ? `<div style="background:rgba(78,168,255,0.10);border-bottom:1px solid rgba(78,168,255,0.35);padding:6px 14px;font-size:11px;font-weight:700;color:#4ea8ff;border-radius:8px 8px 0 0;margin:-12px -12px 10px">● ${POCKET_LABELS[b.pocketId]} — paper stake${b.pocketModelVersion ? ` · standalone model ${String(b.pocketModelVersion).slice(0, 10)}` : ''}</div>` : ''}
       ${(b.pocketId && b.mode === 'real') ? `<div style="background:rgba(0,255,135,0.10);border-bottom:1px solid rgba(0,255,135,0.35);padding:6px 14px;font-size:11px;font-weight:700;color:var(--green);border-radius:8px 8px 0 0;margin:-12px -12px 10px">✓ ${POCKET_LABELS[b.pocketId] || b.pocketId} — real, confirmed</div>` : ''}
       ${isReal ? `<div style="background:rgba(255,209,102,0.08);border-bottom:1px solid rgba(255,209,102,0.2);padding:5px 14px;font-size:10px;font-weight:700;color:var(--amber);border-radius:8px 8px 0 0;margin:-12px -12px 8px;letter-spacing:.04em">REAL MONEY BET</div>` : ''}
       <div style="display:flex;align-items:flex-start;gap:10px">
@@ -2865,7 +2868,7 @@ function watchingCard(w) {
     <div class="fixture-card watching state-paper ${wMode === 'real' ? 'real-money' : 'paper-trade'} ${wMeetsPaperMoneyRule ? 'paper-money-hit' : ''}" onclick="openDrawerById('${w.id}')" ${wMeetsPaperMoneyRule ? 'title="Clears the 18%/45% domestic paper-money rule — this is the population under review for real-money promotion"' : ''}>
       ${scoreBadge(w.projectedScore)}
       <div class="fixture-meta">
-        <div class="fixture-name">${w.fixture}${w.pocketId ? ` <span class="badge" style="background:rgba(0,255,135,.12);border:1px solid rgba(0,255,135,.35);color:var(--green)" title="Will lock into this real-money pocket at T-60 if it still qualifies">${POCKET_LABELS[w.pocketId] || w.pocketId}</span>` : ''}</div>
+        <div class="fixture-name">${w.fixture}${w.pocketId ? ` <span class="badge" style="${isRealPocket(w.pocketId) ? 'background:rgba(0,255,135,.12);border:1px solid rgba(0,255,135,.35);color:var(--green)' : 'background:rgba(78,168,255,.12);border:1px solid rgba(78,168,255,.4);color:#4ea8ff'}" title="Will lock into this pocket at T-60 if it still qualifies">${POCKET_LABELS[w.pocketId] || w.pocketId}</span>` : ''}</div>
         <div class="fixture-info">
           <span>${w.leagueName}</span>
           <span>🇬🇧 KO ${kickoff}</span>
@@ -3259,7 +3262,7 @@ async function renderPerfMode(mode) {
     tr.innerHTML = `
       <td class="mono" style="color:var(--muted);white-space:nowrap" title="${betDate.getFullYear() > 2000 ? betDate.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) : 'Date unavailable'}">${dateStr}</td>
       ${modeCell}
-      <td class="mono"><span class="state-dot state-${b.displayState || 'paper'}" title="${b.displayState === 'real' ? 'Real — confirmed placement' : b.displayState === 'awaiting' ? 'Pocket lock awaiting confirmation' : 'Paper'}"></span>${b.fixture}${(b.pocketId && b.mode !== 'real' && !b.result) ? ` <button class="btn btn-ghost btn-sm" style="padding:1px 6px;color:#f5a623;border-color:#f5a623;font-size:10px" onclick="openBmPanel('${b.id}')">Confirm placed</button>` : ''}</td>
+      <td class="mono"><span class="state-dot state-${b.displayState || 'paper'}" title="${b.displayState === 'real' ? 'Real — confirmed placement' : b.displayState === 'awaiting' ? 'Pocket lock awaiting confirmation' : 'Paper'}"></span>${b.fixture}${(isRealPocket(b.pocketId) && b.mode !== 'real' && !b.result) ? ` <button class="btn btn-ghost btn-sm" style="padding:1px 6px;color:#f5a623;border-color:#f5a623;font-size:10px" onclick="openBmPanel('${b.id}')">Confirm placed</button>` : ''}</td>
       <td style="color:var(--muted)">${b.leagueName || '—'}</td>
       <td><span class="badge badge-cyan">${b.bet}</span></td>
       <td>
