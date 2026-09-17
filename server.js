@@ -2151,6 +2151,20 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   const isClassifiedLeague     = isDomesticTierLeague || isTournamentTierLeague;
 
   const tierCandidate = pickTopCandidateByProbability(results);
+  // League Two V2 (paper) — the standalone model's shadow, settled on its own pick
+  // against the same market the live bet saw (Part 3, Addendum 59).
+  if (standaloneShadow && !standaloneShadow.error) {
+    const label = standaloneShadow.pick === 'home' ? 'Home Win' : standaloneShadow.pick === 'away' ? 'Away Win' : 'Draw';
+    const row = results.find(r => r.bet === label);
+    if (row && row.hasRealOdds !== false && row.impliedProb > 0) {
+      standaloneShadow.betLabel = label;
+      standaloneShadow.market = row.impliedProb;
+      standaloneShadow.odds = row.bookOdds ?? null;
+      standaloneShadow.edge = standaloneShadow.calProb - row.impliedProb;
+      const cell = standaloneShadow.cell;
+      standaloneShadow.clearsCell = cell ? (standaloneShadow.edge >= cell.edgeMin && standaloneShadow.prob >= cell.probMin) : null;
+    } else { standaloneShadow.clearsCell = null; standaloneShadow.noMarket = true; }
+  }
 
   // Per-group edge floor on the live edge scale — see getPaperMoneyEdgeMin.
   const paperEdgeMin = getPaperMoneyEdgeMin(leagueId);
@@ -5253,7 +5267,7 @@ app.get('/api/state', (_req, res) => {
     // Real bankroll — same {initial, current, lastUpdated} shape as `bankroll`, its own
     // transactional ledger (Scout-tab bankroll panel), independent of bookmaker balances.
     realBankroll: getRealBankrollAccount(),
-    bets:        getBets(),
+    bets:        decorateBets(getBets()),
     watching,
     settings,
     leagues:     Object.fromEntries(Object.entries(LEAGUES).filter(([id]) => !isRetiredLeague(id))), // Addendum 51: retired leagues hidden from the UI
@@ -5407,7 +5421,49 @@ app.put('/api/settings', (req, res) => {
 });
 
 // GET bets
-app.get('/api/bets',        (_req, res) => res.json(getBets()));
+// ─── Part 3 (Addendum 59): display state and buckets ─────────────────────────
+// The colour a card shows is DERIVED from stored fields at read time; nothing is
+// ever written on a revert. Tracking (real vs paper record) depends only on
+// placementConfirmed, so a confirmation at any time turns the card green.
+const AWAITING_WINDOW_MS = 2 * 60 * 60 * 1000; // orange hint until kickoff + 2h
+function betDisplayState(b, now = Date.now()) {
+  if (b.placementConfirmed || b.placementStatus === 'placed') return 'real';
+  if (b.pocketId && !b.result && b.kickoff && (new Date(b.kickoff).getTime() + AWAITING_WINDOW_MS) > now) return 'awaiting';
+  return 'paper';
+}
+function decorateBets(bets) { const now = Date.now(); return bets.map(b => ({ ...b, displayState: betDisplayState(b, now) })); }
+
+const BUCKETS = [
+  ...POCKETS.map(p => ({ id: p.id, label: p.label, kind: 'real', leagueId: p.leagueId, rule: `edge ≥ ${Math.round(p.edgeMin * 100)}% · prob ≥ ${Math.round(p.probMin * 100)}%${p.months ? ` · ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][p.months[0]-1]}–${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][p.months[1]-1]}` : ' · year-round'}`, from: p.from, basis: p.basis })),
+  { id: 'l2-v2-paper', label: 'League Two V2 (paper)', kind: 'paper-shadow', leagueId: 42, rule: 'standalone League Two model, own pick, candidate cell 9%/40% at 1.0 — never staked', from: '2026-09-16T14:20:00Z', basis: 'Addendum 54' },
+];
+function outcomeFromScore(fs) { if (!fs || !/^\d+-\d+$/.test(String(fs))) return null; const [h, a] = String(fs).split('-').map(Number); return h > a ? 'Home Win' : h < a ? 'Away Win' : 'Draw'; }
+function bucketMembers(bucket, bets) {
+  if (bucket.kind === 'real') return bets.filter(b => b.pocketId === bucket.id).map(b => ({ bet: b, pick: b.bet, odds: b.actualOdds ?? b.bookOdds, market: b.impliedProb, won: b.result === 'win' ? true : b.result === 'loss' ? false : null, real: !!b.placementConfirmed, pnlReal: b.placementConfirmed ? (b.pnl ?? null) : null }));
+  // paper shadow: League Two locks where the standalone's own pick cleared its cell
+  return bets.filter(b => Number(b.leagueId) === 42 && b.standaloneShadow && b.standaloneShadow.clearsCell === true).map(b => { const sh = b.standaloneShadow; const outcome = outcomeFromScore(b.finalScore); const won = outcome ? outcome === sh.betLabel : null; return { bet: b, pick: sh.betLabel, odds: sh.odds, market: sh.market, won, real: false, pnlReal: null }; });
+}
+function bucketStats(members) {
+  const resolved = members.filter(m => m.won != null);
+  const n = members.length, wins = resolved.filter(m => m.won).length;
+  const flatPnl = resolved.reduce((a, m) => a + (m.won ? ((m.odds || 0) - 1) : -1), 0);
+  const bm = resolved.filter(m => m.market > 0).map(m => (m.won ? 1 : 0) - m.market);
+  const bmMean = bm.length ? bm.reduce((a, x) => a + x, 0) / bm.length : null;
+  const bmSd = bm.length > 1 ? Math.sqrt(bm.reduce((a, x) => a + (x - bmMean) ** 2, 0) / (bm.length - 1)) : null;
+  const realResolved = resolved.filter(m => m.real && m.pnlReal != null);
+  return { n, open: n - resolved.length, resolved: resolved.length, wins, losses: resolved.length - wins,
+    flatRoiPct: resolved.length ? +((flatPnl / resolved.length) * 100).toFixed(1) : null,
+    beyondMarketPp: bmMean != null ? +(bmMean * 100).toFixed(1) : null, bmSePp: bmSd != null ? +((bmSd / Math.sqrt(bm.length)) * 100).toFixed(1) : null,
+    realConfirmed: members.filter(m => m.real).length, realResolved: realResolved.length, realPnl: +realResolved.reduce((a, m) => a + m.pnlReal, 0).toFixed(2), realStaked: +realResolved.reduce((a, m) => a + (m.bet.actualStake || 0), 0).toFixed(2),
+    last10: resolved.slice(-10).map(m => m.won ? 'W' : 'L').join('') };
+}
+app.get('/api/buckets', (_req, res) => {
+  const bets = getBets().filter(b => !b.postponed).sort((a, b) => (a.lockedAt || '') < (b.lockedAt || '') ? -1 : 1);
+  const out = BUCKETS.map(bk => { const members = bucketMembers(bk, bets); return { ...bk, stats: bucketStats(members), members: members.slice(-20).reverse().map(m => ({ id: m.bet.id, fixture: m.bet.fixture, kickoff: m.bet.kickoff, pick: m.pick, odds: m.odds, market: m.market, result: m.won == null ? null : (m.won ? 'win' : 'loss'), displayState: betDisplayState(m.bet), real: m.real, pnl: m.pnlReal })) }; });
+  res.json({ buckets: out, awaitingWindowHours: AWAITING_WINDOW_MS / 3600000 });
+});
+
+app.get('/api/bets',        (_req, res) => res.json(decorateBets(getBets())));
 app.get('/api/calibration', (_req, res) => res.json(getCalibration()));
 app.get('/api/scan-meta',   (_req, res) => res.json(readJSON('scan-meta.json') || {}));
 
