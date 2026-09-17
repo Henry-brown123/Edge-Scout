@@ -10398,6 +10398,7 @@ app.get('/api/admin/diag-pocket-search', async (req, res) => {
     const cutoff = DATE_SPLIT_HOLDOUT_CUTOFFS.get(leagueId) || '2026-08-11T09:00:00Z';
     const fixedE = parseFloat(req.query.edgeMin) || 0.06, fixedP = parseFloat(req.query.probMin) || 0.45;
     const minN = parseInt(req.query.minN, 10) || 40;
+    const minZ = req.query.minZ != null ? parseFloat(req.query.minZ) : 1.5;
     const { classifyFixture, WEIGHTS_BY_CONTEXT, CONTEXT_CONFIG, LEAGUE_CONFIG: LC } = require('./scoring');
     const settings = getSettings();
     const hist = readHistoricalCached() || {};
@@ -10456,7 +10457,7 @@ app.get('/api/admin/diag-pocket-search', async (req, res) => {
       // train-only search
       const grid = [];
       for (const e of edges) for (const p of probsG) { const sm = summarise(inCell(train, e, p), seasonsTrain); if (sm.n >= minN) grid.push({ edgeMin: e, probMin: p, ...sm }); }
-      const eligible = grid.filter(g => g.z != null && g.z >= 1.5);
+      const eligible = grid.filter(g => g.z != null && g.z >= minZ);
       const best = eligible.sort((a, b) => b.totalReturnPerSeasonUnits - a.totalReturnPerSeasonUnits)[0] || null;
       let selected = null;
       if (best) {
@@ -10490,6 +10491,7 @@ app.get('/api/admin/diag-era', async (req, res) => {
     const cutoff = DATE_SPLIT_HOLDOUT_CUTOFFS.get(leagueId) || '2026-08-11T09:00:00Z';
     const cells = String(req.query.cells || '0.06/0.45').split(',').map(x => { const [e, p] = x.split('/').map(Number); return { e, p, key: x }; });
     const halfLife = parseFloat(req.query.halfLife) || 2;
+    const sideFilter = req.query.side || null; // home | away — restrict cells and top picks to one pick side
     const { classifyFixture, WEIGHTS_BY_CONTEXT, CONTEXT_CONFIG, LEAGUE_CONFIG: LC } = require('./scoring');
     const settings = getSettings();
     const hist = readHistoricalCached() || {};
@@ -10511,17 +10513,18 @@ app.get('/api/admin/diag-era', async (req, res) => {
       const closedDoors = r.date >= '2020-06-17' && r.date < '2021-05-17';
       rows.push({ date: r.date, season, half, key: `${season}-${half}`, closedDoors, pick, prob: probs[pick], edge: calProb - stripped[pick], market: stripped[pick], won, pnl: won ? co[`${pick}Odds`] - 1 : -1, bm: (won ? 1 : 0) - stripped[pick], homeWon: r.actualOutcome === 'home', homeMarket: stripped.home, homeModel: probs.home });
     }
+    const cellRows = sideFilter ? rows.filter(r => r.pick === sideFilter) : rows;
     const sm = (list) => { const n = list.length; if (!n) return { n: 0 }; const bm = list.reduce((a, x) => a + x.bm, 0) / n; const roi = list.reduce((a, x) => a + x.pnl, 0) / n; return { n, bmPp: +(bm * 100).toFixed(1), roiPct: +(roi * 100).toFixed(1) }; };
     const keys = [...new Set(rows.map(r => r.key))].sort();
-    const timeline = keys.map(k => { const all = rows.filter(r => r.key === k); const o = { period: k, closedDoorsShare: +(all.filter(r => r.closedDoors).length / all.length).toFixed(2), fixtures: all.length, homeWinRate: +(all.filter(r => r.homeWon).length / all.length).toFixed(3), homePricedByMarket: +(all.reduce((a, r) => a + r.homeMarket, 0) / all.length).toFixed(3), homeByModel: +(all.reduce((a, r) => a + r.homeModel, 0) / all.length).toFixed(3), allTopPicks: sm(all) }; for (const c of cells) o[`cell ${c.key}`] = sm(all.filter(r => r.edge >= c.e - 1e-9 && r.prob >= c.p - 1e-9)); return o; });
+    const timeline = keys.map(k => { const all = rows.filter(r => r.key === k); const cr = cellRows.filter(r => r.key === k); const o = { period: k, closedDoorsShare: +(all.filter(r => r.closedDoors).length / all.length).toFixed(2), fixtures: all.length, homeWinRate: +(all.filter(r => r.homeWon).length / all.length).toFixed(3), homePricedByMarket: +(all.reduce((a, r) => a + r.homeMarket, 0) / all.length).toFixed(3), homeByModel: +(all.reduce((a, r) => a + r.homeModel, 0) / all.length).toFixed(3), allTopPicks: sm(cr) }; for (const c of cells) o[`cell ${c.key}`] = sm(cr.filter(r => r.edge >= c.e - 1e-9 && r.prob >= c.p - 1e-9)); return o; });
     const byDoors = { closedDoors: {}, openDoors: {} };
-    for (const [label, flag] of [['closedDoors', true], ['openDoors', false]]) { const all = rows.filter(r => r.closedDoors === flag); byDoors[label] = { fixtures: all.length, homeWinRate: +(all.filter(r => r.homeWon).length / all.length).toFixed(3), homePricedByMarket: +(all.reduce((a, r) => a + r.homeMarket, 0) / all.length).toFixed(3), allTopPicks: sm(all), homePicks: sm(all.filter(r => r.pick === 'home')), awayPicks: sm(all.filter(r => r.pick === 'away')) }; for (const c of cells) byDoors[label][`cell ${c.key}`] = sm(all.filter(r => r.edge >= c.e - 1e-9 && r.prob >= c.p - 1e-9)); }
+    for (const [label, flag] of [['closedDoors', true], ['openDoors', false]]) { const all = rows.filter(r => r.closedDoors === flag); byDoors[label] = { fixtures: all.length, homeWinRate: +(all.filter(r => r.homeWon).length / all.length).toFixed(3), homePricedByMarket: +(all.reduce((a, r) => a + r.homeMarket, 0) / all.length).toFixed(3), allTopPicks: sm(all), homePicks: sm(all.filter(r => r.pick === 'home')), awayPicks: sm(all.filter(r => r.pick === 'away')) }; for (const c of cells) byDoors[label][`cell ${c.key}`] = sm(all.filter(r => (!sideFilter || r.pick === sideFilter) && r.edge >= c.e - 1e-9 && r.prob >= c.p - 1e-9)); }
     // recency-weighted residual: weight = 0.5^(seasonsBeforeCutoff / halfLife)
     const cutoffSeason = new Date(cutoff).getUTCMonth() >= 6 ? new Date(cutoff).getUTCFullYear() : new Date(cutoff).getUTCFullYear() - 1;
     const rw = (list) => { let w = 0, bm = 0, pnl = 0; for (const r of list) { const wt = Math.pow(0.5, (cutoffSeason - r.season) / halfLife); w += wt; bm += wt * r.bm; pnl += wt * r.pnl; } return w ? { n: list.length, effectiveN: +w.toFixed(1), weightedBmPp: +((bm / w) * 100).toFixed(1), weightedRoiPct: +((pnl / w) * 100).toFixed(1), unweightedBmPp: +((list.reduce((a, r) => a + r.bm, 0) / list.length) * 100).toFixed(1) } : { n: 0 }; };
     const recency = { halfLifeSeasons: halfLife, allTopPicks: rw(rows) };
-    for (const c of cells) recency[`cell ${c.key}`] = rw(rows.filter(r => r.edge >= c.e - 1e-9 && r.prob >= c.p - 1e-9));
-    res.json({ leagueId, factor, matched: rows.length, closedDoorsWindow: '2020-06-17 -> 2021-05-17', timeline, byDoors, recency });
+    for (const c of cells) recency[`cell ${c.key}`] = rw(cellRows.filter(r => r.edge >= c.e - 1e-9 && r.prob >= c.p - 1e-9));
+    res.json({ leagueId, factor, side: sideFilter, matched: rows.length, closedDoorsWindow: '2020-06-17 -> 2021-05-17', timeline, byDoors, recency });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
