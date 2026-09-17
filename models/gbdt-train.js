@@ -848,7 +848,7 @@ function bandAccuracy(records, probFn) {
   } else {
     gateResult.decision = 'adopted';
     gateResult.reason = deployed ? 'deployed weights unreadable/incomplete — nothing to compare against' : 'no deployed weights — first version';
-    if (GATE_DRY_RUN) { writeGateResult(gateResult); console.log(`\n  [GBDT] DRY RUN — ${gateResult.reason}; nothing written.`); process.exit(0); }
+    if (GATE_DRY_RUN) { archiveVersion(candidateOut, 'dry-run', { tag: RUN_TAG || null, halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, comparedTo: null }); writeGateResult(gateResult); console.log(`\n  [GBDT] DRY RUN — ${gateResult.reason}; candidate archived as dry-run, nothing written.`); process.exit(0); }
     console.log(`\n  [GBDT] Gate: ${gateResult.reason}; writing weights.`);
   }
 
