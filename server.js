@@ -31,6 +31,7 @@ const {
 
 const model = require('./models/interface');
 const { SCORER_VERSION, FEATURE_SPEC, buildLiveFactors, scoreProbabilities, diffScores } = require('./sharedScorer');
+const lineupLock = require('./lineupLock'); // Addendum 60: lineup-triggered lock
 
 const {
   getTeamProfiles,
@@ -2489,6 +2490,7 @@ async function runMorningScan(leagueIds) {
 // per-league setting.
 async function runPreMatchScan(watchingEntry, overrides = {}) {
   const settings  = getSettings();
+  let lineupsConfirmedAtLock = false; // Addendum 60: set by the lineup fetch below
   const leagueId  = watchingEntry.leagueId;
   const meta      = LEAGUES[leagueId] || { season: 2024 };
   const threshold = settings.successThreshold || 40;
@@ -2562,9 +2564,11 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
       saveFixtureStats({ ...fixtureStatsDb, ...statsToSave });
     }
 
-    // Fetch lineups for the target fixture (available T-60 if teams submit early)
+    // Fetch lineups for the target fixture — with the lineup-triggered lock this is
+    // normally present; absent only on the ~T-25 fallback.
     try {
       const { data: lu } = await apiSports.get('/fixtures/lineups', { params: { fixture: fix.fixture.id } });
+      lineupsConfirmedAtLock = lineupLock.lineupsComplete(lu);
       if (lu?.response?.length >= 2) {
         const lineupEntry = {
           home:      parseApiLineup(lu.response[0]),
@@ -2751,6 +2755,11 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
       bankrollAtLock: isReal ? (realBr || 0) : br.current,
       stage:        'RECOMMENDED',
       lockedAt:     new Date().toISOString(),
+      // Addendum 60: were confirmed team sheets available and fetched at lock time?
+      lineupsAtLock: lineupsConfirmedAtLock,
+      lockTrigger:  overrides.lockTrigger || (overrides.mode ? 'manual' : 'legacy'),
+      lineupPollsAtLock: overrides.lineupPolls ?? null,
+      lineupSeenAt: overrides.lineupSeenAt ?? null,
       result:       null,
       pnl:          null,
       resolvedAt:   null,
@@ -3569,53 +3578,49 @@ function setupScheduler() {
     if (isRateLimited() || _cronRunning.preMatch) return;
     const watching = getWatching();
     const now = Date.now();
-    const getOffset = getLockOffsetMinutes;
-    // Lock window: T-(60+offset) to T-(55+offset) — fires for 5 consecutive minutes
-    const toScan = watching.filter(w => {
-      if (isRetiredLeague(w.leagueId)) return false; // Addendum 51: never lock a retired competition
-      const m = (new Date(w.kickoff).getTime() - now) / 60000;
-      const off = getOffset(w);
-      return m <= (60 + off) && m > (55 + off);
-    });
-    const locked = watching.filter(w => (new Date(w.kickoff).getTime() - now) / 60000 > (55 + getOffset(w)));
-    // Always drop anything past its own window, even on a "quiet" minute where
-    // nothing NEW is entering one. Previously this cleanup only ran nested inside
-    // the toScan-only path below, so a fixture whose window closed on a minute
-    // when no other fixture happened to be entering its own window at the same
-    // moment could sit in Watching indefinitely despite already being scanned
-    // (or needing to be) earlier -- the "Lock overdue" state surfaced on the
-    // Scout tab. Confirmed live 2026-08-25 (Plymouth vs Coventry).
-    //
-    // 2026-09-02: found the actual mechanism behind a fixture staying stuck
-    // "Lock overdue" all evening despite the logic above being correct — late
-    // in the evening, once every remaining watching fixture has passed its own
-    // window, `locked` legitimately computes to `[]`. writeJSON's empty-data
-    // guard (meant to catch accidental data loss from a bug) can't distinguish
-    // that from an actual bug, and silently refused to persist it — logged
-    // every single minute as "refused — would overwrite Nb file with empty
-    // structure", freezing watching.json at whatever it was before the guard
-    // first kicked in. allowEmpty:true on both saves here, matching the same
-    // fix already applied to runHourlyRescan's save for the identical reason.
-    if (!toScan.length) {
-      if (locked.length !== watching.length) saveWatching(locked, { allowEmpty: true });
-      return;
+    const minsTo = w => (new Date(w.kickoff).getTime() - now) / 60000;
+    let changed = false;
+    // Addendum 60 (2026-09-17), universal for every category (real pocket, paper
+    // pocket, observation): the old T-(60±15) lock window is now the LAST WATCHING
+    // REFRESH; the lock itself is lineup-triggered from T-40 with a ~T-25 fallback
+    // (lineupLock.js). Applies to every watching fixture regardless of stake tier.
+    const refreshDue = watching.filter(w => { if (isRetiredLeague(w.leagueId) || w._preLockRefreshed) return false; const m = minsTo(w); const off = getLockOffsetMinutes(w); return m <= (60 + off) && m > lineupLock.POLL_FROM_MIN; });
+    if (refreshDue.length) {
+      for (const w of refreshDue) w._preLockRefreshed = new Date().toISOString();
+      changed = true;
+      if (!_cronRunning.hourlyRescan) {
+        _cronRunning.hourlyRescan = true;
+        console.log(`[Cron:PreLock] ${refreshDue.length} fixture(s) at T-60 — last watching refresh before the lineup-triggered lock`);
+        saveWatching(watching, { allowEmpty: true }); changed = false;
+        runHourlyRescan().catch(e => console.error(`[Cron:PreLock] refresh error: ${e.message}`)).finally(() => { _cronRunning.hourlyRescan = false; });
+      }
     }
+    const toLock = [];
+    for (const w of watching) {
+      if (isRetiredLeague(w.leagueId)) continue;
+      const m = minsTo(w);
+      if (m > lineupLock.POLL_FROM_MIN || m <= 0) continue;
+      let present = false;
+      if (!w._lineupSeenAt) {
+        try {
+          const { data: lu } = await apiSports.get('/fixtures/lineups', { params: { fixture: w.fixtureId } });
+          w._lineupPolls = (w._lineupPolls || 0) + 1; changed = true;
+          present = lineupLock.lineupsComplete(lu);
+          if (present) { w._lineupSeenAt = new Date().toISOString(); console.log(`[Cron:PreMatch] team sheets in for ${w.fixture} at T-${m.toFixed(0)} (poll ${w._lineupPolls})`); }
+        } catch (e) { console.warn(`[Cron:PreMatch] lineup poll failed for ${w.fixture}: ${e.message}`); }
+      }
+      const d = lineupLock.decide(w, m, now, present);
+      if (d.action === 'lock') toLock.push({ w, trigger: d.trigger });
+    }
+    if (changed) saveWatching(watching, { allowEmpty: true });
+    if (!toLock.length) return;
     _cronRunning.preMatch = true;
-    console.log(`[Cron:PreMatch] ${toScan.length} fixture(s) entering pre-match lock (T-60 ±15 min variation)`);
+    console.log(`[Cron:PreMatch] ${toLock.length} fixture(s) locking — ${toLock.map(x => `${x.w.fixture}:${x.trigger}`).join(' | ')}`);
     try {
-      const results = await Promise.all(toScan.map(w => runPreMatchScan(w)));
-      // `locked` (the keep-set) is time-filtered only, so it still includes every
-      // toScan fixture during the tick it's actually processed — a fixture that
-      // just became a real bet stayed visible in Watching for up to the rest of
-      // its 5-minute toScan window (confirmed live 2026-09-02: Kilmarnock/Burton
-      // Albion showing in both Locked Bets and Watching for several minutes after
-      // locking). Only remove fixtures that actually locked here — dropped/null
-      // outcomes keep their existing behavior (another look on a later tick
-      // within the same window), since that isn't the reported bug and may be
-      // deliberate resilience against a fixture priced/confirmed late.
-      const lockedIds = new Set(toScan.filter((w, i) => results[i] && !results[i].dropped).map(w => w.id));
-      const survivors = locked.filter(w => !lockedIds.has(w.id));
-      saveWatching(survivors, { allowEmpty: true });
+      const results = await Promise.all(toLock.map(x => runPreMatchScan(x.w, { lockTrigger: x.trigger, lineupPolls: x.w._lineupPolls || 0, lineupSeenAt: x.w._lineupSeenAt || null })));
+      const lockedIds = new Set(toLock.filter((x, i) => results[i] && !results[i].dropped).map(x => x.w.id));
+      const fresh = getWatching(); // re-read: the refresh may have saved meanwhile
+      saveWatching(fresh.filter(w => !lockedIds.has(w.id)), { allowEmpty: true });
     } catch (e) {
       console.error(`[Cron:PreMatch] Error: ${e.message}`);
     } finally {
@@ -10691,6 +10696,23 @@ app.get('/api/admin/diag-pocket-overlap', async (req, res) => {
     out.beforeAssignment = Object.fromEntries(pockets.map(p => [p.id, sm(rows.filter(r => r.qualifies.includes(p.id)))]));
     out.union = sm(rows.filter(r => r.assigned));
     res.json(out);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Addendum 60: what the lineup-triggered lock would do for a watching fixture right now.
+app.get('/api/admin/diag-lineup-lock', async (req, res) => {
+  try {
+    const watching = getWatching();
+    const w = req.query.fixtureId ? watching.find(x => String(x.fixtureId) === String(req.query.fixtureId)) : watching.find(x => new RegExp(req.query.q || '.', 'i').test(x.fixture));
+    if (!w) return res.status(404).json({ error: 'fixture not in watching', watching: watching.map(x => `${x.fixtureId} ${x.fixture}`) });
+    const now = Date.now(); const m = (new Date(w.kickoff).getTime() - now) / 60000;
+    let lineups = null; try { const { data: lu } = await apiSports.get('/fixtures/lineups', { params: { fixture: w.fixtureId } }); lineups = { teams: lu?.response?.length || 0, complete: lineupLock.lineupsComplete(lu), startXI: (lu?.response || []).map(t => (t.startXI || []).length) }; } catch (e) { lineups = { error: e.message }; }
+    const j = lineupLock.jitterFor(w);
+    const koMs = new Date(w.kickoff).getTime();
+    res.json({ fixture: w.fixture, kickoff: w.kickoff, minutesToKickoff: +m.toFixed(1), pocketId: w.pocketId ?? null, tier: w.pocketTier ?? null,
+      schedule: { lastRefreshAt: `T-${60 + getLockOffsetMinutes(w)} (${new Date(koMs - (60 + getLockOffsetMinutes(w)) * 60000).toISOString()})`, pollFrom: `T-${lineupLock.POLL_FROM_MIN} (${new Date(koMs - lineupLock.POLL_FROM_MIN * 60000).toISOString()})`, fallbackAt: `T-${j.fallbackAt} (${new Date(koMs - j.fallbackAt * 60000).toISOString()})`, delayAfterSheetsMin: j.delayMin },
+      state: { preLockRefreshed: w._preLockRefreshed ?? null, lineupPolls: w._lineupPolls ?? 0, lineupSeenAt: w._lineupSeenAt ?? null },
+      lineupsNow: lineups, decisionNow: lineupLock.decide(w, m, now, !!lineups?.complete) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

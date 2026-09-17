@@ -2806,6 +2806,7 @@ function recommendedCard(b) {
         ${scoreBadge(b.successScore)}
         <div class="fixture-meta" style="flex:1">
           <div class="fixture-name">${b.fixture}</div>
+          ${b.lockTrigger ? (b.lineupsAtLock ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">✓ Team sheets confirmed at lock${b.lockTrigger === 'lineups' ? ' (lineup-triggered)' : ''}</div>` : `<div style="font-size:11px;font-weight:700;color:#f5a623;margin-top:2px">⚠ Lineups not confirmed at lock${b.lockTrigger === 'fallback' ? ' — T-25 fallback fired' : ''}</div>`) : ''}
           <div class="fixture-info">
             <span>${b.leagueName}</span>
             <span>🇬🇧 KO ${kickoff}</span>
@@ -2848,11 +2849,13 @@ function watchingCard(w) {
   // is never ambiguous with "stuck past its window and needs a look."
   const lockLabel = (() => {
     if (minsOut == null) return null;
-    const off = w.lockOffsetMinutes ?? 0;
-    const opensAt = 60 + off, closesAt = 55 + off;
-    if (minsOut > opensAt) return `<span style="color:var(--muted)" title="Auto-locks and re-scores between T-${opensAt}m and T-${closesAt}m">Locks in ${minsOut - opensAt}m</span>`;
-    if (minsOut > closesAt) return `<span style="color:var(--amber)" title="Inside its auto-lock window — re-scoring now">Locking now…</span>`;
-    return `<span style="color:var(--red)" title="Past its scheduled T-${opensAt}m/T-${closesAt}m auto-lock window but still showing here — worth a manual check">⚠ Lock overdue</span>`;
+    // Addendum 60: lineup-triggered lock — polls team sheets from T-40, locks when they
+    // appear (+0–3 min), fallback around T-25. T-60±15 is the last full refresh.
+    if (w._lineupSeenAt) return `<span style="color:var(--amber)" title="Team sheets are in — locking within minutes">Team sheets in — locking…</span>`;
+    if (minsOut > 40) return `<span style="color:var(--muted)" title="Polls team sheets every minute from T-40 and locks when they appear; fallback lock around T-25">Team-sheet watch from T-40 (in ${minsOut - 40}m)</span>`;
+    if (minsOut > 22) return `<span style="color:var(--amber)" title="Polling team sheets each minute (${w._lineupPolls || 0} so far); locks when they appear or at the ~T-25 fallback">Awaiting team sheets… (${w._lineupPolls || 0} polls)</span>`;
+    if (minsOut > 0) return `<span style="color:var(--red)" title="Past the fallback minute but still showing here — worth a manual check">⚠ Lock overdue</span>`;
+    return `<span style="color:var(--muted)">Kicked off</span>`;
   })();
   // How stale can the number on this card possibly be? Morning scan (07:00), the
   // hourly rescan (on the hour), or T-60 lock all update scoredAt — this is
@@ -3297,7 +3300,7 @@ async function renderPerfMode(mode) {
     tr.innerHTML = `
       <td class="mono" style="color:var(--muted);white-space:nowrap" title="${betDate.getFullYear() > 2000 ? betDate.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) : 'Date unavailable'}">${dateStr}</td>
       ${modeCell}
-      <td class="mono"><span class="state-dot state-${b.displayState || 'paper'}" title="${b.displayState === 'real' ? 'Real — confirmed placement' : b.displayState === 'awaiting' ? 'Pocket lock awaiting confirmation' : 'Paper'}"></span>${b.fixture}${(isRealPocket(b.pocketId) && b.mode !== 'real' && !b.result) ? ` <button class="btn btn-ghost btn-sm" style="padding:1px 6px;color:#f5a623;border-color:#f5a623;font-size:10px" onclick="openBmPanel('${b.id}')">Confirm placed</button>` : ''}</td>
+      <td class="mono"><span class="state-dot state-${b.displayState || 'paper'}" title="${b.displayState === 'real' ? 'Real — confirmed placement' : b.displayState === 'awaiting' ? 'Pocket lock awaiting confirmation' : 'Paper'}"></span>${b.fixture}${b.lockTrigger && !b.lineupsAtLock ? ` <span class="badge" style="background:rgba(245,166,35,.15);border:1px solid rgba(245,166,35,.45);color:#f5a623" title="Team sheets were not available when this bet locked (T-25 fallback)">Lineups not confirmed</span>` : ''}${(isRealPocket(b.pocketId) && b.mode !== 'real' && !b.result) ? ` <button class="btn btn-ghost btn-sm" style="padding:1px 6px;color:#f5a623;border-color:#f5a623;font-size:10px" onclick="openBmPanel('${b.id}')">Confirm placed</button>` : ''}</td>
       <td style="color:var(--muted)">${b.leagueName || '—'}</td>
       <td><span class="badge badge-cyan">${b.bet}</span></td>
       <td>
@@ -5773,11 +5776,11 @@ function openDrawer(w) {
   const isPreMatch = minsOut != null && minsOut <= 60;
   const drawerLockLabel = (() => {
     if (minsOut == null) return '';
-    const off = w.lockOffsetMinutes ?? 0;
-    const opensAt = 60 + off, closesAt = 55 + off;
-    if (minsOut > opensAt) return ` · <span style="color:var(--muted)" title="Auto-locks and re-scores between T-${opensAt}m and T-${closesAt}m">Locks in ${minsOut - opensAt}m</span>`;
-    if (minsOut > closesAt) return ` · <span style="color:var(--amber)" title="Inside its auto-lock window — re-scoring now">Locking now…</span>`;
-    return ` · <span style="color:var(--red)" title="Past its scheduled T-${opensAt}m/T-${closesAt}m auto-lock window but still showing here — worth a manual check">⚠ Lock overdue</span>`;
+    if (w._lineupSeenAt) return ` · <span style="color:var(--amber)">Team sheets in — locking…</span>`;
+    if (minsOut > 40) return ` · <span style="color:var(--muted)">Team-sheet watch from T-40 (in ${minsOut - 40}m)</span>`;
+    if (minsOut > 22) return ` · <span style="color:var(--amber)">Awaiting team sheets… (${w._lineupPolls || 0} polls)</span>`;
+    if (minsOut > 0) return ` · <span style="color:var(--red)">⚠ Lock overdue</span>`;
+    return '';
   })();
 
   const factors = Object.keys(WEIGHTS);
