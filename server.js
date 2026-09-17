@@ -10716,6 +10716,116 @@ app.get('/api/admin/diag-lineup-lock', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Addendum 61 (2026-09-17): modifier validation per pocket. Each modifier's live
+// formula (teamProfiles.js) is reproduced from PRIOR fixtures only (rolling, same
+// league), applied to the pocket chain's probabilities, and the pocket cell is
+// re-measured: as a split (does the signal separate good picks from bad inside
+// the cell?) and as an adjustment (does applying it change the cell for better
+// or worse?), with train/test (2024-09-16), four blocks and membership
+// decomposition. WOWY is restricted to fixtures with post-match lineups (2022+)
+// and its baseline is measured on the same subset.
+app.get('/api/admin/diag-modifiers', async (req, res) => {
+  try {
+    const leagueId = parseInt(req.query.league, 10) || 41;
+    const pocketId = req.query.pocket;
+    const pocket = POCKETS.find(p => p.id === pocketId && p.leagueId === leagueId);
+    if (!pocket) return res.status(400).json({ error: 'pocket required', pockets: POCKETS.filter(p => p.leagueId === leagueId).map(p => p.id) });
+    const useStandalone = pocket.model === 'standalone';
+    const factor = useStandalone ? (STANDALONE_FACTOR[leagueId] ?? 1.0) : getCalFactorForLeague(getSettings(), leagueId);
+    const split = '2024-09-16T00:00:00Z';
+    const cutoff = DATE_SPLIT_HOLDOUT_CUTOFFS.get(leagueId) || '2026-08-11T09:00:00Z';
+    const { classifyFixture, WEIGHTS_BY_CONTEXT, CONTEXT_CONFIG, LEAGUE_CONFIG: LC } = require('./scoring');
+    const settings = getSettings(); const hist = readHistoricalCached() || {}; const closing = getClosingOdds(); const lineups = getLineups();
+    const recById = new Map((hist.scoredRecords || []).filter(r => parseInt(r.leagueId, 10) === leagueId && r.homeFactors && r.awayFactors && r.actualOutcome).map(r => [String(r.fixtureId), r]));
+    const fixtures = (hist.fixtures || []).filter(f => parseInt(f.league?.id, 10) === leagueId && ['FT','AET','PEN'].includes(f.fixture?.status?.short) && f.fixture?.date < cutoff).sort((a, b) => a.fixture.date < b.fixture.date ? -1 : 1);
+    const LIVE_HOME_AVG = 0.463, LIVE_AWAY_AVG = 0.29;
+    // rolling state (prior fixtures only)
+    const homeRec = {}, awayRec = {}, overall = {}, vs = {}, wowy = {}; // wowy[team][player] = {with:{w,d,l}, without:{w,d,l}}
+    let lgHomeW = 0, lgHomeN = 0, lgAwayW = 0;
+    const rate = r => r && r.n ? r.w / r.n : null;
+    const rows = []; let i = 0;
+    for (const f of fixtures) {
+      if (++i % 200 === 0) await new Promise(rr => setImmediate(rr));
+      const fid = String(f.fixture.id), h = f.teams.home.id, a = f.teams.away.id;
+      const hg = f.goals?.home, ag = f.goals?.away; const outcome = hg > ag ? 'home' : hg < ag ? 'away' : 'draw';
+      const rec = recById.get(fid); const co = closing[fid] || closing[f.fixture.id];
+      const priced = rec && co && co.bookmaker === 'pinnacle' && co.homeOdds > 1 && co.drawOdds > 1 && co.awayOdds > 1;
+      if (priced) {
+        const context = rec.context || classifyFixture(leagueId);
+        let probs;
+        if (useStandalone) { const sp = model.predictLeague(leagueId, rec.homeFactors, rec.awayFactors, context); probs = sp ? sp.probs : null; }
+        else probs = scoreProbabilities({ homeF: rec.homeFactors, awayF: rec.awayFactors, weights: WEIGHTS_BY_CONTEXT[context], context, leagueId, leagueConfig: LC[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: true, rankAdjust: false, hostBoost: false, modifiers: false } }).probs;
+        if (probs) {
+          const stripped = marginStrippedImplied(co);
+          // --- home/away multiplier (live formula, pooled 0.463/0.29 baseline) and pocket-specific (league rolling baseline)
+          const hr = homeRec[h], ar = awayRec[a];
+          const conf = r => Math.min((r?.n || 0) / 20, 1);
+          const multOf = (r, avg, min) => { if (!r || r.n < min) return 1; const m = rate(r) / Math.max(avg, 0.01); const b = conf(r) * m + (1 - conf(r)); return Math.max(0.5, Math.min(2.0, b)); };
+          const lgH = lgHomeN >= 50 ? lgHomeW / lgHomeN : LIVE_HOME_AVG, lgA = lgHomeN >= 50 ? lgAwayW / lgHomeN : LIVE_AWAY_AVG;
+          const mH_live = multOf(hr, LIVE_HOME_AVG, 5), mA_live = multOf(ar, LIVE_AWAY_AVG, 5);
+          const mH_lg = multOf(hr, lgH, 5), mA_lg = multOf(ar, lgA, 5);
+          // --- H2H anomaly (home team's perspective, live formula)
+          const ov = overall[h]; const vsRec = (vs[h] || {})[a];
+          let h2hAdj = 0, h2hSig = null;
+          if (vsRec && vsRec.n >= 6 && ov && ov.n) { const an = vsRec.w / vsRec.n - ov.w / ov.n; h2hSig = an; if (Math.abs(an) >= 0.12) h2hAdj = an * 0.5; }
+          // --- WOWY (prior lineups only; absent = high-confidence key player not in today's XI)
+          const lu = lineups[fid];
+          let hasLineup = false, wowyH = 0, wowyA = 0, absentH = 0, absentA = 0;
+          if (lu && lu.home?.starters?.length >= 11 && lu.away?.starters?.length >= 11) {
+            hasLineup = true;
+            const wowyFor = (team, starters) => { const players = wowy[team] || {}; const xi = new Set(starters.map(s => String(s.id ?? s))); let adj = 0, absent = 0; for (const [pid, r] of Object.entries(players)) { const wT = r.with.w + r.with.d + r.with.l, woT = r.without.w + r.without.d + r.without.l; if (wT < 8 || woT < 5) continue; const withRate = (r.with.w + 0.5 * r.with.d) / wT, woRate = (r.without.w + 0.5 * r.without.d) / woT; const delta = withRate - woRate; if (woRate > 0.85 && woT < 15 && delta < 0) continue; if (Math.abs(delta * 100) < 12) continue; if (xi.has(pid)) continue; absent++; adj += Math.max(-0.05, Math.min(0.05, delta * 0.3)); } return { adj: Math.max(-0.08, Math.min(0.08, adj)), absent }; };
+            const wh = wowyFor(h, lu.home.starters), wa = wowyFor(a, lu.away.starters); wowyH = wh.adj; wowyA = wa.adj; absentH = wh.absent; absentA = wa.absent;
+          }
+          const mk = (p) => { const pick = p.home >= p.draw && p.home >= p.away ? 'home' : p.away >= p.draw ? 'away' : 'draw'; const calProb = Math.min(0.97, p[pick] * factor); const won = outcome === pick; return { pick, prob: p[pick], edge: calProb - stripped[pick], bm: (won ? 1 : 0) - stripped[pick], pnl: won ? co[`${pick}Odds`] - 1 : -1 }; };
+          const applyMult = (p, mh, ma) => { let H = p.home * mh, A = p.away * ma, D = p.draw; const t = H + A + D; return { home: H / t, draw: D / t, away: A / t }; };
+          const applyAdd = (p, dH, dA) => { let H = Math.max(0.01, p.home + dH), A = Math.max(0.01, p.away + dA), D = Math.max(0.01, p.draw); const t = H + A + D; return { home: H / t, draw: D / t, away: A / t }; };
+          const base = mk(probs);
+          rows.push({ fid, date: f.fixture.date, month: new Date(f.fixture.date).getUTCMonth() + 1, base,
+            mult_live: { ...mk(applyMult(probs, mH_live, mA_live)), sig: base.pick === 'home' ? mH_live : base.pick === 'away' ? mA_live : 1 },
+            mult_league: { ...mk(applyMult(probs, mH_lg, mA_lg)), sig: base.pick === 'home' ? mH_lg : base.pick === 'away' ? mA_lg : 1 },
+            h2h: { ...mk(applyAdd(probs, h2hAdj, -h2hAdj)), sig: base.pick === 'home' ? h2hAdj : base.pick === 'away' ? -h2hAdj : 0, raw: h2hSig },
+            wowy: hasLineup ? { ...mk(applyAdd(probs, wowyH, wowyA)), sig: base.pick === 'home' ? wowyH : base.pick === 'away' ? wowyA : 0, absent: base.pick === 'home' ? absentH : absentA } : null });
+        }
+      }
+      // --- update rolling state AFTER scoring this fixture
+      const upd = (obj, k, won) => { if (!obj[k]) obj[k] = { w: 0, n: 0 }; obj[k].n++; if (won) obj[k].w++; };
+      upd(homeRec, h, outcome === 'home'); upd(awayRec, a, outcome === 'away'); upd(overall, h, outcome === 'home'); upd(overall, a, outcome === 'away');
+      if (!vs[h]) vs[h] = {}; if (!vs[a]) vs[a] = {}; upd(vs[h], a, outcome === 'home'); upd(vs[a], h, outcome === 'away');
+      lgHomeN++; if (outcome === 'home') lgHomeW++; if (outcome === 'away') lgAwayW++;
+      const lu = lineups[fid];
+      if (lu && lu.home?.starters?.length && lu.away?.starters?.length) {
+        const rec2 = (team, starters, subs, res) => { if (!wowy[team]) wowy[team] = {}; const P = wowy[team]; const add = (e, isStarter) => { const id = String(e.id ?? e); if (!P[id]) P[id] = { with: { w: 0, d: 0, l: 0 }, without: { w: 0, d: 0, l: 0 } }; const r = isStarter ? P[id].with : P[id].without; if (res === 'win') r.w++; else if (res === 'draw') r.d++; else r.l++; }; (starters || []).forEach(e => add(e, true)); (subs || []).forEach(e => add(e, false)); };
+        rec2(h, lu.home.starters, lu.home.substitutes, outcome === 'home' ? 'win' : outcome === 'draw' ? 'draw' : 'loss');
+        rec2(a, lu.away.starters, lu.away.substitutes, outcome === 'away' ? 'win' : outcome === 'draw' ? 'draw' : 'loss');
+      }
+    }
+    // --- pocket cell evaluation
+    const inCell = (x, date, month) => x && x.edge >= pocket.edgeMin - 1e-9 && x.prob >= pocket.probMin - 1e-9 && (!pocket.months || (month >= pocket.months[0] && month <= pocket.months[1]));
+    const seasonOf = d => { const D = new Date(d); return D.getUTCMonth() >= 6 ? D.getUTCFullYear() : D.getUTCFullYear() - 1; };
+    const summarise = (list) => { const n = list.length; if (!n) return { n: 0 }; const seasons = new Set(list.map(r => seasonOf(r.date))).size || 1; const bm = list.reduce((s, r) => s + r.x.bm, 0) / n; const sd = Math.sqrt(list.reduce((s, r) => s + (r.x.bm - bm) ** 2, 0) / Math.max(1, n - 1)); const roi = list.reduce((s, r) => s + r.x.pnl, 0) / n; return { n, betsPerSeason: +(n / seasons).toFixed(1), beyondMarketPp: +(bm * 100).toFixed(1), sePp: +((sd / Math.sqrt(n)) * 100).toFixed(1), z: sd ? +(bm / (sd / Math.sqrt(n))).toFixed(2) : null, roiClosePct: +(roi * 100).toFixed(1), totalReturnPerSeasonUnits: +((roi * n) / seasons).toFixed(1) }; };
+    const evalVariant = (key, subset) => {
+      const pop = subset.filter(r => r[key]);
+      const cellBase = pop.filter(r => inCell(r.base, r.date, r.month)).map(r => ({ date: r.date, x: r.base, sig: r[key].sig, absent: r[key].absent }));
+      const cellAdj = pop.filter(r => inCell(r[key], r.date, r.month)).map(r => ({ date: r.date, x: r[key] }));
+      const baseIds = new Set(pop.filter(r => inCell(r.base, r.date, r.month)).map(r => r.fid)), adjIds = new Set(pop.filter(r => inCell(r[key], r.date, r.month)).map(r => r.fid));
+      const removed = pop.filter(r => baseIds.has(r.fid) && !adjIds.has(r.fid)).map(r => ({ date: r.date, x: r.base })), added = pop.filter(r => !baseIds.has(r.fid) && adjIds.has(r.fid)).map(r => ({ date: r.date, x: r[key] }));
+      const tt = list => ({ train: summarise(list.filter(r => r.date < split)), test: summarise(list.filter(r => r.date >= split)) });
+      const blocks = list => { const q = Math.floor(list.length / 4); return [list.slice(0, q), list.slice(q, 2 * q), list.slice(2 * q, 3 * q), list.slice(3 * q)].map(b => { const s = summarise(b); return `${s.n}:${s.roiClosePct ?? '-'}%/${s.beyondMarketPp ?? '-'}`; }); };
+      const bucket = (fn) => { const m = {}; for (const r of cellBase) { const k = fn(r); if (k == null) continue; (m[k] = m[k] || []).push(r); } return Object.fromEntries(Object.entries(m).map(([k, l]) => [k, summarise(l)])); };
+      const split_ = key.startsWith('mult') ? bucket(r => r.sig < 0.8 ? '<0.80' : r.sig < 0.95 ? '0.80-0.95' : r.sig <= 1.05 ? '0.95-1.05' : r.sig <= 1.2 ? '1.05-1.20' : '>1.20')
+        : key === 'h2h' ? bucket(r => r.sig < -0.03 ? 'against pick (<-3pp)' : r.sig > 0.03 ? 'for pick (>+3pp)' : 'none/small')
+        : bucket(r => r.absent > 0 ? (r.sig < -0.02 ? 'key player absent, adj < -2pp' : 'key player absent, small adj') : 'no key absence');
+      return { population: pop.length, baseline: { whole: summarise(cellBase), ...tt(cellBase), blocks: blocks(cellBase) }, adjusted: { whole: summarise(cellAdj), ...tt(cellAdj), blocks: blocks(cellAdj) }, decomposition: { kept: summarise(pop.filter(r => baseIds.has(r.fid) && adjIds.has(r.fid)).map(r => ({ date: r.date, x: r.base }))), removedByModifier: summarise(removed), addedByModifier: summarise(added) }, splitWithinBaselineCell: split_ };
+    };
+    const out = { leagueId, pocket: pocket.id, chain: useStandalone ? 'standalone' : 'pooled', factor, matched: rows.length, split, cutoff,
+      homeMultiplier_liveFormula_pooledBaseline: evalVariant('mult_live', rows),
+      homeMultiplier_leagueRollingBaseline: evalVariant('mult_league', rows),
+      h2hAnomaly: evalVariant('h2h', rows),
+      wowy: evalVariant('wowy', rows.filter(r => r.wowy)) };
+    res.json(out);
+  } catch (e) { res.status(500).json({ error: e.message, stack: (e.stack || '').split('\n').slice(0, 3) }); }
+});
+
 app.get('/api/admin/retrain-gate', (req, res) => {
   const suffix = req.query.league ? `-${parseInt(req.query.league, 10)}` : '';
   res.json({ last: readJSON(req.query.dryrun === 'true' ? `retrain-gate-dryrun${suffix}.json` : `retrain-gate-result${suffix}.json`) || null });
