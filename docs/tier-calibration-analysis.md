@@ -9849,3 +9849,53 @@ remainder, stated here so it is not read as the whole cell. Display: paper
 pockets are blue with the pocket named on the card; only real-tier locks
 show orange and the Confirm-placed action. Buckets: five, kind = tier, with
 paper P&L / staked on the paper tiles.
+
+## Addendum 60 — Lineup-triggered lock, universal (2026-09-17)
+
+Built and deployed before tonight's League One kickoff (commit f0937da),
+applied to every watching fixture regardless of category — real pockets,
+paper pockets (including League Two V2) and observation locks alike.
+
+**Mechanism** (`lineupLock.js`, pure and unit-tested; wired into the
+every-minute cron):
+- T-(60 ± 15, the old lock window) is now the **last full watching refresh**
+  (form, statistics, injuries, standings, odds) — no lock.
+- From **T-40** the cron polls `/fixtures/lineups` once a minute per
+  fixture (one API call each). A team sheet counts only when both sides have
+  a full starting XI.
+- **Lock at the first minute sheets are complete, plus a per-fixture delay
+  of 0–3 minutes** (seeded), with a full re-score at that instant: fixture
+  status, both teams' form, recent-match statistics, injuries, standings and
+  a fresh odds pull.
+- **Fallback at ~T-25** (seeded between T-22 and T-28 per fixture) if no
+  sheets appear; if sheets appear and the fallback minute arrives first,
+  the lock still records them as confirmed.
+
+**Bet record markers:** `lineupsAtLock` (were complete team sheets fetched
+at lock), `lockTrigger` (`lineups` | `fallback` | `manual` | `legacy`),
+`lineupPollsAtLock`, `lineupSeenAt`. Cards show "✓ Team sheets confirmed at
+lock" or "⚠ Lineups not confirmed at lock — T-25 fallback fired"; the bet
+log shows a "Lineups not confirmed" badge. No new colour state: a real-
+pocket fallback lock is orange as usual and reverts to paper if not
+confirmed.
+
+**Anti-detection variability, redesigned rather than lost.** The old ±15
+minute offset produced a lock at a random point in T-45..T-75. The new lock
+minute depends on (a) when the clubs publish, which varies fixture to
+fixture, (b) a seeded 0–3 minute delay after detection, and (c) a seeded
+fallback minute in T-22..T-28. Across 50 synthetic fixtures the fallback
+spread is flat across the seven minutes and the delay spread is roughly
+even across 0–3. Placement itself remains manual and adds its own
+variability. The old offset survives only as the refresh minute.
+
+**Cross-competition timing.** Addendum 44 measured API-Sports publication
+at ~T-28 across all thirteen competitions then scanned; the retired
+tournaments are out of scope. A league whose sheets are published earlier
+(T-75 style) is caught at the first poll and locks at about T-40 minus the
+delay, after the T-60 refresh — still with fresh odds. The T-40 window
+therefore covers every measured case with margin; the fallback covers the
+unmeasured one.
+
+**Unit test (offline):** sheets at T-30 → lock at the fallback minute
+labelled `lineups`; no sheets → `fallback` at the seeded minute; sheets out
+early → lock at T-37..40. LIVE_PLACEHOLDER
