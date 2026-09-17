@@ -2352,6 +2352,7 @@ async function loadState() {
       apiFetch('/api/league-tier-matrix').catch(() => null),
     ]);
     STATE = s;
+    STATE.loaded = true; _loadStateRetries = 0;
     STATE.greenFlags = greenFlags?.flags || []; // green-flag manual curation (Addendum 21 Part C)
     STATE.tierPerf = tierPerf; // used by Scout-page tier context lines — see tierContextLine()
     // Urgent fix (2026-08-15): scoutTierBlock's "no historical baseline" check only
@@ -2397,8 +2398,19 @@ async function loadState() {
         el.style.color = 'var(--amber)';
       }
     }
-  } catch(e) { toast('Failed to load state: ' + e.message, 'error'); }
+  } catch(e) {
+    // A load that fails (typically a 502 during a deploy swap) must never leave the
+    // page rendering the default £1,000 / 0-bet STATE as if it were real. Keep the
+    // last good state, say so, and retry with backoff (2026-09-17).
+    _loadStateRetries = (_loadStateRetries || 0) + 1;
+    const el = document.getElementById('scan-status');
+    if (el) el.textContent = `Server not reachable (${e.message}) — retrying in ${Math.min(30, 5 * _loadStateRetries)}s…`;
+    if (!STATE.loaded) { for (const id of ['p-bankroll', 'p-total', 'p-pnl', 'real-p-bankroll', 'combined-p-bankroll']) { const t = document.getElementById(id); if (t) t.textContent = '…'; } }
+    if (_loadStateRetries <= 20) setTimeout(loadState, Math.min(30000, 5000 * _loadStateRetries));
+    else toast('Failed to load state: ' + e.message, 'error');
+  }
 }
+let _loadStateRetries = 0;
 
 async function checkApiStatus() {
   // Liveness: ping /api/state (always available)
@@ -2654,6 +2666,7 @@ function applyResearchToggle() {
 function toggleResearch(on) { localStorage.setItem('researchViews', on ? '1' : '0'); applyResearchToggle(); }
 
 function renderScout() {
+  if (!STATE.loaded) return;
   const { bets, watching } = STATE;
   // Zero-stake (observation) locks and watching entries are not shown here or in
   // the Performance bet log — they are neither paper-staked nor real-money and
@@ -3121,6 +3134,7 @@ async function renderPerfCombined() { renderLiveCalibration(); return renderPerf
 // so they share one identical layout. `mode` picks the bet filter and API params;
 // `prefix` picks which set of DOM ids to write into (paper keeps unprefixed ids).
 async function renderPerfMode(mode) {
+  if (!STATE.loaded) return; // never render totals from the default STATE (see loadState)
   renderBuckets(); applyResearchToggle();
   const prefix  = mode === 'paper' ? '' : mode === 'real' ? 'real-' : 'combined-';
   const apiMode = mode === 'combined' ? 'all' : mode;
