@@ -11017,8 +11017,11 @@ app.listen(PORT, () => {
     for (const b of bets) {
       if (!isRetiredLeague(b.leagueId)) continue;
       if ((b.lockedAt || '') < '2026-09-15T15:57:00Z' || b.result) continue;
-      b.result = 'void'; b.pnl = 0; b.voidReason = 'retired-league (Addendum 51) — locked from a pre-retirement watching entry'; b.resolvedAt = new Date().toISOString(); voided++;
+      b.result = 'void'; b.pnl = 0; b.stage = 'RESOLVED'; b.voidReason = 'retired-league (Addendum 51) — locked from a pre-retirement watching entry'; b.resolvedAt = new Date().toISOString(); voided++;
     }
+    // One-off repair: voided bets left at stage RECOMMENDED by the first version of this migration.
+    let repaired = 0; for (const b of bets) { if (b.result === 'void' && b.stage === 'RECOMMENDED') { b.stage = 'RESOLVED'; repaired++; } }
+    if (repaired) { console.warn(`[Startup] Set stage=RESOLVED on ${repaired} voided bets`); saveBets(bets); }
     if (voided) { console.warn(`[Startup] Voided ${voided} retired-league locks made after the retirement deploy`); saveBets(bets); }
   }
 

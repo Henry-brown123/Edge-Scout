@@ -2645,7 +2645,7 @@ function toggleResearch(on) { localStorage.setItem('researchViews', on ? '1' : '
 
 function renderScout() {
   const { bets, watching } = STATE;
-  const locked = bets.filter(b => b.stage === 'RECOMMENDED' && !b.postponed);
+  const locked = bets.filter(b => b.stage === 'RECOMMENDED' && !b.postponed && !b.result);
   const today  = new Date().toISOString().split('T')[0];
   const todayW = watching.filter(w => w.kickoff?.startsWith(today));
   // Real = a pocket lock (or a bet converted to real); paper = everything else,
