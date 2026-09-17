@@ -604,14 +604,6 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
 
 <!-- ═══════════════════════════ PERFORMANCE ════════════════════════ -->
 <div class="tab-panel" id="tab-performance">
-  <div class="card" style="margin-bottom:16px">
-    <div class="card-header">
-      <span class="card-title">Pockets — three real money, two paper-staked</span>
-      <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;cursor:pointer" title="Cohort tables, league × tier grids, calibration matrices and correction-layer backtests — research views, hidden by default"><input type="checkbox" id="research-toggle" onchange="toggleResearch(this.checked)"> Research views</label>
-    </div>
-    <div style="padding:12px 16px 4px;font-size:11px;color:var(--muted)">Everything else keeps feeding the model and the logs in the background; only these five are broken out.</div>
-    <div class="bucket-strip" id="perf-bucket-strip" style="padding:0 16px 12px;margin:0"></div>
-  </div>
 
   <!-- View switcher -->
   <div style="display:flex;gap:4px;margin-bottom:16px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:4px;width:fit-content">
@@ -619,6 +611,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     <button id="perf-view-real"     class="perf-view-btn" onclick="switchPerfView('real')">Real Money</button>
     <button id="perf-view-combined" class="perf-view-btn" onclick="switchPerfView('combined')">Combined</button>
   </div>
+  <label style="display:inline-flex;align-items:center;gap:6px;margin:0 0 16px 10px;padding:6px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;font-size:11px;color:var(--muted);cursor:pointer;vertical-align:top" title="Show the research cards: league performance, calibration tiers, home/away tiers, live calibration, league × tier matrix, calibration matrix, correction-layer backtests"><input type="checkbox" id="research-toggle" onchange="toggleResearch(this.checked)"> Research views</label>
 
   <!-- Walk-forward proxy-to-real handoff alert — fires when a walk-forward-proxy
        league's genuine (real-money) Live sample clears the 350-bet decision-grade
@@ -695,6 +688,11 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
   <div class="card" style="margin-bottom:16px">
     <div class="card-header"><span class="card-title">P&L Curve</span><span style="font-family:'DM Mono',monospace;font-size:.72rem;color:var(--text2)">placed bets only</span></div>
     <div class="chart-wrap"><canvas id="pnl-chart"></canvas></div>
+  </div>
+  <!-- Pockets: three real money, two paper-staked -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-header"><span class="card-title">Pockets</span><span style="font-size:11px;color:var(--muted)">three real money · two paper-staked · everything else feeds the model and logs in the background</span></div>
+    <div class="bucket-strip perf-bucket-strip" style="padding:0 16px 12px;margin:0"></div>
   </div>
 
   <!-- League Performance -->
@@ -937,6 +935,11 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     <div class="card-header"><span class="card-title">P&L Curve</span><span style="font-family:'DM Mono',monospace;font-size:.72rem;color:var(--text2)">placed bets only</span></div>
     <div class="chart-wrap"><canvas id="real-pnl-chart"></canvas></div>
   </div>
+  <!-- Pockets: three real money, two paper-staked -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-header"><span class="card-title">Pockets</span><span style="font-size:11px;color:var(--muted)">three real money · two paper-staked · everything else feeds the model and logs in the background</span></div>
+    <div class="bucket-strip perf-bucket-strip" style="padding:0 16px 12px;margin:0"></div>
+  </div>
 
   <!-- League Performance -->
   <div class="card" style="margin-top:16px">
@@ -1177,6 +1180,11 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
   <div class="card" style="margin-bottom:16px">
     <div class="card-header"><span class="card-title">P&L Curve</span><span style="font-family:'DM Mono',monospace;font-size:.72rem;color:var(--text2)">placed bets only</span></div>
     <div class="chart-wrap"><canvas id="combined-pnl-chart"></canvas></div>
+  </div>
+  <!-- Pockets: three real money, two paper-staked -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-header"><span class="card-title">Pockets</span><span style="font-size:11px;color:var(--muted)">three real money · two paper-staked · everything else feeds the model and logs in the background</span></div>
+    <div class="bucket-strip perf-bucket-strip" style="padding:0 16px 12px;margin:0"></div>
   </div>
 
   <!-- League Performance -->
@@ -2625,7 +2633,7 @@ async function renderBuckets() {
       ${real}
     </div>`;
   }).join('');
-  for (const id of ['bucket-strip', 'perf-bucket-strip']) { const el = document.getElementById(id); if (el) el.innerHTML = html; }
+  for (const el of document.querySelectorAll('.perf-bucket-strip, #bucket-strip')) el.innerHTML = html;
 }
 // Locked cards grouped by pocket first; everything else under a collapsed group.
 function groupedCards(list, otherLabel = 'Other — paper, background') {
