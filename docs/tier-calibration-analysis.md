@@ -9777,3 +9777,48 @@ counted twice; the union is ~46 bets and ~10.4 units a season at flat stakes.
 Live verification: cohorts show League One staked with both pockets, the
 reserved set `l1-live-pockets-2026` is registered, and the T-60 lock path
 stamps `pocketId` on every League One lock.
+
+## Addendum 59 — Scout and Performance tabs restructured around pockets (2026-09-17)
+
+Built per `docs/scout-performance-redesign-plan.md` (commits d0625e4, 3d59ee5).
+
+**Display state is derived, never stored.** `betDisplayState(bet)`: `real`
+when `mode === 'real'` (the convert-to-real flow is the only thing that sets
+it; paper bets also carry `placementConfirmed` from lock time, which is why
+that flag is not the criterion — caught on the first live read, when all
+516 bets showed as real); `awaiting` when the bet has a `pocketId`, is
+unresolved and it is earlier than kickoff + 2 h; otherwise `paper`. Nothing
+is written on a revert, so a confirmation at any time turns the card green
+and moves the bet to the real record. The Confirm-placed action appears on
+every unconfirmed pocket bet, orange or blue, on cards and in the bet log,
+and opens the existing bookmaker panel (convert-to-real).
+
+**Buckets** (`GET /api/buckets`): the three real pockets keyed on `pocketId`,
+plus **League Two V2 (paper)** = League Two locks where the standalone
+model's own pick cleared its pre-registered cell, settled on the
+standalone's pick at the lock odds from `finalScore`; never staked. Each
+bucket reports open/resolved, record, last 10, flat ROI at lock odds,
+beyond-market residual with SE, and real confirmed count / PnL.
+
+**Visibility.** Bucket strip on Scout (above the locked-bets card) and at
+the top of Performance; locked cards grouped by pocket with everything else
+under a collapsed "Other — paper, background"; the seven research cards
+(League Performance, Calibration Tier Performance, Home vs Away, Live
+Calibration, Historical Performance Matrix, Calibration Matrix,
+Correction-Layer Backtests) behind a Research toggle, off by default,
+remembered per browser. The overall paper log, paper bankroll and the
+Paper / Real / Combined panels are unchanged.
+
+**Zero effect on data — verified.** Before (11:05:57 UTC) and after
+(11:09:49 UTC), identical: bets 516 with the same per-league counts;
+watching 3; active leagues the same 14; scored records visible 80,852 of
+94,050 fixtures with 13,181 retired rows hidden; reserved sets
+`l2-post-cutoff-2026` 72/72, `l1-live-pockets-2026` 0/0,
+`l1-home-favourite-2026` 13/13; standalone League Two version
+2026-09-16T14:20; last retrain eligible pool 42,708. The filter lives only
+in the client and in two read-only routes.
+
+**Not yet exercised live:** the orange state and the Confirm-placed flow on
+a real pocket lock — the first is tonight's League One lock (AFC Wimbledon v
+MK Dons, assigned to `l1-12-50`); League Two V2 (paper) fills from the next
+League Two locks (earlier locks pre-date the settlement fields).
