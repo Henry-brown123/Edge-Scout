@@ -9898,4 +9898,11 @@ unmeasured one.
 
 **Unit test (offline):** sheets at T-30 → lock at the fallback minute
 labelled `lineups`; no sheets → `fallback` at the seeded minute; sheets out
-early → lock at T-37..40. LIVE_PLACEHOLDER
+early → lock at T-37..40.
+
+**Tonight's fixture, read on the deployed build at 12:36 UTC:** AFC Wimbledon
+v MK Dons, kickoff 19:00 UTC, real pocket `l1-12-50`. Schedule computed for
+it: last refresh at T-65 (17:55 UTC), team-sheet polling from T-40 (18:20
+UTC), delay after sheets 2 minutes, fallback at T-23 (18:37 UTC). Decision
+now: wait. The live outcome (lineup-triggered or fallback, and the label) is
+appended after the lock.
