@@ -9737,3 +9737,26 @@ volume principle — more bets at *comparable* confidence — the autumn home
 bets fail the comparable-confidence half (z 0.44). No separate home-only
 year-round rule; note that 12%/50% is already 78% home picks (95 of 121)
 and is positive in autumn on its own. The two GO cells stand.
+
+## Addendum 58 — League One live: two pockets, single-bucket assignment, pocket registry (2026-09-17)
+
+Implemented (this commit): `POCKETS` registry in server.js — every staked
+rule is a pocket (league × structural filter × edge/probability); a fixture
+is assigned to at most one pocket, first match by priority; `pocketId` on
+every bet and watching entry; League One joins `PAPER_STAKE_ELIGIBLE_LEAGUE_IDS`;
+pocket-aware retrain gates for both League One cells (month filter added);
+`RESERVED_TEST_SETS` entry `l1-live-pockets-2026`; the 6%/45% entry marked
+superseded. Go/no-go: `docs/league-one-go-no-go-2026-09-17.md`. Methodology:
+rule 19. Part 3 (Scout/Performance redesign): `docs/scout-performance-redesign-plan.md`.
+
+**Tie-break.** `l1-12-50` (priority 1) before `l1-jan-may-5-45` (priority 2).
+Justification: wherever both apply (January–May fixtures with edge ≥12% and
+probability ≥50%), the year-round cell is a strict subset of the seasonal
+one; assigning those fixtures to the narrower cell keeps each pocket's
+forward record measuring only the bets that cell alone selects, and the
+narrower cell is the one with the higher per-bet edge and the evidence that
+needed no era excused. The alternative (seasonal first) would leave the
+year-round pocket with no January–May bets at all, which is not the rule
+that was validated.
+
+**Historical overlap check:** OVERLAP_PLACEHOLDER

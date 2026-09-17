@@ -427,3 +427,35 @@ build, selection window 2022-09 → 2024-09, one test look) and both
 histories are now closed on the same terms as League Two's. The rule for
 every league from here: one disciplined search of its own history at most,
 stated as such, then forward data only.
+
+## 19. The pocket-discovery toolkit is applied to every league proactively, not reactively (2026-09-17, Addenda 55–58).
+
+Every pocket investigation, for every league, runs all of the following
+before a go/no-go — not only when a number looks odd:
+
+1. **Closed-doors and other dateable external events** are flagged in the
+   timeline and, where the pocket's picks are exposed to them, excluded or
+   discounted only with a stated mechanism — cross-checked against a
+   comparable league in the same period, so a model or market problem is
+   not mistaken for an external event (Addendum 57: League One's model
+   over-priced empty-stadium home advantage by 3.2pp against a correct
+   market; League Two's did not).
+2. **Seasonality splits** (by season half, by month window) on every pocket.
+3. **Home/away splits** on every pocket, so a signal concentrated on one side
+   is seen as such.
+4. **Recency-weighted residuals** (exponential, half-life two seasons,
+   anchored at the cutoff) reported beside the equal-weighted figures. Tests
+   stay equal-weighted because a test cannot down-weight the evidence it
+   dislikes; a pocket whose weighted figure sits well below its unweighted
+   one is decaying and is disqualified whatever its whole-history z.
+5. **Decomposition** of any "why not combine X and Y" or "why not the broader
+   cell" question into its constituent segments, each measured on its own,
+   rather than accepting or rejecting the combined number.
+6. **Overlap and tie-breaking** whenever two or more validated rules could
+   apply to one fixture: single-bucket assignment, the rule stated and
+   verified on the historical fixtures that would have qualified for both,
+   before go-live; each pocket's post-assignment record is what its forward
+   record is measured against.
+
+Tools: `diag-pocket-search` (1–3, 5, 6), `diag-era` (1, 2, 4),
+`diag-pocket-overlap` (6). Related: rules 15 (mechanism bar), 17, 18.

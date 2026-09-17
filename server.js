@@ -583,6 +583,32 @@ const PAPER_MONEY_PROB_MIN = 0.45;
 const LEAGUE_TWO_EDGE_MIN = 0.09;
 const LEAGUE_TWO_PROB_MIN = 0.40;
 const LEAGUE_TWO_RULE_FROM = '2026-09-15T19:15:00Z';
+// ─── POCKET REGISTRY (2026-09-17, Addendum 58) ───────────────────────────────
+// Every staked rule is a pocket: league × structural filter × edge/probability
+// on that league's live chain. A fixture is assigned to AT MOST ONE pocket —
+// the first match in `priority` order — so no bet is staked, counted or tracked
+// twice. Tie-break (verified on history, Addendum 58): the narrower, higher-
+// floor cell takes precedence, because it is a strict subset of the broader
+// cell wherever both apply, and assigning its bets to itself keeps each
+// pocket's forward record measuring only the bets that cell alone selects.
+const LEAGUE_ONE_RULE_FROM = '2026-09-17T10:00:00Z';
+const POCKETS = [
+  { id: 'l2-9-40',          leagueId: 42, label: 'League Two 9%/40%',               edgeMin: 0.09, probMin: 0.40, months: null,   priority: 1, from: LEAGUE_TWO_RULE_FROM, basis: 'Addendum 53' },
+  { id: 'l1-12-50',         leagueId: 41, label: 'League One 12%/50% year-round',   edgeMin: 0.12, probMin: 0.50, months: null,   priority: 1, from: LEAGUE_ONE_RULE_FROM, basis: 'Addenda 56–57' },
+  { id: 'l1-jan-may-5-45',  leagueId: 41, label: 'League One Jan–May 5%/45%',       edgeMin: 0.05, probMin: 0.45, months: [1, 5], priority: 2, from: LEAGUE_ONE_RULE_FROM, basis: 'Addenda 56–57' },
+];
+const POCKET_LEAGUE_IDS = new Set(POCKETS.map(p => p.leagueId));
+function assignPocket(leagueId, edge, modelProb, kickoffIso) {
+  const lid = parseInt(leagueId, 10);
+  if (!(edge != null && modelProb != null)) return null;
+  const month = kickoffIso ? new Date(kickoffIso).getUTCMonth() + 1 : null;
+  const cands = POCKETS.filter(p => p.leagueId === lid).sort((a, b) => a.priority - b.priority);
+  for (const p of cands) {
+    if (p.months && (month == null || month < p.months[0] || month > p.months[1])) continue;
+    if (edge >= p.edgeMin && modelProb >= p.probMin) return p;
+  }
+  return null;
+}
 // ─── Standalone per-league models (2026-09-16, Addendum 54) ────────────────
 // Default architecture for every future pocket: a league's model trains and
 // gates on its own rows only (models/gbdt-train.js LEAGUE_ID mode). Pooling is
@@ -630,6 +656,7 @@ const STANDALONE_FACTOR = { 42: 1.0, 40: 1.0, 41: 1.0 }; // own Platt calibratio
 function getPaperMoneyEdgeMin(leagueId) {
   const lid = parseInt(leagueId, 10);
   if (lid === 42) return LEAGUE_TWO_EDGE_MIN;
+  if (lid === 41) return 0.05; // display only: League One's rule is the POCKETS registry (12/50 year-round; Jan–May 5/45)
   if (RULE12_CALIBRATION_LEAGUE_IDS.has(lid)) return PAPER_MONEY_EDGE_MIN_RULE12;
   if (TOP_DIVISION_CALIBRATION_LEAGUE_IDS.has(lid)) return PAPER_MONEY_EDGE_MIN_TOP;
   // Continental second tiers: no paper-money rule at all (Addendum 43 Part 4 —
@@ -638,7 +665,8 @@ function getPaperMoneyEdgeMin(leagueId) {
   return PAPER_MONEY_EDGE_MIN;
 }
 function getPaperMoneyProbMin(leagueId) {
-  return parseInt(leagueId, 10) === 42 ? LEAGUE_TWO_PROB_MIN : PAPER_MONEY_PROB_MIN;
+  const lid = parseInt(leagueId, 10);
+  return lid === 42 ? LEAGUE_TWO_PROB_MIN : lid === 41 ? 0.45 : PAPER_MONEY_PROB_MIN;
 }
 // 2026-09-04 (Addendum 38, adopted): paper-with-stake is limited to the leagues
 // whose backtest support actually carries the rule — Championship / League One /
@@ -657,7 +685,7 @@ function getPaperMoneyProbMin(leagueId) {
 // 13%/45% rule at 0.93 (PAPER_MONEY_EDGE_MIN_RULE12 / PAPER_MONEY_PROB_MIN /
 // RULE12_CALIBRATION_FACTOR) is untouched for all three; 40 and 41 keep clearing
 // it as observation-tier records. Reversible by restoring 40 and 41 here.
-const PAPER_STAKE_ELIGIBLE_LEAGUE_IDS = new Set([42]);
+const PAPER_STAKE_ELIGIBLE_LEAGUE_IDS = new Set([42, 41]); // League One joins 2026-09-17 (Addendum 58)
 
 // Legacy zero-stake paper records (locked 2026-08-08 → 2026-08-31, before the
 // three-tier redesign): a per-league paper_only flag zeroed their Kelly stake at
@@ -746,7 +774,11 @@ const RESERVED_TEST_SETS = [
   // ~57 bets a season. PAPER TRACK ONLY, no stake: League One's standalone model
   // failed its own gate, so staking this depends on the user's evidenced decision
   // to fall back to the pooled model for this league. History closed (rule 18).
-  { id: 'l1-pooled-6-45-2026', leagueId: 41, league: 'League One', from: '2026-09-16T15:30:00Z', registered: '2026-09-16',
+  { id: 'l1-live-pockets-2026', leagueId: 41, league: 'League One', from: LEAGUE_ONE_RULE_FROM, registered: '2026-09-17',
+    purpose: 'League One LIVE pockets (Addenda 56–58): 12%/50% year-round and Jan–May 5%/45% at 0.93 on the pooled chain (model -> bias; no correction layer; modifiers off). Single-bucket assignment, 12/50 first. Read forward at any time (rule 18); fixed, never re-optimised.',
+    lookRule: 'Forward data only. Stop rule per pocket in docs/league-one-go-no-go-2026-09-17.md; decisions use a pre-registered sequential test.',
+    candidates: [{ label: 'LIVE POCKET l1-12-50: edge>=12 & prob>=50, year-round', edgeMin: 0.12, probMin: 0.50 }, { label: 'LIVE POCKET l1-jan-may-5-45: edge>=5 & prob>=45, Jan–May, excluding fixtures assigned to l1-12-50', edgeMin: 0.05, probMin: 0.45, monthsFrom: 1, monthsTo: 5 }] },
+  { id: 'l1-pooled-6-45-2026', leagueId: 41, league: 'League One', from: '2026-09-16T15:30:00Z', registered: '2026-09-16', superseded: 'Addenda 56–58: the year-round 6/45 cell decomposed into the Jan–May pocket plus a flat autumn; kept for the record',
     purpose: 'League One paper track on the pooled chain (model -> bias, no correction layer, factor 0.93): the cell its own investigation selected. Read forward at any time; no stake until the pooling-fallback decision is taken.',
     lookRule: 'Forward data only (rule 18). Decisions use a pre-registered sequential test.',
     // Addendum 55 (2026-09-16): stress-tested — NO-GO for real money now, PARKED (not a
@@ -2122,12 +2154,20 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
 
   // Per-group edge floor on the live edge scale — see getPaperMoneyEdgeMin.
   const paperEdgeMin = getPaperMoneyEdgeMin(leagueId);
-  const clearsPaperMoneyRule = isDomesticTierLeague
+  // Pocket leagues (Addendum 58): the rule IS the pocket registry — single-bucket
+  // assignment, first match by priority. Other domestic leagues keep the per-group
+  // floor (observation cohorts).
+  const pocket = POCKET_LEAGUE_IDS.has(lidNum) && tierCandidate.hasRealOdds
+    ? assignPocket(leagueId, tierCandidate.edge, tierCandidate.modelProb, fix.fixture?.date) : null;
+  const pocketId = pocket ? pocket.id : null;
+  const clearsPaperMoneyRule = POCKET_LEAGUE_IDS.has(lidNum)
+    ? !!pocket
+    : (isDomesticTierLeague
     && paperEdgeMin != null
     && tierCandidate.hasRealOdds
     && tierCandidate.edge != null
     && tierCandidate.edge >= paperEdgeMin
-    && tierCandidate.modelProb >= getPaperMoneyProbMin(leagueId);
+    && tierCandidate.modelProb >= getPaperMoneyProbMin(leagueId));
   // Stake only where the rule's evidence lives — see PAPER_STAKE_ELIGIBLE_LEAGUE_IDS.
   const meetsPaperMoneyRule = clearsPaperMoneyRule && PAPER_STAKE_ELIGIBLE_LEAGUE_IDS.has(lidNum);
 
@@ -2162,7 +2202,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     homeDataConf, awayDataConf, dataConf,
     homeFormCount, awayFormCount, minFormCount, tierThreshold,
     teamIntel, paperTradeOnly, isTrainingHoldout, betMode,
-    isClassifiedLeague, isDomesticTierLeague, tierCandidate, clearsPaperMoneyRule, meetsPaperMoneyRule, isFakeMoney,
+    isClassifiedLeague, isDomesticTierLeague, tierCandidate, clearsPaperMoneyRule, meetsPaperMoneyRule, isFakeMoney, pocketId,
     goalsCandidates, modelVersion, correctionVersion, domesticBlendFixtures,
     scorerPath, scorerVersion: SCORER_VERSION, featureSpecVersion: `live-${FEATURE_SPEC.version}`, scorerShadow, modifierShadow, standaloneShadow,
   };
@@ -2336,6 +2376,7 @@ async function runMorningScan(leagueIds) {
               isFakeMoney:         scored.isFakeMoney,
               meetsPaperMoneyRule: scored.meetsPaperMoneyRule,
               clearsPaperMoneyRule: scored.clearsPaperMoneyRule,
+              pocketId:        scored.pocketId ?? null,
               isDomesticTierLeague: scored.isDomesticTierLeague,
               projectedScore:  noMarketData ? null : displayPick.successScore,
               projectedBet:    displayPick.bet,
@@ -2660,6 +2701,7 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
       paperTradeOnly: scored.paperTradeOnly,
       isFakeMoney:   scored.isFakeMoney,
       clearsPaperMoneyRule: scored.clearsPaperMoneyRule ?? null,
+      pocketId:     scored.pocketId ?? null,
       isTrainingHoldout: scored.isTrainingHoldout,
       kellyFraction: kellyFrac,
       kellStake:     computedStake,
@@ -2909,6 +2951,7 @@ async function runHourlyRescan() {
             isFakeMoney:         scored.isFakeMoney,
             meetsPaperMoneyRule: scored.meetsPaperMoneyRule,
             clearsPaperMoneyRule: scored.clearsPaperMoneyRule,
+            pocketId:        scored.pocketId ?? null,
             isDomesticTierLeague: scored.isDomesticTierLeague,
             projectedScore:   noMarketData ? null : displayPick.successScore,
             projectedBet:     displayPick.bet,
@@ -10528,6 +10571,45 @@ app.get('/api/admin/diag-era', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Addendum 58: pocket overlap check on history — which fixtures would qualify for
+// more than one pocket, how the tie-break assigns them, and what each pocket's
+// record looks like AFTER single-bucket assignment (the numbers the forward
+// records will be measured against). Re-measurement of fixed cells, not a search.
+app.get('/api/admin/diag-pocket-overlap', async (req, res) => {
+  try {
+    const leagueId = parseInt(req.query.league, 10) || 41;
+    const factor = getCalFactorForLeague(getSettings(), leagueId);
+    const cutoff = DATE_SPLIT_HOLDOUT_CUTOFFS.get(leagueId) || '2026-08-11T09:00:00Z';
+    const { classifyFixture, WEIGHTS_BY_CONTEXT, CONTEXT_CONFIG, LEAGUE_CONFIG: LC } = require('./scoring');
+    const settings = getSettings(); const hist = readHistoricalCached() || {}; const closing = getClosingOdds();
+    const recs = (hist.scoredRecords || []).filter(r => parseInt(r.leagueId, 10) === leagueId && r.homeFactors && r.awayFactors && r.actualOutcome && r.date < cutoff);
+    const pockets = POCKETS.filter(p => p.leagueId === leagueId);
+    const rows = []; let i = 0;
+    for (const r of recs) {
+      if (++i % 300 === 0) await new Promise(rr => setImmediate(rr));
+      const co = closing[r.fixtureId] || closing[String(r.fixtureId)];
+      if (!co || co.bookmaker !== 'pinnacle' || !(co.homeOdds > 1 && co.drawOdds > 1 && co.awayOdds > 1)) continue;
+      const context = r.context || classifyFixture(leagueId);
+      const probs = scoreProbabilities({ homeF: r.homeFactors, awayF: r.awayFactors, weights: WEIGHTS_BY_CONTEXT[context], context, leagueId, leagueConfig: LC[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: true, rankAdjust: false, hostBoost: false, modifiers: false } }).probs;
+      const stripped = marginStrippedImplied(co);
+      const pick = probs.home >= probs.draw && probs.home >= probs.away ? 'home' : probs.away >= probs.draw ? 'away' : 'draw';
+      const edge = Math.min(0.97, probs[pick] * factor) - stripped[pick];
+      const won = r.actualOutcome === pick;
+      const qualifies = pockets.filter(p => { const m = new Date(r.date).getUTCMonth() + 1; return (!p.months || (m >= p.months[0] && m <= p.months[1])) && edge >= p.edgeMin && probs[pick] >= p.probMin; }).map(p => p.id);
+      const assigned = assignPocket(leagueId, edge, probs[pick], r.date);
+      rows.push({ fid: String(r.fixtureId), date: r.date, qualifies, assigned: assigned ? assigned.id : null, bm: (won ? 1 : 0) - stripped[pick], pnl: won ? co[`${pick}Odds`] - 1 : -1 });
+    }
+    const seasons = new Set(rows.map(r => { const d = new Date(r.date); return d.getUTCMonth() >= 6 ? d.getUTCFullYear() : d.getUTCFullYear() - 1; })).size || 1;
+    const sm = (list) => { const n = list.length; if (!n) return { n: 0 }; const bm = list.reduce((a, x) => a + x.bm, 0) / n; const sd = Math.sqrt(list.reduce((a, x) => a + (x.bm - bm) ** 2, 0) / Math.max(1, n - 1)); const roi = list.reduce((a, x) => a + x.pnl, 0) / n; return { n, betsPerSeason: +(n / seasons).toFixed(1), beyondMarketPp: +(bm * 100).toFixed(1), z: sd ? +(bm / (sd / Math.sqrt(n))).toFixed(2) : null, roiClosePct: +(roi * 100).toFixed(1), totalReturnPerSeasonUnits: +((roi * n) / seasons).toFixed(1) }; };
+    const multi = rows.filter(r => r.qualifies.length > 1);
+    const out = { leagueId, matched: rows.length, seasons, pockets: pockets.map(p => p.id), qualifyingBoth: { n: multi.length, assignedTo: Object.fromEntries(pockets.map(p => [p.id, multi.filter(r => r.assigned === p.id).length])), stats: sm(multi) } };
+    out.afterAssignment = Object.fromEntries(pockets.map(p => [p.id, sm(rows.filter(r => r.assigned === p.id))]));
+    out.beforeAssignment = Object.fromEntries(pockets.map(p => [p.id, sm(rows.filter(r => r.qualifies.includes(p.id)))]));
+    out.union = sm(rows.filter(r => r.assigned));
+    res.json(out);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/admin/retrain-gate', (req, res) => {
   const suffix = req.query.league ? `-${parseInt(req.query.league, 10)}` : '';
   res.json({ last: readJSON(req.query.dryrun === 'true' ? `retrain-gate-dryrun${suffix}.json` : `retrain-gate-result${suffix}.json`) || null });
@@ -10629,6 +10711,7 @@ function getCalibrationCohorts() {
     paperEdgeMin: DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(lid) ? getPaperMoneyEdgeMin(lid) : null,
     paperProbMin: DOMESTIC_LEAGUE_IDS_FOR_BLEND.has(lid) ? getPaperMoneyProbMin(lid) : null,
     paperStakeEligible: PAPER_STAKE_ELIGIBLE_LEAGUE_IDS.has(lid),
+    pockets: POCKETS.filter(p => p.leagueId === lid).map(p => ({ id: p.id, label: p.label, edgeMin: p.edgeMin, probMin: p.probMin, months: p.months, priority: p.priority, from: p.from })),
   }; });
   const cohortMap = {};
   for (const r of rows) {

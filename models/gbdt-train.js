@@ -101,6 +101,8 @@ const KNOWN_TREE_BOUNDARIES = { '2026-08-08T20:56:33.315Z': '2022-11-14T00:00:00
 // Mirrors server.js's rule constants for the league (kept in lockstep by hand).
 const POCKET_GATES = [
   { leagueId: 42, label: 'League Two live rule 9/40', factor: 0.93, edgeMin: 0.09, probMin: 0.40, cutoff: '2026-08-11T09:00:00Z' }, // Addendum 53 (2026-09-15)
+  { leagueId: 41, label: 'League One pocket 12/50 year-round', factor: 0.93, edgeMin: 0.12, probMin: 0.50, cutoff: '2026-08-11T09:00:00Z' }, // Addendum 58 (2026-09-17)
+  { leagueId: 41, label: 'League One pocket Jan–May 5/45', factor: 0.93, edgeMin: 0.05, probMin: 0.45, months: [1, 5], cutoff: '2026-08-11T09:00:00Z' }, // Addendum 58
 ];
 
 function loadPocketRecords(leagueId) {
@@ -131,6 +133,7 @@ function pocketGate(gate, candFn, depFn) {
       const pick = p.home >= p.draw && p.home >= p.away ? 'home' : p.away >= p.draw ? 'away' : 'draw';
       const calProb = Math.min(0.97, p[pick] * gate.factor);
       const stripped = marginStrippedImplied(co);
+      if (gate.months) { const mo = new Date(r.date).getUTCMonth() + 1; if (mo < gate.months[0] || mo > gate.months[1]) continue; }
       if (!(calProb - stripped[pick] >= gate.edgeMin && p[pick] >= gate.probMin)) continue;
       const won = r.y === pick;
       rows.push({ bm: (won ? 1 : 0) - stripped[pick], pnl: won ? co[`${pick}Odds`] - 1 : -1 });
