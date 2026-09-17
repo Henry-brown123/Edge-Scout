@@ -9822,3 +9822,30 @@ in the client and in two read-only routes.
 a real pocket lock — the first is tonight's League One lock (AFC Wimbledon v
 MK Dons, assigned to `l1-12-50`); League Two V2 (paper) fills from the next
 League Two locks (earlier locks pre-date the settlement fields).
+
+### Addendum 59 Part 2 — Scout simplified; two paper-staked pockets (2026-09-17, later)
+
+Scout tab (user direction): four count tiles (paper/real × watching/locked)
+plus two totals, then four lists in the same order; no results or
+performance metrics on Scout; zero-stake observation entries hidden from
+Scout and from every Performance bet-log view (display only — they still
+lock, resolve and log server-side and never fed training, which reads the
+historical scored pool).
+
+Pocket registry now carries a **tier**. Real (three, unchanged): League Two
+9%/40%, League One 12%/50% year-round, League One Jan–May 5%/45%. **Paper-
+staked (two, new, from 2026-09-17T12:00Z)**: `l2-v2-9-40` — League Two V2:
+the standalone League Two model's own pick, locked when the standalone
+clears its pre-registered cell (edge ≥9% at factor 1.0 on its scale,
+probability ≥40%), staked at paper Kelly on the standalone's calibrated
+probability, bet record tagged `pocketModelVersion`; and `l1-6-45-paper` —
+League One's parked 6%/45% cell on the pooled chain. Single-bucket
+assignment is unchanged and real pockets take precedence, so each paper
+pocket receives only fixtures no real pocket takes: for League One that is
+6%/45% outside the two real cells (in practice the June–December remainder),
+for League Two the standalone's picks on fixtures where the pooled chain
+does not clear 9%/40%. Each paper pocket's forward record is therefore its
+remainder, stated here so it is not read as the whole cell. Display: paper
+pockets are blue with the pocket named on the card; only real-tier locks
+show orange and the Confirm-placed action. Buckets: five, kind = tier, with
+paper P&L / staked on the paper tiles.
