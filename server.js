@@ -5427,7 +5427,9 @@ app.put('/api/settings', (req, res) => {
 // placementConfirmed, so a confirmation at any time turns the card green.
 const AWAITING_WINDOW_MS = 2 * 60 * 60 * 1000; // orange hint until kickoff + 2h
 function betDisplayState(b, now = Date.now()) {
-  if (b.placementConfirmed || b.placementStatus === 'placed') return 'real';
+  // 'real' means the bet was converted to real money (mode === 'real'); paper bets
+  // also carry placementConfirmed from lock time, so that flag is NOT the criterion.
+  if (b.mode === 'real') return 'real';
   if (b.pocketId && !b.result && b.kickoff && (new Date(b.kickoff).getTime() + AWAITING_WINDOW_MS) > now) return 'awaiting';
   return 'paper';
 }
@@ -5439,7 +5441,7 @@ const BUCKETS = [
 ];
 function outcomeFromScore(fs) { if (!fs || !/^\d+-\d+$/.test(String(fs))) return null; const [h, a] = String(fs).split('-').map(Number); return h > a ? 'Home Win' : h < a ? 'Away Win' : 'Draw'; }
 function bucketMembers(bucket, bets) {
-  if (bucket.kind === 'real') return bets.filter(b => b.pocketId === bucket.id).map(b => ({ bet: b, pick: b.bet, odds: b.actualOdds ?? b.bookOdds, market: b.impliedProb, won: b.result === 'win' ? true : b.result === 'loss' ? false : null, real: !!b.placementConfirmed, pnlReal: b.placementConfirmed ? (b.pnl ?? null) : null }));
+  if (bucket.kind === 'real') return bets.filter(b => b.pocketId === bucket.id).map(b => ({ bet: b, pick: b.bet, odds: b.actualOdds ?? b.bookOdds, market: b.impliedProb, won: b.result === 'win' ? true : b.result === 'loss' ? false : null, real: b.mode === 'real', pnlReal: b.mode === 'real' ? (b.pnl ?? null) : null }));
   // paper shadow: League Two locks where the standalone's own pick cleared its cell
   return bets.filter(b => Number(b.leagueId) === 42 && b.standaloneShadow && b.standaloneShadow.clearsCell === true).map(b => { const sh = b.standaloneShadow; const outcome = outcomeFromScore(b.finalScore); const won = outcome ? outcome === sh.betLabel : null; return { bet: b, pick: sh.betLabel, odds: sh.odds, market: sh.market, won, real: false, pnlReal: null }; });
 }
