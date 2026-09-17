@@ -524,101 +524,80 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
     <div id="scan-status" style="font-size:12px;color:var(--muted)"></div>
   </div>
 
-  <!-- Stats row -->
+  <!-- Stats: paper vs real, watching vs locked — counts only; performance lives on the Performance tab -->
   <div class="grid-4" id="scout-stats" style="margin-bottom:12px">
+    <div class="stat-tile" style="border:1px solid rgba(78,168,255,.35)">
+      <div class="stat-label" style="color:#4ea8ff">Paper — Watching</div>
+      <div class="stat-value" style="color:#4ea8ff" id="s-paper-watching">0</div>
+      <div class="stat-sub">today · not yet locked</div>
+    </div>
+    <div class="stat-tile" style="border:1px solid rgba(78,168,255,.35)">
+      <div class="stat-label" style="color:#4ea8ff">Paper — Locked</div>
+      <div class="stat-value" style="color:#4ea8ff" id="s-paper-locked">0</div>
+      <div class="stat-sub">awaiting result</div>
+    </div>
+    <div class="stat-tile" style="background:rgba(0,255,135,.05);border:1px solid rgba(0,255,135,.3)">
+      <div class="stat-label" style="color:var(--green)">Real — Watching</div>
+      <div class="stat-value c-green" id="s-real-watching">0</div>
+      <div class="stat-sub">pocket-eligible today</div>
+    </div>
+    <div class="stat-tile" style="background:rgba(0,255,135,.05);border:1px solid rgba(0,255,135,.3)">
+      <div class="stat-label" style="color:var(--green)">Real — Locked</div>
+      <div class="stat-value c-green" id="s-real-locked">0</div>
+      <div class="stat-sub" id="s-real-locked-sub">0 confirmed · 0 awaiting confirmation</div>
+    </div>
+  </div>
+  <div class="grid-2" id="scout-stats-total" style="margin-bottom:16px">
     <div class="stat-tile">
-      <div class="stat-label">Paper Bankroll</div>
-      <div class="stat-value c-cyan" id="s-bankroll">£1,000</div>
-      <div class="stat-sub" id="s-pnl">+£0.00 (0%)</div>
+      <div class="stat-label">Total — Watching</div>
+      <div class="stat-value" id="s-total-watching">0</div>
+      <div class="stat-sub">paper + real</div>
     </div>
     <div class="stat-tile">
-      <div class="stat-label">Watching Today</div>
-      <div class="stat-value c-amber" id="s-watching">0</div>
-      <div class="stat-sub">fixtures flagged</div>
-    </div>
-    <div class="stat-tile">
-      <div class="stat-label">Locked Bets</div>
-      <div class="stat-value c-green" id="s-locked">0</div>
-      <div class="stat-sub">pending resolution</div>
-    </div>
-    <div class="stat-tile">
-      <div class="stat-label">Win Rate</div>
-      <div class="stat-value" id="s-winrate">—</div>
-      <div class="stat-sub" id="s-record">0W 0L</div>
+      <div class="stat-label">Total — Locked</div>
+      <div class="stat-value" id="s-total-locked">0</div>
+      <div class="stat-sub">paper + real</div>
     </div>
   </div>
 
-  <!-- Green-flagged (domestic paper-money rule: League Two 9%/40%; Championship/League One 13%/45% observation; top flights 20%/45% observation) subset — dedicated tiles -->
-  <div class="grid-2" id="scout-stats-paper" style="margin-bottom:16px">
-    <div class="stat-tile" style="background:rgba(0,255,135,.06);border:1px solid rgba(0,255,135,.25)">
-      <div class="stat-label" style="color:var(--green)">Paper-Money Watching</div>
-      <div class="stat-value c-green" id="s-watching-paper">0</div>
-      <div class="stat-sub">League Two 9%/40% · League One 12%/50% & Jan–May 5%/45%</div>
-    </div>
-    <div class="stat-tile" style="background:rgba(0,255,135,.06);border:1px solid rgba(0,255,135,.25)">
-      <div class="stat-label" style="color:var(--green)">Paper-Money Locked</div>
-      <div class="stat-value c-green" id="s-locked-paper">0</div>
-      <div class="stat-sub">real Kelly stake, under review</div>
-    </div>
-  </div>
-
-  <!-- Pockets (Part 3): the three real-money pockets + League Two V2 (paper) -->
-  <div class="bucket-strip" id="bucket-strip"></div>
-
-  <!-- LOCKED — PAPER BETS (carries a real Kelly stake) -->
-  <div class="card" id="recommended-card">
+  <!-- PAPER — WATCHING -->
+  <div class="card" id="paper-watching-card">
     <div class="card-header">
-      <span class="card-title">Locked Bets — Paper (Staked)</span>
-      <span style="font-size:11px;color:var(--muted)">L2 9/40 · L1 12/50 & Jan–May 5/45 · Live odds</span>
+      <span class="card-title" style="color:#4ea8ff">Watching — Paper</span>
+      <span style="font-size:11px;color:var(--muted)">Projected scores · not yet locked · feeds the paper log</span>
     </div>
-    <!-- Pending Placement sub-section -->
-    <div id="pending-section" style="display:none">
-      <div style="display:flex;align-items:center;gap:8px;padding:10px 16px 6px;border-bottom:1px solid var(--border)">
-        <span style="width:8px;height:8px;border-radius:50%;background:#f5a623;flex-shrink:0;animation:pulse-amber 1.4s infinite"></span>
-        <span style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#f5a623">Pending Placement</span>
-        <span id="pending-count" style="font-size:11px;color:var(--muted)"></span>
-      </div>
-      <div id="pending-list"></div>
-    </div>
-    <!-- Placed sub-section -->
-    <div id="placed-section" style="display:none">
-      <div style="display:flex;align-items:center;gap:8px;padding:10px 16px 6px;border-bottom:1px solid var(--border)">
-        <span style="width:8px;height:8px;border-radius:50%;background:var(--green);flex-shrink:0"></span>
-        <span style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--green)">Placed — Awaiting Result</span>
-        <span id="placed-count" style="font-size:11px;color:var(--muted)"></span>
-      </div>
-      <div id="placed-list"></div>
-    </div>
-    <!-- Empty state (shown when both sections empty) -->
-    <div id="recommended-empty" style="padding:32px 16px">
-      <div class="empty"><div class="empty-icon">🔒</div><p>No locked paper bets yet. Pre-match scans fire automatically at T-60.</p></div>
-    </div>
+    <div id="paper-watching-list"></div>
+    <div id="paper-watching-empty" class="empty" style="padding:28px 16px"><div class="empty-icon">👁</div><p>No paper fixtures flagged today.</p></div>
   </div>
 
-  <!-- LOCKED — ZERO-STAKE (observation only) -->
-  <div class="card" id="zerostake-card" style="margin-top:16px">
+  <!-- PAPER — LOCKED -->
+  <div class="card" id="paper-locked-card" style="margin-top:16px">
     <div class="card-header">
-      <span class="card-title">Locked Bets — No Stake (Observation)</span>
-      <span style="font-size:11px;color:var(--muted)">Logged for model training · excluded from Paper P&L</span>
+      <span class="card-title" style="color:#4ea8ff">Locked — Paper</span>
+      <span style="font-size:11px;color:var(--muted)">Staked and observation · Paper P&amp;L on the Performance tab</span>
     </div>
-    <div id="zerostake-list"></div>
-    <div id="zerostake-empty" style="padding:32px 16px">
-      <div class="empty"><div class="empty-icon">📋</div><p>No zero-stake observation bets locked yet.</p></div>
-    </div>
+    <div id="paper-locked-list"></div>
+    <div id="paper-locked-empty" class="empty" style="padding:28px 16px"><div class="empty-icon">🔒</div><p>No paper bets locked. Pre-match locks fire automatically at T-60.</p></div>
   </div>
 
-  <!-- WATCHING fixtures -->
-  <div class="card" id="watching-card" style="margin-top:16px">
+  <!-- REAL — WATCHING -->
+  <div class="card" id="real-watching-card" style="margin-top:16px">
     <div class="card-header">
-      <span class="card-title">Watching — Early Flags</span>
-      <span style="font-size:11px;color:var(--muted)">Projected scores · Not yet locked</span>
+      <span class="card-title" style="color:var(--green)">Watching — Real Money</span>
+      <span style="font-size:11px;color:var(--muted)">Pocket-eligible on the current reading · locks at T-60 if it still qualifies</span>
     </div>
-    <div id="watching-list">
-      <div class="empty" id="watching-empty">
-        <div class="empty-icon">👁</div>
-        <p>Run a scan to flag today's fixtures.</p>
-      </div>
+    <div id="real-watching-list"></div>
+    <div id="real-watching-empty" class="empty" style="padding:28px 16px"><div class="empty-icon">👁</div><p>No pocket-eligible fixtures today.</p></div>
+  </div>
+
+  <!-- REAL — LOCKED -->
+  <div class="card" id="real-locked-card" style="margin-top:16px">
+    <div class="card-header">
+      <span class="card-title" style="color:var(--green)">Locked — Real Money</span>
+      <span style="font-size:11px;color:var(--muted)">L2 9/40 · L1 12/50 &amp; Jan–May 5/45 · orange = confirm placement</span>
     </div>
+    <div id="real-locked-list"></div>
+    <div id="real-locked-empty" class="empty" style="padding:28px 16px"><div class="empty-icon">💷</div><p>No real-money pocket locks open.</p></div>
   </div>
 
 </div>
@@ -2647,12 +2626,12 @@ async function renderBuckets() {
   for (const id of ['bucket-strip', 'perf-bucket-strip']) { const el = document.getElementById(id); if (el) el.innerHTML = html; }
 }
 // Locked cards grouped by pocket first; everything else under a collapsed group.
-function groupedCards(list) {
+function groupedCards(list, otherLabel = 'Other — paper, background') {
   const groups = [];
   for (const id of Object.keys(POCKET_LABELS)) { const items = list.filter(b => b.pocketId === id); if (items.length) groups.push({ label: POCKET_LABELS[id], items, real: true }); }
   const other = list.filter(b => !POCKET_LABELS[b.pocketId]);
   let html = groups.map(g => `<div class="bucket-group-head" style="color:var(--green)">${g.label} <span style="color:var(--muted);font-weight:400">${g.items.length}</span></div>${g.items.map(b => recommendedCard(b)).join('')}`).join('');
-  if (other.length) html += `<details ${groups.length ? '' : 'open'}><summary class="bucket-group-head" style="color:var(--muted);cursor:pointer;list-style:none">Other — paper, background <span style="font-weight:400">${other.length}</span></summary>${other.map(b => recommendedCard(b)).join('')}</details>`;
+  if (other.length) html += `<details ${groups.length ? '' : 'open'}><summary class="bucket-group-head" style="color:var(--muted);cursor:pointer;list-style:none">${otherLabel} <span style="font-weight:400">${other.length}</span></summary>${other.map(b => recommendedCard(b)).join('')}</details>`;
   return html;
 }
 function applyResearchToggle() {
@@ -2665,93 +2644,27 @@ function applyResearchToggle() {
 function toggleResearch(on) { localStorage.setItem('researchViews', on ? '1' : '0'); applyResearchToggle(); }
 
 function renderScout() {
-  const { bankroll, bets, watching } = STATE;
-
-  // Stats
-  // Postponed real bets (server.js's checkAndResolve — a fixture that will never
-  // produce a result under this fixture id) are kept in bets.json for accounting
-  // but drop out of the active Scout-tab list here per explicit preference
-  // (2026-08-18): they shouldn't sit showing "awaiting result" forever. Postponed
-  // paper bets are removed server-side entirely, so this filter is really only
-  // ever relevant to real bets in practice.
-  const locked   = bets.filter(b => b.stage === 'RECOMMENDED' && !b.postponed);
-  // Same legacy zero-stake exclusion as server.js isLegacyZeroStakeBet and the
-  // Performance header's stake>0 filter — pre-redesign paper_only records with a
-  // zeroed stake were still counted here, so this W/L record disagreed with the
-  // Performance tab. Scoped to !isFakeMoney so observation-tier handling is unchanged.
-  const isLegacyZeroStake = b => !b.isFakeMoney && !((b.actualStake ?? b.suggestedStake) > 0);
-  const resolved = bets.filter(b => b.stage === 'RESOLVED' && !isLegacyZeroStake(b));
-  const wins     = resolved.filter(b => b.result === 'win').length;
-  const losses   = resolved.filter(b => b.result === 'loss').length;
-  // Was bankroll.current - bankroll.initial — ignored any deposits/withdrawals
-  // since the account was opened, so a funded account showed a false "gain"
-  // equal to whatever was deposited on top of the true P&L. baseline is the
-  // deposit/withdrawal-adjusted anchor computeBankrollAccount() already tracks.
-  const pnlBase  = bankroll.baseline ?? bankroll.initial;
-  const pnl      = bankroll.current - pnlBase;
-  const pnlPct   = pnlBase ? ((pnl / pnlBase) * 100).toFixed(1) : '0.0';
-
-  document.getElementById('s-bankroll').textContent = `£${bankroll.current.toLocaleString('en-GB', {minimumFractionDigits:2,maximumFractionDigits:2})}`;
-  document.getElementById('s-bankroll').className   = `stat-value ${pnl >= 0 ? 'c-green' : 'c-red'}`;
-  document.getElementById('s-pnl').textContent      = `${pnl >= 0 ? '+' : ''}£${pnl.toFixed(2)} (${pnlPct}%)`;
+  const { bets, watching } = STATE;
+  const locked = bets.filter(b => b.stage === 'RECOMMENDED' && !b.postponed);
   const today  = new Date().toISOString().split('T')[0];
   const todayW = watching.filter(w => w.kickoff?.startsWith(today));
-  document.getElementById('s-watching').textContent = todayW.length;
-  document.getElementById('s-locked').textContent   = locked.length;
-  document.getElementById('s-winrate').textContent  = resolved.length ? `${((wins/(wins+losses||1))*100).toFixed(0)}%` : '—';
-  document.getElementById('s-record').textContent   = `${wins}W ${losses}L`;
-
-  // Green-flagged (domestic paper-money rule: League Two 9%/40%; Championship/League One 13%/45% observation; top flights 20%/45% observation) subset, dedicated tiles
-  const lockedPaper = locked.filter(b => !b.isFakeMoney);
-  const lockedZero  = locked.filter(b => b.isFakeMoney);
-  document.getElementById('s-watching-paper').textContent = todayW.filter(w => w.meetsPaperMoneyRule).length;
-  document.getElementById('s-locked-paper').textContent   = lockedPaper.length;
-
-  // Split locked PAPER bets into pending/placed sub-sections
-  // Backward compat: treat placementConfirmed=true as 'placed', else 'pending_placement'
-  const getStatus = b => b.placementStatus || (b.placementConfirmed ? 'placed' : 'pending_placement');
-  const pendingBets = lockedPaper.filter(b => getStatus(b) === 'pending_placement');
-  const placedBets  = lockedPaper.filter(b => getStatus(b) === 'placed');
-
-  const pendingSection = document.getElementById('pending-section');
-  const placedSection  = document.getElementById('placed-section');
-  const emptyEl        = document.getElementById('recommended-empty');
-
-  if (pendingBets.length) {
-    pendingSection.style.display = 'block';
-    document.getElementById('pending-count').textContent = `${pendingBets.length} bet${pendingBets.length > 1 ? 's' : ''}`;
-    document.getElementById('pending-list').innerHTML = groupedCards(pendingBets);
-  } else {
-    pendingSection.style.display = 'none';
-  }
-  if (placedBets.length) {
-    placedSection.style.display = 'block';
-    document.getElementById('placed-count').textContent = `${placedBets.length} bet${placedBets.length > 1 ? 's' : ''}`;
-    document.getElementById('placed-list').innerHTML = groupedCards(placedBets);
-  } else {
-    placedSection.style.display = 'none';
-  }
-  emptyEl.style.display = lockedPaper.length ? 'none' : 'block';
-
-  // Locked ZERO-STAKE bets (observation only)
-  const zeroList  = document.getElementById('zerostake-list');
-  const zeroEmpty = document.getElementById('zerostake-empty');
-  if (lockedZero.length) {
-    zeroList.innerHTML = lockedZero.map(b => recommendedCard(b)).join('');
-    zeroEmpty.style.display = 'none';
-  } else {
-    zeroList.innerHTML = '';
-    zeroEmpty.style.display = 'block';
-  }
-
-  // Watching
-  const watEl  = document.getElementById('watching-list');
-  if (todayW.length) {
-    watEl.innerHTML = todayW.map(w => watchingCard(w)).join('');
-  } else {
-    watEl.innerHTML = `<div class="empty"><div class="empty-icon">👁</div><p>Run a scan to flag today's fixtures.</p></div>`;
-  }
-  renderBuckets();
+  // Real = a pocket lock (or a bet converted to real); paper = everything else,
+  // including observation/no-stake locks, which keep their NO STAKE badge.
+  const isRealBet = b => !!b.pocketId || b.mode === 'real';
+  const realW = todayW.filter(w => !!w.pocketId), paperW = todayW.filter(w => !w.pocketId);
+  const realL = locked.filter(isRealBet),          paperL = locked.filter(b => !isRealBet(b));
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  set('s-paper-watching', paperW.length); set('s-paper-locked', paperL.length);
+  set('s-real-watching',  realW.length);  set('s-real-locked',  realL.length);
+  set('s-total-watching', todayW.length); set('s-total-locked', locked.length);
+  const confirmed = realL.filter(b => b.mode === 'real').length;
+  const awaiting  = realL.filter(b => b.displayState === 'awaiting').length;
+  set('s-real-locked-sub', `${confirmed} confirmed · ${awaiting} awaiting confirmation`);
+  const fill = (listId, emptyId, html) => { const l = document.getElementById(listId), e = document.getElementById(emptyId); if (!l) return; l.innerHTML = html; if (e) e.style.display = html ? 'none' : 'block'; };
+  fill('paper-watching-list', 'paper-watching-empty', paperW.map(w => watchingCard(w)).join(''));
+  fill('paper-locked-list',   'paper-locked-empty',   paperL.map(b => recommendedCard(b)).join(''));
+  fill('real-watching-list',  'real-watching-empty',  realW.map(w => watchingCard(w)).join(''));
+  fill('real-locked-list',    'real-locked-empty',    groupedCards(realL, 'Real — outside a pocket'));
 }
 
 function routingHTML(b) {
