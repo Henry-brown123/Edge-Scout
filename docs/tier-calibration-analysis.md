@@ -9906,3 +9906,100 @@ it: last refresh at T-65 (17:55 UTC), team-sheet polling from T-40 (18:20
 UTC), delay after sheets 2 minutes, fallback at T-23 (18:37 UTC). Decision
 now: wait. The live outcome (lineup-triggered or fallback, and the label) is
 appended after the lock.
+
+## Addendum 61 — Shadow modifiers validated against the five pockets: home/away multiplier, H2H anomaly, WOWY (2026-09-17)
+
+Trigger: tonight's League One real lock carried three shadow signals against
+the pick (home multiplier ×0.63, H2H −7.5pp, WOWY −8pp each side). None is in
+any live chain. The user held the bet pending this validation. Tool:
+`diag-modifiers` — each live formula (`teamProfiles.js`) reproduced from prior
+fixtures only (rolling, same league, no future data), applied to the pocket
+chain's probabilities, and the pocket cell re-measured two ways: as a
+**split** inside the baseline cell (does the signal separate good picks from
+bad?) and as an **adjustment** (the live formula applied, pick re-chosen,
+cell re-formed), with train/test at 2024-09-16, four sequential blocks and
+membership decomposition (picks removed / added). WOWY uses post-match
+lineups (2022+ only) and its baseline is measured on that same subset. The
+fifth pocket is League One 6%/45% (paper). The multiplier is tested with
+the live pooled baseline (46.3% / 29%) and with the league's own rolling
+baseline (rule 19 point 4: pocket-specific, not pooled).
+
+### Verdict table (beyond-market pp, z; ROI at close; units/season)
+
+| Pocket | Baseline cell | Multiplier, pooled baseline → | Multiplier, league baseline → | H2H anomaly → | WOWY (2022+ subset: baseline → adjusted) |
+|---|---|---|---|---|---|
+| L2 9/40 (real) | 211: +8.3, z 2.49, +42.6%, 15.0u | 363: +3.4, z 1.34, +19.6%, 10.2u | 348: +4.4, z 1.69, +24.9%, 14.4u | 419: +1.6, z 0.69, +11.0%, 6.6u | 141: +8.4, z 2.05 → 189: +4.9, z 1.41 |
+| L2 V2 9/40 (paper, standalone) | 407: +12.8, z 5.21 (mostly in-sample) | 561: +9.5 | 684: +11.3 | 644: +7.2 | 251: +8.6 → 369: +4.3 |
+| L1 12/50 (real) | 121: +12.2, z 2.74, +27.7%, 5.6u | 260: +2.9, z 0.96, +3.9%, 1.7u | 268: +3.2, z 1.09, +4.1%, 1.8u | 211: +6.4, z 1.92, +11.5%, 4.1u | 70: +17.2, z 2.98 → 91: +15.1, z 2.99 |
+| L1 Jan–May 5/45 (real) | 208: +10.6, z 3.09, +22.4%, 7.8u | 402: +4.0, z 1.65, +3.9%, 2.6u | 417: +4.3, z 1.80, +4.6%, 3.2u | 303: +4.9, z 1.78, +6.8%, 3.4u | 128: +17.8, z 4.18 → 177: +11.5, z 3.11 |
+| L1 6/45 (paper) | 386: +4.2, z 1.68, +7.4%, 4.8u | 680: +3.5, z 1.90, +3.9%, 4.5u | 705: +2.3, z 1.27, +0.6%, 0.7u | 543: +2.3, z 1.12, +1.2%, 1.1u | 238: +9.0, z 2.81 → 299: +6.9, z 2.42 |
+
+**Every modifier, applied as the live formula, makes every pocket worse**
+(lower residual, lower z, lower ROI, and for the real pockets far lower
+total return), in train and test alike, with the first sequential block
+turning negative for the multiplier on League One (−28% ROI). The mechanism
+is the decomposition: the multipliers and the H2H add-on inflate the
+favoured side's probability and push 100–370 extra fixtures over the edge
+floor — and those added picks are flat or negative beyond the market
+(e.g. L1 12/50: 162 added at −2.6pp, −10% ROI; L2 9/40 H2H: 218 added at
+−3.6pp) — while the picks they *remove* were positive (L1 12/50: 23 removed
+at +12.6pp; L2 9/40: 71 removed at +7.5pp). The modifiers do not know
+anything the market does not; they re-price what the market already priced.
+
+**As a split inside the cell — the "should this fixture have worried us"
+question:** the picks the modifiers argue *against* are not worse.
+
+- Multiplier 0.80–0.95 on the pick side (a weak venue record, tonight's
+  band was lower still): L1 12/50 +23.8pp, z 2.40, ROI +61% (n=25); L1
+  Jan–May +19.7pp, z 2.53 (n=37); L1 6/45 +9.4pp (n=77); L2 9/40 +7.5pp
+  (pooled) / −11.7pp (league baseline, n=48) — inconsistent on League Two,
+  positive on every League One pocket. Below 0.80: n = 2, 5, 13, 22 —
+  unreadable. No pocket shows a weak venue record on the pick side
+  predicting a bad pick.
+- H2H "against the pick" (< −3pp): L1 12/50 +27pp (n=6), L2 9/40 +24.7pp
+  (n=11), V2 +12.3pp (n=37); "for the pick" on L2 −9.1pp (n=28). Thin, but
+  the direction is the contrarian one. This is Addendum 29's finding at
+  pocket level: the anomaly is the team's overall win rate compared with a
+  venue-specific fixture (the home-advantage baseline artefact) plus
+  regression to the mean; it is not an independent signal and it does not
+  behave differently in these narrower cells.
+- WOWY, pick side missing a "key player" (live criteria: high-confidence
+  delta ≥ 12pp, no PIR in these leagues): those picks do **better** than
+  picks with no absence on every pooled pocket — L1 12/50 +19.2pp, z 1.96,
+  ROI +56% (n=26) vs +17.2 (n=17); L1 Jan–May +20.8, z 3.39 vs +9.8; L1 6/45
+  +10.5, z 2.00 vs +2.7; L2 9/40 +12.7, z 2.13, ROI +76% (n=70) vs +4.0.
+  The market prices the absence; the model's edge survives it. (V2 runs the
+  other way, +3.3 vs +17.8, on a chain that is mostly in-sample here.)
+  Absences are frequent because the WOWY criteria fire on players who have
+  left the club as readily as on injured ones — the same is true of the
+  live path.
+
+### Verdicts
+
+| Modifier | L2 9/40 | L2 V2 | L1 12/50 | L1 Jan–May | L1 6/45 |
+|---|---|---|---|---|---|
+| Home/away multiplier (either baseline) | not validated | not validated | not validated | not validated | not validated |
+| H2H anomaly | not validated | not validated | not validated | not validated | not validated |
+| WOWY (as a negative adjustment) | not validated | not validated | not validated | not validated | not validated |
+
+Fifteen of fifteen not validated. All three stay off for every pocket,
+exactly as now, and this addendum is the reason not to bolt any of them on
+after a single concerning-looking card. One forward hypothesis is recorded,
+not a rule and not selected here (rule 18): on the pooled League One and
+League Two pockets, a flagged key-player absence on the pick side coincided
+with a stronger residual; it may be read forward on the reserved sets.
+
+Caveats stated: League Two V2's train rows are its own trees' training data,
+so its absolute levels are inflated and only the before/after comparison on
+identical rows is meaningful; WOWY histories start at 2022 (lineups pool);
+the reconstruction has no PIR, matching what League One and Two have live.
+
+### Tonight's bet
+
+The rule that selected AFC Wimbledon was validated with these modifiers off,
+on populations that include exactly this kind of pick. The three signals on
+the card were untested; the pocket-level tests show that picks they argue
+against did not underperform, and on League One outperformed. Holding the
+bet was a caution the evidence did not require. Recommendation: proceed on
+the current validated rules for every pocket from here; nothing in the live
+chains changes.

@@ -1412,8 +1412,9 @@ function _buildBookmakerMarket(sport, homeName, awayName, kickoffIso = null) {
   const allBooks = (ev.bookmakers || []).map(bm => {
     const mkt = bm.markets?.find(m => m.key === 'h2h');
     if (!mkt) return null;
-    const get = name => mkt.outcomes?.find(o => o.name === name)?.price ?? null;
-    return { name: bm.title, homeOdds: get(homeName), drawOdds: get('Draw'), awayOdds: get(awayName) };
+    // 2026-09-17: fuzzy outcome match (was exact o.name === teamName — 'AFC Wimbledon' missed on every book, blanking the confirm panel's prefill)
+    const pr = extractH2hPrices(mkt.outcomes, homeName, awayName);
+    return { name: bm.title, homeOdds: pr.home, drawOdds: pr.draw, awayOdds: pr.away };
   }).filter(Boolean);
   // Pinnacle must never be silently capped out -- it's the one book this
   // whole project treats as the reference price ("does this clear the beat
