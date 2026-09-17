@@ -9759,4 +9759,21 @@ needed no era excused. The alternative (seasonal first) would leave the
 year-round pocket with no January–May bets at all, which is not the rule
 that was validated.
 
-**Historical overlap check:** OVERLAP_PLACEHOLDER
+**Historical overlap check** (`diag-pocket-overlap`, League One matched
+pre-cutoff population, 3,284 fixtures, six seasons):
+
+| | n | Bets/season | Beyond market | z | ROI at close | Total/season |
+|---|---|---|---|---|---|---|
+| Qualify for both (all assigned to `l1-12-50`) | 52 | 8.7 | +14.0 | 2.04 | +34.0% | 3.0 u |
+| `l1-12-50` after assignment (unchanged) | 121 | 20.2 | +12.2 | 2.74 | +27.7% | 5.6 u |
+| `l1-jan-may-5-45` before assignment | 208 | 34.7 | +10.6 | 3.09 | +22.4% | 7.8 u |
+| **`l1-jan-may-5-45` after assignment** | **156** | **26.0** | **+9.4** | **2.38** | **+18.5%** | **4.8 u** |
+| Union (no double counting) | 277 | 46.2 | +10.6 | 3.60 | +22.5% | 10.4 u |
+
+The seasonal pocket keeps its edge after losing its strongest 52 fixtures to
+the year-round cell (+9.4pp, z 2.38, ROI +18.5%); those post-assignment
+figures are what its forward record is measured against. No fixture is
+counted twice; the union is ~46 bets and ~10.4 units a season at flat stakes.
+Live verification: cohorts show League One staked with both pockets, the
+reserved set `l1-live-pockets-2026` is registered, and the T-60 lock path
+stamps `pocketId` on every League One lock.
