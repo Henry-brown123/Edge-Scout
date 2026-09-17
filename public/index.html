@@ -629,11 +629,12 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
 
   <!-- Period filter bar -->
   <div class="perf-filter-bar" id="perf-filter-bar">
+    <button class="pf-btn active" data-period="reset" onclick="setPerfPeriod('reset')" title="From the most recent bankroll reset of the account being viewed (both reset 2026-09-17)">Since reset</button>
     <button class="pf-btn" data-period="7d"     onclick="setPerfPeriod('7d')">7D</button>
     <button class="pf-btn" data-period="14d"    onclick="setPerfPeriod('14d')">14D</button>
     <button class="pf-btn" data-period="1m"     onclick="setPerfPeriod('1m')">1M</button>
     <button class="pf-btn" data-period="3m"     onclick="setPerfPeriod('3m')">3M</button>
-    <button class="pf-btn active" data-period="all" onclick="setPerfPeriod('all')">ALL</button>
+    <button class="pf-btn" data-period="all" onclick="setPerfPeriod('all')">All time</button>
     <button class="pf-btn" data-period="custom" onclick="setPerfPeriod('custom')">Custom</button>
     <div class="pf-custom" id="pf-custom-inputs">
       <input type="date" id="pf-from" class="pf-date" onchange="applyCustomPeriod()">
@@ -2353,6 +2354,8 @@ async function loadState() {
     ]);
     STATE = s;
     STATE.loaded = true; _loadStateRetries = 0;
+    // Latest bankroll reset per account — the default 'Since reset' Performance window.
+    try { const tx = await apiFetch('/api/transactions?account=all'); const list = tx.transactions || []; const latest = acc => list.filter(t => t.type === 'reset' && ((t.account || 'paper') === acc)).map(t => t.date).sort().slice(-1)[0] || null; STATE.resets = { paper: latest('paper'), real: latest('real') }; } catch { STATE.resets = {}; }
     STATE.greenFlags = greenFlags?.flags || []; // green-flag manual curation (Addendum 21 Part C)
     STATE.tierPerf = tierPerf; // used by Scout-page tier context lines — see tierContextLine()
     // Urgent fix (2026-08-15): scoutTierBlock's "no historical baseline" check only
@@ -3061,12 +3064,21 @@ async function manualResolve(id, result) {
 
 // ─── PERFORMANCE ─────────────────────────────────────────────────────────────
 // ─── PERFORMANCE PERIOD FILTER ───────────────────────────────────────────────
-const PERF_FILTER = { period: 'all', from: null, to: null };
+const PERF_FILTER = { period: 'reset', from: null, to: null };
 let betLogExpanded = { paper: false, real: false, combined: false };
 const BET_LOG_PAGE_SIZE = 10;
 
+let _perfMode = 'paper';
+function _resetDateForMode() {
+  const r = STATE.resets || {};
+  if (_perfMode === 'paper') return r.paper ? new Date(r.paper) : null;
+  if (_perfMode === 'real')  return r.real  ? new Date(r.real)  : null;
+  const ds = [r.paper, r.real].filter(Boolean).map(d => new Date(d));
+  return ds.length ? new Date(Math.min(...ds.map(d => d.getTime()))) : null;
+}
 function getPerfWindow() {
   if (PERF_FILTER.period === 'all') return { from: null, to: null };
+  if (PERF_FILTER.period === 'reset') return { from: _resetDateForMode(), to: null };
   if (PERF_FILTER.period === 'custom') return { from: PERF_FILTER.from, to: PERF_FILTER.to };
   const to   = new Date();
   const from = new Date();
@@ -3135,6 +3147,7 @@ async function renderPerfCombined() { renderLiveCalibration(); return renderPerf
 // `prefix` picks which set of DOM ids to write into (paper keeps unprefixed ids).
 async function renderPerfMode(mode) {
   if (!STATE.loaded) return; // never render totals from the default STATE (see loadState)
+  _perfMode = mode;
   renderBuckets(); applyResearchToggle();
   const prefix  = mode === 'paper' ? '' : mode === 'real' ? 'real-' : 'combined-';
   const apiMode = mode === 'combined' ? 'all' : mode;
