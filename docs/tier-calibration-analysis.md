@@ -9628,3 +9628,87 @@ commit: League One joins the staked set with a two-cell rule (edge ≥12% and
 probability ≥50% year-round; OR January–May with edge ≥5% and probability
 ≥45%), pocket gates for both cells, reserved-set entries, and its own
 go/no-go document with the pre-registered stop rule.
+
+## Addendum 57 — League One's bad era explained; recency weighting; what it does and does not license (2026-09-17)
+
+Tool: `diag-era` (season-half timeline with a closed-doors flag, the
+league's actual home-win rate against Pinnacle's price and the model's
+expectation, and recency-weighted residuals as descriptive statistics).
+Halves are H1 = July–December, H2 = January–June of the season named.
+
+### 1. The closed-doors mechanism (June 2020 → May 2021)
+
+| League One | Fixtures | Home win rate | Home priced by Pinnacle | Home expected by model | Model minus market |
+|---|---|---|---|---|---|
+| Closed doors | 555 | 40.2% | 40.3% | 43.5% | **+3.2pp** |
+| Open doors | 2,729 | 43.9% | 42.5% | 43.2% | +0.7pp |
+
+Pinnacle priced the empty-stadium home advantage correctly to the decimal.
+The model did not: its home-advantage input is built from historical home
+records and carried the crowd-era rate into a season with no crowds. Its
+picks are three-quarters home picks, so the cells lost exactly where the
+model was wrong: all top picks −1.8pp / −9.2% ROI, 6%/45% −6.2pp / −20.8%,
+7%/45% −7.9pp / −24.6%. The League Two control shows the same market
+accuracy (home 40.4% actual vs 39.7% priced) and a model overshoot of only
++1.0pp, so its cell was unhurt (+19.5pp on 35 bets). This is an external,
+bounded, football-explicable mechanism — the bar rule 15 sets — and it is a
+**model** finding: a home-advantage input that cannot react to a regime
+shift the market reacts to. Filed to the feature backlog; moot for live
+scoring now that crowds are back, live for any future regime shift.
+
+### 2. But the bad era is not only closed doors
+
+6%/45% by half, beyond market (pp): July–December halves 2020 −4.8 (closed),
+2021 −2.5, 2022 −2.7, 2023 −2.2, 2024 −4.4, 2025 +5.7; January–June halves
+2021 −6.8 (closed), 2022 +4.3, 2023 +25.4, 2024 +33.9, 2025 +21.6, 2026
++10.1. Every open-doors autumn is flat; every open-doors spring is strongly
+positive. The year-round 6%/45% cell is the January–May pocket carrying an
+autumn drag, which is the Addendum 56 finding seen a second, independent
+way. Closed doors explains 2020–21; it does not turn 6%/45% into a
+year-round rule.
+
+12%/50% by half: positive on beyond-market in eleven of twelve halves, the
+exception the first closed-doors autumn (+1.4pp, ROI −4%); closed doors as
+a whole +2.6pp. It is the one cell that never needed the era excused.
+
+### 3. Recency weighting (half-life two seasons, anchored at the cutoff)
+
+| Cell | Unweighted beyond market | Recency-weighted | Weighted ROI |
+|---|---|---|---|
+| All top picks | +1.8 | +2.3 | +0.6% |
+| 6% / 45% | +4.2 | +6.8 | +12.0% |
+| 12% / 50% | +12.2 | +15.1 | +30.6% |
+| League Two 9% / 40% | +8.3 | +9.5 | +49.4% |
+
+Every cell is stronger recency-weighted than unweighted: no decay anywhere,
+and the "good in 2022–24, bad since" pattern the user would rightly reject
+is absent (6%/45%: spring 2025 +21.6, autumn 2025 +5.7, spring 2026 +10.1;
+12%/50%: +19.5 / +17.3 / +18.5). Recorded as the standing convention: the
+significance tests stay equal-weighted because a test cannot down-weight
+the evidence it dislikes, and the recency-weighted residual is reported
+beside them; a cell whose weighted figure sits well below its unweighted
+one is decaying and is disqualified whatever its whole-history z.
+
+### 4. On the edge/probability search
+
+Every candidate's cell was searched over the full grid (18 edge floors × 6
+probability floors) on its own training window. The 3%/35% (from September
+2022) and 7%/45% (from August 2021) results are not different searches but
+different windows: the extra 2021–22 year is flat for broad picks, so the
+total-return objective narrows the cell. Both searches were complete.
+
+### What this licenses
+
+- January–May 5%/45%'s one negative block was spring 2021, closed doors.
+  With that era mechanistically excused it is positive in every open-doors
+  block; its case is stronger, not weaker.
+- 12%/50% year-round needed no excuse and remains the cleanest cell.
+- A broader **year-round** League One bucket is **not** licensed: the
+  autumn halves are flat with the doors open. A broader **January–May**
+  bucket would be a fresh selection on a population this addendum has read
+  again, and 5%/45% was already the train-selected optimum for that window
+  (broader cells lost on train total return). Rule 18 applies.
+
+Recommendation unchanged from Addendum 56, now with the era explained: GO on
+12%/50% year-round and on January–May 5%/45%, both fixed, awaiting the
+user's confirmation for the one-commit implementation.

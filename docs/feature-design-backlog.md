@@ -34,3 +34,7 @@ outcome ensembles that carry all the discriminating features; nothing in the
 **Status:** logged 2026-09-06; not scheduled. Independent of the League Two
 pocket work and of the reserved test set — it must not be developed on that
 reserved population.
+
+## FD-2 — Home-advantage input cannot react to a regime shift the market reacts to (2026-09-17, Addendum 57)
+
+Closed-doors 2020-21: Pinnacle priced League One home wins at 40.3% (actual 40.2%); the model expected 43.5% because its home-advantage factor is built from historical home records. League One picks (three-quarters home) lost −9% ROI at the close over 555 fixtures; League Two's model overshot by only 1pp and was unhurt. Model finding, not pipeline. Any future regime shift (rule changes, neutral venues, schedule compression) will reproduce it. Candidate fix for a standalone model: a rolling-window or market-anchored home-advantage feature; pre-registered, forward-validated.
