@@ -574,7 +574,7 @@ input[type=range] { flex: 1; accent-color: var(--cyan); }
   <div class="card" id="paper-locked-card" style="margin-top:16px">
     <div class="card-header">
       <span class="card-title" style="color:#4ea8ff">Locked — Paper</span>
-      <span style="font-size:11px;color:var(--muted)">Staked and observation · Paper P&amp;L on the Performance tab</span>
+      <span style="font-size:11px;color:var(--muted)">Paper-staked only · observation locks stay server-side · P&amp;L on the Performance tab</span>
     </div>
     <div id="paper-locked-list"></div>
     <div id="paper-locked-empty" class="empty" style="padding:28px 16px"><div class="empty-icon">🔒</div><p>No paper bets locked. Pre-match locks fire automatically at T-60.</p></div>
@@ -2645,9 +2645,12 @@ function toggleResearch(on) { localStorage.setItem('researchViews', on ? '1' : '
 
 function renderScout() {
   const { bets, watching } = STATE;
-  const locked = bets.filter(b => b.stage === 'RECOMMENDED' && !b.postponed && !b.result);
+  // Zero-stake (observation) locks and watching entries are not shown here or in
+  // the Performance bet log — they are neither paper-staked nor real-money and
+  // still lock, resolve and log server-side exactly as before (2026-09-17).
+  const locked = bets.filter(b => b.stage === 'RECOMMENDED' && !b.postponed && !b.result && !b.isFakeMoney);
   const today  = new Date().toISOString().split('T')[0];
-  const todayW = watching.filter(w => w.kickoff?.startsWith(today));
+  const todayW = watching.filter(w => w.kickoff?.startsWith(today) && !w.isFakeMoney);
   // Real = a pocket lock (or a bet converted to real); paper = everything else,
   // including observation/no-stake locks, which keep their NO STAKE badge.
   const isRealBet = b => !!b.pocketId || b.mode === 'real';
@@ -3128,7 +3131,7 @@ async function renderPerfMode(mode) {
 
   // Mode-filtered, deduplicated bet set (fixtureId+mode, since combined can hold the
   // same fixtureId once under paper and once under real — both are legitimate rows).
-  const modeBets = bets.filter(b => mode === 'paper' ? ((!b.mode || b.mode === 'paper') && !b.isFakeMoney) : mode === 'real' ? b.mode === 'real' : true);
+  const modeBets = bets.filter(b => mode === 'paper' ? ((!b.mode || b.mode === 'paper') && !b.isFakeMoney) : mode === 'real' ? b.mode === 'real' : !b.isFakeMoney);
   const seen = new Set();
   // Was `b.suggestedStake > 0` only — excluded any bet whose auto-computed
   // suggestion happened to be zero (e.g. locked in a paperTradeOnly-zeroed
