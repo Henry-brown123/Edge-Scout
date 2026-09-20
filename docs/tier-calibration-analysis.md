@@ -10062,4 +10062,40 @@ the model chase whatever the last season looked like.
 
 ### League Two standalone
 
-L2_PLACEHOLDER
+The first batch archived only candidates that passed the deployment quality
+gates; nine of twelve League Two candidates failed gate 2 (50–60% band bias
+≤ 5pp, on 560–1,660 test rows), including two of the three unweighted
+controls — that gate is noisy at League Two's sample size and says nothing
+about weighting. Dry runs now archive regardless (`dry-run-gates-failed`)
+and the twelve were re-run on 2026-09-20. Same comparisons, League Two rows
+only:
+
+| Build / window | n | HL 2 | HL 3 | HL 5 |
+|---|---|---|---|---|
+| Full history, rows after 2023-09-16 | 1,659 | +0.0048 (z 1.78) | +0.0035 (z 1.69) | +0.0019 (z 1.35) |
+| …of which 2024 rows | 532 | +0.0092 (z 1.83) | **+0.0099 (z 2.59)** | +0.0048 (z 1.82) |
+| Trees < 2020-06, closed doors 2020-06 → 2021-08 | 559 | +0.0029 (z 0.81) | +0.0032 (z 1.15) | **+0.0054 (z 2.62)** |
+| Trees < 2020-06, after 2021-08 → 2023-08 | 1,110 | −0.0003 (z −0.11) | −0.0002 (z −0.10) | +0.0007 (z 0.43) |
+| Trees < 2021-08, first year 2021-08 → 2022-09 | 627 | +0.0005 (z 0.16) | −0.0039 (z −1.66) | −0.0026 (z −1.41) |
+| Trees < 2021-08, later 2022-09 → 2024-09 | 1,109 | +0.0038 (z 1.48) | +0.0016 (z 0.80) | +0.0022 (z 1.46) |
+
+Readings: worse on the full out-of-sample window for all three half-lives
+(the standalone has only 6,600 training rows, so the effective-sample loss
+bites harder than in the pool); equally blind to closed doors (expected home
+rate 42.2–42.6% for every candidate against 40.3% actual); the one
+favourable cell (trees < 2021-08, first year, HL 3/5 better at z −1.4 to
+−1.7) reverses two seasons later (+0.0016 to +0.0038). No candidate beats
+the control anywhere durable.
+
+**Verdict (League Two standalone): not validated; equal-weighted recipe
+stays.** With no candidate beating a control on either model, the
+pre-registered re-measurement of the fixed live cells does not arise
+(rule 18: nothing is re-measured against a recipe that was not adopted).
+The standalone forward comparison stands as reported on 2026-09-17: 61
+matched post-cutoff fixtures, standalone top-pick residual +7.0pp vs pooled
+−3.6pp (paired +10.5 ± 4.9pp), one fifth of the 300 the cutover rule needs.
+
+**Standing conclusion for every per-pocket model:** train equal-weighted.
+Recency weighting is closed as a recipe candidate for this trainer; a future
+regime shift is handled by reactive features (FD-2), not by weights.
+
