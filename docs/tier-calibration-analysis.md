@@ -10190,3 +10190,75 @@ control's expected home rate runs ~42–43.5% against ~40% actual (Addenda 57,
 rows moves toward actual **and** its paired log-loss there is better.
 
 Results follow in Part 2.
+
+### Part 2 — Results
+
+**Data reliability (production pool, `diag-regime`, 2026-09-20 20:03Z).**
+Home-win rate inside vs outside the flagged windows, completed fixtures:
+
+| League | Closed n | Closed HW | Open n | Open HW | Δ pp | z |
+|---|---|---|---|---|---|---|
+| Ligue 1 | 382 | 37.2% | 5,423 | 44.6% | −7.4 | −2.9 |
+| Eredivisie | 388 | 39.9% | 4,608 | 46.6% | −6.7 | −2.6 |
+| Premier League | 452 | 38.9% | 5,674 | 45.1% | −6.2 | −2.6 |
+| Bundesliga | 419 | 39.4% | 4,524 | 45.1% | −5.7 | −2.3 |
+| La Liga | 490 | 41.4% | 5,654 | 47.1% | −5.7 | −2.5 |
+| Scottish Premiership | 239 | 39.3% | 3,414 | 43.4% | −4.1 | −1.3 |
+| Serie B | 493 | 38.7% | 3,556 | 42.1% | −3.4 | −1.5 |
+| League One | 556 | 40.1% | 7,722 | 43.1% | −3.0 | −1.4 |
+| Championship | 664 | 40.7% | 7,774 | 43.2% | −2.5 | −1.3 |
+| Primeira Liga | 398 | 42.2% | 4,302 | 44.4% | −2.2 | −0.9 |
+| League Two | 556 | 40.3% | 7,748 | 42.2% | −1.9 | −0.9 |
+| Segunda División | 589 | 43.1% | 4,148 | 45.0% | −1.9 | −0.9 |
+| Serie A | 504 | 41.9% | 5,622 | 43.4% | −1.5 | −0.7 |
+| 2. Bundesliga | 408 | 44.1% | 4,242 | 42.9% | +1.2 | +0.5 |
+
+Thirteen of fourteen leagues show the depression; the dating is accepted. 2.
+Bundesliga shows none, so its flag carries only noise (recorded, kept — the
+table is a fact about crowds, not a fitted parameter). The pool runs from
+2010 (2016 for Serie B / Segunda), 80,949 scored records, 6,538 flagged. The
+rolling `leagueHomeRate` had a value on 99.4% of fixtures (range 0.25–0.62,
+league means 0.42–0.47).
+
+**League Two standalone (16 runs, seed 20260920, all dry, none failed).**
+Paired log-loss, candidate − seeded control; positive = worse. Expected home
+rate on the window: actual / candidate / control.
+
+| Build | Window | n | flag | rate | both | Home act / rate-cand / ctl |
+|---|---|---|---|---|---|---|
+| Full | rows ≥ 2023-09-16 | 1,670 | −0.00027 (z −1.31) | −0.00054 (z −0.99) | −0.00068 (z −1.27) | 43.4 / 43.2 / 43.2 |
+| Trees < 2020-06 | closed doors 2020-06-17 → 2021-08 | 559 | **0 (identical trees)** | +0.0004 (z 0.38) | = rate | 40.3 / 42.1 / 42.5 |
+| Trees < 2020-06 | post 2021-08 → 2023-08 | 1,110 | 0 | +0.0003 (z 0.38) | = rate | 41.8 / 42.3 / 42.4 |
+| Trees < 2021-01 | rest of closed doors 2021-01 → 2021-08 | 311 | **0** | −0.0003 (z −0.22) | = rate | 40.8 / 41.2 / 41.8 |
+| Trees < 2021-01 | post 2021-08 → 2023-08 | 1,110 | 0 | +0.0005 (z 0.61) | = rate | 41.8 / 41.6 / 41.7 |
+| Trees < 2021-08 | first year 2021-08 → 2022-09 | 627 | **0** | +0.0004 (z 0.29) | = rate | 43.1 / 41.2 / 40.9 |
+| Trees < 2021-08 | later 2022-09 → 2024-09 | 1,086 | 0 | −0.0014 (z −1.48) | = rate | 43.0 / 41.4 / 41.0 |
+
+Readings:
+
+- **The flag was never split on in any walk-forward build.** A diff of
+  exactly zero on every row means identical trees: with 248 (trees < 2021-01)
+  or 559 (trees < 2021-08) flagged rows in a 3,300–3,600-row training set and
+  a league whose closed-doors depression is only −1.9pp (z −0.9), the flag
+  never wins a split against the eight factor scores. `both` equals `rate`
+  everywhere for the same reason. Only the full-history model (6,600 rows)
+  used it, and there it is worth −0.0003 (z −1.3) — noise.
+- **The rolling rate moves the home expectation in the right direction, but
+  by a fraction of the gap** — 0.4pp of the 2.2pp gap on unseen closed doors,
+  0.6pp of 1.0pp on the second half — and the paired log-loss does not
+  improve anywhere at the pre-registered level (best −0.0014, z −1.48, on the
+  trees-<2021-08 "later" window). It does not cause the newest-rows damage
+  that recency weighting did (full-build standard window −0.0005 to −0.0007,
+  flat by year).
+- **There was little gap to close in League Two.** The control's 42.5%
+  expectation against 40.3% actual is a 2.2pp miss on 559 fixtures (about
+  1 SE); Addendum 57 already recorded that League Two's model overshot by
+  ~1pp and its picks were unhurt. The feature cannot learn an effect the
+  league barely exhibits.
+
+**Verdict (League Two standalone): not adopted.** Precondition (i) is met
+by all three sets (non-inferior, slightly better, on the standard window);
+condition (ii) is met by none (no closed-doors or post-anomaly window better
+at z ≤ −1.645). The standalone keeps `REGIME_FEATURES=none`. The pooled
+model is where the gap was large (Ligue 1 / Eredivisie / Premier League −6
+to −7pp, League One's 43.5% vs 40.3% in Addendum 57); its results follow.
