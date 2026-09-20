@@ -719,6 +719,8 @@ function bandAccuracy(records, probFn) {
   console.log(`\n  Verdict: ${allGatesMet ? `✅ ALL GATES MET — writing ${WEIGHTS_FILE}` : `❌ GATES NOT MET — ${STANDALONE ? 'no standalone model for this league (predictLeague stays null)' : 'keeping linear model'}`}`);
 
   if (!allGatesMet) {
+    // Leave a record (Addendum 62): batch/dry runs need to know WHY a candidate produced no model.
+    writeGateResult({ at: new Date().toISOString(), standaloneLeagueId: STANDALONE ? LEAGUE_ID : null, recipe: { halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, tag: RUN_TAG || null }, decision: 'rejected', reason: 'quality gates not met', qualityGates: { gate1, gate2, gate3 }, candidateOwnSlice: { n: test.length, logLoss: llGBDT, logLossLinear: llLinear, brier: bsGBDT, band5060: { gbdt: band5060GBDT?.bias ?? null, linear: band5060Linear?.bias ?? null } } });
     console.log(`\n  ${WEIGHTS_FILE} NOT written.`);
     process.exit(0);
   }

@@ -10889,7 +10889,7 @@ app.get('/api/admin/diag-compare-models', async (req, res) => {
 });
 
 app.get('/api/admin/retrain-gate', (req, res) => {
-  const suffix = req.query.league ? `-${parseInt(req.query.league, 10)}` : '';
+  const suffix = (req.query.league ? `-${parseInt(req.query.league, 10)}` : '') + (req.query.tag ? `-${String(req.query.tag).replace(/[^A-Za-z0-9_.-]/g, '')}` : '');
   res.json({ last: readJSON(req.query.dryrun === 'true' ? `retrain-gate-dryrun${suffix}.json` : `retrain-gate-result${suffix}.json`) || null });
 });
 
