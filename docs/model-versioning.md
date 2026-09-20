@@ -558,3 +558,7 @@ should appear exactly as before), confirm no retroactive rewrite (this
 layer only ever ran in live scoring, so there is no historical population
 to worry about contaminating), then document the change in
 `docs/tier-calibration-analysis.md`.
+
+## Feature vector (2026-09-20, FD-2)
+
+`buildFeatures` now returns 26 values: the original 24 (16 factors, 5 deltas, 3 context one-hots) plus `closedDoors` and `leagueHomeRate` from `homeFactors.regime` (see `regime.js`, Addendum 63). Appended at the end, so every archived 24-feature model predicts unchanged — its trees never reference indices 24–25. A model file's `recipe.regimeFeatures` records which of the two its trees were allowed to use (`none|flag|rate|both`); `recipe.trainSeed` records the subsampling seed when one was fixed. The trainer default remains `none` until Addendum 63 adopts a set.

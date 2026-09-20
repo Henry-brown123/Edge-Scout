@@ -10099,3 +10099,94 @@ matched post-cutoff fixtures, standalone top-pick residual +7.0pp vs pooled
 Recency weighting is closed as a recipe candidate for this trainer; a future
 regime shift is handled by reactive features (FD-2), not by weights.
 
+
+## Addendum 63 — FD-2: regime-aware home advantage (closed doors and any comparable anomaly), pre-registered test (2026-09-20)
+
+### Why
+
+Addendum 57 found the model expected 43.5% home wins in League One's
+closed-doors season against 40.3% priced and 40.2% actual, and Addendum 62
+showed no age-based training weight can fix that: a model trained before
+closed doors has nothing to learn the anomaly from, and a model trained with
+closed doors as its newest data over-trusts it afterwards. The fix has to be a
+feature the trees can split on.
+
+### Feature definition (built, `regime.js`; features 24–25 of `buildFeatures`)
+
+Two features, computed by one function (`regimeFor`) from one index and
+attached as `homeFactors.regime` on every path — live lock, nightly pool
+scoring, stored records (pre-FD-2 records get it attached on load, identical
+by construction), trainer, gates, archived-model diagnostics:
+
+| Feature | Definition | Data source | Reliability |
+|---|---|---|---|
+| `closedDoors` (0/1) | fixture's UTC day inside a dated no-crowd window for its league | hand-dated table in `regime.js` (API-Sports fixture objects carry **no** attendance or crowd field; nothing in any pooled source does) | exact for England (2020-06-17 → 2021-05-17, Dec-2020 tier pilot kept inside); approximate where a league ran capped crowds (France Aug–Oct 2020 at ≤5,000, Germany Sept–Oct 2020 regional, Netherlands Sept 2020 ~30%) — flagged closed because the caps were a small fraction of capacity; Scotland Dec-21/Jan-22 500-cap, Germany 2021-12-28 → 2022-02-04 and Netherlands 2021-11-13 → 2022-01-26 second closures included |
+| `leagueHomeRate` (0..1) | home-win share over the league's last 100 completed fixtures on calendar days strictly before the fixture's UTC day; 0.44 below 30 fixtures | the pool itself (`backfill-historical.json` fixtures) | fully data-derived, no dating; reacts to **any** anomaly with a lag of about one window (~5 weeks in a 24-team league); the strictly-before-day rule makes the live lock (reading the nightly pool) and the historical pool compute the identical value |
+
+**Recommendation on binary vs general:** both are cheap and they answer
+different questions. The flag is the only thing that can act on day one of a
+*known* regime, and it is the only feature that can be exact for a period the
+model has already seen; the rolling rate is the only thing that can act on an
+*unknown* future anomaly, and it is the only one that can help a model whose
+trees never saw the flag set (a tree cannot split on a constant). Neither is
+over-engineered: the table is nine lines, the index is one pass over the pool.
+Which of them earns its place is what the test below decides; a feature set
+that does not beat the control is dropped, not kept "for the future".
+
+**What this modifies.** Nothing in the eight factor scores. `homeAdvScore`
+(a team's own last-10 home results) is left as it is — it already drops during
+a closed-doors run, with a lag and a lot of noise, and the regime features sit
+beside it as inputs the trees can combine with it. No other factor is
+attendance-sensitive. The static league home rates in `LEAGUE_CONFIG` (bias
+correction targets) are untouched; League One/Two/Championship carry none.
+The features enter the GBDT only.
+
+**Data reliability check (run on the production pool before training, route
+`diag-regime`):** per league, home-win rate inside vs outside the flagged
+windows with n and z. The dating is accepted only where flagged fixtures show
+a depressed home rate; a league whose flagged window shows no depression is
+reported as such (its flag then contributes nothing but noise, and that is
+recorded, not hidden).
+
+### Pre-registered test (rule 18; selection on paired log-loss only)
+
+Trainer knobs: `REGIME_FEATURES=none|flag|rate|both` (masked features are
+zeroed in the training matrix only — a tree never splits on a constant, so the
+live value is simply ignored at prediction) and `TRAIN_SEED` so control and
+candidate draw identical subsamples (verified: `none` under a fixed seed is
+bit-for-bit the 24-feature model). `GATE_DRY_RUN=1` throughout; nothing is
+deployed by the batch.
+
+Models: pooled domestic (P) and League Two standalone (L2). For each, four
+builds × four feature sets, one seed:
+
+| Build | What it tests |
+|---|---|
+| Full history | non-inferiority on the standard out-of-sample window (rows after 2023-09-16) — the adoption precondition |
+| Trees < 2020-06-01 | closed doors entirely unseen: the flag cannot act (never set in training); only the rolling rate can. Home expectation vs actual on closed-doors rows |
+| Trees < 2021-01-01 | half a closed-doors season seen: does the flag let the model (a) predict the rest of the closed-doors season lower and (b) stop over-trusting it after 2021-08 (the Addendum 62 failure) |
+| Trees < 2021-08-01 | closed doors as the newest training data: the over-trust test proper, first year and later |
+
+Windows read (paired log-loss vs the seeded `none` control; positive = worse;
+home expectation vs actual reported on the closed-doors window): rows after
+2023-09-16 (full build); 2020-06-17 → 2021-08-01 and 2021-08-01 → 2023-08-01
+(wf2020-06); 2021-01-01 → 2021-08-01 and 2021-08-01 → 2023-08-01 (wf2021-01);
+2021-08-01 → 2022-09-01 and 2022-09-01 → 2024-09-01 (wf2021-08).
+
+**Adoption rule, fixed in advance.** A feature set is adopted for a model only
+if (i) its full-history build is non-inferior on the standard window (no
+z ≥ 1.645 worse, no +0.002), and (ii) it is better at z ≤ −1.645 on at least
+one of the closed-doors or post-anomaly windows of the wf2020-06 / wf2021-01
+/ wf2021-08 builds while being worse (z ≥ 1.645) on none of them. Ties
+between adopted sets go to the smaller set (flag < rate < both). An adopted
+set's full-history candidate then goes through the normal gate (paired
+non-inferiority + pocket gates) and the version archive; fixed live cells are
+**re-measured, not re-selected**, on the adopted model. If nothing is adopted
+the trainer default stays `none` and this addendum records why.
+
+The gap this must close, stated as a number: on the closed-doors windows the
+control's expected home rate runs ~42–43.5% against ~40% actual (Addenda 57,
+62). A candidate "closes the gap" only if its expected home rate on those same
+rows moves toward actual **and** its paired log-loss there is better.
+
+Results follow in Part 2.

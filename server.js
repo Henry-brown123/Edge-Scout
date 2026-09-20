@@ -31,6 +31,7 @@ const {
 
 const model = require('./models/interface');
 const { SCORER_VERSION, FEATURE_SPEC, buildLiveFactors, scoreProbabilities, diffScores } = require('./sharedScorer');
+const regime = require('./regime');
 const lineupLock = require('./lineupLock'); // Addendum 60: lineup-triggered lock
 
 const {
@@ -1718,7 +1719,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   // the shared path is sharedScorer.buildLiveFactors (a verbatim lift of the same code).
   const scorerPath = opts.scorerPath || (settings.scorerPath === 'shared' ? 'shared' : 'legacy');
   const scorerShadowOn = opts.scorerShadow ?? (settings.scorerShadow !== false);
-  const factorInputs = { scoringPool, homeId, awayId, homeName, awayName, h2hFixtures, injuries, standings, lastSeasonStandings, statsCache, context, neutralVenue, homeStandingsOverride, awayStandingsOverride, fw, d, hw, seeds: context === 'international' ? getTournamentSeeds() : null };
+  const factorInputs = { scoringPool, homeId, awayId, homeName, awayName, h2hFixtures, injuries, standings, lastSeasonStandings, statsCache, context, neutralVenue, homeStandingsOverride, awayStandingsOverride, fw, d, hw, seeds: context === 'international' ? getTournamentSeeds() : null, leagueId, kickoff: fix.fixture?.date, regimeIndex: getRegimeIndex() }; // FD-2
   const legacyFactors = () => {
     const homeF = {
       form:      formScore(scoringPool, homeId, fw, d),
@@ -1792,6 +1793,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   };
   const activeFactors = scorerPath === 'shared' ? buildLiveFactors(factorInputs) : legacyFactors();
   const { homeF, awayF, homeFormCount, awayFormCount, homeDataConf, awayDataConf, dataConf } = activeFactors;
+  if (!homeF.regime) homeF.regime = regime.regimeFor(leagueId, fix.fixture?.date, getRegimeIndex()); // FD-2: legacy path carries it too
 
 
   // Weather — fetch first so it can inform profile modifiers
@@ -4127,7 +4129,7 @@ async function runHistoricalBackfill({ rescore = false, skipOptimise = false, on
       const filteredDomesticTimeline = buildDomesticTimeline(filteredDomesticTimelineFixtures);
       const fullDomesticTimeline     = buildDomesticTimeline(allFixtures);
       let   scored         = 0;
-      const _sc = getSettings(); const scorerOpts = { scorerPath: _sc.scorerPath === 'shared' ? 'shared' : 'legacy', shadow: _sc.scorerShadow !== false, statsCache: getFixtureStats(), fw: _sc.formWindow ?? 6, d: _sc.decay ?? 0.05, hw: _sc.h2hWindow ?? 5 }; // step 3: unified leagues read the stats tier and live windows
+      const _sc = getSettings(); const scorerOpts = { scorerPath: _sc.scorerPath === 'shared' ? 'shared' : 'legacy', shadow: _sc.scorerShadow !== false, statsCache: getFixtureStats(), fw: _sc.formWindow ?? 6, d: _sc.decay ?? 0.05, hw: _sc.h2hWindow ?? 5, regimeIndex: regime.buildLeagueHomeRateIndex(existing.fixtures || []) }; // FD-2: index over the pool being scored // step 3: unified leagues read the stats tier and live windows
       let shadowMax = 0, shadowOver = 0, shadowN = 0;
       const checkpointEvery = isLargeRun ? LARGE_RUN_PERSIST_EVERY : OPTIMISE_EVERY;
       let   nextCheckpointAt = Math.ceil(scoredMap.size / checkpointEvery) * checkpointEvery;
@@ -10084,7 +10086,15 @@ const SERVER_STATUS_CACHE_MS = 30000;
 // a fresh full deserialize) — the primary cause remains the Starter-tier 512MB ceiling
 // itself, see the overnight report for the full breakdown. Read-only, diagnostic-only,
 // no scoring/betting code path touches this.
-let _histFileCache = { mtimeMs: null, data: null };
+let _histFileCache = { mtimeMs: null, data: null, regimeIndex: null };
+// FD-2: the league home-rate index over the pool's fixtures, rebuilt only when the
+// file changes. Live locks and the nightly scorer read the same index.
+function getRegimeIndex() {
+  const data = readHistoricalCached();
+  if (!data) return new Map();
+  if (!_histFileCache.regimeIndex) _histFileCache.regimeIndex = regime.buildLeagueHomeRateIndex(data.fixtures || []);
+  return _histFileCache.regimeIndex;
+}
 function readHistoricalCached() {
   const p = path.join(DATA_DIR, 'backfill-historical.json');
   let mtimeMs;
@@ -10102,7 +10112,16 @@ function readHistoricalCached() {
     data.scoredRecords = data.scoredRecords.filter(r => r.context === 'club_domestic' && !isRetiredLeague(r.leagueId));
     data._retiredScoredRecordsHidden = before - data.scoredRecords.length;
   }
-  _histFileCache = { mtimeMs, data };
+  _histFileCache = { mtimeMs, data, regimeIndex: null };
+  // FD-2: records scored before 2026-09-20 carry no homeFactors.regime — attach it
+  // from the same function and index the nightly scorer now uses, so trainer
+  // mirrors, gates and diagnostics see one definition. Saved back on the next
+  // nightly write; identical by construction to what the scorer would store.
+  if (data && Array.isArray(data.scoredRecords)) {
+    const idx = getRegimeIndex();
+    const n = regime.attachRegime(data.scoredRecords, idx);
+    if (n) console.log(`[Regime] attached regime features to ${n} stored records lacking them`);
+  }
   return data;
 }
 
@@ -10833,14 +10852,14 @@ app.get('/api/admin/diag-modifiers', async (req, res) => {
 let _trainBatch = { running: false, runs: [], current: null, startedAt: null, finishedAt: null };
 app.post('/api/admin/train-batch', (req, res) => {
   if (_trainBatch.running) return res.json({ error: 'batch already running', batch: _trainBatch });
-  const runs = (req.body?.runs || []).filter(r => r && r.tag).map(r => ({ tag: r.tag, leagueId: r.leagueId || null, trainBefore: r.trainBefore || null, halfLife: r.halfLife || null, status: 'queued', startedAt: null, finishedAt: null, error: null, trainedAt: null }));
+  const runs = (req.body?.runs || []).filter(r => r && r.tag).map(r => ({ tag: r.tag, leagueId: r.leagueId || null, trainBefore: r.trainBefore || null, halfLife: r.halfLife || null, regime: r.regime || null, seed: r.seed || null, status: 'queued', startedAt: null, finishedAt: null, error: null, trainedAt: null }));
   if (!runs.length) return res.status(400).json({ error: 'runs required' });
   _trainBatch = { running: true, runs, current: null, startedAt: new Date().toISOString(), finishedAt: null };
   writeJSON('train-batch-status.json', _trainBatch);
   const next = () => {
     const r = _trainBatch.runs.find(x => x.status === 'queued');
     if (!r) { _trainBatch.running = false; _trainBatch.current = null; _trainBatch.finishedAt = new Date().toISOString(); writeJSON('train-batch-status.json', _trainBatch); console.log('[TrainBatch] complete'); return; }
-    const env = { GATE_DRY_RUN: '1', RUN_TAG: r.tag, ...(r.leagueId ? { LEAGUE_ID: String(r.leagueId) } : {}), ...(r.trainBefore ? { TRAIN_BEFORE: r.trainBefore } : {}), ...(r.halfLife ? { RECENCY_HALF_LIFE: String(r.halfLife) } : {}) };
+    const env = { GATE_DRY_RUN: '1', RUN_TAG: r.tag, ...(r.leagueId ? { LEAGUE_ID: String(r.leagueId) } : {}), ...(r.trainBefore ? { TRAIN_BEFORE: r.trainBefore } : {}), ...(r.halfLife ? { RECENCY_HALF_LIFE: String(r.halfLife) } : {}), ...(r.regime ? { REGIME_FEATURES: String(r.regime) } : {}), ...(r.seed ? { TRAIN_SEED: String(r.seed) } : {}) };
     const started = runGbdtRetrain(`batch ${r.tag}`, (result) => { r.status = result.success ? 'done' : 'failed'; r.finishedAt = new Date().toISOString(); r.error = result.success ? null : result.error; r.trainedAt = result.trainedAt || null; writeJSON('train-batch-status.json', _trainBatch); setTimeout(next, 3000); }, env);
     if (!started.success) { r.status = 'failed'; r.error = started.error; writeJSON('train-batch-status.json', _trainBatch); setTimeout(next, 15000); return; }
     r.status = 'running'; r.startedAt = new Date().toISOString(); _trainBatch.current = r.tag; writeJSON('train-batch-status.json', _trainBatch);
@@ -10860,6 +10879,50 @@ function _loadArchived(scope, key) {
   if (!e) return null;
   try { return { entry: e, weights: JSON.parse(fs.readFileSync(path.join(dir, e.file), 'utf8')) }; } catch { return null; }
 }
+// FD-2 (Addendum 63): reliability read of regime.js against the pool itself —
+// per league, home-win rate inside vs outside the dated closed-doors windows,
+// coverage of the pool by date, and the rolling leagueHomeRate distribution.
+// Descriptive only (no model, no selection); the flagged windows should show a
+// depressed home rate if the dating is right.
+app.get('/api/admin/diag-regime', (req, res) => {
+  try {
+    const data = readHistoricalCached() || {};
+    const idx = getRegimeIndex();
+    const out = {};
+    for (const f of (data.fixtures || [])) {
+      const lid = parseInt(f.league?.id, 10);
+      if (!Number.isFinite(lid) || isRetiredLeague(lid) || f.fixture?.status?.short !== 'FT') continue;
+      const hg = Number(f.goals?.home ?? f.score?.fulltime?.home), ag = Number(f.goals?.away ?? f.score?.fulltime?.away);
+      if (!Number.isFinite(hg) || !Number.isFinite(ag)) continue;
+      const o = out[lid] || (out[lid] = { leagueId: lid, name: f.league?.name, firstDay: null, lastDay: null, windows: regime.CLOSED_DOORS_WINDOWS[lid] || [], closed: { n: 0, homeWins: 0, draws: 0 }, open: { n: 0, homeWins: 0, draws: 0 }, openBySeason: {}, rate: { n: 0, sum: 0, min: 1, max: 0, belowMinN: 0 } });
+      const day = String(f.fixture?.date || '').slice(0, 10);
+      if (!o.firstDay || day < o.firstDay) o.firstDay = day;
+      if (!o.lastDay || day > o.lastDay) o.lastDay = day;
+      const cd = regime.closedDoorsFlag(lid, f.fixture?.date);
+      const b = cd ? o.closed : o.open;
+      b.n++; if (hg > ag) b.homeWins++; if (hg === ag) b.draws++;
+      if (!cd) { const s = f.league?.season; const sb = o.openBySeason[s] || (o.openBySeason[s] = { n: 0, homeWins: 0 }); sb.n++; if (hg > ag) sb.homeWins++; }
+      const r = regime.leagueHomeRate(idx, lid, f.fixture?.date);
+      if (r.rate == null) o.rate.belowMinN++; else { o.rate.n++; o.rate.sum += r.rate; o.rate.min = Math.min(o.rate.min, r.rate); o.rate.max = Math.max(o.rate.max, r.rate); }
+    }
+    const rows = Object.values(out).map(o => {
+      const pct = (b) => b.n ? +(b.homeWins / b.n).toFixed(3) : null;
+      const se = (b) => { const p = b.homeWins / b.n; return b.n ? Math.sqrt(p * (1 - p) / b.n) : null; };
+      const pc = pct(o.closed), po = pct(o.open);
+      const z = (o.closed.n && o.open.n) ? +((pc - po) / Math.sqrt(se(o.closed) ** 2 + se(o.open) ** 2)).toFixed(2) : null;
+      return { leagueId: o.leagueId, name: o.name, poolFrom: o.firstDay, poolTo: o.lastDay, windows: o.windows,
+        closedDoors: { n: o.closed.n, homeWinRate: pc, drawRate: o.closed.n ? +(o.closed.draws / o.closed.n).toFixed(3) : null },
+        openDoors: { n: o.open.n, homeWinRate: po, drawRate: o.open.n ? +(o.open.draws / o.open.n).toFixed(3) : null },
+        closedMinusOpenPp: (pc != null && po != null) ? +((pc - po) * 100).toFixed(1) : null, z,
+        openBySeason: Object.fromEntries(Object.entries(o.openBySeason).map(([s, b]) => [s, { n: b.n, homeWinRate: +(b.homeWins / b.n).toFixed(3) }])),
+        leagueHomeRate: { withValue: o.rate.n, belowMinN: o.rate.belowMinN, mean: o.rate.n ? +(o.rate.sum / o.rate.n).toFixed(3) : null, min: o.rate.n ? +o.rate.min.toFixed(3) : null, max: o.rate.n ? +o.rate.max.toFixed(3) : null } };
+    }).sort((a, b) => a.leagueId - b.leagueId);
+    const recs = data.scoredRecords || [];
+    const withRegime = recs.filter(r => r.homeFactors?.regime).length;
+    res.json({ window: regime.LEAGUE_HOME_RATE_WINDOW, minN: regime.LEAGUE_HOME_RATE_MIN_N, scoredRecords: recs.length, scoredRecordsWithRegime: withRegime, scoredClosedDoorsRecords: recs.filter(r => r.homeFactors?.regime?.closedDoors).length, leagues: rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/admin/diag-compare-models', async (req, res) => {
   try {
     const scope = req.query.scope || 'pooled';

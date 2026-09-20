@@ -5,6 +5,7 @@
 // its own feature weights from training data.
 
 const path = require('path');
+const { regimeFeatureValues } = require('../regime');
 const fs   = require('fs');
 const { computeModelProb, WEIGHTS_BY_CONTEXT, LEAGUE_CONFIG } = require('../scoring');
 
@@ -70,10 +71,14 @@ function predictLeague(leagueId, homeFactors, awayFactors, context = 'club_domes
   return m ? { probs: predictWith(m, homeFactors, awayFactors, context), version: m.trainedAt } : null;
 }
 
-// 24 features: 16 raw factors (home+away, normalised 0-1), 5 deltas, 3 context OHE
+// 26 features: 16 raw factors (home+away, normalised 0-1), 5 deltas, 3 context OHE,
+// 2 regime features (FD-2, 2026-09-20: closedDoors 0|1, leagueHomeRate 0..1 —
+// read from homeFactors.regime, defaults when absent; see regime.js). Appended
+// at the end so every model file trained on 24 features predicts unchanged.
 function buildFeatures(homeFactors, awayFactors, context) {
   const h = homeFactors;
   const a = awayFactors;
+  const [closedDoors, leagueHomeRate] = regimeFeatureValues(h?.regime);
   return [
     h.form      / 100, a.form      / 100,
     h.homeAdv   / 100, a.homeAdv   / 100,
@@ -91,6 +96,8 @@ function buildFeatures(homeFactors, awayFactors, context) {
     context === 'club_domestic' ? 1 : 0,
     context === 'club_european' ? 1 : 0,
     context === 'international' ? 1 : 0,
+    closedDoors,
+    leagueHomeRate,
   ];
 }
 

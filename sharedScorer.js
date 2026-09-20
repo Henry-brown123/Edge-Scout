@@ -26,12 +26,19 @@ const {
 } = require('./scoring');
 const model = require('./models/interface');
 const { applyTeamProfileModifiers } = require('./teamProfiles');
+const { regimeFor } = require('./regime');
 
 const SCORER_VERSION = 'shared-stageA-2026-09-06';
 
 // What each path computes today (Stage A records; Stage B unifies).
 const FEATURE_SPEC = {
   version: 'stageB-L2-2026-09-15',
+  // FD-2 (2026-09-20, Addendum 63): homeFactors.regime = regimeFor(leagueId, kickoff,
+  // leagueHomeRateIndex) on every path — closedDoors from regime.js's dated table,
+  // leagueHomeRate over the league's last 100 completed pool fixtures on days
+  // strictly before the fixture's UTC day (live reads the nightly pool; the
+  // strictly-before-day rule makes live and pool identical). Model features 24–25.
+  regime: 'homeFactors.regime = { closedDoors, leagueHomeRate, leagueHomeN } via regime.regimeFor on live, pool and unified paths',
   live: {
     formWindow: 'settings.formWindow league-only fixtures (API last-60 x 2 seasons + pool leagueBackfill); cups excluded; international: pool of international leagues',
     xg: 'StatsBomb/Understat lookup -> API-Sports statistics (statsCache, fetched for the 15 most recent league fixtures) -> shots-on x0.33 -> goals',
@@ -69,7 +76,7 @@ const HOST_NATIONS_2026 = new Set([2384, 5529, 16]); // USA, Canada, Mexico
 function buildLiveFactors(p) {
   const { scoringPool, homeId, awayId, homeName, awayName, h2hFixtures, injuries, standings,
     lastSeasonStandings, statsCache, context, neutralVenue, homeStandingsOverride, awayStandingsOverride,
-    fw, d, hw, seeds } = p;
+    fw, d, hw, seeds, leagueId, kickoff, regimeIndex } = p;
 
   const homeF = {
     form:      formScore(scoringPool, homeId, fw, d),
@@ -125,12 +132,14 @@ function buildLiveFactors(p) {
   const awayDataConf = Math.min(awayFormCount / 15, confCap);
   const dataConf     = Math.min(homeDataConf, awayDataConf); // use the weaker team's confidence
 
+  if (leagueId != null) homeF.regime = regimeFor(leagueId, kickoff, regimeIndex); // FD-2
+
   return { homeF, awayF, homeFormCount, awayFormCount, homeDataConf, awayDataConf, dataConf };
 }
 
 // ── Factors: pool path (verbatim from scoreFixtureFromPool) ─────────────────
 function buildPoolFactors(p) {
-  const { homeFixtures, awayFixtures, h2h, homeId, awayId, homeStandings, awayStandings } = p;
+  const { homeFixtures, awayFixtures, h2h, homeId, awayId, homeStandings, awayStandings, leagueId, kickoff, regimeIndex } = p;
   const homeFactors = {
     form:      formScore(homeFixtures, homeId, 6, 0.05),
     homeAdv:   homeAdvScore(homeFixtures, homeId, 0.05),
@@ -152,6 +161,7 @@ function buildPoolFactors(p) {
     injuries:  50,
     standings: awayStandings,
   };
+  if (leagueId != null) homeFactors.regime = regimeFor(leagueId, kickoff, regimeIndex); // FD-2
   return { homeFactors, awayFactors };
 }
 
@@ -160,7 +170,7 @@ function buildPoolFactors(p) {
 // league-only window, the fixture-stats tier for xG, the previous-season table
 // as the early-season standings proxy, and the staleness pull as-of kickoff.
 function buildUnifiedPoolFactors(p) {
-  const { fix, teamIndex, standingsIndex, statsCache = {}, fw = 6, d = 0.05, hw = 5 } = p;
+  const { fix, teamIndex, standingsIndex, statsCache = {}, fw = 6, d = 0.05, hw = 5, regimeIndex = null } = p;
   const lid = parseInt(fix.league?.id, 10);
   const season = fix.league?.season;
   const fid = fix.fixture?.id, fixDate = fix.fixture?.date;
@@ -210,6 +220,7 @@ function buildUnifiedPoolFactors(p) {
     homeFactors[k] = applyStalenessPull(homeFactors[k], hs);
     awayFactors[k] = applyStalenessPull(awayFactors[k], as);
   }
+  homeFactors.regime = regimeFor(lid, fixDate, regimeIndex); // FD-2
   return { homeFactors, awayFactors, homeFormCount: homeFixtures.length, awayFormCount: awayFixtures.length };
 }
 

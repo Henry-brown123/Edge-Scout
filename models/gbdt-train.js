@@ -11,6 +11,7 @@ const path = require('path');
 const fs   = require('fs');
 const { computeModelProb, WEIGHTS_BY_CONTEXT, LEAGUE_CONFIG, RETIRED_LEAGUE_IDS, applyLeagueBiasCorrection, applyVariableCorrectionLayer, CORRECTION_LAYER_RULES, marginStrippedImplied } = require('../scoring');
 const { buildFeatures } = require('./gbdt');
+const { attachRegime, buildLeagueHomeRateIndex } = require('../regime');
 
 // ─── HYPERPARAMETERS ─────────────────────────────────────────────────────────
 const N_TREES   = 200;
@@ -76,7 +77,21 @@ const TRAIN_BEFORE       = process.env.TRAIN_BEFORE || null;
 // evidence it dislikes. Unset = every row weight 1 (the recipe as it always was).
 const RECENCY_HALF_LIFE  = process.env.RECENCY_HALF_LIFE ? parseFloat(process.env.RECENCY_HALF_LIFE) : null;
 const RUN_TAG            = process.env.RUN_TAG || '';
-const WEIGHTS_SUFFIX     = (TRAIN_BEFORE ? `-wf${TRAIN_BEFORE.slice(0, 10)}` : '') + (RECENCY_HALF_LIFE ? `-hl${RECENCY_HALF_LIFE}` : '') + (RUN_TAG ? `-${RUN_TAG}` : '');
+// REGIME_FEATURES=none|flag|rate|both (FD-2, 2026-09-20, Addendum 63): which of the
+// two regime features (buildFeatures indices 24 closedDoors, 25 leagueHomeRate)
+// the trees may split on. Masked features are zeroed in the TRAINING matrix only;
+// a tree never splits on a constant, so at prediction time the live value is
+// simply ignored. 'none' (default) is the recipe as it stands — bit-for-bit the
+// 24-feature model when TRAIN_SEED is fixed.
+const REGIME_FEATURES    = (process.env.REGIME_FEATURES || 'none').toLowerCase();
+if (!['none', 'flag', 'rate', 'both'].includes(REGIME_FEATURES)) { console.error(`REGIME_FEATURES must be none|flag|rate|both, got ${REGIME_FEATURES}`); process.exit(1); }
+const REGIME_MASK        = { none: [false, false], flag: [true, false], rate: [false, true], both: [true, true] }[REGIME_FEATURES];
+function maskRegime(x) { if (REGIME_FEATURES === 'both') return x; const y = x.slice(); if (!REGIME_MASK[0]) y[24] = 0; if (!REGIME_MASK[1]) y[25] = 0; return y; }
+// TRAIN_SEED=<int>: seed the subsampling RNG so a control and a candidate that
+// differ only in features draw the same subsamples (mulberry32). Unset = Math.random.
+const TRAIN_SEED         = process.env.TRAIN_SEED ? parseInt(process.env.TRAIN_SEED, 10) : null;
+const rng = (() => { if (!Number.isFinite(TRAIN_SEED)) return Math.random; let a = TRAIN_SEED >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; })();
+const WEIGHTS_SUFFIX     = (TRAIN_BEFORE ? `-wf${TRAIN_BEFORE.slice(0, 10)}` : '') + (RECENCY_HALF_LIFE ? `-hl${RECENCY_HALF_LIFE}` : '') + (REGIME_FEATURES !== 'none' ? `-rg${REGIME_FEATURES}` : '') + (RUN_TAG ? `-${RUN_TAG}` : '');
 const WEIGHTS_FILE       = STANDALONE ? `gbdt-weights-${LEAGUE_ID}${WEIGHTS_SUFFIX}.json` : 'gbdt-weights.json';
 const ARCHIVE_DIR        = STANDALONE ? path.join(DATA_DIR, 'model-archive', `league-${LEAGUE_ID}`) : path.join(DATA_DIR, 'model-archive');
 const GATE_POLICY        = 'non-inferiority'; // | 'superiority'
@@ -114,6 +129,7 @@ const POCKET_GATES = [
 
 function loadPocketRecords(leagueId) {
   const raw = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'backfill-historical.json'), 'utf8'));
+  attachRegime(raw.scoredRecords || [], buildLeagueHomeRateIndex(raw.fixtures || [])); // FD-2
   return (raw.scoredRecords || [])
     .filter(r => parseInt(r.leagueId, 10) === leagueId && r.context === 'club_domestic' && r.homeFactors && r.awayFactors && r.actualOutcome && r.date)
     .map(r => ({ x: buildFeatures(r.homeFactors, r.awayFactors, r.context), y: r.actualOutcome, date: r.date, context: r.context, leagueId: r.leagueId, fixtureId: r.fixtureId }));
@@ -345,6 +361,8 @@ function isTrainingExcluded(leagueId, date) {
 function loadData() {
   const raw = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'backfill-historical.json'), 'utf8'));
   const records = raw.scoredRecords || [];
+  const attached = attachRegime(records, buildLeagueHomeRateIndex(raw.fixtures || [])); // FD-2: pre-2026-09-20 records
+  if (attached) console.log(`  [Regime] attached regime features to ${attached} records lacking them (features=${REGIME_FEATURES})`);
   return records
     .filter(r => r.homeFactors && r.awayFactors && r.actualOutcome && r.context)
     // 2026-09-15 (Addendum 51): domestic club football only. Tournament and
@@ -355,7 +373,7 @@ function loadData() {
     .filter(r => STANDALONE ? parseInt(r.leagueId, 10) === LEAGUE_ID : !isTrainingExcluded(r.leagueId, r.date))
     .filter(r => !TRAIN_BEFORE || r.date < TRAIN_BEFORE)
     .map(r => ({
-      x:        buildFeatures(r.homeFactors, r.awayFactors, r.context),
+      x:        maskRegime(buildFeatures(r.homeFactors, r.awayFactors, r.context)),
       y:        r.actualOutcome,   // 'home' | 'draw' | 'away'
       date:     r.date,
       context:  r.context,
@@ -473,7 +491,7 @@ async function trainClassifier(samples, classLabel, sampleW = null) {
     // Stochastic subsampling: random subset of indices
     const allIdx = Array.from({length: n}, (_, i) => i);
     for (let i = n - 1; i > 0; i--) {             // Fisher-Yates shuffle
-      const j = Math.floor(Math.random() * (i + 1));
+      const j = Math.floor(rng() * (i + 1));
       [allIdx[i], allIdx[j]] = [allIdx[j], allIdx[i]];
     }
     const subIdx = allIdx.slice(0, subN);
@@ -722,9 +740,9 @@ function bandAccuracy(records, probFn) {
     // Dry runs archive the candidate anyway (status 'dry-run-gates-failed') so a
     // recipe comparison is still possible — the quality gates guard DEPLOYMENT, not
     // measurement (Addendum 62).
-    if (GATE_DRY_RUN) archiveVersion({ trainedAt: new Date().toISOString(), standaloneLeagueId: STANDALONE ? LEAGUE_ID : null, recipe: { halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, tag: RUN_TAG || null, effectiveN }, trainN: train.length, testN: test.length, treeBoundary, hyperparams: { nTrees: N_TREES, depth: DEPTH, lr: LR, minLeaf: MIN_LEAF }, validation: { logLoss: llGBDT, brier: bsGBDT, logLossLinear: llLinear, brierLinear: bsLinear }, metrics: { logLossLinear: llLinear, logLossGBDT: llGBDT, brierLinear: bsLinear, brierGBDT: bsGBDT }, classifiers, platt }, 'dry-run-gates-failed', { tag: RUN_TAG || null, halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, gates: { gate1, gate2, gate3 } });
+    if (GATE_DRY_RUN) archiveVersion({ trainedAt: new Date().toISOString(), standaloneLeagueId: STANDALONE ? LEAGUE_ID : null, recipe: { halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, tag: RUN_TAG || null, regimeFeatures: REGIME_FEATURES, trainSeed: TRAIN_SEED, effectiveN }, trainN: train.length, testN: test.length, treeBoundary, hyperparams: { nTrees: N_TREES, depth: DEPTH, lr: LR, minLeaf: MIN_LEAF }, validation: { logLoss: llGBDT, brier: bsGBDT, logLossLinear: llLinear, brierLinear: bsLinear }, metrics: { logLossLinear: llLinear, logLossGBDT: llGBDT, brierLinear: bsLinear, brierGBDT: bsGBDT }, classifiers, platt }, 'dry-run-gates-failed', { tag: RUN_TAG || null, halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, gates: { gate1, gate2, gate3 } });
     // Leave a record (Addendum 62): batch/dry runs need to know WHY a candidate produced no model.
-    writeGateResult({ at: new Date().toISOString(), standaloneLeagueId: STANDALONE ? LEAGUE_ID : null, recipe: { halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, tag: RUN_TAG || null }, decision: 'rejected', reason: 'quality gates not met', qualityGates: { gate1, gate2, gate3 }, candidateOwnSlice: { n: test.length, logLoss: llGBDT, logLossLinear: llLinear, brier: bsGBDT, band5060: { gbdt: band5060GBDT?.bias ?? null, linear: band5060Linear?.bias ?? null } } });
+    writeGateResult({ at: new Date().toISOString(), standaloneLeagueId: STANDALONE ? LEAGUE_ID : null, recipe: { halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, tag: RUN_TAG || null, regimeFeatures: REGIME_FEATURES, trainSeed: TRAIN_SEED }, decision: 'rejected', reason: 'quality gates not met', qualityGates: { gate1, gate2, gate3 }, candidateOwnSlice: { n: test.length, logLoss: llGBDT, logLossLinear: llLinear, brier: bsGBDT, band5060: { gbdt: band5060GBDT?.bias ?? null, linear: band5060Linear?.bias ?? null } } });
     console.log(`\n  ${WEIGHTS_FILE} NOT written.`);
     process.exit(0);
   }
@@ -745,7 +763,7 @@ function bandAccuracy(records, probFn) {
   const candidateOut = {
     trainedAt,
     standaloneLeagueId: STANDALONE ? LEAGUE_ID : null,
-    recipe: { halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, tag: RUN_TAG || null, effectiveN },
+    recipe: { halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, tag: RUN_TAG || null, regimeFeatures: REGIME_FEATURES, trainSeed: TRAIN_SEED, effectiveN },
     trainN:      train.length,
     testN:       test.length,
     treeBoundary,
@@ -760,7 +778,7 @@ function bandAccuracy(records, probFn) {
     at: trainedAt,
     standaloneLeagueId: STANDALONE ? LEAGUE_ID : null,
     weightsFile: WEIGHTS_FILE,
-    recipe: { halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, tag: RUN_TAG || null },
+    recipe: { halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, tag: RUN_TAG || null, regimeFeatures: REGIME_FEATURES, trainSeed: TRAIN_SEED },
     dryRun: GATE_DRY_RUN,
     candidateVersion: trainedAt,
     deployedVersion: deployed?.trainedAt ?? null,

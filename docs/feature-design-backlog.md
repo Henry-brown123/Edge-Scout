@@ -38,3 +38,5 @@ reserved population.
 ## FD-2 — Home-advantage input cannot react to a regime shift the market reacts to (2026-09-17, Addendum 57)
 
 Closed-doors 2020-21: Pinnacle priced League One home wins at 40.3% (actual 40.2%); the model expected 43.5% because its home-advantage factor is built from historical home records. League One picks (three-quarters home) lost −9% ROI at the close over 555 fixtures; League Two's model overshot by only 1pp and was unhurt. Model finding, not pipeline. Any future regime shift (rule changes, neutral venues, schedule compression) will reproduce it. Candidate fix for a standalone model: a rolling-window or market-anchored home-advantage feature; pre-registered, forward-validated.
+
+**Status 2026-09-20: built and under pre-registered test (Addendum 63).** `regime.js` supplies `closedDoors` (hand-dated per-league table — no source carries attendance) and `leagueHomeRate` (rolling 100-fixture league home-win share, strictly-before-day) as GBDT features 24–25 via `homeFactors.regime`, attached on every path by the shared builder. Trainer knobs `REGIME_FEATURES`, `TRAIN_SEED`. Default recipe unchanged (`none`) until the test adopts a set.
