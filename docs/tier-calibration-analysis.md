@@ -10003,3 +10003,63 @@ against did not underperform, and on League One outperformed. Holding the
 bet was a caution the evidence did not require. Recommendation: proceed on
 the current validated rules for every pocket from here; nothing in the live
 chains changes.
+
+## Addendum 62 — Recency-weighted training: pre-registered test on the pooled domestic model and the League Two standalone (2026-09-17 → 20)
+
+Question (user, 2026-09-17): the trainer weights every row equally; does an
+exponential recency weight (0.5^(age in seasons / half-life), applied to the
+Newton gradients and hessians, evaluation unweighted) improve the model, and
+does it do so without blinding the model to a regime shift of the kind that
+already happened (closed doors, 2020-06 → 2021-05)?
+
+Pre-registered candidates: half-life 2, 3, 5 seasons, and unweighted
+(control). Selection purely on paired log-loss against the control on
+identical rows (rule 18: never on pocket ROI). Three builds each: full
+history (compared on rows after the trees' boundary); trees on rows before
+2020-06-01 (compared on the closed-doors period, then on 2021-08 → 2023-08);
+trees on rows before 2021-08-01 (the closed-doors season is then the newest,
+most-weighted training data; compared on 2021-08 → 2022-09, then 2022-09 →
+2024-09). 24 dry runs via `train-batch`; comparisons via
+`diag-compare-models` (diff = candidate − control log-loss per fixture;
+negative = candidate better).
+
+### Pooled domestic model
+
+| Build / window | n | HL 2 | HL 3 | HL 5 |
+|---|---|---|---|---|
+| Full history, rows after 2023-05-27 | 17,266 | +0.00063 (z 1.29) | −0.00007 (z −0.17) | −0.00011 (z −0.39) |
+| …of which 2026 rows | 3,661 | **+0.00291 (z 2.71)** | +0.00197 (z 2.39) | +0.00127 (z 2.10) |
+| Trees < 2020-06, closed doors 2020-06 → 2021-08 | 6,408 | +0.00112 (z 1.73) | +0.00043 (z 0.87) | −0.00013 (z −0.34) |
+| Trees < 2020-06, after 2021-08 → 2023-08 | 11,036 | +0.00079 (z 1.61) | +0.00060 (z 1.60) | +0.00022 (z 0.79) |
+| Trees < 2021-08, first year 2021-08 → 2022-09 | 6,149 | +0.00036 (z 0.53) | −0.00017 (z −0.33) | −0.00008 (z −0.20) |
+| Trees < 2021-08, later 2022-09 → 2024-09 | 10,973 | **+0.00125 (z 2.43)** | **+0.00098 (z 2.49)** | +0.00054 (z 1.89) |
+
+Effective training n at HL 2 / 3 / 5: 14,922 / 20,661 / 27,219 of 34,175.
+
+Readings:
+- **No candidate beats the control.** HL 3 and HL 5 are flat over the whole
+  out-of-sample window; HL 2 is worse. None reaches the gate's superiority
+  margin (−0.001), and HL 2 would be the one nearest rejection.
+- **Recency weighting makes the newest season worse, not better** — 2026
+  rows are +0.0013 to +0.0029 worse for all three, at z 2.1 to 2.7. The
+  mechanism is variance: down-weighting old rows shrinks the effective
+  sample (to 44% at HL 2) without adding information.
+- **The regime-shift test, both directions.** Trees built before closed
+  doors are equally blind to it whichever weighting is used (expected home
+  rate 45.0–45.1% for all four against 40.9% actual): recency weighting
+  cannot help with a shift that has not yet appeared in the data, which is
+  the case that matters at the time. And trees built with the closed-doors
+  season as their newest data are made *worse* two seasons later by
+  up-weighting it (+0.0010 to +0.0013, z 2.4–2.5 at HL 2–3): the weighting
+  carries the anomaly forward more strongly instead of letting it wash out.
+  That is the failure the user anticipated, in its actual form — not
+  forgetting the warning, but over-learning the anomaly.
+
+**Verdict (pooled): not validated; the equal-weighted recipe stays.** The
+right response to regime shifts is features that react to them (FD-2, a
+rolling or market-anchored home-advantage input), not a weight that makes
+the model chase whatever the last season looked like.
+
+### League Two standalone
+
+L2_PLACEHOLDER
