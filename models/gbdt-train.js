@@ -719,6 +719,10 @@ function bandAccuracy(records, probFn) {
   console.log(`\n  Verdict: ${allGatesMet ? `✅ ALL GATES MET — writing ${WEIGHTS_FILE}` : `❌ GATES NOT MET — ${STANDALONE ? 'no standalone model for this league (predictLeague stays null)' : 'keeping linear model'}`}`);
 
   if (!allGatesMet) {
+    // Dry runs archive the candidate anyway (status 'dry-run-gates-failed') so a
+    // recipe comparison is still possible — the quality gates guard DEPLOYMENT, not
+    // measurement (Addendum 62).
+    if (GATE_DRY_RUN) archiveVersion({ trainedAt: new Date().toISOString(), standaloneLeagueId: STANDALONE ? LEAGUE_ID : null, recipe: { halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, tag: RUN_TAG || null, effectiveN }, trainN: train.length, testN: test.length, treeBoundary, hyperparams: { nTrees: N_TREES, depth: DEPTH, lr: LR, minLeaf: MIN_LEAF }, validation: { logLoss: llGBDT, brier: bsGBDT, logLossLinear: llLinear, brierLinear: bsLinear }, metrics: { logLossLinear: llLinear, logLossGBDT: llGBDT, brierLinear: bsLinear, brierGBDT: bsGBDT }, classifiers, platt }, 'dry-run-gates-failed', { tag: RUN_TAG || null, halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, gates: { gate1, gate2, gate3 } });
     // Leave a record (Addendum 62): batch/dry runs need to know WHY a candidate produced no model.
     writeGateResult({ at: new Date().toISOString(), standaloneLeagueId: STANDALONE ? LEAGUE_ID : null, recipe: { halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, tag: RUN_TAG || null }, decision: 'rejected', reason: 'quality gates not met', qualityGates: { gate1, gate2, gate3 }, candidateOwnSlice: { n: test.length, logLoss: llGBDT, logLossLinear: llLinear, brier: bsGBDT, band5060: { gbdt: band5060GBDT?.bias ?? null, linear: band5060Linear?.bias ?? null } } });
     console.log(`\n  ${WEIGHTS_FILE} NOT written.`);
