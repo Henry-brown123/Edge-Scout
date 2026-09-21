@@ -1965,14 +1965,21 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   let standaloneShadow = null;
   if (STANDALONE_SHADOW_LEAGUE_IDS.has(parseInt(leagueId, 10)) && model.predictLeague) {
     try {
-      const sp = model.predictLeague(leagueId, homeF, awayF, context);
+      // 2026-09-21: the standalone model runs through the SAME chain as the pooled
+      // model (sharedScorer.scoreProbabilities, modelKey = league id) under the
+      // standalone template — every stage a switch, new models get it by default.
+      // chainDiff pairs it against the model's raw output: 0 while the template
+      // has every stage off, and the number to watch when a stage is switched on.
+      const chained = scoreProbabilities({ ...probInputs(), modelKey: String(parseInt(leagueId, 10)) });
+      const rawSp = model.predictLeague(leagueId, homeF, awayF, context);
+      const sp = chained ? { probs: chained.probs, version: chained.modelVersion, chain: chained.chain, chainDiff: rawSp ? diffScores({ probs: chained.probs }, { probs: rawSp.probs }).maxDiff : null } : null;
       if (sp) {
         const p = sp.probs;
         const pick = p.home >= p.draw && p.home >= p.away ? 'home' : p.away >= p.draw ? 'away' : 'draw';
         const f = STANDALONE_FACTOR[parseInt(leagueId, 10)] ?? 1.0;
         const calProb = Math.min(0.97, p[pick] * f);
         const cell = STANDALONE_CANDIDATE_CELLS[parseInt(leagueId, 10)];
-        standaloneShadow = { version: sp.version, probs: p, pick, prob: p[pick], calProb, factor: f, cell: cell || null, clearsCell: null };
+        standaloneShadow = { version: sp.version, probs: p, pick, prob: p[pick], calProb, factor: f, cell: cell || null, clearsCell: null, chain: sp.chain, chainDiff: sp.chainDiff };
       }
     } catch (e) { standaloneShadow = { error: e.message }; }
   }
@@ -10423,7 +10430,7 @@ app.get('/api/admin/diag-l2-grid', async (req, res) => {
       if (!co || co.bookmaker !== 'pinnacle' || !(co.homeOdds > 1 && co.drawOdds > 1 && co.awayOdds > 1)) continue;
       const context = r.context || classifyFixture(leagueId);
       let probs;
-      if (useStandalone) { const sp = model.predictLeague(modelKey, r.homeFactors, r.awayFactors, context); if (!sp) throw new Error(`no standalone model file for ${modelKey}`); probs = sp.probs; }
+      if (useStandalone) { const sp = standaloneChainProbs(modelKey, leagueId, r, context); if (!sp) throw new Error(`no standalone model file for ${modelKey}`); probs = sp.probs; }
       else probs = scoreProbabilities({ homeF: r.homeFactors, awayF: r.awayFactors, weights: WEIGHTS_BY_CONTEXT[context], context, leagueId, leagueConfig: LC[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: true, rankAdjust: false, hostBoost: false, modifiers: false } }).probs;
       const stripped = marginStrippedImplied(co);
       const pick = probs.home >= probs.draw && probs.home >= probs.away ? 'home' : probs.away >= probs.draw ? 'away' : 'draw';
@@ -10496,6 +10503,13 @@ app.get('/api/admin/diag-l2-grid', async (req, res) => {
 // paired. This is the pre-registered cutover measure (>=300 fixtures, standalone
 // within 1pp of pooled or better, own cell non-negative). Forward data: readable
 // at any time (rule 18).
+// 2026-09-21: standalone model probabilities for a scored record, through the one
+// chain (standalone template). Diagnostics use this, never model.predictLeague
+// directly, so what they measure is what the live shadow/pocket computes.
+function standaloneChainProbs(modelKey, leagueId, rec, context) {
+  const r = scoreProbabilities({ homeF: rec.homeFactors, awayF: rec.awayFactors, weights: WEIGHTS_BY_CONTEXT[context], context, leagueId, leagueConfig: LEAGUE_CONFIG[leagueId], settings: getSettings(), cfg: CONTEXT_CONFIG[context], dataConf: 1, modelKey: String(modelKey) });
+  return r ? { probs: r.probs, version: r.modelVersion } : null;
+}
 app.get('/api/admin/diag-standalone-forward', async (req, res) => {
   try {
     const leagueId = parseInt(req.query.league, 10) || 42;
@@ -10513,7 +10527,7 @@ app.get('/api/admin/diag-standalone-forward', async (req, res) => {
       if (!co || co.bookmaker !== 'pinnacle' || !(co.homeOdds > 1 && co.drawOdds > 1 && co.awayOdds > 1)) continue;
       const context = r.context || classifyFixture(leagueId);
       const pooled = scoreProbabilities({ homeF: r.homeFactors, awayF: r.awayFactors, weights: WEIGHTS_BY_CONTEXT[context], context, leagueId, leagueConfig: LC[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: true, rankAdjust: false, hostBoost: false, modifiers: false } }).probs;
-      const sp = model.predictLeague(leagueId, r.homeFactors, r.awayFactors, context);
+      const sp = standaloneChainProbs(leagueId, leagueId, r, context);
       if (!sp) continue;
       const stripped = marginStrippedImplied(co);
       const mk = (p, f) => { const pick = p.home >= p.draw && p.home >= p.away ? 'home' : p.away >= p.draw ? 'away' : 'draw'; const won = r.actualOutcome === pick; return { pick, prob: p[pick], edge: Math.min(0.97, p[pick] * f) - stripped[pick], bm: (won ? 1 : 0) - stripped[pick], pnl: won ? co[`${pick}Odds`] - 1 : -1 }; };
@@ -10773,7 +10787,7 @@ app.get('/api/admin/diag-modifiers', async (req, res) => {
       if (priced) {
         const context = rec.context || classifyFixture(leagueId);
         let probs;
-        if (useStandalone) { const sp = model.predictLeague(leagueId, rec.homeFactors, rec.awayFactors, context); probs = sp ? sp.probs : null; }
+        if (useStandalone) { const sp = standaloneChainProbs(leagueId, leagueId, rec, context); probs = sp ? sp.probs : null; }
         else probs = scoreProbabilities({ homeF: rec.homeFactors, awayF: rec.awayFactors, weights: WEIGHTS_BY_CONTEXT[context], context, leagueId, leagueConfig: LC[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: true, rankAdjust: false, hostBoost: false, modifiers: false } }).probs;
         if (probs) {
           const stripped = marginStrippedImplied(co);

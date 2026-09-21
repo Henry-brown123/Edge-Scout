@@ -562,3 +562,31 @@ to worry about contaminating), then document the change in
 ## Feature vector (2026-09-20, FD-2)
 
 `buildFeatures` now returns 26 values: the original 24 (16 factors, 5 deltas, 3 context one-hots) plus `closedDoors` and `leagueHomeRate` from `homeFactors.regime` (see `regime.js`, Addendum 63). Appended at the end, so every archived 24-feature model predicts unchanged — its trees never reference indices 24–25. A model file's `recipe.regimeFeatures` records which of the two its trees were allowed to use (`none|flag|rate|both`); `recipe.trainSeed` records the subsampling seed when one was fixed. The trainer default remains `none` until Addendum 63 adopts a set.
+
+## One probability chain for every model (2026-09-21)
+
+`sharedScorer.scoreProbabilities` takes a `modelKey`: `'pooled'` or a
+standalone key (`'42'`, `'42-wf2022-09-01'`, …). The model is selected inside
+the chain, and every stage — bias correction, correction layer, regime offset
+(design brief R's slot, no-op until built), rank anchor, host boost, team
+modifiers — is a switch whose default comes from `MODEL_CHAIN_TEMPLATES` for
+the model's kind, merged with the caller's per-call options:
+
+- **pooled**: no template defaults, so the chain is bit-identical to what it
+  was before templates existed.
+- **standalone**: every pooled-model patch off (a per-league model learns
+  its own base rate); output = the model's own probability. This is what the
+  Addendum 54 shadow computed inline before; the live record now carries
+  `standaloneShadow.chain` (the switches used) and `chainDiff` (against the raw
+  model, 0 while every stage is off).
+
+Per-model departures go in `MODEL_CHAIN_OVERRIDES` keyed by modelKey, and
+need their own addendum. **A new standalone model (League One, any future
+pocket) gets the standalone template the moment its weights file exists;
+nothing is wired per model.** Diagnostics obtain standalone probabilities
+through `standaloneChainProbs()` in server.js, never `model.predictLeague`
+directly, so what they measure is what the live path computes. The one
+remaining pooled-only copy of a chain is the trainer's pocket gate
+(`models/gbdt-train.js pocketGate`, bias → correction layer), kept in
+lockstep by hand as before.
+

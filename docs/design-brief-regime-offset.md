@@ -51,6 +51,18 @@ Two outcomes are shifted because closed doors also moved draws in several
 leagues (recorded in `diag-regime`); whether γ is needed is a fitting
 question, answered on flagged rows, not assumed.
 
+### 2a. Architecture note (added 2026-09-21, after the chain refactor)
+
+The stage is **not** pooled-specific. `scoreProbabilities` now runs every
+model — pooled and each standalone — through one chain selected by
+`modelKey`, with per-kind templates (`MODEL_CHAIN_TEMPLATES` in
+`sharedScorer.js`). `regimeOffset` is already a slot in both templates
+(`'off'`). Building this brief means: implement `applyRegimeOffset`, fit the
+coefficients, and flip the slot to `'shadow'` in **both** templates. League
+Two's standalone, League One's if it gets one, and any future pocket model
+inherit it without per-model wiring; a model that must differ gets an
+evidence-gated entry in `MODEL_CHAIN_OVERRIDES`, never an inline path.
+
 ## 3. The two terms are different animals — scope them separately
 
 **Term A — dated regime (`closedDoors`).** Exact where the dating is exact,

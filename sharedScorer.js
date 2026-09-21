@@ -72,6 +72,46 @@ const FEATURE_SPEC = {
 
 const HOST_NATIONS_2026 = new Set([2384, 5529, 16]); // USA, Canada, Mexico
 
+// ─── Model chain templates (2026-09-21) ──────────────────────────────────────
+// ONE probability chain for every model. scoreProbabilities() takes a modelKey:
+// 'pooled' (gbdt-weights.json, model.predict) or a standalone key ('42',
+// '42-wf2022-09-01', …; gbdt-weights-<key>.json via model.predictLeague). Every
+// stage is a switch, and the switches come from the TEMPLATE for the model's
+// kind, merged with the caller's per-call options. A new standalone model
+// therefore gets the standalone template automatically — nothing is wired per
+// model unless an evidence-gated entry is added to MODEL_CHAIN_OVERRIDES.
+//
+// Stage order: model → biasCorrection → correctionLayer → regimeOffset →
+// rankAdjust → hostBoost → modifiers. (regimeOffset is design brief R's slot:
+// present in both templates, 'off' until that brief is built and validated.)
+//
+// pooled: every switch left to the caller (the live path passes {} or
+//   { modifiers:false } for unified leagues) — bit-identical to the chain as it
+//   stood before templates existed.
+// standalone: a per-league model learns its own league's base rate, so the
+//   pooled-model patches (bias blend toward static league rates, the League Two
+//   correction layer fitted on the pooled chain, the FIFA rank anchor, the
+//   international host boost, team-profile modifiers) are all OFF. Its output is
+//   the model's own probability — exactly what Addendum 54's shadow computed
+//   inline before this refactor (verified: chainDiff 0).
+const MODEL_CHAIN_TEMPLATES = {
+  pooled:     {},
+  standalone: { biasCorrection: false, correctionLayer: false, regimeOffset: 'off', rankAdjust: false, hostBoost: false, modifiers: false },
+};
+// Per-model evidence-gated departures from the template, keyed by modelKey.
+// Empty on purpose: an entry here needs its own addendum.
+const MODEL_CHAIN_OVERRIDES = {};
+function chainOptionsFor(modelKey, callerOptions = {}) {
+  const kind = modelKey === 'pooled' ? 'pooled' : 'standalone';
+  return { ...MODEL_CHAIN_TEMPLATES[kind], ...(MODEL_CHAIN_OVERRIDES[modelKey] || {}), ...callerOptions };
+}
+// Design brief R slot: additive regime offset on the log-odds. No coefficients
+// exist; 'off' (and anything but a fitted, validated 'on') returns probs unchanged.
+function applyRegimeOffset(probs, _leagueId, _regime, mode) {
+  if (mode !== 'on') return probs;
+  throw new Error('regimeOffset "on" has no fitted coefficients (design brief R is not built)');
+}
+
 // ── Factors: live path (verbatim from scoreOneFixture) ──────────────────────
 function buildLiveFactors(p) {
   const { scoringPool, homeId, awayId, homeName, awayName, h2hFixtures, injuries, standings,
@@ -232,10 +272,19 @@ function scoreProbabilities(p) {
   const { homeF, awayF, weights, context, leagueId, leagueConfig, settings, cfg, dataConf,
     homeName, awayName, neutralVenue, competitionPhase, homeId, awayId,
     homeProfile, awayProfile, homeDays, awayDays, weatherForModifier,
-    homeMatchday, awayMatchday, currentSeason, rankToQuality, options = {} } = p;
+    homeMatchday, awayMatchday, currentSeason, rankToQuality, modelKey = 'pooled' } = p;
+  const options = chainOptionsFor(modelKey, p.options || {});
 
-  const rawProbs = model.predict(homeF, awayF, weights, context, leagueConfig);
-  let probs = applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG);
+  let rawProbs, modelVersion;
+  if (modelKey === 'pooled') {
+    rawProbs = model.predict(homeF, awayF, weights, context, leagueConfig);
+    modelVersion = model.getVersion ? model.getVersion() : null;
+  } else {
+    const sp = model.predictLeague(modelKey, homeF, awayF, context);
+    if (!sp) return null; // no standalone model file for this key
+    rawProbs = sp.probs; modelVersion = sp.version;
+  }
+  let probs = options.biasCorrection !== false ? applyLeagueBiasCorrection(rawProbs, leagueId, LEAGUE_CONFIG) : rawProbs;
 
   let correctionVersion = null;
   if (options.correctionLayer !== false) {
@@ -251,6 +300,8 @@ function scoreProbabilities(p) {
       }
     }
   }
+
+  probs = applyRegimeOffset(probs, leagueId, homeF?.regime, options.regimeOffset); // design brief R slot (no-op until built)
 
   if (options.rankAdjust !== false && cfg.rankScale > 0 && dataConf < 1) {
     const homeRank = lookupFIFARank(homeName);
@@ -320,7 +371,7 @@ function scoreProbabilities(p) {
     teamIntel = { home: null, away: null, modifierNotes: ['team-profile modifiers disabled for this league (unified definitions)'], modifierApplied: false, neutralVenue: !!neutralVenue };
   }
 
-  return { rawProbs, probs, correctionVersion, teamIntel };
+  return { rawProbs, probs, correctionVersion, teamIntel, modelKey, modelVersion, chain: options };
 }
 
 // Max absolute difference across two factor pairs and (optionally) two prob sets.
@@ -335,4 +386,4 @@ function diffScores(a, b) {
   return { maxDiff: max, where: where.slice(-3) };
 }
 
-module.exports = { SCORER_VERSION, FEATURE_SPEC, buildLiveFactors, buildPoolFactors, buildUnifiedPoolFactors, scoreProbabilities, diffScores };
+module.exports = { SCORER_VERSION, FEATURE_SPEC, buildLiveFactors, buildPoolFactors, buildUnifiedPoolFactors, scoreProbabilities, diffScores, MODEL_CHAIN_TEMPLATES, MODEL_CHAIN_OVERRIDES, chainOptionsFor };
