@@ -10781,6 +10781,87 @@ app.post('/api/admin/research/totals-backfill', (req, res) => {
 });
 app.get('/api/admin/research/totals-status', (_req, res) => res.json(_rtStatus.running ? _rtStatus : (readJSON('research-totals-status.json') || _rtStatus)));
 
+// ── Totals (over/under 2.5) pocket search — research only (rule 18/19 discipline) ──
+// Model: rolling Poisson from the league's own prior fixtures (team attack/defence
+// vs league average, exponential decay), total goals ~ Poisson(λH+λA), Platt
+// calibration fitted on TRAIN rows only. Market: Pinnacle 2.5 line at kickoff,
+// margin-stripped. Selection: train-only (rows before `split`), cells with
+// n >= selectN and z >= minZ ranked by total return per season; the shortlist is
+// the top `shortlist` cells by that rule (fixed here, before the look); ONE test
+// look on rows >= split for the shortlist only. Rule-19 checks on every
+// shortlisted cell: dateable event (closed doors), seasonality, side, recency
+// blocks, decomposition by price band, overlap with the league's 1X2 real pocket.
+function _poissonOver25(lambda) { return 1 - Math.exp(-lambda) * (1 + lambda + lambda * lambda / 2); }
+function _fitPlatt2(xs, ys) { // logistic on x=logit(p): minimise log-loss over (A,B), coarse then fine grid
+  const lo = p => { const q = Math.max(1e-6, Math.min(1 - 1e-6, p)); return Math.log(q / (1 - q)); };
+  const z = xs.map(lo); const ll = (A, B) => { let s = 0; for (let i = 0; i < z.length; i++) { const q = 1 / (1 + Math.exp(-(A * z[i] + B))); s += -(ys[i] ? Math.log(Math.max(1e-12, q)) : Math.log(Math.max(1e-12, 1 - q))); } return s / z.length; };
+  let best = { A: 1, B: 0, ll: ll(1, 0) };
+  for (let A = 0.2; A <= 2.0 + 1e-9; A += 0.1) for (let B = -1.0; B <= 1.0 + 1e-9; B += 0.1) { const v = ll(A, B); if (v < best.ll) best = { A, B, ll: v }; }
+  const c = { ...best }; for (let A = c.A - 0.15; A <= c.A + 0.15 + 1e-9; A += 0.01) for (let B = c.B - 0.15; B <= c.B + 0.15 + 1e-9; B += 0.01) { const v = ll(A, B); if (v < best.ll) best = { A, B, ll: v }; }
+  const A = best.A, B = best.B; return { A: +A.toFixed(3), B: +B.toFixed(3), apply: p => 1 / (1 + Math.exp(-(A * lo(p) + B))) };
+}
+app.get('/api/admin/research/totals-search', (req, res) => {
+  try {
+    const leagueId = parseInt(req.query.league, 10) || 42, split = req.query.split || '2024-09-16', selectN = parseInt(req.query.selectN || '60', 10), minZ = parseFloat(req.query.minZ || '1.5'), shortlistN = parseInt(req.query.shortlist || '5', 10);
+    const N = parseInt(req.query.window || '25', 10), HALF = parseFloat(req.query.halfLife || '12'), LEAGUE_WIN = parseInt(req.query.leagueWindow || '1100', 10);
+    const store = readJSON('research-totals-closing.json') || { entries: {} };
+    const hist = readHistoricalCached() || {}; const closing = getClosingOdds(); const settings = getSettings();
+    const fixtures = (hist.fixtures || []).filter(f => parseInt(f.league?.id, 10) === leagueId && ['FT', 'AET', 'PEN'].includes(f.fixture?.status?.short) && Number.isFinite(Number(f.goals?.home ?? f.score?.fulltime?.home))).map(f => ({ id: f.fixture.id, date: f.fixture.date, day: f.fixture.date.slice(0, 10), h: f.teams.home.id, a: f.teams.away.id, hg: Number(f.goals?.home ?? f.score?.fulltime?.home), ag: Number(f.goals?.away ?? f.score?.fulltime?.away) })).sort((x, y) => x.date < y.date ? -1 : 1);
+    // rolling team form: for each fixture, strengths from strictly-earlier days
+    const fixById = new Map(fixtures.map(f => [f.id, f]));
+    const byTeam = {}; for (const f of fixtures) { (byTeam[f.h] = byTeam[f.h] || []).push({ day: f.day, gf: f.hg, ga: f.ag, home: true }); (byTeam[f.a] = byTeam[f.a] || []).push({ day: f.day, gf: f.ag, ga: f.hg, home: false }); }
+    const decayW = (k) => Math.pow(0.5, k / HALF);
+    const teamRates = (tid, day) => { const arr = (byTeam[tid] || []).filter(x => x.day < day).slice(-N); if (arr.length < 8) return null; let wg = 0, wc = 0, ws = 0; for (let i = 0; i < arr.length; i++) { const w = decayW(arr.length - 1 - i); wg += w * arr[i].gf; wc += w * arr[i].ga; ws += w; } return { gf: wg / ws, ga: wc / ws, n: arr.length }; };
+    const leagueAvg = (day) => { let i = fixtures.findIndex(f => f.day >= day); if (i < 0) i = fixtures.length; const sl = fixtures.slice(Math.max(0, i - LEAGUE_WIN), i); if (sl.length < 200) return null; return { h: sl.reduce((s, f) => s + f.hg, 0) / sl.length, a: sl.reduce((s, f) => s + f.ag, 0) / sl.length }; };
+    const rows = [];
+    for (const e of Object.values(store.entries)) {
+      if (e.leagueId !== leagueId || !e.main || e.main.point !== 2.5 || !(e.main.over > 1 && e.main.under > 1)) continue;
+      const hg = Number(e.goals?.home), ag = Number(e.goals?.away); if (!Number.isFinite(hg) || !Number.isFinite(ag)) continue;
+      const day = e.date.slice(0, 10); const L = leagueAvg(day); const fx = fixById.get(e.fixtureId); if (!fx) continue; const th = teamRates(fx.h, day), ta = teamRates(fx.a, day);
+      if (!L || !th || !ta) continue;
+      const avg = (L.h + L.a) / 2; const lamH = L.h * (th.gf / avg) * (ta.ga / avg), lamA = L.a * (ta.gf / avg) * (th.ga / avg);
+      const pOverRaw = _poissonOver25(lamH + lamA);
+      const io = 1 / e.main.over, iu = 1 / e.main.under; const mOver = io / (io + iu);
+      rows.push({ fid: e.fixtureId, date: e.date, day, over: hg + ag >= 3 ? 1 : 0, pOverRaw, mOver, oddsOver: e.main.over, oddsUnder: e.main.under, lam: lamH + lamA });
+    }
+    rows.sort((x, y) => x.date < y.date ? -1 : 1);
+    const train = rows.filter(r => r.date < split), test = rows.filter(r => r.date >= split);
+    if (train.length < 200) return res.json({ leagueId, note: 'too few train rows', trainN: train.length, testN: test.length });
+    const platt = _fitPlatt2(train.map(r => r.pOverRaw), train.map(r => r.over));
+    for (const r of rows) { r.pOver = platt.apply(r.pOverRaw); r.edgeOver = r.pOver - r.mOver; r.edgeUnder = (1 - r.pOver) - (1 - r.mOver); }
+    // Model-level read first: paired log-loss model vs market on the over/under outcome
+    const ll = (p, y) => -(y ? Math.log(Math.max(1e-12, p)) : Math.log(Math.max(1e-12, 1 - p)));
+    const pairedLL = (list) => { const d = list.map(r => ll(r.pOver, r.over) - ll(r.mOver, r.over)); const n = d.length; if (!n) return { n: 0 }; const m = d.reduce((a, b) => a + b, 0) / n, sd = n > 1 ? Math.sqrt(d.reduce((a, x) => a + (x - m) ** 2, 0) / (n - 1)) : 0; return { n, meanDiff: +m.toFixed(5), z: sd ? +(m / (sd / Math.sqrt(n))).toFixed(2) : null, modelLL: +(list.reduce((a, r) => a + ll(r.pOver, r.over), 0) / n).toFixed(4), marketLL: +(list.reduce((a, r) => a + ll(r.mOver, r.over), 0) / n).toFixed(4), overRate: +(list.reduce((a, r) => a + r.over, 0) / n).toFixed(3), modelMeanP: +(list.reduce((a, r) => a + r.pOver, 0) / n).toFixed(3), marketMeanP: +(list.reduce((a, r) => a + r.mOver, 0) / n).toFixed(3) }; };
+    // cell evaluation
+    const seasonsOf = (list) => { if (!list.length) return 1; const a = new Date(list[0].date), b = new Date(list[list.length - 1].date); return Math.max(0.5, (b - a) / (365.25 * 86400000)); };
+    const evalCell = (list, side, eMin, pMin) => { const bets = list.filter(r => side === 'over' ? (r.edgeOver >= eMin - 1e-9 && r.pOver >= pMin - 1e-9) : (r.edgeUnder >= eMin - 1e-9 && (1 - r.pOver) >= pMin - 1e-9)).map(r => { const won = side === 'over' ? r.over === 1 : r.over === 0; const mk = side === 'over' ? r.mOver : 1 - r.mOver; const odds = side === 'over' ? r.oddsOver : r.oddsUnder; return { date: r.date, won, bm: (won ? 1 : 0) - mk, pnl: won ? odds - 1 : -1, mk, r }; }); const n = bets.length; if (!n) return { n: 0 }; const bm = bets.reduce((a, b) => a + b.bm, 0) / n, sd = n > 1 ? Math.sqrt(bets.reduce((a, b) => a + (b.bm - bm) ** 2, 0) / (n - 1)) : 0, pnl = bets.reduce((a, b) => a + b.pnl, 0); return { n, wins: bets.filter(b => b.won).length, beyondMarketPp: +(bm * 100).toFixed(2), sePp: sd ? +((sd / Math.sqrt(n)) * 100).toFixed(2) : null, z: sd ? +(bm / (sd / Math.sqrt(n))).toFixed(2) : null, roiClosePct: +((pnl / n) * 100).toFixed(1), unitsPerSeason: +(pnl / seasonsOf(list)).toFixed(1), betsPerSeason: +(n / seasonsOf(list)).toFixed(1), _bets: bets }; };
+    const grid = [];
+    for (const side of ['over', 'under']) for (let e = 0; e <= 0.15 + 1e-9; e += 0.01) for (let p = 0.35; p <= 0.70 + 1e-9; p += 0.05) { const t = evalCell(train, side, e, p); if (t.n >= selectN) grid.push({ side, edgeMin: +e.toFixed(2), probMin: +p.toFixed(2), train: { n: t.n, beyondMarketPp: t.beyondMarketPp, z: t.z, roiClosePct: t.roiClosePct, unitsPerSeason: t.unitsPerSeason, betsPerSeason: t.betsPerSeason } }); }
+    const eligible = grid.filter(g => g.train.z >= minZ).sort((a, b) => b.train.unitsPerSeason - a.train.unitsPerSeason);
+    const shortlist = eligible.slice(0, shortlistN);
+    // Rule-19 checks + ONE test look, shortlist only
+    const strip = (o) => { const { _bets, ...rest } = o; return rest; };
+    const sub = (bets, f) => { const l = bets.filter(f); const n = l.length; if (!n) return { n: 0 }; const bm = l.reduce((a, b) => a + b.bm, 0) / n; return { n, beyondMarketPp: +(bm * 100).toFixed(1), roiClosePct: +((l.reduce((a, b) => a + b.pnl, 0) / n) * 100).toFixed(1) }; };
+    const closedDoors = (d) => d >= '2020-06-17' && d < '2021-05-17';
+    // overlap with the league's real 1X2 pocket (pooled chain at the h2h close)
+    const realCell = leagueId === 42 ? { e: 0.09, p: 0.40 } : { e: 0.12, p: 0.50 }; const fP = getCalFactorForLeague(settings, leagueId);
+    const recById = new Map((hist.scoredRecords || []).filter(r => parseInt(r.leagueId, 10) === leagueId && r.homeFactors && r.awayFactors && r.actualOutcome).map(r => [String(r.fixtureId), r]));
+    const inRealPocket = (fid) => { const r = recById.get(String(fid)); const co = closing[fid] || closing[String(fid)]; if (!r || !co || co.bookmaker !== 'pinnacle' || !(co.homeOdds > 1 && co.drawOdds > 1 && co.awayOdds > 1)) return null; const context = r.context || 'club_domestic'; const sc = scoreProbabilities({ homeF: r.homeFactors, awayF: r.awayFactors, weights: WEIGHTS_BY_CONTEXT[context], context, leagueId, leagueConfig: LEAGUE_CONFIG[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { rankAdjust: false, hostBoost: false, modifiers: false } }); if (!sc) return null; const p = sc.probs; const pick = p.home >= p.draw && p.home >= p.away ? 'home' : p.away >= p.draw ? 'away' : 'draw'; const st = marginStrippedImplied(co); return (Math.min(0.97, p[pick] * fP) - st[pick] >= realCell.e && p[pick] >= realCell.p); };
+    const checks = shortlist.map(c => {
+      const tr = evalCell(train, c.side, c.edgeMin, c.probMin), te = evalCell(test, c.side, c.edgeMin, c.probMin), all = evalCell(rows, c.side, c.edgeMin, c.probMin);
+      const bets = tr._bets; const q = Math.max(1, Math.ceil(bets.length / 4)); const blocks = [0, 1, 2, 3].map(i => ({ block: i + 1, ...sub(bets, (b, idx) => idx >= i * q && idx < (i + 1) * q) }));
+      const months = (b) => new Date(b.date).getUTCMonth() + 1;
+      const overlapN = bets.filter(b => inRealPocket(b.r.fid) === true).length;
+      return { cell: { side: c.side, edgeMin: c.edgeMin, probMin: c.probMin }, train: strip(tr), testLook: strip(te), allRows: strip(all),
+        rule19: { closedDoors: { inside: sub(bets, b => closedDoors(b.date.slice(0, 10))), outside: sub(bets, b => !closedDoors(b.date.slice(0, 10))) }, seasonality: { augOct: sub(bets, b => [8, 9, 10].includes(months(b))), novJan: sub(bets, b => [11, 12, 1].includes(months(b))), febMay: sub(bets, b => [2, 3, 4, 5].includes(months(b))) }, side: c.side, recencyBlocks: blocks, decompositionByMarketPrice: { under45: sub(bets, b => b.mk < 0.45), mid: sub(bets, b => b.mk >= 0.45 && b.mk < 0.55), over55: sub(bets, b => b.mk >= 0.55) }, overlapWithReal1x2Pocket: { betsAlsoInRealPocket: overlapN, share: bets.length ? +(overlapN / bets.length).toFixed(2) : null } } };
+    });
+    res.json({ leagueId, split, model: { type: 'rolling Poisson, independent goals, no Dixon–Coles; team window ' + N + ' matches, half-life ' + HALF + ', league window ' + LEAGUE_WIN, platt: { A: platt.A, B: platt.B } }, coverage: { entries: Object.values(store.entries).filter(e => e.leagueId === leagueId).length, with25: Object.values(store.entries).filter(e => e.leagueId === leagueId && e.main?.point === 2.5).length, scoredRows: rows.length, trainN: train.length, testN: test.length, from: rows[0]?.date?.slice(0, 10), to: rows[rows.length - 1]?.date?.slice(0, 10) },
+      modelVsMarket: { train: pairedLL(train), test: pairedLL(test) }, allTopPicks: { trainOver: strip(evalCell(train, 'over', 0, 0)), trainUnder: strip(evalCell(train, 'under', 0, 0)) },
+      gridEligible: eligible.length, gridCells: grid.length, shortlistRule: `top ${shortlistN} of cells with train n>=${selectN} and z>=${minZ}, by units/season`, shortlist: checks,
+      note: 'diff = model − market log-loss per fixture (negative = model better). The test look is the ONE permitted look for this market on this league (rule 18).' });
+  } catch (e) { res.status(500).json({ error: e.message, stack: (e.stack || '').split('\n').slice(0, 3) }); }
+});
+
 app.get('/api/admin/research/odds-usage', (_req, res) => { const u = _researchUsage(); res.json({ creditsUsed: u.creditsUsed, remaining: u.remaining, calls: u.calls.length, byLabel: Object.entries(u.calls.reduce((a, c) => { const k = c.label.split(' ').slice(0, 2).join(' '); a[k] = (a[k] || 0) + c.credits; return a; }, {})) }); });
 
 app.get('/api/admin/regime-offset/status', (_req, res) => {
