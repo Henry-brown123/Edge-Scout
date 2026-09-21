@@ -320,6 +320,12 @@ td.mono { font-family: var(--font-data); }
 .state-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; vertical-align:middle; background:#4ea8ff }
 .state-dot.state-awaiting, .state-dot.state-unplaced { background:#f5a623; animation:pulse-amber 1.4s infinite }
 .badge-unplaced { background:rgba(245,166,35,.16); color:#f5a623; border:1px solid rgba(245,166,35,.5); font-weight:800 }
+/* Addendum 67: pooled pocket + derived V2 standalone counterpart rendered as a pair, leagues collapsible */
+.bucket-league { margin: 6px 0 10px }
+.bucket-pair { display:grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: stretch; margin: 6px 0 4px }
+.bucket-pair .bucket-tile { margin: 0 }
+.bucket-pair-delta { grid-column: 1 / -1; font-size: 11px; color: var(--muted); padding: 2px 6px 8px; border-bottom: 1px dashed rgba(148,163,184,.25) }
+@media (max-width: 760px) { .bucket-pair { grid-template-columns: 1fr } }
 .state-dot.state-real { background:var(--green) }
 .bucket-strip { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:10px; margin-bottom:16px }
 .bucket-tile { background:var(--card,#14161c); border:1px solid var(--border); border-radius:10px; padding:12px 14px }
@@ -2627,13 +2633,16 @@ function contextBadge(ctx) {
 
 // ─── RENDER SCOUT ─────────────────────────────────────────────────────────────
 // ── Part 3 (Addendum 59): buckets, grouped cards, research toggle ─────────────
-const POCKET_LABELS = { 'l2-9-40': 'League Two 9%/40%', 'l1-12-50': 'League One 12%/50%', 'l1-jan-may-5-45': 'League One Jan–May 5%/45%', 'l2-v2-9-40': 'League Two V2 (paper)', 'l1-v2-12-50': 'League One V2 (paper)', 'l1-6-45-paper': 'League One 6%/45% (paper)' };
+// Seed for first paint; renderBuckets() merges the server registry (labels and
+// real/paper kind) so new pockets and derived V2 counterparts need no UI edit.
+const POCKET_LABELS = { 'l2-9-40': 'League Two 9%/40%', 'l1-12-50': 'League One 12%/50%', 'l1-jan-may-5-45': 'League One Jan–May 5%/45%', 'l2-v2-9-40': 'V2 · League Two 9%/40%', 'l1-v2-12-50': 'V2 · League One 12%/50% year-round', 'l1-v2-jan-may-5-45': 'V2 · League One Jan–May 5%/45%', 'l1-6-45-paper': 'League One 6%/45% (paper)', 'l1-v2-6-45': 'V2 · League One 6%/45%' };
 const REAL_POCKETS = new Set(['l2-9-40', 'l1-12-50', 'l1-jan-may-5-45']);
 const isRealPocket = id => REAL_POCKETS.has(id);
-let _bucketsCache = null;
+let _bucketsCache = null; const _bucketsOpen = {};
 async function renderBuckets() {
   try { _bucketsCache = await apiFetch('/api/buckets'); } catch (e) { return; }
-  const html = (_bucketsCache.buckets || []).map(bk => {
+  for (const bk of (_bucketsCache.buckets || [])) { POCKET_LABELS[bk.id] = bk.label; if (bk.kind === 'real') REAL_POCKETS.add(bk.id); }
+  const tile = (bk) => {
     const st = bk.stats || {};
     const rec = st.resolved ? `${st.wins}W ${st.losses}L` : '—';
     const bm = st.beyondMarketPp != null ? `${st.beyondMarketPp >= 0 ? '+' : ''}${st.beyondMarketPp}pp${st.bmSePp != null ? ` ±${st.bmSePp}` : ''}` : '—';
@@ -2648,6 +2657,22 @@ async function renderBuckets() {
       <div class="bt-row"><span>Beyond market</span><span>${bm}</span></div>
       ${real}
     </div>`;
+  };
+  // Addendum 67: one pair per pooled pocket — pooled tile beside its derived V2
+  // standalone counterpart, with the paired difference; leagues as collapsible
+  // sections so the card scales with the number of pockets.
+  const buckets = _bucketsCache.buckets || []; const byId = Object.fromEntries(buckets.map(b => [b.id, b]));
+  const pairs = _bucketsCache.pairs || buckets.filter(b => b.model !== 'standalone').map(b => ({ leagueId: b.leagueId, pooled: b.id, standalone: (buckets.find(x => x.pairedWith === b.id) || {}).id || null }));
+  const leagues = [...new Set(pairs.map(p => p.leagueId))];
+  const leagueName = (lid) => (buckets.find(b => b.leagueId === lid)?.label || '').split(' ').slice(0, 2).join(' ');
+  const html = leagues.map(lid => {
+    const lp = pairs.filter(p => p.leagueId === lid);
+    const blocks = lp.map(p => { const a = byId[p.pooled], b = p.standalone ? byId[p.standalone] : null; const sa = a?.stats || {}, sb = b?.stats || {};
+      const d = (sa.beyondMarketPp != null && sb.beyondMarketPp != null) ? (sb.beyondMarketPp - sa.beyondMarketPp) : null;
+      const delta = `<div class="bucket-pair-delta">${b ? `V2 − pooled, beyond market: <b class="${d == null ? '' : d >= 0 ? 'c-green' : 'c-red'}">${d == null ? '—' : `${d >= 0 ? '+' : ''}${d.toFixed(1)}pp`}</b> · bets ${sa.n ?? 0} vs ${sb.n ?? 0}${b.model === 'standalone' && (sb.n ?? 0) === 0 ? ' · <span style="color:var(--muted)">no V2 bets yet' + (b.rule && /Jan–May/.test(b.rule) ? ' (fires from January)' : '') + '</span>' : ''}` : '<span class="c-red">no standalone counterpart — registry rule violated</span>'}</div>`;
+      return `<div class="bucket-pair">${a ? tile(a) : ''}${b ? tile(b) : ''}${delta}</div>`; }).join('');
+    const open = (_bucketsOpen[lid] ?? true) ? 'open' : '';
+    return `<details class="bucket-league" ${open} ontoggle="_bucketsOpen[${lid}] = this.open"><summary class="bucket-group-head" style="cursor:pointer;list-style:none">${leagueName(lid) || `League ${lid}`} <span style="color:var(--muted);font-weight:400">${lp.length} pocket${lp.length === 1 ? '' : 's'} · ${lp.filter(p => p.standalone).length} V2 shadow${lp.filter(p => p.standalone).length === 1 ? '' : 's'}</span></summary>${blocks}</details>`;
   }).join('');
   for (const el of document.querySelectorAll('.perf-bucket-strip, #bucket-strip')) el.innerHTML = html;
 }

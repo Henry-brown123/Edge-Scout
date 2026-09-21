@@ -601,14 +601,31 @@ const LEAGUE_ONE_RULE_FROM = '2026-09-17T10:00:00Z';
 // league's standalone model's own pick, judged on its own outputs (League Two V2).
 const PAPER_POCKETS_FROM = '2026-09-17T12:00:00Z';
 const L1_V2_FROM = '2026-09-21T18:45:00Z'; // Addendum 66: League One standalone shadow + paper pocket
-const POCKETS = [
-  { id: 'l2-9-40',          leagueId: 42, tier: 'real',  label: 'League Two 9%/40%',               edgeMin: 0.09, probMin: 0.40, months: null,   priority: 1, from: LEAGUE_TWO_RULE_FROM, basis: 'Addendum 53' },
-  { id: 'l2-v2-9-40',       leagueId: 42, tier: 'paper', label: 'League Two V2 (paper)',            edgeMin: 0.09, probMin: 0.40, months: null,   priority: 2, from: PAPER_POCKETS_FROM, basis: 'Addendum 54', model: 'standalone' },
-  { id: 'l1-12-50',         leagueId: 41, tier: 'real',  label: 'League One 12%/50% year-round',   edgeMin: 0.12, probMin: 0.50, months: null,   priority: 1, from: LEAGUE_ONE_RULE_FROM, basis: 'Addenda 56–57' },
-  { id: 'l1-jan-may-5-45',  leagueId: 41, tier: 'real',  label: 'League One Jan–May 5%/45%',       edgeMin: 0.05, probMin: 0.45, months: [1, 5], priority: 2, from: LEAGUE_ONE_RULE_FROM, basis: 'Addenda 56–57' },
-  { id: 'l1-v2-12-50',      leagueId: 41, tier: 'paper', label: 'League One V2 (paper)',            edgeMin: 0.12, probMin: 0.50, months: null,   priority: 3, from: L1_V2_FROM, basis: 'Addendum 66', model: 'standalone' },
-  { id: 'l1-6-45-paper',    leagueId: 41, tier: 'paper', label: 'League One 6%/45% (paper)',        edgeMin: 0.06, probMin: 0.45, months: null,   priority: 4, from: PAPER_POCKETS_FROM, basis: 'Addendum 55 (parked cell)' },
+// ─── Pocket registry (Addendum 67, 2026-09-21): pooled pockets are DECLARED; the
+// standalone counterpart of every pooled pocket is DERIVED, by construction —
+// a standing rule, not a per-pocket request. Each counterpart is a paper pocket
+// on the league's standalone model's OWN pick, same cell shape (edge/prob/
+// months), so every pooled pocket has a V2 tile to compare against for its own
+// cut-over decision. Priorities: pooled real 1–9, pooled paper 21–29; a
+// counterpart sits at pooled.priority + 10, so real pockets always win the
+// single-bucket assignment, V2-of-real comes next, then pooled paper, then
+// V2-of-paper. `standaloneId` pins an id already present on stored bets.
+const L1_V2_PAIRS_FROM = '2026-09-21T20:00:00Z'; // Addendum 67: Jan–May and 6/45 counterparts registered
+const POOLED_POCKETS = [
+  { id: 'l2-9-40',          leagueId: 42, tier: 'real',  label: 'League Two 9%/40%',               edgeMin: 0.09, probMin: 0.40, months: null,   priority: 1,  from: LEAGUE_TWO_RULE_FROM, basis: 'Addendum 53',                 standaloneId: 'l2-v2-9-40',  standaloneFrom: PAPER_POCKETS_FROM, standaloneBasis: 'Addendum 54' },
+  { id: 'l1-12-50',         leagueId: 41, tier: 'real',  label: 'League One 12%/50% year-round',   edgeMin: 0.12, probMin: 0.50, months: null,   priority: 1,  from: LEAGUE_ONE_RULE_FROM, basis: 'Addenda 56–57',              standaloneId: 'l1-v2-12-50', standaloneFrom: L1_V2_FROM,         standaloneBasis: 'Addendum 66' },
+  { id: 'l1-jan-may-5-45',  leagueId: 41, tier: 'real',  label: 'League One Jan–May 5%/45%',       edgeMin: 0.05, probMin: 0.45, months: [1, 5], priority: 2,  from: LEAGUE_ONE_RULE_FROM, basis: 'Addenda 56–57',              standaloneFrom: L1_V2_PAIRS_FROM,   standaloneBasis: 'Addendum 67 (registered before the season; fires from January)' },
+  { id: 'l1-6-45-paper',    leagueId: 41, tier: 'paper', label: 'League One 6%/45% (paper)',        edgeMin: 0.06, probMin: 0.45, months: null,   priority: 21, from: PAPER_POCKETS_FROM,   basis: 'Addendum 55 (parked cell)',  standaloneFrom: L1_V2_PAIRS_FROM,   standaloneBasis: 'Addendum 67' },
 ];
+function deriveStandalonePocket(p) {
+  return { id: p.standaloneId || `${p.id.replace(/^(l\d)-/, '$1-v2-').replace(/-paper$/, '')}`, leagueId: p.leagueId, tier: 'paper', label: `V2 · ${p.label.replace(/ \(paper\)$/, '')}`,
+    edgeMin: p.edgeMin, probMin: p.probMin, months: p.months, priority: p.priority + 10, from: p.standaloneFrom || p.from, basis: p.standaloneBasis || `derived counterpart of ${p.id}`, model: 'standalone', pairedWith: p.id };
+}
+const POCKETS = POOLED_POCKETS.flatMap(p => [p, deriveStandalonePocket(p)]);
+// Standalone candidate cells ARE the registry's standalone pockets (one source of truth).
+function standaloneCellsFor(leagueId) { return POCKETS.filter(p => p.model === 'standalone' && p.leagueId === parseInt(leagueId, 10)).map(p => ({ id: p.id, pairedWith: p.pairedWith, edgeMin: p.edgeMin, probMin: p.probMin, months: p.months, registered: p.from, basis: p.basis })); }
+function cellMonthsOk(cell, kickoffIso) { if (!cell.months) return true; const m = kickoffIso ? new Date(kickoffIso).getUTCMonth() + 1 : null; return m != null && m >= cell.months[0] && m <= cell.months[1]; }
+console.log(`[Pockets] ${POOLED_POCKETS.length} pooled pockets, ${POCKETS.length - POOLED_POCKETS.length} standalone counterparts derived: ${POCKETS.filter(p => p.model === 'standalone').map(p => p.id).join(', ')}`);
 const POCKET_LEAGUE_IDS = new Set(POCKETS.map(p => p.leagueId));
 const POCKET_BY_ID = Object.fromEntries(POCKETS.map(p => [p.id, p]));
 // standalone: { edge, prob, clears } from the standalone shadow, or null.
@@ -618,7 +635,7 @@ function assignPocket(leagueId, edge, modelProb, kickoffIso, standalone = null) 
   const cands = POCKETS.filter(p => p.leagueId === lid).sort((a, b) => a.priority - b.priority);
   for (const p of cands) {
     if (p.months && (month == null || month < p.months[0] || month > p.months[1])) continue;
-    if (p.model === 'standalone') { if (standalone && standalone.clears === true) return p; continue; }
+    if (p.model === 'standalone') { if (standalone && standalone.edge != null && standalone.prob != null && standalone.edge >= p.edgeMin && standalone.prob >= p.probMin) return p; continue; }
     if (edge != null && modelProb != null && edge >= p.edgeMin && modelProb >= p.probMin) return p;
   }
   return null;
@@ -654,11 +671,11 @@ const SCANNING_PAUSED_LEAGUE_IDS = new Set([40]); // Championship, 2026-09-16
 // IN-SAMPLE (its trees were built on those same rows) and is discarded. The
 // candidate is therefore the live rule's shape on the standalone's own scale,
 // pre-registered without any historical selection and judged forward only.
-const STANDALONE_CANDIDATE_CELLS = {
-  42: { edgeMin: 0.09, probMin: 0.40, registered: '2026-09-16T14:30:00Z', basis: 'pre-registered forward candidate: live rule shape (9/40) on the standalone scale at factor 1.0; no historical selection' },
-  40: null,
-  41: { edgeMin: 0.12, probMin: 0.50, registered: '2026-09-21T18:45:00Z', basis: 'pre-registered forward candidate: live year-round rule shape (12/50) on the standalone scale at factor 1.0; no historical selection. The Jan–May 5/45 cell is not registered for the standalone (months-bounded cells need their own forward read).' },
-};
+// Addendum 67: candidate cells are derived from the registry (every pooled pocket's
+// counterpart). This compat view exposes the year-round counterpart of the
+// league's first real pocket, which the cutover rule reads; standaloneCellsFor()
+// lists them all.
+const STANDALONE_CANDIDATE_CELLS = Object.fromEntries([42, 41, 40].map(lid => { const cells = standaloneCellsFor(lid); const c = cells.find(x => !x.months) || cells[0] || null; return [lid, c ? { ...c, basis: `pre-registered forward candidate (registry counterpart ${c.id} of ${c.pairedWith}); no historical selection` } : null]; }));
 const STANDALONE_FACTOR = { 42: 1.0, 40: 1.0, 41: 1.0 }; // own Platt calibration; a factor is a rule-13/17 decision on forward data
 // 2026-09-04 (Addendum 40, adopted): the edge floor is expressed on each league
 // group's own live calibration scale. 18% was selected and validated on the
@@ -1982,8 +1999,8 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
         const pick = p.home >= p.draw && p.home >= p.away ? 'home' : p.away >= p.draw ? 'away' : 'draw';
         const f = STANDALONE_FACTOR[parseInt(leagueId, 10)] ?? 1.0;
         const calProb = Math.min(0.97, p[pick] * f);
-        const cell = STANDALONE_CANDIDATE_CELLS[parseInt(leagueId, 10)];
-        standaloneShadow = { version: sp.version, probs: p, pick, prob: p[pick], calProb, factor: f, cell: cell || null, clearsCell: null, chain: sp.chain, chainDiff: sp.chainDiff, regimeOffsetShadow: sp.regimeOffsetShadow };
+        const cells = standaloneCellsFor(leagueId); const cell = cells.find(x => !x.months) || cells[0] || null;
+        standaloneShadow = { version: sp.version, probs: p, pick, prob: p[pick], calProb, factor: f, cell: cell || null, cells, clearsCell: null, clearsCells: [], chain: sp.chain, chainDiff: sp.chainDiff, regimeOffsetShadow: sp.regimeOffsetShadow };
       }
     } catch (e) { standaloneShadow = { error: e.message }; }
   }
@@ -2186,9 +2203,10 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
       standaloneShadow.market = row.impliedProb;
       standaloneShadow.odds = row.bookOdds ?? null;
       standaloneShadow.edge = standaloneShadow.calProb - row.impliedProb;
-      const cell = standaloneShadow.cell;
-      standaloneShadow.clearsCell = cell ? (standaloneShadow.edge >= cell.edgeMin && standaloneShadow.prob >= cell.probMin) : null;
-    } else { standaloneShadow.clearsCell = null; standaloneShadow.noMarket = true; }
+      const cells = standaloneShadow.cells || [];
+      standaloneShadow.clearsCells = cells.filter(c => cellMonthsOk(c, fix.fixture?.date) && standaloneShadow.edge >= c.edgeMin && standaloneShadow.prob >= c.probMin).map(c => c.id);
+      standaloneShadow.clearsCell = cells.length ? standaloneShadow.clearsCells.length > 0 : null;
+    } else { standaloneShadow.clearsCell = null; standaloneShadow.clearsCells = []; standaloneShadow.noMarket = true; }
   }
 
   // Per-group edge floor on the live edge scale — see getPaperMoneyEdgeMin.
@@ -2196,7 +2214,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
   // Pocket leagues (Addendum 58): the rule IS the pocket registry — single-bucket
   // assignment, first match by priority. Other domestic leagues keep the per-group
   // floor (observation cohorts).
-  const standaloneForPocket = (standaloneShadow && !standaloneShadow.error && standaloneShadow.clearsCell != null)
+  const standaloneForPocket = (standaloneShadow && !standaloneShadow.error && standaloneShadow.edge != null && standaloneShadow.prob != null)
     ? { edge: standaloneShadow.edge, prob: standaloneShadow.prob, clears: standaloneShadow.clearsCell } : null;
   const pocket = POCKET_LEAGUE_IDS.has(lidNum) && tierCandidate.hasRealOdds
     ? assignPocket(leagueId, tierCandidate.edge, tierCandidate.modelProb, fix.fixture?.date, standaloneForPocket) : null;
@@ -5502,7 +5520,7 @@ function betDisplayState(b, _now = Date.now()) {
 function decorateBets(bets) { const now = Date.now(); return bets.map(b => ({ ...b, displayState: betDisplayState(b, now) })); }
 
 const MONTHS3 = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const BUCKETS = POCKETS.map(p => ({ id: p.id, label: p.label, kind: p.tier, leagueId: p.leagueId, rule: `${p.model === 'standalone' ? 'standalone model, own pick · ' : ''}edge ≥ ${Math.round(p.edgeMin * 100)}% · prob ≥ ${Math.round(p.probMin * 100)}%${p.months ? ` · ${MONTHS3[p.months[0]-1]}–${MONTHS3[p.months[1]-1]}` : ' · year-round'}`, from: p.from, basis: p.basis }));
+const BUCKETS = POCKETS.map(p => ({ id: p.id, label: p.label, kind: p.tier, leagueId: p.leagueId, model: p.model || 'pooled', pairedWith: p.pairedWith || null, rule: `${p.model === 'standalone' ? 'standalone model, own pick · ' : ''}edge ≥ ${Math.round(p.edgeMin * 100)}% · prob ≥ ${Math.round(p.probMin * 100)}%${p.months ? ` · ${MONTHS3[p.months[0]-1]}–${MONTHS3[p.months[1]-1]}` : ' · year-round'}`, from: p.from, basis: p.basis }));
 function outcomeFromScore(fs) { if (!fs || !/^\d+-\d+$/.test(String(fs))) return null; const [h, a] = String(fs).split('-').map(Number); return h > a ? 'Home Win' : h < a ? 'Away Win' : 'Draw'; }
 function bucketMembers(bucket, bets) {
   return bets.filter(b => b.pocketId === bucket.id).map(b => ({ bet: b, pick: b.bet, odds: b.actualOdds ?? b.bookOdds, market: b.impliedProb, won: b.result === 'win' ? true : b.result === 'loss' ? false : null, real: b.mode === 'real', pnlReal: b.mode === 'real' ? (b.pnl ?? null) : null }));
@@ -5525,7 +5543,9 @@ function bucketStats(members) {
 app.get('/api/buckets', (_req, res) => {
   const bets = getBets().filter(b => !b.postponed).sort((a, b) => (a.lockedAt || '') < (b.lockedAt || '') ? -1 : 1);
   const out = BUCKETS.map(bk => { const members = bucketMembers(bk, bets); return { ...bk, stats: bucketStats(members), members: members.slice(-20).reverse().map(m => ({ id: m.bet.id, fixture: m.bet.fixture, kickoff: m.bet.kickoff, pick: m.pick, odds: m.odds, market: m.market, result: m.won == null ? null : (m.won ? 'win' : 'loss'), displayState: betDisplayState(m.bet), real: m.real, pnl: m.pnlReal })) }; });
-  res.json({ buckets: out, awaitingWindowHours: AWAITING_WINDOW_MS / 3600000 });
+  // Addendum 67: pairs — every pooled pocket with its derived standalone counterpart, grouped by league.
+  const pairs = POOLED_POCKETS.map(p => ({ leagueId: p.leagueId, pooled: p.id, standalone: POCKETS.find(q => q.pairedWith === p.id)?.id || null }));
+  res.json({ buckets: out, pairs, standaloneCoverage: { pooled: POOLED_POCKETS.length, withCounterpart: pairs.filter(x => x.standalone).length }, awaitingWindowHours: AWAITING_WINDOW_MS / 3600000 });
 });
 
 app.get('/api/bets',        (_req, res) => res.json(decorateBets(getBets())));
@@ -10735,6 +10755,7 @@ app.get('/api/admin/diag-standalone-forward', async (req, res) => {
       allTopPicks: { pooled: sm(rows.map(r => r.pooled)), standalone: sm(rows.map(r => r.standalone)), pairedDiffPp: md != null ? +(md * 100).toFixed(2) : null, pairedSePp: sdd ? +((sdd / Math.sqrt(n)) * 100).toFixed(2) : null, samePick: rows.filter(r => r.pooled.pick === r.standalone.pick).length },
       liveRule9_40_pooled: sm(rows.filter(r => r.pooled.edge >= 0.09 && r.pooled.prob >= 0.40).map(r => r.pooled)),
       standaloneCell: cell ? { cell, ...sm(rows.filter(r => r.standalone.edge >= cell.edgeMin && r.standalone.prob >= cell.probMin).map(r => r.standalone)) } : { cell: null, note: 'no candidate cell registered yet' },
+      standaloneCells: standaloneCellsFor(leagueId).map(c => ({ cell: c, ...sm(rows.filter(r => cellMonthsOk(c, r.date) && r.standalone.edge >= c.edgeMin && r.standalone.prob >= c.probMin).map(r => r.standalone)), pooledSameCell: sm(rows.filter(r => cellMonthsOk(c, r.date) && r.pooled.edge >= c.edgeMin && r.pooled.prob >= c.probMin).map(r => r.pooled)) })),
       betRows: req.query.rows === '1' ? rows.map(r => ({ date: r.date.slice(0, 10), fixture: r.fixture, outcome: r.outcome, close: r.close, pooled: { pick: r.pooled.pick, prob: +r.pooled.prob.toFixed(3), edge: +r.pooled.edge.toFixed(3), clears: r.pooled.edge >= 0.09 && r.pooled.prob >= 0.40, pnl: +r.pooled.pnl.toFixed(2) }, standalone: { pick: r.standalone.pick, prob: +r.standalone.prob.toFixed(3), edge: +r.standalone.edge.toFixed(3), clears: cell ? (r.standalone.edge >= cell.edgeMin && r.standalone.prob >= cell.probMin) : null, pnl: +r.standalone.pnl.toFixed(2) } })) : undefined,
       cutoverRule: 'standalone forward top-pick residual >= pooled − 1pp over >= 300 matched fixtures AND its own cell non-negative; then STANDALONE_ACTIVE_LEAGUE_IDS gains the league and the rule is re-registered on its outputs' });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -11182,7 +11203,7 @@ app.get('/api/admin/standalone-models', (_req, res) => {
   for (const lid of new Set([...STANDALONE_TRAIN_LEAGUE_IDS, ...STANDALONE_SHADOW_LEAGUE_IDS, ...STANDALONE_ACTIVE_LEAGUE_IDS])) {
     const w = readJSON(`gbdt-weights-${lid}.json`);
     let index = []; try { index = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'model-archive', `league-${lid}`, 'index.json'), 'utf8')); } catch {}
-    out[lid] = { hasModel: !!w, version: w?.trainedAt ?? null, trainN: w?.trainN ?? null, testN: w?.testN ?? null, validation: w?.validation ?? null, treeBoundary: w?.treeBoundary ?? null, shadow: STANDALONE_SHADOW_LEAGUE_IDS.has(lid), active: STANDALONE_ACTIVE_LEAGUE_IDS.has(lid), candidateCell: STANDALONE_CANDIDATE_CELLS[lid] ?? null, factor: STANDALONE_FACTOR[lid] ?? 1.0, archive: index.map(v => ({ version: v.version, status: v.status, trainN: v.trainN })) };
+    out[lid] = { hasModel: !!w, version: w?.trainedAt ?? null, trainN: w?.trainN ?? null, testN: w?.testN ?? null, validation: w?.validation ?? null, treeBoundary: w?.treeBoundary ?? null, shadow: STANDALONE_SHADOW_LEAGUE_IDS.has(lid), active: STANDALONE_ACTIVE_LEAGUE_IDS.has(lid), candidateCell: STANDALONE_CANDIDATE_CELLS[lid] ?? null, candidateCells: standaloneCellsFor(lid), factor: STANDALONE_FACTOR[lid] ?? 1.0, archive: index.map(v => ({ version: v.version, status: v.status, trainN: v.trainN })) };
   }
   res.json(out);
 });

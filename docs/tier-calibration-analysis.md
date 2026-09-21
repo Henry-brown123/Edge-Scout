@@ -10570,3 +10570,49 @@ until January. Cutover rule unchanged: ≥ 300 forward fixtures, standalone
 top-pick residual within 1pp of pooled or better, own cell non-negative.
 Nothing about the live League One pockets changes; real money stays on the
 pooled chain.
+
+## Addendum 67 — Standalone counterparts for every pocket, by construction (2026-09-21)
+
+**Audit of the pooled pockets before this change.** League Two 9/40 → V2
+counterpart existed (`l2-v2-9-40`, Addendum 54). League One 12/50 → existed
+(`l1-v2-12-50`, Addendum 66). League One Jan–May 5/45 → **none**. League One
+6/45 paper → **none**. The League Two 7/35 paper track is a reserved-set
+read (`RESERVED_TEST_SETS`), not a registry pocket, and has no tile of either
+kind; it stays where it is.
+
+**Change.** The registry now declares only pooled pockets and derives each
+one's standalone counterpart (`deriveStandalonePocket`): same league, same
+edge/prob/months, paper tier, the standalone model's own pick, priority
+pooled + 10 (real pockets always win the single-bucket assignment; V2-of-real
+next; pooled paper; V2-of-paper). Existing ids are pinned so stored bets keep
+their pocket. New counterparts from 2026-09-21T20:00Z:
+
+| Pooled pocket | Counterpart | Fires |
+|---|---|---|
+| League Two 9/40 (real) | `l2-v2-9-40` | live since 2026-09-17 |
+| League One 12/50 year-round (real) | `l1-v2-12-50` | live since 2026-09-21 18:45Z |
+| League One Jan–May 5/45 (real) | `l1-v2-jan-may-5-45` | registered now; fires from January (months 1–5) |
+| League One 6/45 (paper) | `l1-v2-6-45` | live now |
+
+**Jan–May specifically.** No separate model build is needed. The standalone
+model is per league and produces a probability for every League One fixture;
+a pocket is a cell on that output. The Jan–May counterpart is the same
+League One standalone model read through a months-bounded cell (edge ≥ 5%,
+prob ≥ 45%, January–May). It is registered today, appears as its own tile
+today (0 bets, "fires from January"), and needs no action when the season
+arrives. Its forward read starts in January and is read per cell by the
+cutover rule; the standalone-forward diagnostic now reports every counterpart
+cell (`standaloneCells`) with the pooled reading on the same cell beside it.
+
+**Standing rule.** Rule 20 in calibration-rules.md: a pooled pocket cannot be
+registered without its counterpart. Every candidate cell the standalone
+shadow evaluates comes from the registry (`standaloneCellsFor`), so a new
+pocket needs one line in `POOLED_POCKETS` and nothing else — no UI edit
+(labels and real/paper kind are merged from `/api/buckets`), no candidate-cell
+constant, no request.
+
+**Dashboard.** The Pockets card renders one pair per pooled pocket — pooled
+tile beside its V2 counterpart with the paired beyond-market difference and
+bet counts — grouped under collapsible league sections (open state remembered
+for the session). Twelve pockets across four leagues is four sections of
+three pairs; the card grows by one pair per pocket, never by loose tiles.

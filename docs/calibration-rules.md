@@ -459,3 +459,21 @@ before a go/no-go — not only when a number looks odd:
 
 Tools: `diag-pocket-search` (1–3, 5, 6), `diag-era` (1, 2, 4),
 `diag-pocket-overlap` (6). Related: rules 15 (mechanism bar), 17, 18.
+
+## Rule 20 — Every pooled pocket has a standalone counterpart, by construction (2026-09-21, Addendum 67)
+
+A pocket is a cell on a model's output. The pooled model is the default only
+until a league's own standalone model earns cutover, so **every pooled pocket
+that goes live (real or paper) has, from the same moment, a paper pocket on
+the league's standalone model's own pick with the identical cell shape**
+(edge floor, probability floor, months). This is not requested per pocket: the
+registry (`POOLED_POCKETS` in server.js) declares pooled pockets and
+`deriveStandalonePocket` generates the counterpart, so a pocket cannot be
+registered without one. The counterpart is the pocket's own forward evidence
+for its own cut-over decision (rule 18 cutover rule per league, read per
+cell), displayed beside the pooled tile as a pair. A months-bounded pocket's
+counterpart is registered at the same time as the pooled pocket and simply
+fires when its months arrive — never built reactively mid-season. A league
+with no standalone model yet still gets the counterpart registered; it
+records nothing until the model exists, and that gap is visible on the tile.
+
