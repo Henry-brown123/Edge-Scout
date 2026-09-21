@@ -148,10 +148,15 @@ function leagueBaselineRate(index, leagueId, day) {
   if (end < BASELINE_MIN_N) return { rate: null, n: end };
   return { rate: arr.cum[end] / end, n: end };
 }
+// Leagues the index pools: every DOMESTIC league in the pool. Tournament and
+// international leagues (retired, Addendum 51) are excluded — kept in lockstep
+// with scoring.js RETIRED_LEAGUE_IDS by hand (scoring.js is not required here to
+// keep this module dependency-free).
+const INDEX_EXCLUDED_LEAGUE_IDS = new Set([1, 2, 3, 48, 848, 4, 5, 6, 7, 8, 9, 10, 31, 32, 33, 34, 960]);
 function globalRegime(index, dateIso, leagueIds = null) {
   const day = String(dateIso || '').slice(0, 10);
   if (!index || day.length !== 10) return { dev: null, se: null, gRaw: null, g: 0, n: 0, leagues: 0 };
-  const ids = leagueIds || [...index.keys()];
+  const ids = (leagueIds || [...index.keys()]).filter(l => !INDEX_EXCLUDED_LEAGUE_IDS.has(parseInt(l, 10)));
   let sumDev = 0, sumVar = 0, N = 0, leagues = 0;
   for (const lid of ids) {
     const arr = index.get(parseInt(lid, 10)); if (!arr || !arr.cum) continue;
@@ -234,7 +239,7 @@ function attachRegime(records, index, { force = false } = {}) {
 
 module.exports = {
   CLOSED_DOORS_WINDOWS, LEAGUE_HOME_RATE_WINDOW, LEAGUE_HOME_RATE_MIN_N, LEAGUE_HOME_RATE_DEFAULT,
-  DEAD_ZONE, G_CLAMP, BASELINE_LAG_DAYS, BASELINE_MIN_N, REGIME_OFFSET,
+  DEAD_ZONE, G_CLAMP, BASELINE_LAG_DAYS, BASELINE_MIN_N, REGIME_OFFSET, INDEX_EXCLUDED_LEAGUE_IDS,
   closedDoorsFlag, buildLeagueHomeRateIndex, leagueHomeRate, leagueBaselineRate, globalRegime, regimeFor, regimeFeatureValues, attachRegime,
   applyLogOddsOffset, regimeOffsetDeltas,
 };
