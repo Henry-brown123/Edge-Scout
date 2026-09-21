@@ -3343,9 +3343,9 @@ async function renderPerfMode(mode) {
     tbody.appendChild(tr);
   });
 
-  if (placedBets.length > BET_LOG_PAGE_SIZE) {
+  if (logBets.length > BET_LOG_PAGE_SIZE) {
     moreRow.style.display = 'block';
-    moreBtn.textContent = betLogExpanded[mode] ? 'Show less' : `See more (${placedBets.length - BET_LOG_PAGE_SIZE} more)`;
+    moreBtn.textContent = betLogExpanded[mode] ? 'Show less' : `See more (${logBets.length - BET_LOG_PAGE_SIZE} more)`;
   } else {
     moreRow.style.display = 'none';
   }
