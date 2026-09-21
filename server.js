@@ -30,7 +30,7 @@ const {
 } = require('./scoring');
 
 const model = require('./models/interface');
-const { SCORER_VERSION, FEATURE_SPEC, buildLiveFactors, scoreProbabilities, diffScores } = require('./sharedScorer');
+const { SCORER_VERSION, FEATURE_SPEC, buildLiveFactors, scoreProbabilities, diffScores, chainOptionsFor } = require('./sharedScorer');
 const regime = require('./regime');
 const lineupLock = require('./lineupLock'); // Addendum 60: lineup-triggered lock
 
@@ -10522,6 +10522,7 @@ app.get('/api/admin/diag-standalone-forward', async (req, res) => {
     const fS = STANDALONE_FACTOR[leagueId] ?? 1.0, fP = getCalFactorForLeague(settings, leagueId);
     const cell = STANDALONE_CANDIDATE_CELLS[leagueId];
     const rows = [];
+    let chainVsRawMaxDiff = 0;
     for (const r of recs) {
       const co = closing[r.fixtureId] || closing[String(r.fixtureId)];
       if (!co || co.bookmaker !== 'pinnacle' || !(co.homeOdds > 1 && co.drawOdds > 1 && co.awayOdds > 1)) continue;
@@ -10529,6 +10530,7 @@ app.get('/api/admin/diag-standalone-forward', async (req, res) => {
       const pooled = scoreProbabilities({ homeF: r.homeFactors, awayF: r.awayFactors, weights: WEIGHTS_BY_CONTEXT[context], context, leagueId, leagueConfig: LC[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: true, rankAdjust: false, hostBoost: false, modifiers: false } }).probs;
       const sp = standaloneChainProbs(leagueId, leagueId, r, context);
       if (!sp) continue;
+      { const rawSp = model.predictLeague(leagueId, r.homeFactors, r.awayFactors, context); const dd = rawSp ? Math.max(...['home', 'draw', 'away'].map(k => Math.abs(sp.probs[k] - rawSp.probs[k]))) : null; if (dd != null && dd > chainVsRawMaxDiff) chainVsRawMaxDiff = dd; } // 2026-09-21: chain (standalone template) vs raw model — 0 while every stage is off
       const stripped = marginStrippedImplied(co);
       const mk = (p, f) => { const pick = p.home >= p.draw && p.home >= p.away ? 'home' : p.away >= p.draw ? 'away' : 'draw'; const won = r.actualOutcome === pick; return { pick, prob: p[pick], edge: Math.min(0.97, p[pick] * f) - stripped[pick], bm: (won ? 1 : 0) - stripped[pick], pnl: won ? co[`${pick}Odds`] - 1 : -1 }; };
       rows.push({ date: r.date, pooled: mk(pooled, fP), standalone: mk(sp.probs, fS) });
@@ -10536,7 +10538,7 @@ app.get('/api/admin/diag-standalone-forward', async (req, res) => {
     const sm = (list) => { const n = list.length; if (!n) return { n: 0 }; const bm = list.reduce((a, x) => a + x.bm, 0) / n; const sd = Math.sqrt(list.reduce((a, x) => a + (x.bm - bm) ** 2, 0) / Math.max(1, n - 1)); return { n, beyondMarketPp: +(bm * 100).toFixed(2), sePp: +((sd / Math.sqrt(n)) * 100).toFixed(2), roiClosePct: +((list.reduce((a, x) => a + x.pnl, 0) / n) * 100).toFixed(1) }; };
     const diffs = rows.map(r => r.standalone.bm - r.pooled.bm);
     const n = diffs.length, md = n ? diffs.reduce((a, b) => a + b, 0) / n : null, sdd = n > 1 ? Math.sqrt(diffs.reduce((a, d) => a + (d - md) ** 2, 0) / (n - 1)) : null;
-    res.json({ leagueId, cutoff, matchedForward: rows.length, standaloneVersion: model.predictLeague(leagueId, {}, {}, 'club_domestic')?.version ?? null,
+    res.json({ leagueId, cutoff, matchedForward: rows.length, standaloneVersion: model.predictLeague(leagueId, {}, {}, 'club_domestic')?.version ?? null, chain: chainOptionsFor(String(leagueId)), chainVsRawMaxDiff,
       allTopPicks: { pooled: sm(rows.map(r => r.pooled)), standalone: sm(rows.map(r => r.standalone)), pairedDiffPp: md != null ? +(md * 100).toFixed(2) : null, pairedSePp: sdd ? +((sdd / Math.sqrt(n)) * 100).toFixed(2) : null, samePick: rows.filter(r => r.pooled.pick === r.standalone.pick).length },
       liveRule9_40_pooled: sm(rows.filter(r => r.pooled.edge >= 0.09 && r.pooled.prob >= 0.40).map(r => r.pooled)),
       standaloneCell: cell ? { cell, ...sm(rows.filter(r => r.standalone.edge >= cell.edgeMin && r.standalone.prob >= cell.probMin).map(r => r.standalone)) } : { cell: null, note: 'no candidate cell registered yet' },
