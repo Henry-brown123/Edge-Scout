@@ -10416,3 +10416,52 @@ criteria met; coefficients committed.
 Recorded in Part 2 after the coefficient deploy (`diag-regime-offset-remeasure`:
 every cell, live chain off vs both terms forced on with each row's historical
 closedDoors and g; the post-cutoff forward slice must be identical).
+
+### Part 2 — Re-measurement and production verification (2026-09-21 15:27Z)
+
+`diag-regime-offset-remeasure`: each fixed cell on its league's matched
+Pinnacle-closing rows, live chain as it runs (off) vs both terms forced on
+with each row's historical closedDoors and g (on). Beyond-market residual pp
+/ closing ROI %, n in brackets.
+
+| Cell (model) | All history off → on | Closed-doors era off → on | Post-cutoff forward off → on |
+|---|---|---|---|
+| L2 9/40 (pooled) | +7.7 / 39.9 (217) → +4.8 / 30.6 (221) | +19.5 / 60.9 (35) → +6.2 / 17.0 (40) | **identical** −13.8 (6) |
+| L2 7/35 paper (pooled) | +5.5 / 25.9 (419) → +3.8 / 22.0 (416) | +11.9 (81) → +4.2 (74) | **identical** (14) |
+| L2 V2 9/40 (standalone) | +11.7 / 41.1 (426) → +12.3 / 44.5 (385) | +17.9 (98) → +23.1 (57) | **identical** (9) |
+| L1 12/50 (pooled) | +11.4 / 25.7 (129) → +9.4 / 21.5 (129) | +2.6 (32) → −2.5 (29) | **identical** (8) |
+| L1 Jan–May 5/45 (pooled) | +10.6 / 22.4 (208) → +9.5 / 19.5 (203) | −5.8 (50) → −11.8 (44) | (0) |
+| L1 6/45 paper (pooled) | +3.7 / 6.2 (400) → +4.3 / 7.8 (389) | −6.2 (91) → −4.9 (81) | **identical** (14) |
+
+Rows changed by the offset: 753 of League Two's and 743 of League One's
+matched rows — the flagged 2020-21 season plus the index's out-of-regime
+excursions (2015-10, 2017, 2023 summer); every other row is untouched.
+
+What this says, plainly: **in a normal season the offset changes nothing**
+(the forward slices are identical to the row), which is the ship condition.
+Over the regime rows it changes which fixtures enter a cell, and for the
+pooled League Two cell the closed-doors era was its *best* era without the
+offset (+19.5pp on 35 bets) and merely good with it (+6.2pp on 40) — the
+un-offset picks profited from the model's own miscalibration there, which a
+better-calibrated model does not reproduce. The standalone cell moves the
+other way (+17.9 → +23.1). None of this is a selection input (rule 18); it
+is the recorded cost/benefit of switching a term on during a regime, and it
+is the reason activation stays a human decision after the pre-registered
+read.
+
+Production checks (uptime 140 s on the coefficient deploy):
+- `PUT /api/settings { regimeOffset: { termB: 'on' } }` → **400, "activation
+  not eligible: no cross-league trigger yet"** — the gate works.
+- First daily check (Phase 1d): 2026-09-21 gRaw −1.52, g 0 (dev −2.0pp on
+  1,400 fixtures, 14 leagues); Pinnacle 14-day home-rate deviation +0.6pp
+  (n 307 vs 198 baseline) — inside the dead zone, no trigger, nothing
+  outside, not killed. State file seeded.
+- Modes: termA shadow, termB shadow. Coefficients present, gPeak −4.64.
+- Live lock carrying `regimeOffsetShadow`: still to be observed — the
+  watching list was empty on 20–21 September. It lands with the next lock.
+
+**Standing state:** built, validated, shipped in shadow on every model.
+Nothing applied. Switching Term A on = a dated regime declared in
+`regime.js` plus `termA: 'on'`; Term B on = trigger + 300 locks + the
+pre-registered read, then `termB: 'on'`; the nightly rule can kill Term B on
+its own and a kill is cleared only by hand.
