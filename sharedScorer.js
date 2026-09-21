@@ -116,7 +116,7 @@ function applyRegimeOffset(probs, leagueId, regime, slot, settings) {
   const modes = settings?.regimeOffset || {};
   const d = regimeOffsetDeltas(null, leagueId, regime, { termA: modes.termA || 'shadow', termB: modes.termB || 'shadow' });
   const out = applyLogOddsOffset(probs, d.applied.deltaHome, d.applied.deltaDraw);
-  const withBoth = applyLogOddsOffset(probs, d.termA.deltaHome + d.termB.deltaHome, d.termA.deltaDraw + d.termB.deltaDraw);
+  const withBoth = applyLogOddsOffset(probs, d.combined.deltaHome, d.combined.deltaDraw);
   return { probs: out, shadow: { ...d, probsBefore: probs, probsIfBothOn: withBoth, changed: out !== probs } };
 }
 

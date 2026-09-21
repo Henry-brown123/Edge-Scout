@@ -229,8 +229,15 @@ function regimeOffsetDeltas(coef, leagueId, regime, modes = {}) {
   // scaled by |g|/|gPeak| (capped at 1); the opposite sign reverses it.
   const g = regime?.g || 0;
   if (g !== 0 && c.gPeak) { const k = Math.min(1, Math.abs(g) / Math.abs(c.gPeak)) * Math.sign(g) * Math.sign(c.gPeak); out.termB.deltaHome = c.pooled.deltaHome * k; out.termB.deltaDraw = c.pooled.deltaDraw * k; }
-  if (out.termA.mode === 'on') { out.applied.deltaHome += out.termA.deltaHome; out.applied.deltaDraw += out.termA.deltaDraw; }
-  if (out.termB.mode === 'on') { out.applied.deltaHome += out.termB.deltaHome; out.applied.deltaDraw += out.termB.deltaDraw; }
+  // Combination: the two terms describe the SAME regime, so they never add. A
+  // dated regime (Term A) takes precedence where it is flagged; Term B acts only
+  // where nothing is dated. `combined` is what both-on would apply; `applied` is
+  // what the current modes apply.
+  const flagged = !!regime?.closedDoors;
+  out.combined = flagged ? { deltaHome: out.termA.deltaHome, deltaDraw: out.termA.deltaDraw } : { deltaHome: out.termB.deltaHome, deltaDraw: out.termB.deltaDraw };
+  if (flagged && out.termA.mode === 'on') { out.applied.deltaHome = out.termA.deltaHome; out.applied.deltaDraw = out.termA.deltaDraw; }
+  else if (!flagged && out.termB.mode === 'on') { out.applied.deltaHome = out.termB.deltaHome; out.applied.deltaDraw = out.termB.deltaDraw; }
+  else if (flagged && out.termA.mode !== 'on' && out.termB.mode === 'on') { out.applied.deltaHome = out.termB.deltaHome; out.applied.deltaDraw = out.termB.deltaDraw; } // A not live: B still covers the index
   return out;
 }
 
