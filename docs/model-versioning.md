@@ -568,7 +568,7 @@ to worry about contaminating), then document the change in
 `sharedScorer.scoreProbabilities` takes a `modelKey`: `'pooled'` or a
 standalone key (`'42'`, `'42-wf2022-09-01'`, …). The model is selected inside
 the chain, and every stage — bias correction, correction layer, regime offset
-(design brief R's slot, no-op until built), rank anchor, host boost, team
+(design brief R, built 2026-09-21: slot `active` in both templates — deltas recorded on every lock, applied per `settings.regimeOffset`), rank anchor, host boost, team
 modifiers — is a switch whose default comes from `MODEL_CHAIN_TEMPLATES` for
 the model's kind, merged with the caller's per-call options:
 

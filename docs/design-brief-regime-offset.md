@@ -1,6 +1,6 @@
 # Design brief R — Additive regime offset on the log-odds (2026-09-21)
 
-Status: **design only, not built.** Follows Addenda 57, 62 and 63: the
+Status: **built 2026-09-21 (Addendum 64), shipped in shadow.** Originally: Follows Addenda 57, 62 and 63: the
 closed-doors gap is real (pool: 45.1% expected vs 41.0% actual home wins on
 6,308 flagged fixtures), and neither age-based weighting nor a learned tree
 feature can close it with this trainer. This brief scopes the one mechanism

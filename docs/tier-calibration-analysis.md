@@ -10345,3 +10345,74 @@ worse near that level. Trainer default stays `REGIME_FEATURES=none`.
 6. Live proof that the lock path stores `homeFactors.regime` is still to be
    captured: the watching list was empty on 20 and 21 September. It lands
    with the next scan that scores a fixture.
+
+## Addendum 64 — Regime offset built: Term A fitted and validated, Term B armed in shadow (2026-09-21)
+
+Design brief R (`docs/design-brief-regime-offset.md`) is built. It ships
+**switched off**: both terms in `shadow` (deltas computed and recorded on every
+lock, nothing applied). Coefficients live in `regime.js` (rule 17).
+
+### Mechanism, as built
+
+- Stage `applyRegimeOffset` in the one chain (`sharedScorer.scoreProbabilities`),
+  after the correction layer and before the rank anchor, slot `active` in
+  **both** model templates — pooled and every standalone model inherit it.
+- Term A: `δ = coef(league) · closedDoors` on the home and draw log-odds.
+- Term B: `δ = coef.pooled · min(1, |g|/|gPeak|) · sign(g)·sign(gPeak)`, where
+  `g` is the domestic cross-league index (mean deviation of each league's
+  last-100 home rate from its own baseline lagged one year, in standard
+  errors), dead-zoned at |g| < 2 and clamped at ±4.
+- Activation: `settings.regimeOffset.termA|termB = 'on'`. Term B `on` is
+  refused by the settings route unless the nightly check has recorded a
+  trigger (|g| ≥ 2) and ≥ 300 locks have happened since it, and never while
+  killed. Term A `on` is a human declaration (a dated regime in `regime.js`).
+- Kill rule (nightly Phase 1d, after closing odds): index outside the dead
+  zone for ≥ 14 consecutive days with no matching Pinnacle move (same sign,
+  ≥ half the observed rate deviation, closing-implied home rate over the same
+  14 days vs the same leagues a year earlier) → `termB = 'killed'`. Clearing
+  a kill is an explicit route that records why and re-arms shadow only.
+- Recorded on every lock: `regimeOffsetShadow` (closedDoors, g, each term's
+  delta, applied delta, probabilities before and with both terms on) on the
+  pooled path and inside `standaloneShadow` for the standalone path.
+
+### Term A fit and test look (`regime-offset-fit`, pre-registered)
+
+Model: `rgp-wf2020-none` (trees < 2020-06-01, never saw closed doors),
+bias-corrected probabilities. Fit rows: flagged, 2020-06-17 → 2021-01-01
+(n 3,058). MLE: **δ_home −0.225, δ_draw −0.085** (log-likelihood per row
+−1.0571 vs −1.0615 without). Per-league MLE shrunk toward pooled (prior
+weight 500): home deltas −0.12 (Segunda) to −0.29 (Scotland).
+
+One test look, flagged rows 2021-01-01 → 2021-08-01 (n 3,188):
+
+| Coefficients | Paired log-loss vs none | z | Home actual / none / offset |
+|---|---|---|---|
+| pooled | −0.00343 | −2.07 | 41.2% / 45.0% / 40.7% |
+| per-league shrunk | **−0.00379** | **−2.19** | 41.2% / 45.0% / 40.8% |
+
+By league (shrunk): better in 9 of 14 (Premier League z −2.35, Ligue 1 −1.96,
+League One −1.73), worse in none at z ≥ 1.645 (Bundesliga +0.014, z 1.56 —
+its spring-2021 home rate was 48.2%, an outlier in the other direction).
+Unflagged rows in the same window: diff **exactly 0** (n 60). Adoption
+criteria met; coefficients committed.
+
+### Index behaviour on history (domestic leagues only)
+
+- Closed doors: crossed the dead zone in **Dec 2020** (−2.97) and stayed out
+  through May 2021 (peak **−4.64**, Jan 2021), plus July 2021; it did **not**
+  cross in June–Nov 2020 (−0.4 to −1.9). Honest correction to the brief:
+  the index would have triggered about six months after the restart, not
+  within weeks — the pooled deviation in the first months was only 1–2 SE.
+- Outside the regime (157 months sampled): above the dead zone in 12
+  (7.6%), three episodes — 2015-10 (one month, −2.2); 2017-01 → 2017-09
+  (+2.0 to +3.1, home rates abnormally *high* across leagues); 2023-06 →
+  2023-09 (+2.5). Each would have needed Pinnacle to agree for 14 days to
+  survive the kill rule, and then 300 locks before any live effect.
+- Today (2026-09-21): gRaw −1.52 (dev −2.0pp on 1,400 fixtures, 14
+  leagues), inside the dead zone. No trigger recorded.
+
+### Re-measurement of the fixed cells
+
+Recorded in Part 2 after the coefficient deploy (`diag-regime-offset-remeasure`:
+every cell, live chain off vs both terms forced on with each row's historical
+closedDoors and g; the post-cutoff forward slice must be identical).

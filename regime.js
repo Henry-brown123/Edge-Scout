@@ -188,7 +188,27 @@ function regimeFor(leagueId, dateIso, index) {
 //   gPeak:    the index's SIGNED gRaw at its peak during the fitted regime (Term B scale)
 // Term A: δ = coef(league) · closedDoors.
 // Term B: δ = coef.pooled · min(1, |g|/|gPeak|) · sign(g)·sign(gPeak), zero in the dead zone.
-const REGIME_OFFSET = null;
+// Fitted 2026-09-21 (Addendum 64) on rgp-wf2020-none (trees < 2020-06, never saw
+// closed doors), bias-corrected probabilities, flagged rows 2020-06-17 → 2021-01-01
+// (n 3,058); one test look 2021-01-01 → 2021-08-01 (n 3,188): paired log-loss
+// −0.0038 (z −2.19), expected home 45.0% → 40.8% vs 41.2% actual; unflagged rows
+// unchanged (diff exactly 0). Per-league MLE shrunk toward pooled with prior
+// weight 500. gPeak = the domestic index's signed reading at its closed-doors
+// peak (January 2021).
+const REGIME_OFFSET = {
+  fittedAt: '2026-09-21', model: 'rgp-wf2020-none', fitWindow: ['2020-06-17', '2021-01-01'], testWindow: ['2021-01-01', '2021-08-01'], shrinkK: 500,
+  pooled: { deltaHome: -0.225, deltaDraw: -0.085 },
+  byLeague: {
+    39: { deltaHome: -0.230, deltaDraw: -0.100, n: 247 }, 40: { deltaHome: -0.216, deltaDraw: -0.072, n: 372 },
+    41: { deltaHome: -0.261, deltaDraw: -0.177, n: 231 }, 42: { deltaHome: -0.250, deltaDraw: -0.102, n: 248 },
+    61: { deltaHome: -0.243, deltaDraw: -0.129, n: 168 }, 78: { deltaHome: -0.273, deltaDraw: -0.040, n: 142 },
+    79: { deltaHome: -0.181, deltaDraw: -0.104, n: 142 }, 88: { deltaHome: -0.217, deltaDraw: -0.047, n: 126 },
+    94: { deltaHome: -0.178, deltaDraw: -0.072, n: 168 }, 135: { deltaHome: -0.256, deltaDraw: -0.123, n: 262 },
+    136: { deltaHome: -0.204, deltaDraw: 0.015, n: 262 }, 140: { deltaHome: -0.242, deltaDraw: -0.047, n: 250 },
+    141: { deltaHome: -0.121, deltaDraw: -0.069, n: 321 }, 179: { deltaHome: -0.288, deltaDraw: -0.148, n: 119 },
+  },
+  gPeak: -4.64,
+};
 function _logit3(p) { return { lh: Math.log(p.home / p.away), ld: Math.log(p.draw / p.away) }; }
 function applyLogOddsOffset(probs, deltaHome, deltaDraw) {
   if (!deltaHome && !deltaDraw) return probs;
