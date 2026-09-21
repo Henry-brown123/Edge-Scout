@@ -10262,3 +10262,86 @@ condition (ii) is met by none (no closed-doors or post-anomaly window better
 at z ≤ −1.645). The standalone keeps `REGIME_FEATURES=none`. The pooled
 model is where the gap was large (Ligue 1 / Eredivisie / Premier League −6
 to −7pp, League One's 43.5% vs 40.3% in Addendum 57); its results follow.
+
+**Pooled domestic model (16 runs, seed 20260920, all dry, none failed;
+57,000–80,000 training rows, 6,308 flagged rows before 2021-08).** Same
+layout; expected home rate is actual / candidate / control.
+
+| Build | Window | n | flag | rate | both | Home act / rate-cand / ctl |
+|---|---|---|---|---|---|---|
+| Full | rows ≥ 2023-09-16 | 16,516 | **+0.00012 (z 2.13)** | +0.00007 (z 1.00) | **+0.00015 (z 1.76)** | 43.3 / 43.0 / 43.0 |
+| Trees < 2020-06 | closed doors 2020-06-17 → 2021-08 | 6,308 | 0 (never set in training) | +0.0002 (z 0.67) | = rate | **41.0 / 45.0 / 45.1** |
+| Trees < 2020-06 | post 2021-08 → 2023-08 | 11,036 | 0 | −0.00004 (z −0.27) | = rate | 43.7 / 45.1 / 45.1 |
+| Trees < 2021-01 | rest of closed doors 2021-01 → 2021-08 | 3,248 | **0 (identical trees)** | −0.0001 (z −0.21) | = rate | 41.3 / 43.6 / 43.7 |
+| Trees < 2021-01 | post 2021-08 → 2023-08 | 11,036 | 0 | +0.0001 (z 0.98) | = rate | 43.7 / 43.7 / 43.7 |
+| Trees < 2021-08 | first year 2021-08 → 2022-09 | 6,149 | **0 (identical trees)** | **+0.0003 (z 1.73)** | = rate | 42.8 / 42.7 / 42.7 |
+| Trees < 2021-08 | later 2022-09 → 2024-09 | 10,773 | 0 | +0.0002 (z 1.56) | = rate | 44.0 / 43.0 / 43.0 |
+
+Readings:
+
+- **The gap is real and large in the pool.** A model whose trees never saw
+  closed doors expects 45.1% home wins on the 6,308 flagged fixtures against
+  41.0% actual — a 4.1pp miss (Premier League 45.4 vs 39.6, Ligue 1 45.0 vs
+  37.2, League One 45.6 vs 40.3). That is the number FD-2 exists to close.
+- **Neither feature closes it out-of-sample.** The rolling rate moves the
+  expectation by 0.1pp (45.0 vs 45.1) and is not better on log-loss
+  (+0.0002, z 0.67); trees trained on normal seasons, where the rolling
+  league rate carries almost no information about a single fixture, give it
+  almost no weight, so a value they never saw (0.30 in a league that ran
+  0.42–0.47) barely changes their output. The flag cannot act at all: it was
+  never set in the training rows.
+- **The flag was never split on, even with 6,308 flagged rows in training
+  (trees < 2021-01 and < 2021-08).** Identical trees, diff exactly zero.
+  This is the trainer's structure, not a data fault: 200 trees of depth 3,
+  greedy gain, learning rate 0.02. A binary that shifts 10% of the rows by
+  4pp has a root gain around 40 against several thousand for the strength
+  features, and at depth 3 it never wins a node. Only the full-history build
+  (80,000 rows) used it, and there it is slightly *worse* on the standard
+  window (+0.00012, z 2.13) — structural noise from re-partitioning, since
+  every evaluation row has the flag at zero.
+- **The over-trust test (trees < 2021-08, closed doors as the newest
+  data):** with the flag never split on, `flag` = control, so nothing to
+  report; `rate` is worse in the first year (+0.0003, z 1.73) and later
+  (+0.0002, z 1.56). The control itself shows the Addendum 62 symptom
+  (expects 43.0% against 44.0% actual two seasons later) and the features do
+  not correct it.
+- **Standard dry-run gate against the deployed model (informational; not
+  the selection):** `none`, `flag` and `both` would have been adopted;
+  `rate` was rejected by the League One pocket gate (worse log-loss on
+  League One, +0.00043, z 2.11 — the league real money depends on).
+
+**Verdict (pooled): not adopted.** `flag` and `both` fail precondition (i)
+(worse at z ≥ 1.645 on the standard window); `rate` passes (i) but fails
+(ii) — no closed-doors or post-anomaly window better at z ≤ −1.645, two
+worse near that level. Trainer default stays `REGIME_FEATURES=none`.
+
+### Combined verdict and what was learned
+
+1. **Both models keep the equal-weighted, no-regime-feature recipe.** No
+   live scoring or staking behaviour changed; no cell is re-measured (rule
+   18: nothing is re-measured against a recipe that was not adopted).
+2. **The closed-doors gap is confirmed and quantified on the pool: 4.1pp on
+   6,308 fixtures, 2–8pp by league; League Two's own gap is ~2pp and its
+   picks were never hurt by it.**
+3. **Why the feature route fails here, plainly.** A binary flag can only help
+   a model that has seen it set, and this trainer will not learn a 4pp shift
+   on 10% of rows through a depth-3 greedy split — the effect is real but
+   its gain is two orders of magnitude below the strength features. A
+   rolling league rate is learnable but, trained on normal seasons, carries
+   almost no weight, so it cannot move a prediction far when the regime
+   changes. Age-based weighting (Addendum 62) and a learned feature (this
+   addendum) are now both closed as ways to make the *trees* regime-aware.
+4. **What would work is a different mechanism, not a different feature:**
+   an additive regime offset on the log-odds, applied *after* the trees —
+   the same place the league bias correction sits — with the closed-doors
+   term fitted on flagged rows only, and a rolling-rate term as a slow
+   correction. That is a change to the probability chain, so it is a
+   separate proposal (rule 13: its own validation, its own factor), not a
+   feature-builder change, and it is not built here.
+5. **The features stay in the pipeline** (`homeFactors.regime` on every
+   record and lock; trees ignore them under `none`) at no cost, so the data
+   is already in place for item 4 and for the 2. Bundesliga-style
+   dating checks. FEATURE_SPEC records them.
+6. Live proof that the lock path stores `homeFactors.regime` is still to be
+   captured: the watching list was empty on 20 and 21 September. It lands
+   with the next scan that scores a fixture.
