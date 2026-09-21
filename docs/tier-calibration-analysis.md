@@ -10537,3 +10537,36 @@ to the 05:23 version on 1,586 paired rows (−0.0010, z −1.07). Forward read o
 the frozen model: 73 fixtures, top-pick residual +6.5 ± 4.1pp vs pooled;
 cell 8 bets, −18.9pp — unchanged in substance from the 05:23 reading. Cost accepted: the
 shadow model learns nothing new until cutover.
+
+## Addendum 66 — League One standalone: standard-recipe retry passes; shadow + paper pocket from 2026-09-21T18:45Z
+
+**Question.** Retry League One's standalone after the first attempt failed
+quality gate 2 by 0.3pp (Addendum 54)? **Honest view:** not a priority —
+both League One pockets perform on the pooled chain, the pocket-aware gate
+protects them, and League Two's standalone has not yet shown a decisive gain
+over the pooled model. But the failed attempt was the *walk-forward* build
+(trees before 2022-09, about half the league's rows); the like-for-like
+attempt — the standard recipe on all pre-cutoff rows with the forward window
+frozen, exactly what League Two V2 runs — had never been made and costs a
+minute. One run, no recipe search (iterating hyperparameters until a gate
+reads 4.9 would be gate-mining; not done).
+
+**Result (dry run 2026-09-21T18:30Z, then the same recipe written as the
+first version).** Recipe: equal-weighted, no regime features,
+`forwardFreeze` 2026-08-11T09:00Z. Quality gates 1/2/3 all passed; held-out
+slice 1,639 rows (2023-08-15 → 2026-05-24), log-loss 1.0395, Brier 0.6251.
+
+**Wired as League Two V2 is:** `STANDALONE_SHADOW_LEAGUE_IDS` gains 41
+(standalone probabilities, pick and edge recorded on every League One lock
+beside the live values, through the one chain under the standalone
+template); weekly standalone retrain includes 41 (forward window frozen);
+paper pocket `l1-v2-12-50` (standalone model's own pick, paper Kelly on its
+own calibrated probability, priority 3 — the parked 6/45 paper cell moves to
+priority 4, mirroring League Two where V2 sits directly after the real
+pocket); pre-registered forward-only candidate cell 12/50 at factor 1.0. The
+Jan–May 5/45 cell is **not** registered for the standalone — a
+months-bounded cell needs its own forward read and there is no Jan–May data
+until January. Cutover rule unchanged: ≥ 300 forward fixtures, standalone
+top-pick residual within 1pp of pooled or better, own cell non-negative.
+Nothing about the live League One pockets changes; real money stays on the
+pooled chain.

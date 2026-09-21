@@ -600,12 +600,14 @@ const LEAGUE_ONE_RULE_FROM = '2026-09-17T10:00:00Z';
 // paper Kelly, never converted automatically). model 'standalone' = the bet is the
 // league's standalone model's own pick, judged on its own outputs (League Two V2).
 const PAPER_POCKETS_FROM = '2026-09-17T12:00:00Z';
+const L1_V2_FROM = '2026-09-21T18:45:00Z'; // Addendum 66: League One standalone shadow + paper pocket
 const POCKETS = [
   { id: 'l2-9-40',          leagueId: 42, tier: 'real',  label: 'League Two 9%/40%',               edgeMin: 0.09, probMin: 0.40, months: null,   priority: 1, from: LEAGUE_TWO_RULE_FROM, basis: 'Addendum 53' },
   { id: 'l2-v2-9-40',       leagueId: 42, tier: 'paper', label: 'League Two V2 (paper)',            edgeMin: 0.09, probMin: 0.40, months: null,   priority: 2, from: PAPER_POCKETS_FROM, basis: 'Addendum 54', model: 'standalone' },
   { id: 'l1-12-50',         leagueId: 41, tier: 'real',  label: 'League One 12%/50% year-round',   edgeMin: 0.12, probMin: 0.50, months: null,   priority: 1, from: LEAGUE_ONE_RULE_FROM, basis: 'Addenda 56–57' },
   { id: 'l1-jan-may-5-45',  leagueId: 41, tier: 'real',  label: 'League One Jan–May 5%/45%',       edgeMin: 0.05, probMin: 0.45, months: [1, 5], priority: 2, from: LEAGUE_ONE_RULE_FROM, basis: 'Addenda 56–57' },
-  { id: 'l1-6-45-paper',    leagueId: 41, tier: 'paper', label: 'League One 6%/45% (paper)',        edgeMin: 0.06, probMin: 0.45, months: null,   priority: 3, from: PAPER_POCKETS_FROM, basis: 'Addendum 55 (parked cell)' },
+  { id: 'l1-v2-12-50',      leagueId: 41, tier: 'paper', label: 'League One V2 (paper)',            edgeMin: 0.12, probMin: 0.50, months: null,   priority: 3, from: L1_V2_FROM, basis: 'Addendum 66', model: 'standalone' },
+  { id: 'l1-6-45-paper',    leagueId: 41, tier: 'paper', label: 'League One 6%/45% (paper)',        edgeMin: 0.06, probMin: 0.45, months: null,   priority: 4, from: PAPER_POCKETS_FROM, basis: 'Addendum 55 (parked cell)' },
 ];
 const POCKET_LEAGUE_IDS = new Set(POCKETS.map(p => p.leagueId));
 const POCKET_BY_ID = Object.fromEntries(POCKETS.map(p => [p.id, p]));
@@ -637,8 +639,8 @@ function assignPocket(leagueId, edge, modelProb, kickoffIso, standalone = null) 
 // (50-60% band bias 5.3pp vs the 5.0pp bar) at 4,700 training rows, so it has
 // no standalone model — its pooled-chain candidate is a paper track pending the
 // user's evidenced fallback decision. League Two alone keeps a standalone model.
-const STANDALONE_TRAIN_LEAGUE_IDS  = [42];
-const STANDALONE_SHADOW_LEAGUE_IDS = new Set([42]);
+const STANDALONE_TRAIN_LEAGUE_IDS  = [42, 41]; // Addendum 66: League One joins the weekly standalone cycle (forward window frozen)
+const STANDALONE_SHADOW_LEAGUE_IDS = new Set([42, 41]);
 const STANDALONE_ACTIVE_LEAGUE_IDS = new Set([]);
 // Leagues whose own investigation found no pocket (Addendum 54): scanning paused,
 // data ingestion and blends untouched, records kept. Re-enabled only by a new
@@ -654,7 +656,8 @@ const SCANNING_PAUSED_LEAGUE_IDS = new Set([40]); // Championship, 2026-09-16
 // pre-registered without any historical selection and judged forward only.
 const STANDALONE_CANDIDATE_CELLS = {
   42: { edgeMin: 0.09, probMin: 0.40, registered: '2026-09-16T14:30:00Z', basis: 'pre-registered forward candidate: live rule shape (9/40) on the standalone scale at factor 1.0; no historical selection' },
-  40: null, 41: null,
+  40: null,
+  41: { edgeMin: 0.12, probMin: 0.50, registered: '2026-09-21T18:45:00Z', basis: 'pre-registered forward candidate: live year-round rule shape (12/50) on the standalone scale at factor 1.0; no historical selection. The Jan–May 5/45 cell is not registered for the standalone (months-bounded cells need their own forward read).' },
 };
 const STANDALONE_FACTOR = { 42: 1.0, 40: 1.0, 41: 1.0 }; // own Platt calibration; a factor is a rule-13/17 decision on forward data
 // 2026-09-04 (Addendum 40, adopted): the edge floor is expressed on each league
