@@ -5483,12 +5483,17 @@ app.put('/api/settings', (req, res) => {
 // ever written on a revert. Tracking (real vs paper record) depends only on
 // placementConfirmed, so a confirmation at any time turns the card green.
 const AWAITING_WINDOW_MS = 2 * 60 * 60 * 1000; // orange hint until kickoff + 2h
-function betDisplayState(b, now = Date.now()) {
+function betDisplayState(b, _now = Date.now()) {
   // 'real' means the bet was converted to real money (mode === 'real'); paper bets
   // also carry placementConfirmed from lock time, so that flag is NOT the criterion.
+  // 2026-09-21: a real-tier pocket bet that has not been converted is 'unplaced' —
+  // permanently, resolved or not, until the user marks it placed (Scout card or
+  // Performance bet log). It shows in the real-money bet log as unplaced and never
+  // enters the real bankroll. The old transient 'awaiting' state is retired.
   if (b.mode === 'real') return 'real';
+  if (b.isFakeMoney) return 'paper';
   const tier = b.pocketTier || POCKET_BY_ID[b.pocketId]?.tier || null;
-  if (tier === 'real' && !b.result && b.kickoff && (new Date(b.kickoff).getTime() + AWAITING_WINDOW_MS) > now) return 'awaiting';
+  if (tier === 'real') return 'unplaced';
   return 'paper';
 }
 function decorateBets(bets) { const now = Date.now(); return bets.map(b => ({ ...b, displayState: betDisplayState(b, now) })); }
@@ -8222,7 +8227,8 @@ app.post('/api/bets/:id/convert-to-real', (req, res) => {
   if (!bet) return res.status(404).json({ error: 'Not found' });
   if (bet.mode === 'real') return res.status(400).json({ error: 'Already real' });
   if (bet.isFakeMoney) return res.status(400).json({ error: 'Observation-tier bet cannot be converted to real money' });
-  if (bet.result) return res.status(400).json({ error: 'Bet already resolved — mode cannot change' });
+  // 2026-09-21: conversion after the result is allowed (the user places on the move
+  // and logs later). P&L is recomputed below at the real stake/odds and commission.
 
   const { bookmakerId, bookmakerName, actualOdds, actualStake } = req.body;
   if (!bookmakerId || !bookmakerName) return res.status(400).json({ error: 'bookmakerId and bookmakerName required' });
@@ -8259,6 +8265,12 @@ app.post('/api/bets/:id/convert-to-real', (req, res) => {
   bet.placementStatus = 'placed';
   bet.placementConfirmed = true;
   bet.placedAt        = new Date().toISOString();
+  if (bet.result) {
+    // Late conversion: settle at the real stake/odds (exchange commission on net winnings only)
+    const commissionRate = (getBookmakers().find(bm => bm.id === bookmakerId)?.commission) || 0;
+    bet.pnl = bet.result === 'win' ? parseFloat(((odds - 1) * stake * (1 - commissionRate)).toFixed(2)) : bet.result === 'loss' ? -stake : 0;
+    bet.convertedAfterResult = true;
+  }
   saveBets(bets);
 
   // Update bookmaker stats — same as confirm-placement

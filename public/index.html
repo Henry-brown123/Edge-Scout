@@ -315,10 +315,11 @@ td.mono { font-family: var(--font-data); }
 
 /* ── Part 3 (Addendum 59): derived display states — real (green), awaiting (orange, transient), paper (blue) ── */
 .fixture-card.state-paper { border-left: 3px solid #4ea8ff; }
-.fixture-card.state-awaiting { border-left: 3px solid #f5a623; border-color: rgba(245,166,35,.5); background: rgba(245,166,35,.07); box-shadow: 0 0 0 1px rgba(245,166,35,.28); }
+.fixture-card.state-awaiting, .fixture-card.state-unplaced { border-left: 3px solid #f5a623; border-color: rgba(245,166,35,.5); background: rgba(245,166,35,.07); box-shadow: 0 0 0 1px rgba(245,166,35,.28); }
 .fixture-card.state-real { border-left: 3px solid var(--green); border-color: rgba(0,255,135,.45); background: rgba(0,255,135,.05); }
 .state-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; vertical-align:middle; background:#4ea8ff }
-.state-dot.state-awaiting { background:#f5a623; animation:pulse-amber 1.4s infinite }
+.state-dot.state-awaiting, .state-dot.state-unplaced { background:#f5a623; animation:pulse-amber 1.4s infinite }
+.badge-unplaced { background:rgba(245,166,35,.16); color:#f5a623; border:1px solid rgba(245,166,35,.5); font-weight:800 }
 .state-dot.state-real { background:var(--green) }
 .bucket-strip { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:10px; margin-bottom:16px }
 .bucket-tile { background:var(--card,#14161c); border:1px solid var(--border); border-radius:10px; padding:12px 14px }
@@ -2687,8 +2688,8 @@ function renderScout() {
   set('s-real-watching',  realW.length);  set('s-real-locked',  realL.length);
   set('s-total-watching', todayW.length); set('s-total-locked', locked.length);
   const confirmed = realL.filter(b => b.mode === 'real').length;
-  const awaiting  = realL.filter(b => b.displayState === 'awaiting').length;
-  set('s-real-locked-sub', `${confirmed} confirmed · ${awaiting} awaiting confirmation`);
+  const unplaced  = realL.filter(b => b.displayState === 'unplaced').length;
+  set('s-real-locked-sub', `${confirmed} placed · ${unplaced} unplaced`);
   const fill = (listId, emptyId, html) => { const l = document.getElementById(listId), e = document.getElementById(emptyId); if (!l) return; l.innerHTML = html; if (e) e.style.display = html ? 'none' : 'block'; };
   fill('paper-watching-list', 'paper-watching-empty', paperW.map(w => watchingCard(w)).join(''));
   fill('paper-locked-list',   'paper-locked-empty',   groupedCards(paperL, 'Paper — outside a pocket'));
@@ -2798,7 +2799,7 @@ function recommendedCard(b) {
       ${isGenericPaperOnly ? `<div style="background:rgba(255,170,0,0.12);border-bottom:1px solid rgba(255,170,0,0.3);padding:6px 14px;font-size:11px;font-weight:700;color:#ffaa00;border-radius:8px 8px 0 0;margin:-12px -12px 10px">⚠ PAPER ONLY — zero real-money stake (manual lock or calibration flag).</div>` : ''}
       ${isFakeMoney ? `<div style="background:rgba(148,163,184,0.1);border-bottom:1px solid rgba(148,163,184,0.28);padding:6px 14px;font-size:11px;font-weight:700;color:var(--muted);border-radius:8px 8px 0 0;margin:-12px -12px 10px">NO STAKE — observation only. Logged for future review, excluded from Paper P&L.</div>` : ''}
       ${isTrainingHoldout ? `<div style="background:rgba(122,162,255,0.1);border-bottom:1px solid rgba(122,162,255,0.28);padding:6px 14px;font-size:11px;font-weight:700;color:#7aa2ff;border-radius:8px 8px 0 0;margin:-12px -12px 10px">${isDateSplitLeague ? 'Training-excluded fixture — kicked off before the cutoff, so this result stays permanently out of the model by design (not pending).' : 'Training-excluded league — results kept permanently clean for backtesting by design (not pending).'} ${stakeIsZeroed ? 'Paper only (zero real-money stake).' : 'Real betting fully enabled.'}</div>` : ''}
-      ${(isRealPocket(b.pocketId) && b.mode !== 'real' && !b.result) ? `<div style="background:rgba(245,166,35,0.14);border-bottom:1px solid rgba(245,166,35,0.4);padding:6px 14px;font-size:11px;font-weight:700;color:#f5a623;border-radius:8px 8px 0 0;margin:-12px -12px 10px;display:flex;justify-content:space-between;align-items:center"><span>● ${POCKET_LABELS[b.pocketId] || b.pocketId} — ${b.displayState === 'awaiting' ? 'awaiting confirmation' : 'not confirmed (paper)'}</span><button class="btn btn-sm" style="background:#f5a623;color:#111;border:none;padding:3px 10px;font-weight:700" onclick="event.stopPropagation();openBmPanel('${b.id}')">Confirm placed</button></div>` : ''}
+      ${(b.displayState === 'unplaced') ? `<div style="background:rgba(245,166,35,0.14);border-bottom:1px solid rgba(245,166,35,0.4);padding:6px 14px;font-size:11px;font-weight:700;color:#f5a623;border-radius:8px 8px 0 0;margin:-12px -12px 10px;display:flex;justify-content:space-between;align-items:center"><span>● ${POCKET_LABELS[b.pocketId] || b.pocketId} — UNPLACED (real-money pocket, not yet marked placed)</span><button class="btn btn-sm" style="background:#f5a623;color:#111;border:none;padding:3px 10px;font-weight:700" onclick="event.stopPropagation();openBmPanel('${b.id}')">Mark placed</button></div>` : ''}
       ${(b.pocketId && !isRealPocket(b.pocketId)) ? `<div style="background:rgba(78,168,255,0.10);border-bottom:1px solid rgba(78,168,255,0.35);padding:6px 14px;font-size:11px;font-weight:700;color:#4ea8ff;border-radius:8px 8px 0 0;margin:-12px -12px 10px">● ${POCKET_LABELS[b.pocketId]} — paper stake${b.pocketModelVersion ? ` · standalone model ${String(b.pocketModelVersion).slice(0, 10)}` : ''}</div>` : ''}
       ${(b.pocketId && b.mode === 'real') ? `<div style="background:rgba(0,255,135,0.10);border-bottom:1px solid rgba(0,255,135,0.35);padding:6px 14px;font-size:11px;font-weight:700;color:var(--green);border-radius:8px 8px 0 0;margin:-12px -12px 10px">✓ ${POCKET_LABELS[b.pocketId] || b.pocketId} — real, confirmed</div>` : ''}
       ${isReal ? `<div style="background:rgba(255,209,102,0.08);border-bottom:1px solid rgba(255,209,102,0.2);padding:5px 14px;font-size:10px;font-weight:700;color:var(--amber);border-radius:8px 8px 0 0;margin:-12px -12px 8px;letter-spacing:.04em">REAL MONEY BET</div>` : ''}
@@ -3260,9 +3261,15 @@ async function renderPerfMode(mode) {
   const moreRow = document.getElementById(`${prefix}bets-more-row`);
   const moreBtn = document.getElementById(`${prefix}bets-more-btn`);
   tbody.innerHTML = '';
-  empty.style.display = placedBets.length ? 'none' : 'block';
+  // Real view (2026-09-21): unplaced real-tier pocket bets are listed in the real
+  // bet log (orange, 'Mark placed' action) but are NOT in placedBets, so none of
+  // the bankroll / P&L / record figures above include them.
+  const unplacedRows = mode === 'real' ? filterBetsByWindow(bets.filter(b => b.displayState === 'unplaced')) : [];
+  const logBets = mode === 'real' && unplacedRows.length ? [...placedBets, ...unplacedRows].sort((a, b) => (b.lockedAt || b.kickoff || '') < (a.lockedAt || a.kickoff || '') ? -1 : 1) : placedBets;
+  if (mode === 'real') { const allUnplaced = bets.filter(b => b.displayState === 'unplaced'); const theo = allUnplaced.filter(b => b.result === 'win' || b.result === 'loss').reduce((s, b) => s + (b.result === 'win' ? ((b.bookOdds || 0) - 1) * (b.suggestedStake || 0) : -(b.suggestedStake || 0)), 0); const rec = document.getElementById('real-p-record'); if (rec && allUnplaced.length) rec.textContent += ` · ${allUnplaced.length} unplaced (${theo >= 0 ? '+' : ''}£${theo.toFixed(2)} at suggested stakes, not in bankroll)`; }
+  empty.style.display = logBets.length ? 'none' : 'block';
 
-  const visibleBets = betLogExpanded[mode] ? placedBets : placedBets.slice(0, BET_LOG_PAGE_SIZE);
+  const visibleBets = betLogExpanded[mode] ? logBets : logBets.slice(0, BET_LOG_PAGE_SIZE);
 
   visibleBets.forEach(b => {
     const betDate = new Date(b.lockedAt || b.kickoff || 0);
@@ -3300,7 +3307,7 @@ async function renderPerfMode(mode) {
     tr.innerHTML = `
       <td class="mono" style="color:var(--muted);white-space:nowrap" title="${betDate.getFullYear() > 2000 ? betDate.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) : 'Date unavailable'}">${dateStr}</td>
       ${modeCell}
-      <td class="mono"><span class="state-dot state-${b.displayState || 'paper'}" title="${b.displayState === 'real' ? 'Real — confirmed placement' : b.displayState === 'awaiting' ? 'Pocket lock awaiting confirmation' : 'Paper'}"></span>${b.fixture}${b.lockTrigger && !b.lineupsAtLock ? ` <span class="badge" style="background:rgba(245,166,35,.15);border:1px solid rgba(245,166,35,.45);color:#f5a623" title="Team sheets were not available when this bet locked (T-25 fallback)">Lineups not confirmed</span>` : ''}${(isRealPocket(b.pocketId) && b.mode !== 'real' && !b.result) ? ` <button class="btn btn-ghost btn-sm" style="padding:1px 6px;color:#f5a623;border-color:#f5a623;font-size:10px" onclick="openBmPanel('${b.id}')">Confirm placed</button>` : ''}</td>
+      <td class="mono"><span class="state-dot state-${b.displayState || 'paper'}" title="${b.displayState === 'real' ? 'Real — placed' : b.displayState === 'unplaced' ? 'Real-money pocket bet, not yet marked placed — not in the real bankroll' : 'Paper'}"></span>${b.displayState === 'unplaced' ? '<span class="badge badge-unplaced" style="margin-right:6px">UNPLACED</span>' : ''}${b.fixture}${b.lockTrigger && !b.lineupsAtLock ? ` <span class="badge" style="background:rgba(245,166,35,.15);border:1px solid rgba(245,166,35,.45);color:#f5a623" title="Team sheets were not available when this bet locked (T-25 fallback)">Lineups not confirmed</span>` : ''}${(b.displayState === 'unplaced') ? ` <button class="btn btn-ghost btn-sm" style="padding:1px 6px;color:#f5a623;border-color:#f5a623;font-size:10px" title="Convert to a placed real-money bet at the stake and odds you actually got — allowed after the result too" onclick="openBmPanel('${b.id}')">Mark placed</button>` : ''}</td>
       <td style="color:var(--muted)">${b.leagueName || '—'}</td>
       <td><span class="badge badge-cyan">${b.bet}</span></td>
       <td>
