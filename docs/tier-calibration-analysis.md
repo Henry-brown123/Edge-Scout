@@ -10465,3 +10465,54 @@ Nothing applied. Switching Term A on = a dated regime declared in
 `regime.js` plus `termA: 'on'`; Term B on = trigger + 300 locks + the
 pre-registered read, then `termB: 'on'`; the nightly rule can kill Term B on
 its own and a kill is cleared only by hand.
+
+## Addendum 65 — League Two walk-forward twin: one historical read against the pooled model (2026-09-21)
+
+**Why.** The live League Two standalone (Addendum 54) trains its trees on the
+oldest 80% of rows and its Platt calibration on the newest 20%, so its only
+clean read is forward (73 matched fixtures to date). A twin with trees AND
+Platt cut before 2025-08-01 gives an immediate model-level read on rows
+neither it nor the pooled model ever trained on (the pooled model never
+trains on pre-cutoff League Two rows). Built as a dry run (`l2wf2025`,
+archived, nothing written), read once through the one chain
+(`diag-standalone-forward?modelKey=archive:42:l2wf2025&from=2025-08-01`,
+chain-vs-raw diff 0). **Nothing is selected or adjusted from this read; the
+live version's forward validation continues untouched.**
+
+Twin: trees on rows before ~2023-11 (80% of the pre-2025-08 rows), Platt on
+2023-11 → 2025-07 (n 1,533), quality gates passed. Held-out rows with a
+Pinnacle close, 2025-08-01 → 2026-09-19: **628**.
+
+| Read (628 fixtures) | Pooled chain (0.93) | Walk-forward twin (1.0) | Paired |
+|---|---|---|---|
+| Log-loss | — | — | twin − pooled **+0.00045 (z 0.08)** — equal |
+| Expected home rate vs 42.8% actual | 40.4% | **42.6%** | twin better calibrated on the base rate |
+| Top-pick beyond-market residual | +3.66 ± 1.96pp | +1.90 ± 1.94pp | **−1.76 ± 1.25pp** (twin worse, z −1.4); same pick 536/628 |
+| Top-pick closing ROI | +4.7% | +0.4% | |
+
+**9/40 cell, descriptive only — mining caveat.** The 9/40 shape was chosen by
+reading these very fixtures' outcomes three times under the pooled chain
+(Addenda 47, 52, 53). The pooled reading below is therefore the selected
+cell on its own selection rows and is inflated by construction; the twin's
+reading is not selected, but its shape is not independent of these rows
+either. Neither is validation.
+
+| 9/40 on the 628 rows | n | Beyond market | Closing ROI |
+|---|---|---|---|
+| Pooled chain (the live rule, on rows it was selected on) | 36 | +13.5 ± 8.2pp | +61.7% |
+| Walk-forward twin, factor 1.0 | 77 | −0.7 ± 5.3pp | +2.4% |
+
+Readings: the twin ranks fixtures as well as the pooled model (log-loss
+equal, 85% same pick) and calibrates the League Two home rate better, but
+its top picks carry 1.8pp less market-relative edge on this window — outside
+the "within 1pp" band of the cutover rule on the point estimate, and 1.4 SE
+from it. Its 9/40 cell is flat on 77 bets at ±5pp, which says nothing either
+way at that width. The live twin's forward read (73 fixtures, +6.1 ± 4.1pp
+in the standalone's favour) points the other way; the two windows disagree
+at roughly 1.5 SE each and neither is decisive.
+
+**Open question for the user (not resolved here):** whether the cutover rule
+(≥ 300 forward fixtures, standalone residual ≥ pooled − 1pp, own cell
+non-negative) should admit a walk-forward historical read alongside forward
+fixtures. On today's numbers the historical read would *not* pass the
+residual band, so the question is about the rule, not about a cutover.
