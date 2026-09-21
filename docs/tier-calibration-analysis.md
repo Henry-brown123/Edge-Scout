@@ -10527,6 +10527,13 @@ trains trees and Platt only on rows before its pre-registration cutoff
 (2026-08-11T09:00Z for League Two), the same exclusion the pooled model has
 always had. `STANDALONE_TRAIN_ALL=1` lifts it only for a cut-over league.
 The live League Two model was retrained under the new rule immediately
-(through its own gate; version recorded below), so the forward read from
-here on is of a model that has never seen a forward row. Cost accepted: the
+(through its own gate), so the forward read from here on is of a model that
+has never seen a forward row.
+
+Result: version **2026-09-21T17:47:04Z**, `recipe.forwardFreeze`
+2026-08-11T09:00Z; trees on 6,576 rows to 2023-08-15, Platt on 1,644 rows
+2023-08-15 → 2026-05-25 (the last pre-cutoff fixture); adopted, not inferior
+to the 05:23 version on 1,586 paired rows (−0.0010, z −1.07). Forward read on
+the frozen model: 73 fixtures, top-pick residual +6.5 ± 4.1pp vs pooled;
+cell 8 bets, −18.9pp — unchanged in substance from the 05:23 reading. Cost accepted: the
 shadow model learns nothing new until cutover.
