@@ -46,9 +46,18 @@ function loadModel() {
 // same shape as the pooled file, same mtime-based reload. null when absent.
 const _leagueModels = {};
 function loadLeagueModel(leagueId) {
-  // leagueId may be a plain id (42) or a key with a build suffix ('42-wf2022-09-01')
-  const lid = /^\d+$/.test(String(leagueId)) ? parseInt(leagueId, 10) : String(leagueId);
-  const p = path.join(DATA_DIR, `gbdt-weights-${lid}.json`);
+  // leagueId may be a plain id (42), a key with a build suffix ('42-wf2022-09-01'),
+  // or 'archive:<league>:<tag>' — an archived (e.g. dry-run) candidate from
+  // model-archive/league-<league>/, so diagnostics can run it through the one
+  // chain without a weights file being written (2026-09-21).
+  let lid = /^\d+$/.test(String(leagueId)) ? parseInt(leagueId, 10) : String(leagueId);
+  let p = path.join(DATA_DIR, `gbdt-weights-${lid}.json`);
+  const am = /^archive:(\d+):(.+)$/.exec(String(leagueId));
+  if (am) {
+    let index = []; try { index = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'model-archive', `league-${am[1]}`, 'index.json'), 'utf8')); } catch { return null; }
+    const e = index.find(v => v.tag === am[2]) || index.find(v => v.version === am[2]); if (!e) return null;
+    p = path.join(DATA_DIR, 'model-archive', `league-${am[1]}`, e.file);
+  }
   let mtimeMs;
   try { mtimeMs = fs.statSync(p).mtimeMs; } catch { return null; }
   const c = _leagueModels[lid];

@@ -10675,7 +10675,10 @@ function standaloneChainProbs(modelKey, leagueId, rec, context) {
 app.get('/api/admin/diag-standalone-forward', async (req, res) => {
   try {
     const leagueId = parseInt(req.query.league, 10) || 42;
-    const cutoff = DATE_SPLIT_HOLDOUT_CUTOFFS.get(leagueId) || '2026-08-11T09:00:00Z';
+    // 2026-09-21: ?modelKey=archive:<league>:<tag> reads an archived candidate through
+    // the same chain; ?from= overrides the window start (walk-forward holdout reads).
+    const modelKey = req.query.modelKey || String(leagueId);
+    const cutoff = req.query.from || DATE_SPLIT_HOLDOUT_CUTOFFS.get(leagueId) || '2026-08-11T09:00:00Z';
     const { classifyFixture, WEIGHTS_BY_CONTEXT, CONTEXT_CONFIG, LEAGUE_CONFIG: LC } = require('./scoring');
     const settings = getSettings();
     const hist = readHistoricalCached() || {};
@@ -10690,17 +10693,19 @@ app.get('/api/admin/diag-standalone-forward', async (req, res) => {
       if (!co || co.bookmaker !== 'pinnacle' || !(co.homeOdds > 1 && co.drawOdds > 1 && co.awayOdds > 1)) continue;
       const context = r.context || classifyFixture(leagueId);
       const pooled = scoreProbabilities({ homeF: r.homeFactors, awayF: r.awayFactors, weights: WEIGHTS_BY_CONTEXT[context], context, leagueId, leagueConfig: LC[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: true, rankAdjust: false, hostBoost: false, modifiers: false } }).probs;
-      const sp = standaloneChainProbs(leagueId, leagueId, r, context);
+      const sp = standaloneChainProbs(modelKey, leagueId, r, context);
       if (!sp) continue;
-      { const rawSp = model.predictLeague(leagueId, r.homeFactors, r.awayFactors, context); const dd = rawSp ? Math.max(...['home', 'draw', 'away'].map(k => Math.abs(sp.probs[k] - rawSp.probs[k]))) : null; if (dd != null && dd > chainVsRawMaxDiff) chainVsRawMaxDiff = dd; } // 2026-09-21: chain (standalone template) vs raw model — 0 while every stage is off
+      { const rawSp = model.predictLeague(modelKey, r.homeFactors, r.awayFactors, context); const dd = rawSp ? Math.max(...['home', 'draw', 'away'].map(k => Math.abs(sp.probs[k] - rawSp.probs[k]))) : null; if (dd != null && dd > chainVsRawMaxDiff) chainVsRawMaxDiff = dd; } // 2026-09-21: chain (standalone template) vs raw model — 0 while every stage is off
       const stripped = marginStrippedImplied(co);
       const mk = (p, f) => { const pick = p.home >= p.draw && p.home >= p.away ? 'home' : p.away >= p.draw ? 'away' : 'draw'; const won = r.actualOutcome === pick; return { pick, prob: p[pick], edge: Math.min(0.97, p[pick] * f) - stripped[pick], bm: (won ? 1 : 0) - stripped[pick], pnl: won ? co[`${pick}Odds`] - 1 : -1 }; };
-      rows.push({ date: r.date, pooled: mk(pooled, fP), standalone: mk(sp.probs, fS) });
+      rows.push({ date: r.date, pooled: mk(pooled, fP), standalone: mk(sp.probs, fS), llDiff: -Math.log(Math.max(1e-12, sp.probs[r.actualOutcome])) + Math.log(Math.max(1e-12, pooled[r.actualOutcome])), homeWon: r.actualOutcome === 'home' ? 1 : 0, homeS: sp.probs.home, homeP: pooled.home });
     }
     const sm = (list) => { const n = list.length; if (!n) return { n: 0 }; const bm = list.reduce((a, x) => a + x.bm, 0) / n; const sd = Math.sqrt(list.reduce((a, x) => a + (x.bm - bm) ** 2, 0) / Math.max(1, n - 1)); return { n, beyondMarketPp: +(bm * 100).toFixed(2), sePp: +((sd / Math.sqrt(n)) * 100).toFixed(2), roiClosePct: +((list.reduce((a, x) => a + x.pnl, 0) / n) * 100).toFixed(1) }; };
+    const ll = rows.map(r => r.llDiff); const lln = ll.length, llm = lln ? ll.reduce((a, b) => a + b, 0) / lln : null, llsd = lln > 1 ? Math.sqrt(ll.reduce((a, d) => a + (d - llm) ** 2, 0) / (lln - 1)) : null;
+    const pairedLogLoss = lln ? { n: lln, meanDiff: +llm.toFixed(5), se: llsd ? +(llsd / Math.sqrt(lln)).toFixed(5) : null, z: llsd ? +(llm / (llsd / Math.sqrt(lln))).toFixed(2) : null, note: 'standalone − pooled log-loss per fixture; negative = standalone better', homeActual: +(rows.reduce((a, r) => a + r.homeWon, 0) / lln).toFixed(3), homeExpectedStandalone: +(rows.reduce((a, r) => a + r.homeS, 0) / lln).toFixed(3), homeExpectedPooled: +(rows.reduce((a, r) => a + r.homeP, 0) / lln).toFixed(3) } : null;
     const diffs = rows.map(r => r.standalone.bm - r.pooled.bm);
     const n = diffs.length, md = n ? diffs.reduce((a, b) => a + b, 0) / n : null, sdd = n > 1 ? Math.sqrt(diffs.reduce((a, d) => a + (d - md) ** 2, 0) / (n - 1)) : null;
-    res.json({ leagueId, cutoff, matchedForward: rows.length, standaloneVersion: model.predictLeague(leagueId, {}, {}, 'club_domestic')?.version ?? null, chain: chainOptionsFor(String(leagueId)), chainVsRawMaxDiff,
+    res.json({ leagueId, modelKey, cutoff, matchedForward: rows.length, standaloneVersion: model.predictLeague(modelKey, {}, {}, 'club_domestic')?.version ?? null, chain: chainOptionsFor(String(leagueId)), chainVsRawMaxDiff, pairedLogLoss,
       allTopPicks: { pooled: sm(rows.map(r => r.pooled)), standalone: sm(rows.map(r => r.standalone)), pairedDiffPp: md != null ? +(md * 100).toFixed(2) : null, pairedSePp: sdd ? +((sdd / Math.sqrt(n)) * 100).toFixed(2) : null, samePick: rows.filter(r => r.pooled.pick === r.standalone.pick).length },
       liveRule9_40_pooled: sm(rows.filter(r => r.pooled.edge >= 0.09 && r.pooled.prob >= 0.40).map(r => r.pooled)),
       standaloneCell: cell ? { cell, ...sm(rows.filter(r => r.standalone.edge >= cell.edgeMin && r.standalone.prob >= cell.probMin).map(r => r.standalone)) } : { cell: null, note: 'no candidate cell registered yet' },
