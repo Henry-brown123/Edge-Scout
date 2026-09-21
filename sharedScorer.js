@@ -26,7 +26,7 @@ const {
 } = require('./scoring');
 const model = require('./models/interface');
 const { applyTeamProfileModifiers } = require('./teamProfiles');
-const { regimeFor } = require('./regime');
+const { regimeFor, regimeOffsetDeltas, applyLogOddsOffset } = require('./regime');
 
 const SCORER_VERSION = 'shared-stageA-2026-09-06';
 
@@ -95,8 +95,8 @@ const HOST_NATIONS_2026 = new Set([2384, 5529, 16]); // USA, Canada, Mexico
 //   the model's own probability — exactly what Addendum 54's shadow computed
 //   inline before this refactor (verified: chainDiff 0).
 const MODEL_CHAIN_TEMPLATES = {
-  pooled:     {},
-  standalone: { biasCorrection: false, correctionLayer: false, regimeOffset: 'off', rankAdjust: false, hostBoost: false, modifiers: false },
+  pooled:     { regimeOffset: 'active' },
+  standalone: { biasCorrection: false, correctionLayer: false, regimeOffset: 'active', rankAdjust: false, hostBoost: false, modifiers: false },
 };
 // Per-model evidence-gated departures from the template, keyed by modelKey.
 // Empty on purpose: an entry here needs its own addendum.
@@ -105,11 +105,19 @@ function chainOptionsFor(modelKey, callerOptions = {}) {
   const kind = modelKey === 'pooled' ? 'pooled' : 'standalone';
   return { ...MODEL_CHAIN_TEMPLATES[kind], ...(MODEL_CHAIN_OVERRIDES[modelKey] || {}), ...callerOptions };
 }
-// Design brief R slot: additive regime offset on the log-odds. No coefficients
-// exist; 'off' (and anything but a fitted, validated 'on') returns probs unchanged.
-function applyRegimeOffset(probs, _leagueId, _regime, mode) {
-  if (mode !== 'on') return probs;
-  throw new Error('regimeOffset "on" has no fitted coefficients (design brief R is not built)');
+// Design brief R (built 2026-09-21): additive regime offset on the log-odds.
+// slot 'off' → nothing computed. 'active' → the deltas both terms WOULD apply
+// are computed and returned as a shadow on every call; a term is applied only
+// when settings.regimeOffset.<term> === 'on' (default 'shadow' for both;
+// Term B 'on' is gated by the 300-post-trigger rule in server.js and switched
+// to 'killed' by the nightly kill rule). Coefficients live in regime.js.
+function applyRegimeOffset(probs, leagueId, regime, slot, settings) {
+  if (slot !== 'active') return { probs, shadow: null };
+  const modes = settings?.regimeOffset || {};
+  const d = regimeOffsetDeltas(null, leagueId, regime, { termA: modes.termA || 'shadow', termB: modes.termB || 'shadow' });
+  const out = applyLogOddsOffset(probs, d.applied.deltaHome, d.applied.deltaDraw);
+  const withBoth = applyLogOddsOffset(probs, d.termA.deltaHome + d.termB.deltaHome, d.termA.deltaDraw + d.termB.deltaDraw);
+  return { probs: out, shadow: { ...d, probsBefore: probs, probsIfBothOn: withBoth, changed: out !== probs } };
 }
 
 // ── Factors: live path (verbatim from scoreOneFixture) ──────────────────────
@@ -301,7 +309,8 @@ function scoreProbabilities(p) {
     }
   }
 
-  probs = applyRegimeOffset(probs, leagueId, homeF?.regime, options.regimeOffset); // design brief R slot (no-op until built)
+  const ro = applyRegimeOffset(probs, leagueId, homeF?.regime, options.regimeOffset, settings); // design brief R
+  probs = ro.probs; const regimeOffsetShadow = ro.shadow;
 
   if (options.rankAdjust !== false && cfg.rankScale > 0 && dataConf < 1) {
     const homeRank = lookupFIFARank(homeName);
@@ -371,7 +380,7 @@ function scoreProbabilities(p) {
     teamIntel = { home: null, away: null, modifierNotes: ['team-profile modifiers disabled for this league (unified definitions)'], modifierApplied: false, neutralVenue: !!neutralVenue };
   }
 
-  return { rawProbs, probs, correctionVersion, teamIntel, modelKey, modelVersion, chain: options };
+  return { rawProbs, probs, correctionVersion, teamIntel, modelKey, modelVersion, chain: options, regimeOffsetShadow };
 }
 
 // Max absolute difference across two factor pairs and (optionally) two prob sets.

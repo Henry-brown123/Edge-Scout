@@ -188,6 +188,7 @@ function writeJSON(file, data, options = {}) {
 }
 
 const SETTINGS_DEFAULTS = {
+  regimeOffset: { termA: 'shadow', termB: 'shadow' }, // design brief R: 'shadow' | 'on' (Term B: gated, or 'killed' by the nightly rule)
   weights: { form:18, homeAdv:12, xg:16, h2h:10, defense:14, momentum:10, injuries:8, standings:12 },
   decay: 0.05, formWindow: 6, h2hWindow: 5,
   // Stage A (2026-09-06): which scoring path is live ('legacy' | 'shared') and whether the
@@ -1972,18 +1973,19 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
       // has every stage off, and the number to watch when a stage is switched on.
       const chained = scoreProbabilities({ ...probInputs(), modelKey: String(parseInt(leagueId, 10)) });
       const rawSp = model.predictLeague(leagueId, homeF, awayF, context);
-      const sp = chained ? { probs: chained.probs, version: chained.modelVersion, chain: chained.chain, chainDiff: rawSp ? diffScores({ probs: chained.probs }, { probs: rawSp.probs }).maxDiff : null } : null;
+      const sp = chained ? { probs: chained.probs, version: chained.modelVersion, chain: chained.chain, chainDiff: rawSp ? diffScores({ probs: chained.probs }, { probs: rawSp.probs }).maxDiff : null, regimeOffsetShadow: chained.regimeOffsetShadow ?? null } : null;
       if (sp) {
         const p = sp.probs;
         const pick = p.home >= p.draw && p.home >= p.away ? 'home' : p.away >= p.draw ? 'away' : 'draw';
         const f = STANDALONE_FACTOR[parseInt(leagueId, 10)] ?? 1.0;
         const calProb = Math.min(0.97, p[pick] * f);
         const cell = STANDALONE_CANDIDATE_CELLS[parseInt(leagueId, 10)];
-        standaloneShadow = { version: sp.version, probs: p, pick, prob: p[pick], calProb, factor: f, cell: cell || null, clearsCell: null, chain: sp.chain, chainDiff: sp.chainDiff };
+        standaloneShadow = { version: sp.version, probs: p, pick, prob: p[pick], calProb, factor: f, cell: cell || null, clearsCell: null, chain: sp.chain, chainDiff: sp.chainDiff, regimeOffsetShadow: sp.regimeOffsetShadow };
       }
     } catch (e) { standaloneShadow = { error: e.message }; }
   }
   let probs = activeProbs.probs;
+  const regimeOffsetShadow = activeProbs.regimeOffsetShadow ?? null; // design brief R: recorded on every lock
   const correctionVersion = activeProbs.correctionVersion;
   const teamIntel = activeProbs.teamIntel;
   let scorerShadow = null;
@@ -2252,7 +2254,7 @@ async function scoreOneFixture(fix, formFixtures, standings, statsCache, oddsMap
     teamIntel, paperTradeOnly, isTrainingHoldout, betMode,
     isClassifiedLeague, isDomesticTierLeague, tierCandidate, clearsPaperMoneyRule, meetsPaperMoneyRule, isFakeMoney, pocketId, pocketTier, pocketCandidate,
     goalsCandidates, modelVersion, correctionVersion, domesticBlendFixtures,
-    scorerPath, scorerVersion: SCORER_VERSION, featureSpecVersion: `live-${FEATURE_SPEC.version}`, scorerShadow, modifierShadow, standaloneShadow,
+    scorerPath, scorerVersion: SCORER_VERSION, featureSpecVersion: `live-${FEATURE_SPEC.version}`, scorerShadow, modifierShadow, standaloneShadow, regimeOffsetShadow,
   };
 }
 
@@ -2362,7 +2364,7 @@ async function runMorningScan(leagueIds) {
             scoredAt:     new Date().toISOString(),
             successScore:    best.successScore,
             modelVersion:    scored.modelVersion,
-            standaloneShadow: scored.standaloneShadow ?? null, modifierShadow: scored.modifierShadow ?? null, scorerPath: scored.scorerPath, scorerVersion: scored.scorerVersion, featureSpecVersion: scored.featureSpecVersion, scorerShadowMaxDiff: scored.scorerShadow?.maxDiff ?? null,
+            standaloneShadow: scored.standaloneShadow ?? null, modifierShadow: scored.modifierShadow ?? null, regimeOffsetShadow: scored.regimeOffsetShadow ?? null, scorerPath: scored.scorerPath, scorerVersion: scored.scorerVersion, featureSpecVersion: scored.featureSpecVersion, scorerShadowMaxDiff: scored.scorerShadow?.maxDiff ?? null,
             correctionVersion: scored.correctionVersion,
             projectedBet:    best.displayLabel || best.bet,
             projectedBetKey: best.bet,
@@ -3041,7 +3043,7 @@ async function runHourlyRescan() {
             isTrainingHoldout: scored.isTrainingHoldout,
             // Addendum 51: the rescan re-scores through the live path, so it stamps
             // the same scorer tags a lock does (verifies the H cutover hourly).
-            standaloneShadow: scored.standaloneShadow ?? null, modifierShadow: scored.modifierShadow ?? null, scorerPath: scored.scorerPath, scorerVersion: scored.scorerVersion, featureSpecVersion: scored.featureSpecVersion, scorerShadowMaxDiff: scored.scorerShadow?.maxDiff ?? null,
+            standaloneShadow: scored.standaloneShadow ?? null, modifierShadow: scored.modifierShadow ?? null, regimeOffsetShadow: scored.regimeOffsetShadow ?? null, scorerPath: scored.scorerPath, scorerVersion: scored.scorerVersion, featureSpecVersion: scored.featureSpecVersion, scorerShadowMaxDiff: scored.scorerShadow?.maxDiff ?? null,
           };
           refreshed++;
         } catch (e) {
@@ -5452,6 +5454,18 @@ app.get('/api/transactions', (req, res) => {
 // GET settings / PUT settings
 app.get('/api/settings', (_req, res) => res.json(getSettings()));
 app.put('/api/settings', (req, res) => {
+  // Design brief R: Term B may only be switched on after a cross-league trigger
+  // (|g| >= DEAD_ZONE) and >= 300 locks after it, and never while killed.
+  if (req.body?.regimeOffset) {
+    const want = req.body.regimeOffset;
+    for (const t of ['termA', 'termB']) if (want[t] != null && !['shadow', 'on'].includes(want[t])) return res.status(400).json({ error: `regimeOffset.${t} must be 'shadow' or 'on'` });
+    if (want.termB === 'on') {
+      const el = regimeOffsetEligibility();
+      if (el.killed) return res.status(400).json({ error: `regimeOffset.termB is killed (${el.killReason}) — inspect the index and clear the kill explicitly before re-arming` });
+      if (!el.eligible) return res.status(400).json({ error: `regimeOffset.termB activation not eligible: ${el.reason}` });
+    }
+    if (want.termA === 'on' && !regime.REGIME_OFFSET) return res.status(400).json({ error: 'regimeOffset.termA cannot be switched on: no fitted coefficients in regime.js' });
+  }
   // Calibration factors are code constants (rule 17) — no runtime path may change
   // one. Reject rather than silently drop so a stale client is told why.
   if (req.body && Object.prototype.hasOwnProperty.call(req.body, 'calibrationFactor')) {
@@ -8460,6 +8474,8 @@ async function runBackfillChain() {
     // Phase 1c (item L, 2026-09-09): Pinnacle-to-Pinnacle CLV per bet from the
     // closing store just refreshed. No API calls; never blocks Phase 2.
     try { runPinnacleClvPass(); } catch (e) { console.error(`[Backfill] Phase 1c (Pinnacle CLV) error: ${e.message}`); }
+    // Phase 1d (design brief R): cross-league regime index — trigger / kill rule.
+    try { const rc = regimeOffsetDailyCheck(); console.log(`[Backfill] Phase 1d regime index: gRaw ${rc.entry.gRaw} g ${rc.entry.g} (dev ${rc.entry.dev}, n ${rc.entry.n}); market dev ${rc.entry.marketDev}`); } catch (e) { console.error(`[Backfill] Phase 1d (regime index) error: ${e.message}`); }
 
     // Phase 2: lineups (~5,000 budget, hard stop at 05:00 UTC)
     if (backfillCutoffReached()) {
@@ -10503,6 +10519,152 @@ app.get('/api/admin/diag-l2-grid', async (req, res) => {
 // paired. This is the pre-registered cutover measure (>=300 fixtures, standalone
 // within 1pp of pooled or better, own cell non-negative). Forward data: readable
 // at any time (rule 18).
+// ═══ Design brief R (2026-09-21): regime offset — state, kill rule, fit, status ═══
+// regime-offset-state.json: { trigger: { at, day, g }, outside: { since, days }, killedAt,
+// killReason, lastCheckAt, history: [{ date, gRaw, g, dev, marketDev, marketN }] }
+function getRegimeOffsetState() { return readJSON('regime-offset-state.json') || { trigger: null, outside: null, killedAt: null, killReason: null, lastCheckAt: null, history: [] }; }
+function saveRegimeOffsetState(st) { writeJSON('regime-offset-state.json', st); }
+const REGIME_ACTIVATION_LOCKS = 300, REGIME_KILL_DAYS = 14, REGIME_KILL_MARKET_SHARE = 0.5;
+function regimeOffsetEligibility() {
+  const st = getRegimeOffsetState();
+  if (st.killedAt) return { eligible: false, killed: true, killReason: st.killReason, trigger: st.trigger };
+  if (!st.trigger) return { eligible: false, killed: false, reason: `no cross-league trigger yet (|g| >= ${regime.DEAD_ZONE} never observed)`, trigger: null, locksSinceTrigger: 0 };
+  const locks = getBets().filter(b => b.lockedAt && b.lockedAt >= st.trigger.at).length;
+  return { eligible: locks >= REGIME_ACTIVATION_LOCKS, killed: false, reason: locks >= REGIME_ACTIVATION_LOCKS ? 'eligible' : `${locks}/${REGIME_ACTIVATION_LOCKS} locks since trigger ${st.trigger.at}`, trigger: st.trigger, locksSinceTrigger: locks };
+}
+// Pinnacle's implied home rate (margin-stripped closing) over recent fixtures vs
+// the same leagues a year earlier — the market's reading of the same regime.
+function marketHomeDeviation(day, days = REGIME_KILL_DAYS) {
+  const closing = getClosingOdds(); const hist = readHistoricalCached() || {};
+  const byId = new Map((hist.fixtures || []).map(f => [String(f.fixture?.id), f]));
+  const shift = (d, n) => { const x = new Date(d + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+  const fromDay = shift(day, -days), bFromDay = shift(fromDay, -365), bToDay = shift(day, -365);
+  const recent = [], base = [];
+  for (const [fid, co] of Object.entries(closing)) {
+    if (co?.bookmaker !== 'pinnacle' || !(co.homeOdds > 1 && co.drawOdds > 1 && co.awayOdds > 1)) continue;
+    const f = byId.get(String(fid)); if (!f) continue; const lid = parseInt(f.league?.id, 10); if (isRetiredLeague(lid)) continue;
+    const d = String(f.fixture?.date || '').slice(0, 10); const h = marginStrippedImplied(co).home;
+    if (d >= fromDay && d < day) recent.push(h); else if (d >= bFromDay && d < bToDay) base.push(h);
+  }
+  const mean = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+  return { recentN: recent.length, baseN: base.length, recentMean: mean(recent), baseMean: mean(base), dev: (recent.length && base.length) ? mean(recent) - mean(base) : null };
+}
+// Nightly (Phase 1d) and on demand: trigger, outside-dead-zone days, kill.
+function regimeOffsetDailyCheck(dayArg = null) {
+  const day = dayArg || new Date().toISOString().slice(0, 10);
+  const st = getRegimeOffsetState();
+  const G = regime.globalRegime(getRegimeIndex(), day);
+  const M = marketHomeDeviation(day);
+  const entry = { date: day, gRaw: G.gRaw != null ? +G.gRaw.toFixed(3) : null, g: +G.g.toFixed(3), dev: G.dev != null ? +G.dev.toFixed(4) : null, n: G.n, leagues: G.leagues, marketDev: M.dev != null ? +M.dev.toFixed(4) : null, marketN: M.recentN, marketBaseN: M.baseN };
+  if (G.g !== 0) {
+    if (!st.trigger) { st.trigger = { at: new Date().toISOString(), day, g: entry.g, gRaw: entry.gRaw, dev: entry.dev }; console.log(`[RegimeOffset] TRIGGER: cross-league index g=${entry.g} (dev ${entry.dev}) on ${day}`); }
+    if (!st.outside) st.outside = { since: day, days: 0 };
+    st.outside.days = Math.round((new Date(day + 'T00:00:00Z') - new Date(st.outside.since + 'T00:00:00Z')) / 86400000) + 1;
+    // Kill rule: outside the dead zone for >= 14 days with no matching market move
+    // (same sign, at least half the observed rate deviation).
+    const matching = M.dev != null && Math.sign(M.dev) === Math.sign(G.dev) && Math.abs(M.dev) >= REGIME_KILL_MARKET_SHARE * Math.abs(G.dev);
+    entry.marketMatching = matching;
+    if (st.outside.days >= REGIME_KILL_DAYS && !matching && !st.killedAt) {
+      st.killedAt = new Date().toISOString(); st.killReason = `index outside dead zone ${st.outside.days} days (g ${entry.g}, dev ${entry.dev}) with no matching Pinnacle move (market dev ${entry.marketDev}, n ${M.recentN})`;
+      const settings = getSettings(); settings.regimeOffset = { ...(settings.regimeOffset || {}), termB: 'killed' }; saveSettings(settings);
+      console.warn(`[RegimeOffset] KILL: ${st.killReason}`);
+    }
+  } else { st.outside = null; }
+  st.lastCheckAt = new Date().toISOString();
+  st.history = [...(st.history || []).filter(h => h.date !== day), entry].slice(-400);
+  saveRegimeOffsetState(st);
+  return { entry, state: st };
+}
+app.get('/api/admin/regime-offset/status', (_req, res) => {
+  try {
+    const st = getRegimeOffsetState(); const settings = getSettings(); const day = new Date().toISOString().slice(0, 10);
+    const G = regime.globalRegime(getRegimeIndex(), day);
+    res.json({ modes: { termA: settings.regimeOffset?.termA || 'shadow', termB: settings.regimeOffset?.termB || 'shadow' }, coefficients: regime.REGIME_OFFSET, deadZone: regime.DEAD_ZONE, clamp: regime.G_CLAMP, activationLocks: REGIME_ACTIVATION_LOCKS, killDays: REGIME_KILL_DAYS,
+      today: { day, gRaw: G.gRaw, g: G.g, dev: G.dev, se: G.se, n: G.n, leagues: G.leagues }, eligibility: regimeOffsetEligibility(), state: { trigger: st.trigger, outside: st.outside, killedAt: st.killedAt, killReason: st.killReason, lastCheckAt: st.lastCheckAt }, recentHistory: (st.history || []).slice(-14) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/admin/regime-offset/check', (req, res) => { try { res.json(regimeOffsetDailyCheck(req.body?.day || null)); } catch (e) { res.status(500).json({ error: e.message }); } });
+// Clearing a kill is a human decision: it records when/why and re-arms shadow only.
+app.post('/api/admin/regime-offset/clear-kill', (req, res) => {
+  try { const st = getRegimeOffsetState(); if (!st.killedAt) return res.json({ cleared: false, note: 'not killed' }); st.clearedKills = [...(st.clearedKills || []), { killedAt: st.killedAt, killReason: st.killReason, clearedAt: new Date().toISOString(), note: req.body?.note || null }]; st.killedAt = null; st.killReason = null; st.outside = null; saveRegimeOffsetState(st); const settings = getSettings(); settings.regimeOffset = { ...(settings.regimeOffset || {}), termB: 'shadow' }; saveSettings(settings); res.json({ cleared: true, termB: 'shadow' }); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Archived pooled model → raw probability triple (same maths as models/gbdt.js).
+function archivedPredictor(weights) {
+  const { buildFeatures } = require('./models/gbdt');
+  const sig = z => 1 / (1 + Math.exp(-Math.max(-500, Math.min(500, z))));
+  const walk = (node, x) => node.leaf ? node.value : (x[node.feature] <= node.threshold ? walk(node.left, x) : walk(node.right, x));
+  const ens = (c, x) => { let F = c.initValue; for (const t of c.trees) F += c.lr * walk(t, x); return F; };
+  return (homeF, awayF, context) => { const x = buildFeatures(homeF, awayF, context); const h = sig(weights.platt.home.A * ens(weights.classifiers.home, x) + weights.platt.home.B), d = sig(weights.platt.draw.A * ens(weights.classifiers.draw, x) + weights.platt.draw.B), a = sig(weights.platt.away.A * ens(weights.classifiers.away, x) + weights.platt.away.B); const s = h + d + a; return { home: h / s, draw: d / s, away: a / s }; };
+}
+// Term A fit (pre-registered, Addendum 64): MLE of (deltaHome, deltaDraw) on the
+// bias-corrected probabilities of a pooled model whose trees never saw closed
+// doors (default rgp-wf2020-none), flagged rows in [2020-06-17, fitTo); one test
+// look on [fitTo, testTo). Per-league MLE shrunk toward pooled (prior weight
+// shrinkK). Reports gPeak (index |gRaw| peak inside the regime) for Term B's
+// scale and the index's out-of-regime excursions (false-trigger history).
+function _mle2(rows) { // rows: [{ p:{home,draw,away}, y }]
+  const ll = (dh, dd) => { let t = 0; for (const r of rows) { const q = regime.applyLogOddsOffset(r.p, dh, dd); t += Math.log(Math.max(1e-12, q[r.y])); } return t; };
+  const null0 = ll(0, 0);
+  let best = { dh: 0, dd: 0, ll: null0 };
+  for (let dh = -0.8; dh <= 0.4 + 1e-9; dh += 0.05) for (let dd = -0.5; dd <= 0.5 + 1e-9; dd += 0.05) { const v = ll(dh, dd); if (v > best.ll) best = { dh, dd, ll: v }; }
+  const c = best;
+  for (let dh = c.dh - 0.06; dh <= c.dh + 0.06 + 1e-9; dh += 0.005) for (let dd = c.dd - 0.06; dd <= c.dd + 0.06 + 1e-9; dd += 0.005) { const v = ll(dh, dd); if (v > best.ll) best = { dh, dd, ll: v }; }
+  return { deltaHome: +best.dh.toFixed(3), deltaDraw: +best.dd.toFixed(3), n: rows.length, logLikPerRow: rows.length ? +(best.ll / rows.length).toFixed(5) : null, nullLogLikPerRow: rows.length ? +(null0 / rows.length).toFixed(5) : null };
+}
+app.get('/api/admin/regime-offset-fit', (req, res) => {
+  try {
+    const key = req.query.model || 'rgp-wf2020-none', fitFrom = '2020-06-17', fitTo = req.query.fitTo || '2021-01-01', testTo = req.query.testTo || '2021-08-01', shrinkK = parseInt(req.query.shrinkK || '500', 10);
+    const A = _loadArchived('pooled', key); if (!A) return res.status(404).json({ error: `archived pooled model ${key} not found` });
+    const predict = archivedPredictor(A.weights);
+    const hist = readHistoricalCached() || {}; const idx = getRegimeIndex();
+    const recs = (hist.scoredRecords || []).filter(r => r.homeFactors && r.awayFactors && r.actualOutcome && r.context === 'club_domestic' && !isRetiredLeague(r.leagueId) && r.date >= fitFrom && r.date < testTo);
+    const chainP = (r) => applyLeagueBiasCorrection(predict(r.homeFactors, r.awayFactors, r.context), parseInt(r.leagueId, 10), LEAGUE_CONFIG); // the stage the offset follows (correction layer is League Two-only and re-measured separately)
+    const rows = recs.map(r => ({ p: chainP(r), y: r.actualOutcome, lid: parseInt(r.leagueId, 10), date: r.date, flagged: !!r.homeFactors.regime?.closedDoors, gRaw: r.homeFactors.regime?.gRaw ?? null }));
+    const fitRows = rows.filter(r => r.flagged && r.date < fitTo), testRows = rows.filter(r => r.flagged && r.date >= fitTo), unflaggedTest = rows.filter(r => !r.flagged && r.date >= fitTo);
+    const pooled = _mle2(fitRows);
+    const byLeague = {};
+    for (const lid of new Set(fitRows.map(r => r.lid))) { const lr = fitRows.filter(r => r.lid === lid); const m = _mle2(lr); const w = lr.length / (lr.length + shrinkK); byLeague[lid] = { deltaHome: +(w * m.deltaHome + (1 - w) * pooled.deltaHome).toFixed(3), deltaDraw: +(w * m.deltaDraw + (1 - w) * pooled.deltaDraw).toFixed(3), n: lr.length, rawMle: { deltaHome: m.deltaHome, deltaDraw: m.deltaDraw } }; }
+    const paired = (list, coefFor) => { const d = [], hA = [], hN = [], act = []; for (const r of list) { const c = coefFor(r.lid); const q = regime.applyLogOddsOffset(r.p, c.deltaHome, c.deltaDraw); d.push(-Math.log(Math.max(1e-12, q[r.y])) + Math.log(Math.max(1e-12, r.p[r.y]))); hA.push(q.home); hN.push(r.p.home); act.push(r.y === 'home' ? 1 : 0); } const n = d.length; if (!n) return { n: 0 }; const m = d.reduce((a, b) => a + b, 0) / n, v = n > 1 ? d.reduce((a, x) => a + (x - m) ** 2, 0) / (n - 1) : 0, se = n > 1 ? Math.sqrt(v / n) : null; const mean = a => a.reduce((x, y) => x + y, 0) / a.length; return { n, meanDiff: +m.toFixed(5), se: se != null ? +se.toFixed(5) : null, z: se ? +(m / se).toFixed(2) : null, homeActual: +mean(act).toFixed(3), homeExpectedNone: +mean(hN).toFixed(3), homeExpectedOffset: +mean(hA).toFixed(3) }; };
+    const testPooled = paired(testRows, () => pooled), testShrunk = paired(testRows, (lid) => byLeague[lid] || pooled), unflaggedCheck = paired(unflaggedTest, () => ({ deltaHome: 0, deltaDraw: 0 }));
+    const testByLeague = {}; for (const lid of new Set(testRows.map(r => r.lid))) testByLeague[lid] = paired(testRows.filter(r => r.lid === lid), (l) => byLeague[l] || pooled);
+    let gPeak = 0; for (const r of rows.filter(r => r.flagged)) if (r.gRaw != null && Math.abs(r.gRaw) > Math.abs(gPeak)) gPeak = r.gRaw; // signed
+    const months = new Map(); for (const f of (hist.fixtures || [])) { const d = String(f.fixture?.date || '').slice(0, 7); if (d.length === 7 && !months.has(d)) months.set(d, String(f.fixture.date).slice(0, 10)); }
+    const excursions = []; for (const [m, day] of [...months.entries()].sort()) { const G = regime.globalRegime(idx, day); if (G.gRaw != null) excursions.push({ month: m, gRaw: +G.gRaw.toFixed(2), dev: +G.dev.toFixed(4), n: G.n, leagues: G.leagues, closedDoorsMonth: day >= '2020-06-01' && day < '2021-08-01' }); }
+    res.json({ model: key, modelRecipe: A.weights.recipe || null, fitWindow: [fitFrom, fitTo], testWindow: [fitTo, testTo], shrinkK, fit: { pooled, byLeague }, testLook: { pooledCoef: testPooled, shrunkCoef: testShrunk, byLeagueShrunk: testByLeague, unflaggedRowsUnchanged: unflaggedCheck },
+      gPeak: +gPeak.toFixed(2), indexExcursions: { outsideRegimeAboveDeadZone: excursions.filter(e => !e.closedDoorsMonth && Math.abs(e.gRaw) >= regime.DEAD_ZONE), insideRegime: excursions.filter(e => e.closedDoorsMonth), monthsSampled: excursions.length, firstMonthWithIndex: excursions[0]?.month ?? null },
+      note: 'diff = offset − none log-loss per row; negative = offset better. Coefficients are adopted into regime.js by hand (rule 17) only if the test look is better at z <= -1.645 and unflaggedRowsUnchanged.meanDiff is exactly 0.' });
+  } catch (e) { res.status(500).json({ error: e.message, stack: (e.stack || '').split('\n').slice(0, 4) }); }
+});
+// Re-measurement (not re-selection) of every fixed pocket cell with the offset
+// forced on (both terms, history values of closedDoors and g) vs off, on the
+// live chain. In a normal season every difference must be zero.
+app.get('/api/admin/diag-regime-offset-remeasure', (req, res) => {
+  try {
+    if (!regime.REGIME_OFFSET) return res.json({ note: 'no coefficients in regime.js yet — nothing to re-measure', cells: [] });
+    const hist = readHistoricalCached() || {}; const closing = getClosingOdds(); const settings = getSettings();
+    const cells = [
+      { id: 'l2-9-40', leagueId: 42, edgeMin: 0.09, probMin: 0.40, months: null, factor: 0.93, modelKey: 'pooled' },
+      { id: 'l2-7-35-paper', leagueId: 42, edgeMin: 0.07, probMin: 0.35, months: null, factor: 0.93, modelKey: 'pooled' },
+      { id: 'l2-v2-9-40', leagueId: 42, edgeMin: 0.09, probMin: 0.40, months: null, factor: STANDALONE_FACTOR[42] ?? 1.0, modelKey: '42' },
+      { id: 'l1-12-50', leagueId: 41, edgeMin: 0.12, probMin: 0.50, months: null, factor: 0.93, modelKey: 'pooled' },
+      { id: 'l1-jan-may-5-45', leagueId: 41, edgeMin: 0.05, probMin: 0.45, months: [1, 5], factor: 0.93, modelKey: 'pooled' },
+      { id: 'l1-6-45-paper', leagueId: 41, edgeMin: 0.06, probMin: 0.45, months: null, factor: 0.93, modelKey: 'pooled' },
+    ];
+    const out = [];
+    for (const c of cells) {
+      const recs = (hist.scoredRecords || []).filter(r => parseInt(r.leagueId, 10) === c.leagueId && r.homeFactors && r.awayFactors && r.actualOutcome);
+      const cutoff = DATE_SPLIT_HOLDOUT_CUTOFFS.get(c.leagueId) || '2026-08-11T09:00:00Z';
+      const run = (forceOn) => { const list = []; let changedRows = 0; for (const r of recs) { const co = closing[r.fixtureId] || closing[String(r.fixtureId)]; if (!co || co.bookmaker !== 'pinnacle' || !(co.homeOdds > 1 && co.drawOdds > 1 && co.awayOdds > 1)) continue; if (c.months) { const m = new Date(r.date).getUTCMonth() + 1; if (m < c.months[0] || m > c.months[1]) continue; } const context = r.context || 'club_domestic'; const sc = scoreProbabilities({ homeF: r.homeFactors, awayF: r.awayFactors, weights: WEIGHTS_BY_CONTEXT[context], context, leagueId: c.leagueId, leagueConfig: LEAGUE_CONFIG[c.leagueId], settings: { ...settings, regimeOffset: forceOn ? { termA: 'on', termB: 'on' } : { termA: 'shadow', termB: 'shadow' } }, cfg: CONTEXT_CONFIG[context], dataConf: 1, modelKey: c.modelKey, options: { rankAdjust: false, hostBoost: false, modifiers: false } }); if (!sc) continue; if (forceOn && sc.regimeOffsetShadow?.changed) changedRows++; const p = sc.probs; const pick = p.home >= p.draw && p.home >= p.away ? 'home' : p.away >= p.draw ? 'away' : 'draw'; const stripped = marginStrippedImplied(co); const edge = Math.min(0.97, p[pick] * c.factor) - stripped[pick]; if (edge < c.edgeMin - 1e-9 || p[pick] < c.probMin - 1e-9) continue; const won = r.actualOutcome === pick; list.push({ date: r.date, bm: (won ? 1 : 0) - stripped[pick], pnl: won ? co[`${pick}Odds`] - 1 : -1 }); } return { list, changedRows }; };
+      const off = run(false), on = run(true);
+      const sm = (l) => { const n = l.length; if (!n) return { n: 0 }; const bm = l.reduce((a, x) => a + x.bm, 0) / n; return { n, beyondMarketPp: +(bm * 100).toFixed(2), roiClosePct: +((l.reduce((a, x) => a + x.pnl, 0) / n) * 100).toFixed(1) }; };
+      const split = (l) => ({ all: sm(l), closedDoorsEra: sm(l.filter(x => x.date >= '2020-06-17' && x.date < '2021-05-17')), postCutoffForward: sm(l.filter(x => x.date >= cutoff)) });
+      out.push({ cell: c.id, model: c.modelKey, rowsChangedByOffset: on.changedRows, off: split(off.list), on: split(on.list) });
+    }
+    res.json({ coefficients: regime.REGIME_OFFSET, cells: out, note: 'off = live chain as it runs today; on = both terms forced on with each row\'s historical closedDoors and g. postCutoffForward must be identical in a normal season.' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // 2026-09-21: standalone model probabilities for a scored record, through the one
 // chain (standalone template). Diagnostics use this, never model.predictLeague
 // directly, so what they measure is what the live shadow/pocket computes.
