@@ -10516,3 +10516,17 @@ at roughly 1.5 SE each and neither is decisive.
 non-negative) should admit a walk-forward historical read alongside forward
 fixtures. On today's numbers the historical read would *not* pass the
 residual band, so the question is about the rule, not about a cutover.
+
+### Addendum 65 follow-up — standalone forward window frozen out of training (2026-09-21)
+
+The League Two standalone's weekly retrain fitted Platt on the newest 20% of
+rows, which included every post-cutoff fixture the forward validation reads
+(six parameters on 1,661 rows — mild, growing weekly). Fixed at the data
+source rather than by freezing a file: a standalone league in shadow now
+trains trees and Platt only on rows before its pre-registration cutoff
+(2026-08-11T09:00Z for League Two), the same exclusion the pooled model has
+always had. `STANDALONE_TRAIN_ALL=1` lifts it only for a cut-over league.
+The live League Two model was retrained under the new rule immediately
+(through its own gate; version recorded below), so the forward read from
+here on is of a model that has never seen a forward row. Cost accepted: the
+shadow model learns nothing new until cutover.

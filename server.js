@@ -4689,7 +4689,7 @@ async function runWeeklyRetrainCycle() {
       const r = runGbdtRetrain(`weekly standalone league ${lid} (${cycleAt})`, (res2) => {
         appendWeeklyRetrainLog({ cycleAt, standaloneLeagueId: lid, decision: res2.success ? 'retrained' : 'failed', newVersion: res2.trainedAt ?? null, trainN: res2.trainN ?? null, testN: res2.testN ?? null, gate: res2.gate ? { decision: res2.gate.decision, reason: res2.gate.reason, pairedWindow: res2.gate.pairedWindow ? { n: res2.gate.pairedWindow.n, meanDiff: res2.gate.pairedWindow.meanDiff, z: res2.gate.pairedWindow.z } : null } : null, error: res2.success ? null : res2.error });
         setTimeout(next, 2000);
-      }, { LEAGUE_ID: String(lid) });
+      }, { LEAGUE_ID: String(lid), ...(STANDALONE_ACTIVE_LEAGUE_IDS.has(lid) ? { STANDALONE_TRAIN_ALL: '1' } : {}) }); // shadow leagues: forward window frozen out of training (trainer default)
       if (!r.success) { console.warn(`[WeeklyRetrain] standalone league ${lid} could not start: ${r.error}`); setTimeout(next, 5000); }
     };
     setTimeout(next, 5000);
@@ -11147,7 +11147,8 @@ app.post('/api/admin/train-league', (req, res) => {
   if (!lid || isRetiredLeague(lid)) return res.status(400).json({ error: 'league required and must not be retired' });
   const dry = req.query.dryrun === 'true';
   const tb = req.query.trainBefore || null; // walk-forward build: caps rows, writes gbdt-weights-<lid>-wf<date>.json
-  const r = runGbdtRetrain(`standalone league ${lid}${tb ? ` trained before ${tb}` : ''}${dry ? ' (dry run)' : ''}`, null, { LEAGUE_ID: String(lid), ...(tb ? { TRAIN_BEFORE: tb } : {}), ...(dry ? { GATE_DRY_RUN: '1' } : {}) });
+  const trainAll = req.query.trainAll === 'true' || STANDALONE_ACTIVE_LEAGUE_IDS.has(lid); // explicit only: a shadow league's forward window stays frozen out of training
+  const r = runGbdtRetrain(`standalone league ${lid}${tb ? ` trained before ${tb}` : ''}${dry ? ' (dry run)' : ''}${trainAll ? ' (train all rows)' : ''}`, null, { LEAGUE_ID: String(lid), ...(tb ? { TRAIN_BEFORE: tb } : {}), ...(dry ? { GATE_DRY_RUN: '1' } : {}), ...(trainAll ? { STANDALONE_TRAIN_ALL: '1' } : {}) });
   res.json({ ...r, leagueId: lid, dryRun: dry });
 });
 app.get('/api/admin/standalone-models', (_req, res) => {

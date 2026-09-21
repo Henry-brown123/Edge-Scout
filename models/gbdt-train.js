@@ -70,6 +70,15 @@ const STANDALONE         = Number.isFinite(LEAGUE_ID);
 // saw, one test look after that. The final live model is then retrained on all
 // rows with the same fixed recipe; the forward shadow validates model + cell.
 const TRAIN_BEFORE       = process.env.TRAIN_BEFORE || null;
+// STANDALONE_TRAIN_ALL=1 (2026-09-21, Addendum 65 follow-up): a standalone model
+// under forward validation must not learn from the rows that validate it. By
+// default a standalone league's rows on/after its date-split cutoff
+// (DATE_SPLIT_CUTOFFS below — the pre-registration date) are excluded from
+// BOTH trees and Platt, so the weekly retrain can never fold the forward window
+// into the model being read. The pooled model already lives under the same
+// exclusion. Set STANDALONE_TRAIN_ALL=1 only once the league is cut over
+// (STANDALONE_ACTIVE) and its forward window is closed as evidence.
+const STANDALONE_TRAIN_ALL = process.env.STANDALONE_TRAIN_ALL === '1';
 // RECENCY_HALF_LIFE=<seasons> (2026-09-17, Addendum 62): sample weight
 // 0.5^(ageSeasons / halfLife), anchored at the newest TRAINING row, applied to the
 // Newton gradients and hessians (and the class prior). Evaluation (Platt fit,
@@ -358,7 +367,9 @@ function isTrainingExcluded(leagueId, date) {
   return false;
 }
 
+const FORWARD_FREEZE = (STANDALONE && !STANDALONE_TRAIN_ALL) ? (DATE_SPLIT_CUTOFFS.get(LEAGUE_ID) || null) : null;
 function loadData() {
+  if (FORWARD_FREEZE) console.log(`  [Standalone] forward window frozen: rows on/after ${FORWARD_FREEZE} excluded from trees and Platt (STANDALONE_TRAIN_ALL unset)`);
   const raw = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'backfill-historical.json'), 'utf8'));
   const records = raw.scoredRecords || [];
   const attached = attachRegime(records, buildLeagueHomeRateIndex(raw.fixtures || [])); // FD-2: pre-2026-09-20 records
@@ -372,6 +383,7 @@ function loadData() {
     // the model IS the league's own). Pooled: the usual date-split exclusions.
     .filter(r => STANDALONE ? parseInt(r.leagueId, 10) === LEAGUE_ID : !isTrainingExcluded(r.leagueId, r.date))
     .filter(r => !TRAIN_BEFORE || r.date < TRAIN_BEFORE)
+    .filter(r => !FORWARD_FREEZE || r.date < FORWARD_FREEZE) // standalone in shadow: forward window never trains (trees or Platt)
     .map(r => ({
       x:        maskRegime(buildFeatures(r.homeFactors, r.awayFactors, r.context)),
       y:        r.actualOutcome,   // 'home' | 'draw' | 'away'
@@ -740,9 +752,9 @@ function bandAccuracy(records, probFn) {
     // Dry runs archive the candidate anyway (status 'dry-run-gates-failed') so a
     // recipe comparison is still possible — the quality gates guard DEPLOYMENT, not
     // measurement (Addendum 62).
-    if (GATE_DRY_RUN) archiveVersion({ trainedAt: new Date().toISOString(), standaloneLeagueId: STANDALONE ? LEAGUE_ID : null, recipe: { halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, tag: RUN_TAG || null, regimeFeatures: REGIME_FEATURES, trainSeed: TRAIN_SEED, effectiveN }, trainN: train.length, testN: test.length, treeBoundary, hyperparams: { nTrees: N_TREES, depth: DEPTH, lr: LR, minLeaf: MIN_LEAF }, validation: { logLoss: llGBDT, brier: bsGBDT, logLossLinear: llLinear, brierLinear: bsLinear }, metrics: { logLossLinear: llLinear, logLossGBDT: llGBDT, brierLinear: bsLinear, brierGBDT: bsGBDT }, classifiers, platt }, 'dry-run-gates-failed', { tag: RUN_TAG || null, halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, gates: { gate1, gate2, gate3 } });
+    if (GATE_DRY_RUN) archiveVersion({ trainedAt: new Date().toISOString(), standaloneLeagueId: STANDALONE ? LEAGUE_ID : null, recipe: { halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, tag: RUN_TAG || null, regimeFeatures: REGIME_FEATURES, trainSeed: TRAIN_SEED, forwardFreeze: FORWARD_FREEZE, effectiveN }, trainN: train.length, testN: test.length, treeBoundary, hyperparams: { nTrees: N_TREES, depth: DEPTH, lr: LR, minLeaf: MIN_LEAF }, validation: { logLoss: llGBDT, brier: bsGBDT, logLossLinear: llLinear, brierLinear: bsLinear }, metrics: { logLossLinear: llLinear, logLossGBDT: llGBDT, brierLinear: bsLinear, brierGBDT: bsGBDT }, classifiers, platt }, 'dry-run-gates-failed', { tag: RUN_TAG || null, halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, gates: { gate1, gate2, gate3 } });
     // Leave a record (Addendum 62): batch/dry runs need to know WHY a candidate produced no model.
-    writeGateResult({ at: new Date().toISOString(), standaloneLeagueId: STANDALONE ? LEAGUE_ID : null, recipe: { halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, tag: RUN_TAG || null, regimeFeatures: REGIME_FEATURES, trainSeed: TRAIN_SEED }, decision: 'rejected', reason: 'quality gates not met', qualityGates: { gate1, gate2, gate3 }, candidateOwnSlice: { n: test.length, logLoss: llGBDT, logLossLinear: llLinear, brier: bsGBDT, band5060: { gbdt: band5060GBDT?.bias ?? null, linear: band5060Linear?.bias ?? null } } });
+    writeGateResult({ at: new Date().toISOString(), standaloneLeagueId: STANDALONE ? LEAGUE_ID : null, recipe: { halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, tag: RUN_TAG || null, regimeFeatures: REGIME_FEATURES, trainSeed: TRAIN_SEED, forwardFreeze: FORWARD_FREEZE }, decision: 'rejected', reason: 'quality gates not met', qualityGates: { gate1, gate2, gate3 }, candidateOwnSlice: { n: test.length, logLoss: llGBDT, logLossLinear: llLinear, brier: bsGBDT, band5060: { gbdt: band5060GBDT?.bias ?? null, linear: band5060Linear?.bias ?? null } } });
     console.log(`\n  ${WEIGHTS_FILE} NOT written.`);
     process.exit(0);
   }
@@ -763,7 +775,7 @@ function bandAccuracy(records, probFn) {
   const candidateOut = {
     trainedAt,
     standaloneLeagueId: STANDALONE ? LEAGUE_ID : null,
-    recipe: { halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, tag: RUN_TAG || null, regimeFeatures: REGIME_FEATURES, trainSeed: TRAIN_SEED, effectiveN },
+    recipe: { halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, tag: RUN_TAG || null, regimeFeatures: REGIME_FEATURES, trainSeed: TRAIN_SEED, forwardFreeze: FORWARD_FREEZE, effectiveN },
     trainN:      train.length,
     testN:       test.length,
     treeBoundary,
@@ -778,7 +790,7 @@ function bandAccuracy(records, probFn) {
     at: trainedAt,
     standaloneLeagueId: STANDALONE ? LEAGUE_ID : null,
     weightsFile: WEIGHTS_FILE,
-    recipe: { halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, tag: RUN_TAG || null, regimeFeatures: REGIME_FEATURES, trainSeed: TRAIN_SEED },
+    recipe: { halfLifeSeasons: RECENCY_HALF_LIFE, trainBefore: TRAIN_BEFORE, tag: RUN_TAG || null, regimeFeatures: REGIME_FEATURES, trainSeed: TRAIN_SEED, forwardFreeze: FORWARD_FREEZE },
     dryRun: GATE_DRY_RUN,
     candidateVersion: trainedAt,
     deployedVersion: deployed?.trainedAt ?? null,

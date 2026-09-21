@@ -590,3 +590,7 @@ remaining pooled-only copy of a chain is the trainer's pocket gate
 (`models/gbdt-train.js pocketGate`, bias → correction layer), kept in
 lockstep by hand as before.
 
+## Standalone models in shadow never train on their forward window (2026-09-21)
+
+Found while reading Addendum 65: the standalone trainer fitted Platt on the newest 20% of rows, which after each weekly retrain included the post-cutoff fixtures that the forward validation reads. The trainer now excludes a standalone league's rows on/after its date-split cutoff (`DATE_SPLIT_CUTOFFS`, the pre-registration date) from **both** trees and Platt unless `STANDALONE_TRAIN_ALL=1`, which the weekly cycle and `train-league` pass only for `STANDALONE_ACTIVE_LEAGUE_IDS` (`?trainAll=true` overrides by hand). Recorded in the model file as `recipe.forwardFreeze`. The pooled model already lives under the same exclusion. Consequence: a shadow standalone learns nothing new until it is cut over; that is the price of a clean forward read, and it is deliberate.
+
