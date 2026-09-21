@@ -10616,3 +10616,5 @@ tile beside its V2 counterpart with the paired beyond-market difference and
 bet counts — grouped under collapsible league sections (open state remembered
 for the session). Twelve pockets across four leagues is four sections of
 three pairs; the card grows by one pair per pocket, never by loose tiles.
+
+**Addendum 67 follow-up (2026-09-21):** the League Two 7%/35% paper track (pre-registered 2026-09-15, Addendum 53) is promoted to a registry pocket `l2-7-35-paper` (paper-staked, priority 21 — behind the real 9/40 pocket and its V2), with its derived counterpart `l2-v2-7-35`. A visibility change, not a selection: the cell shape and registration date are unchanged, and the reserved-set read on all post-cutoff fixtures continues beside it.

@@ -610,12 +610,14 @@ const L1_V2_FROM = '2026-09-21T18:45:00Z'; // Addendum 66: League One standalone
 // counterpart sits at pooled.priority + 10, so real pockets always win the
 // single-bucket assignment, V2-of-real comes next, then pooled paper, then
 // V2-of-paper. `standaloneId` pins an id already present on stored bets.
-const L1_V2_PAIRS_FROM = '2026-09-21T20:00:00Z'; // Addendum 67: Jan–May and 6/45 counterparts registered
+const L1_V2_PAIRS_FROM = '2026-09-21T20:00:00Z';
+const L2_7_35_POCKET_FROM = '2026-09-21T20:00:00Z'; // Addendum 67: 7/35 paper track promoted to a pocket (reserved-set read continues unchanged) // Addendum 67: Jan–May and 6/45 counterparts registered
 const POOLED_POCKETS = [
   { id: 'l2-9-40',          leagueId: 42, tier: 'real',  label: 'League Two 9%/40%',               edgeMin: 0.09, probMin: 0.40, months: null,   priority: 1,  from: LEAGUE_TWO_RULE_FROM, basis: 'Addendum 53',                 standaloneId: 'l2-v2-9-40',  standaloneFrom: PAPER_POCKETS_FROM, standaloneBasis: 'Addendum 54' },
   { id: 'l1-12-50',         leagueId: 41, tier: 'real',  label: 'League One 12%/50% year-round',   edgeMin: 0.12, probMin: 0.50, months: null,   priority: 1,  from: LEAGUE_ONE_RULE_FROM, basis: 'Addenda 56–57',              standaloneId: 'l1-v2-12-50', standaloneFrom: L1_V2_FROM,         standaloneBasis: 'Addendum 66' },
   { id: 'l1-jan-may-5-45',  leagueId: 41, tier: 'real',  label: 'League One Jan–May 5%/45%',       edgeMin: 0.05, probMin: 0.45, months: [1, 5], priority: 2,  from: LEAGUE_ONE_RULE_FROM, basis: 'Addenda 56–57',              standaloneFrom: L1_V2_PAIRS_FROM,   standaloneBasis: 'Addendum 67 (registered before the season; fires from January)' },
   { id: 'l1-6-45-paper',    leagueId: 41, tier: 'paper', label: 'League One 6%/45% (paper)',        edgeMin: 0.06, probMin: 0.45, months: null,   priority: 21, from: PAPER_POCKETS_FROM,   basis: 'Addendum 55 (parked cell)',  standaloneFrom: L1_V2_PAIRS_FROM,   standaloneBasis: 'Addendum 67' },
+  { id: 'l2-7-35-paper',    leagueId: 42, tier: 'paper', label: 'League Two 7%/35% (paper)',        edgeMin: 0.07, probMin: 0.35, months: null,   priority: 21, from: L2_7_35_POCKET_FROM,  basis: 'Addendum 53 (pre-registered high-volume paper track; promoted to a pocket 2026-09-21, Addendum 67)', standaloneFrom: L2_7_35_POCKET_FROM, standaloneBasis: 'Addendum 67' },
 ];
 function deriveStandalonePocket(p) {
   return { id: p.standaloneId || `${p.id.replace(/^(l\d)-/, '$1-v2-').replace(/-paper$/, '')}`, leagueId: p.leagueId, tier: 'paper', label: `V2 · ${p.label.replace(/ \(paper\)$/, '')}`,
