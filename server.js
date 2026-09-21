@@ -6178,6 +6178,7 @@ app.patch('/api/bets/:id', (req, res) => {
   if (!bet) return res.status(404).json({ error: 'Not found' });
 
   const { result, actualStake, actualOdds, mode, bookmakerId, bookmakerUsed, bankrollAtLock, kellyFraction, displayStake, placementStatus, cashedOut, cashOutPnl } = req.body;
+  const prevBookmakerId = bet.bookmakerId ?? null;
 
   // Correction fields for mode/bookmaker — the symmetric undo for convert-to-real
   // (there's no dedicated revert-to-paper endpoint; this covers it plus any other
@@ -6253,7 +6254,17 @@ app.patch('/api/bets/:id', (req, res) => {
     const settleStake = bet.actualStake ?? bet.suggestedStake;
     bet.theoreticalPnl = bet.result === 'win'  ? parseFloat(((settleOdds - 1) * settleStake).toFixed(2))
                         : bet.result === 'loss' ? -settleStake : 0;
-    bet.pnl = bet.cashedOut ? bet.cashOutPnl : bet.theoreticalPnl;
+    // 2026-09-21: same commission rule as settlement — a real exchange bet owes
+    // commission on net winnings, so an edit must not silently drop it.
+    const commissionRate = (bet.mode === 'real' && bet.bookmakerId) ? (getBookmakers().find(bm => bm.id === bet.bookmakerId)?.commission || 0) : 0;
+    const settled = bet.result === 'win' ? parseFloat((bet.theoreticalPnl * (1 - commissionRate)).toFixed(2)) : bet.theoreticalPnl;
+    bet.pnl = bet.cashedOut ? bet.cashOutPnl : settled;
+  }
+  // Bookmaker newly assigned to a real bet through this route: count it in that
+  // bookmaker's stats, as confirm-placement / convert-to-real do.
+  if (bookmakerId !== undefined && bookmakerId && bookmakerId !== prevBookmakerId && bet.mode === 'real') {
+    const books = getBookmakers(); const bm = books.find(b => b.id === bookmakerId);
+    if (bm) { bm.lastUsed = new Date().toISOString(); bm.totalBets = (bm.totalBets || 0) + 1; bm.totalStaked = parseFloat(((bm.totalStaked || 0) + (bet.actualStake || 0)).toFixed(2)); saveBookmakers(books); }
   }
 
   saveBets(bets);
