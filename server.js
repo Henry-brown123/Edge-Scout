@@ -10623,6 +10623,100 @@ function regimeOffsetDailyCheck(dayArg = null) {
   saveRegimeOffsetState(st);
   return { entry, state: st };
 }
+// ═══ Overnight research routes (2026-09-21): new-market pocket search, League One / League Two ═══
+// Research only — nothing here touches live scoring, staking or the live closing-odds files.
+// Every Odds API call is logged with its credit cost (x-requests-last) into research-odds-usage.json.
+const RESEARCH_SPORTS = { 41: 'soccer_england_league1', 42: 'soccer_england_league2' };
+function _researchUsage() { return readJSON('research-odds-usage.json') || { calls: [], creditsUsed: 0, remaining: null }; }
+function _logOddsCall(u, label, headers, extra = {}) {
+  const last = parseInt(headers?.['x-requests-last'] || '0', 10) || 0, rem = parseInt(headers?.['x-requests-remaining'] || '', 10);
+  u.calls.push({ at: new Date().toISOString(), label, credits: last, remaining: Number.isFinite(rem) ? rem : null, ...extra });
+  u.creditsUsed += last; if (Number.isFinite(rem)) u.remaining = rem; if (u.calls.length > 5000) u.calls = u.calls.slice(-5000);
+  writeJSON('research-odds-usage.json', u);
+}
+function _totalsSummary(ev) {
+  // Per event: which books price totals, Pinnacle's lines, margin per line.
+  const out = { books: [], pinnacle: null };
+  for (const b of (ev.bookmakers || [])) {
+    const m = b.markets?.find(x => x.key === 'totals'); if (!m) continue;
+    out.books.push(b.key);
+    if (b.key === 'pinnacle') {
+      const byPoint = {};
+      for (const o of (m.outcomes || [])) { const k = String(o.point); byPoint[k] = byPoint[k] || {}; byPoint[k][o.name.toLowerCase()] = o.price; }
+      out.pinnacle = Object.entries(byPoint).filter(([, v]) => v.over > 1 && v.under > 1).map(([point, v]) => ({ point: +point, over: v.over, under: v.under, margin: +((1 / v.over + 1 / v.under - 1).toFixed(4)) }));
+    }
+  }
+  return out;
+}
+app.get('/api/admin/research/odds-probe', async (req, res) => {
+  const u = _researchUsage(); const out = { startedAt: new Date().toISOString(), leagues: {}, historical: {}, additionalMarkets: {}, errors: [] };
+  try {
+    const sp = await oddsApi.get('/sports', { params: { apiKey: ODDS_API_KEY } }); _logOddsCall(u, 'sports', sp.headers);
+    out.creditsRemainingAtStart = u.remaining;
+    const dates = (req.query.dates || '2020-10-03,2021-10-02,2022-10-01,2023-10-07,2024-10-05,2025-10-04').split(',');
+    const addl = (req.query.markets || 'btts,draw_no_bet,alternate_totals,team_totals,alternate_team_totals,totals_corners,alternate_totals_corners,totals_cards,player_shots_on_target,player_shots,h2h_h1,totals_h1').split(',');
+    for (const [lid, sport] of Object.entries(RESEARCH_SPORTS)) {
+      // 1. Current featured markets, EU region (Pinnacle lives here)
+      try {
+        const r = await oddsApi.get(`/sports/${sport}/odds`, { params: { apiKey: ODDS_API_KEY, regions: 'eu,uk', markets: 'h2h,totals,spreads', oddsFormat: 'decimal' } });
+        _logOddsCall(u, `current ${sport} h2h,totals,spreads eu,uk`, r.headers);
+        const evs = r.data || [];
+        const withPinTotals = evs.filter(e => _totalsSummary(e).pinnacle?.length).length;
+        const bookCounts = {}; for (const e of evs) for (const b of _totalsSummary(e).books) bookCounts[b] = (bookCounts[b] || 0) + 1;
+        out.leagues[lid] = { sport, upcomingEvents: evs.length, eventsWithPinnacleTotals: withPinTotals, totalsBooks: bookCounts, samplePinnacleLines: evs.slice(0, 3).map(e => ({ event: `${e.home_team} v ${e.away_team}`, commence: e.commence_time, lines: _totalsSummary(e).pinnacle })), firstEventId: evs[0]?.id || null };
+        // 2. Additional markets, probed one key at a time on the first upcoming event (a bad key 422s the whole request)
+        out.additionalMarkets[lid] = {};
+        if (evs[0]) for (const mk of addl) {
+          try {
+            const r2 = await oddsApi.get(`/sports/${sport}/events/${evs[0].id}/odds`, { params: { apiKey: ODDS_API_KEY, regions: 'eu,uk', markets: mk, oddsFormat: 'decimal' } });
+            _logOddsCall(u, `current ${sport} event ${mk}`, r2.headers);
+            const books = (r2.data?.bookmakers || []).filter(b => b.markets?.some(m => m.key === mk)).map(b => b.key);
+            out.additionalMarkets[lid][mk] = { valid: true, booksPricing: books, pinnacle: books.includes('pinnacle') };
+          } catch (e) { out.additionalMarkets[lid][mk] = { valid: false, status: e.response?.status || null, message: (e.response?.data?.message || e.message || '').slice(0, 160) }; }
+          await new Promise(r => setTimeout(r, 150));
+        }
+      } catch (e) { out.errors.push(`${sport} current: ${e.response?.status || ''} ${e.message}`); }
+      // 3. Historical depth: snapshots at Saturday 14:55Z on one date per season, h2h+totals, EU region
+      out.historical[lid] = [];
+      for (const d of dates) {
+        const iso = `${d}T14:55:00Z`;
+        try {
+          const r = await oddsApi.get(`/historical/sports/${sport}/odds`, { params: { apiKey: ODDS_API_KEY, regions: 'eu', markets: 'h2h,totals', oddsFormat: 'decimal', date: iso } });
+          _logOddsCall(u, `historical ${sport} ${iso} h2h,totals eu`, r.headers);
+          const evs = r.data?.data || [];
+          const sums = evs.map(_totalsSummary);
+          const pin = sums.filter(s => s.pinnacle?.length);
+          const margins = pin.flatMap(s => s.pinnacle.map(l => l.margin)); const prices = pin.flatMap(s => s.pinnacle.flatMap(l => [l.over, l.under]));
+          const distinct = (a) => new Set(a.map(x => x.toFixed(3))).size;
+          const lines25 = pin.filter(s => s.pinnacle.some(l => l.point === 2.5)).length;
+          const h2hPin = evs.filter(e => e.bookmakers?.some(b => b.key === 'pinnacle' && b.markets?.some(m => m.key === 'h2h'))).length;
+          const booksTotals = {}; for (const s of sums) for (const b of s.books) booksTotals[b] = (booksTotals[b] || 0) + 1;
+          out.historical[lid].push({ date: iso, snapshotTs: r.data?.timestamp || null, events: evs.length, eventsWithPinnacleH2h: h2hPin, eventsWithPinnacleTotals: pin.length, eventsWithPinnacle25Line: lines25, linesPerEvent: pin.length ? +(pin.reduce((a, s) => a + s.pinnacle.length, 0) / pin.length).toFixed(2) : 0,
+            fabricationSignature: { distinctMargins: distinct(margins), marginMin: margins.length ? +Math.min(...margins).toFixed(4) : null, marginMax: margins.length ? +Math.max(...margins).toFixed(4) : null, distinctPrices: distinct(prices), pricesN: prices.length, verdict: (pin.length >= 3 && distinct(margins) <= 1) ? 'SUSPECT fixed margin' : (pin.length >= 3 && distinct(prices) < Math.min(6, prices.length)) ? 'SUSPECT few distinct prices' : (pin.length ? 'looks real' : 'no pinnacle totals') },
+            totalsBooks: booksTotals });
+        } catch (e) { out.historical[lid].push({ date: iso, error: `${e.response?.status || ''} ${(e.response?.data?.message || e.message || '').slice(0, 140)}` }); }
+        await new Promise(r => setTimeout(r, 200));
+      }
+      // 4. Historical additional markets on one event, two dates (btts / team_totals), to date their depth
+      try {
+        for (const d of ['2023-10-07', '2024-10-05']) {
+          const iso = `${d}T14:55:00Z`;
+          const evr = await oddsApi.get(`/historical/sports/${sport}/events`, { params: { apiKey: ODDS_API_KEY, date: iso } }); _logOddsCall(u, `historical events ${sport} ${iso}`, evr.headers);
+          const ev0 = (evr.data?.data || [])[0]; if (!ev0) { out.historical[lid].push({ date: iso, additional: 'no events' }); continue; }
+          const r3 = await oddsApi.get(`/historical/sports/${sport}/events/${ev0.id}/odds`, { params: { apiKey: ODDS_API_KEY, regions: 'eu,uk', markets: 'btts,team_totals,alternate_totals', oddsFormat: 'decimal', date: iso } });
+          _logOddsCall(u, `historical ${sport} event additional ${iso}`, r3.headers);
+          const bks = (r3.data?.data?.bookmakers || []); const per = {}; for (const b of bks) for (const m of (b.markets || [])) { per[m.key] = per[m.key] || []; per[m.key].push(b.key); }
+          out.historical[lid].push({ date: iso, additionalOnEvent: `${ev0.home_team} v ${ev0.away_team}`, marketsByBook: per });
+        }
+      } catch (e) { out.errors.push(`${sport} historical additional: ${e.response?.status || ''} ${(e.response?.data?.message || e.message || '').slice(0, 160)}`); }
+    }
+  } catch (e) { out.errors.push(`probe: ${e.message}`); }
+  out.creditsUsedThisProbe = u.calls.filter(c => c.at >= out.startedAt).reduce((a, c) => a + c.credits, 0); out.creditsRemaining = u.remaining;
+  writeJSON('research-odds-probe.json', out);
+  res.json(out);
+});
+app.get('/api/admin/research/odds-usage', (_req, res) => { const u = _researchUsage(); res.json({ creditsUsed: u.creditsUsed, remaining: u.remaining, calls: u.calls.length, byLabel: Object.entries(u.calls.reduce((a, c) => { const k = c.label.split(' ').slice(0, 2).join(' '); a[k] = (a[k] || 0) + c.credits; return a; }, {})) }); });
+
 app.get('/api/admin/regime-offset/status', (_req, res) => {
   try {
     const st = getRegimeOffsetState(); const settings = getSettings(); const day = new Date().toISOString().slice(0, 10);
