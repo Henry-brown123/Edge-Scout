@@ -10618,3 +10618,65 @@ for the session). Twelve pockets across four leagues is four sections of
 three pairs; the card grows by one pair per pocket, never by loose tiles.
 
 **Addendum 67 follow-up (2026-09-21):** the League Two 7%/35% paper track (pre-registered 2026-09-15, Addendum 53) is promoted to a registry pocket `l2-7-35-paper` (paper-staked, priority 21 — behind the real 9/40 pocket and its V2), with its derived counterpart `l2-v2-7-35`. A visibility change, not a selection: the cell shape and registration date are unchanged, and the reserved-set read on all post-cutoff fixtures continues beside it.
+
+## Addendum 68 — New-market pocket search, League One and League Two (overnight 2026-09-21 → 22)
+
+Research only. Nothing here changed live scoring, staking or the live
+closing-odds files. Every Odds API call is logged with its credit cost in
+`research-odds-usage.json`.
+
+### Part 1 — Data-reality gate (probe run 19:15Z, 430 credits; balance 4,882,842 → 4,882,412)
+
+Source: the Odds API (the only odds source this project has). Pinnacle is the
+sharp reference throughout. Probed per league: current featured markets
+(h2h, totals, spreads; eu+uk regions), every additional-market key one at a
+time on the first upcoming fixture (a bad key fails the whole request), one
+historical snapshot per season 2020–2025 at a Saturday 14:55Z for h2h +
+totals, and historical additional markets on a sample fixture in 2023 and
+2024.
+
+| Market | Key(s) | League One | League Two | Verdict |
+|---|---|---|---|---|
+| Totals (over/under, Pinnacle main line) | `totals` | Pinnacle prices totals on **every** fixture it prices h2h, every season snapshot from 2021-22 (2020-10: no Pinnacle at all in L1 that day) | same, from 2020-21 | **PASS** — genuine depth, real prices |
+| Corners | `totals_corners` (invalid key, 422), `alternate_totals_corners` (valid key, **no book prices it** for L1/L2) | none | none | **EXCLUDED — no data** |
+| Cards | `totals_cards` (invalid key, 422) | none | none | **EXCLUDED — no data** |
+| Shots / shots on target (player props) | `player_shots`, `player_shots_on_target` (valid keys, no book prices them for L1/L2) | none | none | **EXCLUDED — no data** |
+| Both teams to score | `btts` | current: soft books only (livescorebet, virginbet); historical: Pinnacle present on the 2024 sample, absent on the 2023 sample | current: leovegas/onexbet/soft; historical as L1 | **EXCLUDED for now** — Pinnacle depth ≈ 1–2 seasons at best, soft-book-led; re-check when two Pinnacle seasons exist |
+| Draw no bet, team totals, first-half markets | `draw_no_bet`, `team_totals`, `h2h_h1`, `totals_h1` | soft books or nobody; team_totals Pinnacle on the 2024 sample only | same | **EXCLUDED** — derivative of h2h/totals, no independent sharp price |
+| Alternate totals (all lines incl. 2.5) | `alternate_totals` | historical event endpoint: Pinnacle present 2023 and 2024 samples | same | usable to fetch the 2.5 line per fixture from ~2023-05; not needed tonight (see Part 2 line handling) |
+
+Fabrication check (Addendum 35 signature) on Pinnacle totals at every
+season snapshot: distinct margins 3–9 across 5–14 priced fixtures, margins
+2.7%–5.9%, distinct prices 7–18 per snapshot, one line per fixture — **no
+fixed-margin signature, no degenerate price set, verdict "looks real" at
+every snapshot for both leagues.** Other books pricing totals per snapshot:
+2–13.
+
+One property that shapes Part 2: **Pinnacle's featured main line is 2.5 in
+only about a quarter of fixtures** (L1 snapshots 0/11, 3/14, 1/11, 1/10,
+1/5; L2 1/7, 6/12, 2/11, 0/12, 5/10, 1/5); the rest are quarter or other
+half lines (2.25, 2.75, 3.0…). A search restricted to 2.5 would throw away
+three quarters of the sharp data, so Part 2 models the exact line offered
+(pushes on integer lines, split stakes on quarter lines) and defines the
+beyond-market residual on half-line bets only, where the outcome is decided.
+
+**Shortlist worth searching: totals, both leagues.** Everything else is
+excluded on data, not on appeal — corners, cards and shots simply do not
+exist as priced markets for these leagues through this source, and the
+priced-by-soft-books-only markets cannot support a market-residual framing
+against a sharp reference.
+
+### Part 2 — Totals search (results appended when run)
+
+Closing-line backfill started 19:17Z: one Pinnacle totals snapshot per
+(league, kickoff minute) since 2020-06-01, budget 16,000 credits, written to
+`research-totals-closing.json`. Search protocol (fixed before the look, route
+`research/totals-search`): rolling Poisson model (team attack/defence vs
+league average, 25-match window, 12-match half-life, independent goals, no
+Dixon–Coles), Platt on train rows only; split 2024-09-16 (the established
+League One/Two split); model-vs-market paired log-loss reported first; train-
+only cell selection over side × edge floor × probability floor with n ≥ 60
+and z ≥ 1.5 on the half-line residual, ranked by units per season; shortlist
+= top 5 by that rule; ONE test look for the shortlist; rule-19 checks on
+each (closed doors, seasonality, side, four recency blocks, decomposition by
+market price band, overlap with the league's real 1X2 pocket).
