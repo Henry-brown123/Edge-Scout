@@ -10909,3 +10909,70 @@ such read is counted.
   If iteration 2 also cannot beat a constant with the informative features
   present, that is the point at which "no learnable edge in EFL totals with
   this feature set" becomes a settled negative rather than a tooling gap.
+
+### Part 3 — Iteration 2 (stats-era windows), model-level gate only (run 2026-09-22 15:51Z)
+
+Windows: trees 2019-08-01 → 2023-07-31 (League Two 2,056 rows, 1,921 with
+shots and xG — 93%; League One 2,010 / 1,954), Platt 2023-08 → 2024-07 (548
+/ 549), selection 2024-08 → 2025-07 (549 / 526, one season), holdout
+unchanged (≥ 2025-08-01: 636 / 618). Gate: the model must beat a constant
+and close most of the gap to Pinnacle before any cell search runs.
+
+| League | Window | Model log-loss | Pinnacle | Constant | Platt slope | Model − market (z) |
+|---|---|---|---|---|---|---|
+| League Two | selection | 0.7097 | 0.6851 | 0.6892 | **0.05** | +0.025 (z 2.9) |
+| League Two | holdout | 0.7060 | 0.6898 | 0.6919 | | +0.016 (z 2.3) |
+| League One | selection | 0.6938 | 0.6740 | 0.6931 | 0.22 | +0.020 (z 3.4) |
+| League One | holdout | 0.6949 | 0.6859 | 0.6928 | | +0.009 (z 1.7) |
+
+All top picks on the selection window (edge > 0, either side): League Two
+over −1.7pp / ROI −7.8%, under +5.1pp on 47 bets (noise); League One over
+−1.7pp / −8.4%, under −4.9pp / −13.8%.
+
+**Gate failed in both leagues. No cell search was run; no further holdout
+look was taken.** With the informative features present on 93% of the
+training rows, a learned league-specific model still cannot beat the league's
+own base rate out of sample, in two leagues, across two independent builds
+(Part 2 and Part 3), while Pinnacle's line beats that base rate by 0.4–1.9%
+of log-loss. League Two's calibration slope collapsing to 0.05 a second time
+means the raw score carries no repeatable signal. A further observation that
+matters for any future attempt: the league over-2.5 rate swings season to
+season (League Two ≈ 56% in 2023-24, 45.5% in 2024-25, 47.5% in 2025-26), so
+even a constant is unstable — a totals model would have to track a regime
+that moves year to year, and nothing in the results-derived feature set does.
+
+**Verdict — settled negative, per the standard agreed on 2026-09-22:** with
+results-derived features (rolling goals, over rates, shots, shots on target,
+xG, points, rest, head-to-head, league pace), there is no learnable edge in
+the League One or League Two over/under 2.5 market against Pinnacle. This
+is the market verdict for this feature family, not a tooling gap: the data
+foundation is complete and verified, the model is a proper learned one with
+the features present, the windows are clean, and the read is out of sample.
+
+### Closing statement (final)
+
+- **Capably tested and ruled out:** totals (over/under 2.5) in League One
+  and League Two against Pinnacle with any model built from results-derived
+  features. Also ruled out on data: corners, cards, shots, shots-on-target
+  markets (no priced market exists for these leagues through this source).
+- **Untested and honestly not reachable with current data:** a totals model
+  fed by information Pinnacle prices and we do not hold historically —
+  confirmed line-ups at kick-off (our lineups pool is post-match only),
+  referee, weather, motivation. These are the likely source of the market's
+  0.4–1.9% log-loss advantage over a constant. Pooling leagues is forbidden
+  by rule 21 and the evidence gives no reason to think it would help.
+  BTTS/team totals share the same information problem and have thinner
+  sharp history; not worth credits now.
+- **Prioritised recommendation:** stop spending on EFL totals. Redirect to
+  where this project has demonstrated information advantage — the 1X2
+  market, where the factor model shows a residual against Pinnacle: (1) the
+  live pockets' forward reads and the reserve-first protocol decision
+  (brief V); (2) a 1X2 pocket search in a league not yet searched under
+  rules 19–21 with a reserve-first standalone model (the Championship was
+  searched under the old protocol and found nothing; Serie B / Segunda /
+  2. Bundesliga were read once on the pooled chain in Addendum 43 — a
+  league-specific model there is a genuinely untested, capable attempt);
+  (3) the lineup-timing information that the lineup-triggered lock now
+  captures on every bet (`lineupsAtLock`), which is exactly the kind of
+  information Pinnacle prices and the historical pool lacks — a forward-only
+  edge source worth measuring as it accumulates.
