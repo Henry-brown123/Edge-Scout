@@ -10680,3 +10680,77 @@ and z ≥ 1.5 on the half-line residual, ranked by units per season; shortlist
 = top 5 by that rule; ONE test look for the shortlist; rule-19 checks on
 each (closed doors, seasonality, side, four recency blocks, decomposition by
 market price band, overlap with the league's real 1X2 pocket).
+
+### Part 2 — Totals search results (run 2026-09-22 09:11Z)
+
+**Backfill (rerun after a timestamp-format bug voided the first attempt at
+zero cost):** 1,378 kickoff snapshots, 6,849 fixtures matched, 0 missed,
+6,783 with Pinnacle totals, 2,496 on the 2.5 line; 13,780 credits. Total
+research credits for the night: **14,210** (probe 430 + backfill 13,780);
+balance 4,882,842 → 4,868,612. Line mix: League Two 2.25 ×1,239, 2.5 ×1,129,
+2.0 ×435, 2.75 ×387, 3.0 ×116; League One 2.5 ×1,296, 2.25 ×1,033, 2.75
+×562, 2.0 ×201, 3.0 ×123.
+
+**Model-level read first (paired log-loss, model − Pinnacle, decided rows):**
+
+| League | Train (< 2024-09-16) | Test (≥ 2024-09-16) | Platt slope | Reading |
+|---|---|---|---|---|
+| League Two | −0.0001 (z −0.07), n 2,108 | −0.0002 (z −0.13), n 1,094 | **A = 0.05** | the calibrated model is a near-constant 48% — the Poisson carries no information Pinnacle lacks; log-loss equal only because both sit at the base rate |
+| League One | +0.0015 (z 1.41), n 2,120 | +0.0017 (z 1.13), n 1,071 | — | model worse than the market |
+
+All top picks (edge > 0, train): League Two over −0.9pp / ROI −7.1%, under
+−0.3pp / −4.3%; League One over −3.6pp / −7.8%, under −1.5pp / −4.5%. **On
+neither league does this model beat Pinnacle's totals line.**
+
+**League One: zero eligible cells** (30 grid cells, none with train n ≥ 60
+and z ≥ 1.5). Clean negative, no test look taken.
+
+**League Two: 8 eligible cells, shortlist of 5, one test look.** Four of the
+five are the same bet (under, edge ≥ 3%, any probability floor from 35% to
+50% — the calibrated probability is ~48–52% for every fixture, so the floors
+do not bind); the fifth is under, edge ≥ 4%.
+
+| Cell | Train n (half-line n) | Train residual | Train ROI | Test n | Test residual | Test ROI | All-rows ROI |
+|---|---|---|---|---|---|---|---|
+| under ≥ 3% | 659 (95) | +10.8 ± 5.1pp, z 2.13 | +0.7% | 357 (106) | +7.4 ± 4.9pp, z 1.52 | **−1.2%** | 0.0% |
+| under ≥ 4% | 342 (18) | +19.1 ± 11.4pp, z 1.67 | +1.2% | 183 (37) | +6.2 ± 8.3pp, z 0.75 | −1.8% | +0.1% |
+
+Rule-19 checks on the under ≥ 3% cell (train bets):
+- **Dateable event:** closed doors +31.9pp (n 173) vs outside +6.9pp
+  (n 486). The train residual is the closed-doors season.
+- **Recency blocks:** +28.9 → +16.3 → +14.1 → +3.8pp; ROI +6.1 → −2.1 →
+  +0.2 → −1.4%. Decays to nothing.
+- **Seasonality:** Nov–Jan +20.4pp, Aug–Oct +8.5pp (ROI −8.8%), Feb–May
+  +6.1pp (ROI +7.0%). Noisy, not a structure.
+- **Side / decomposition:** all bets are unders at market prices 45–55%;
+  no other band exists for this cell, because the "model" is a constant
+  and the cell is simply "bet under whenever Pinnacle's over price is above
+  ~51%".
+- **Overlap** with the real 9/40 1X2 pocket: 8% of bets (50 of 659).
+
+**Verdict: no totals pocket in either league.** What League Two's shortlist
+found is not model skill — the Poisson has none here — but an under-bias in
+Pinnacle's League Two totals during the closed-doors season that has since
+decayed, and which was never worth anything at the closing price (ROI 0.0%
+over 1,016 bets, −1.2% on the test slice). A residual without ROI on a
+constant model is the textbook shape of a market artefact, and it fails
+three of the six checks (dateable event, recency, ROI) outright.
+
+**Rule 18 bookkeeping.** The League Two totals test slice (≥ 2024-09-16) has
+now been read once, for the under-edge family of cells on this model. A
+better totals model (e.g. a GBDT on the existing factor set plus xG, which
+would be a *new* model) may still be searched train-only, but any test look
+for an under-type cell on League Two totals is now a second look and must be
+declared as such. League One's totals test slice is unread.
+
+**API usage, whole night:** 14,210 credits across 1,421 calls; no live file
+touched; the research files are `research-odds-probe.json`,
+`research-totals-closing.json`, `research-totals-status.json`,
+`research-odds-usage.json`.
+
+### Part 3 — Validation speed
+
+See `docs/design-brief-reserve-first-validation.md`. Tonight's search was
+run under that protocol (reserve = rows after 2024-09-16, shortlist fixed
+before the look, one look, holdout now closed for this cell family), which
+is why it could reach a clean answer in one night.
