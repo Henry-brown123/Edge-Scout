@@ -477,3 +477,18 @@ fires when its months arrive — never built reactively mid-season. A league
 with no standalone model yet still gets the counterpart registered; it
 records nothing until the model exists, and that gap is visible on the tile.
 
+## Rule 21 — Every pocket search starts from the league's own data (2026-09-22, standing instruction)
+
+Any pocket search — any market, any league — starts from that league's own
+history and tests, at minimum, a model built specifically on that league's
+own rows. A pooled or externally trained model is never substituted as a
+stand-in for a league-specific one; it may be reported *beside* the
+league-specific result as a reference, never instead of it. If a league does
+not yet have enough data to support a standalone model for the market in
+question, the search says so explicitly, records the shortfall (fixtures
+available vs required), and stops there rather than falling back to a pooled
+model. The Addendum 68 totals search (league-only Poisson per league,
+league-only calibration) is the first search recorded under this rule; its
+limitation was model crudeness, not pooling, and any follow-up must be a
+stronger *league-specific* model, not a pooled one.
+
