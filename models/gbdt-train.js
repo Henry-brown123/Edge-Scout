@@ -141,7 +141,7 @@ function loadPocketRecords(leagueId) {
   attachRegime(raw.scoredRecords || [], buildLeagueHomeRateIndex(raw.fixtures || [])); // FD-2
   return (raw.scoredRecords || [])
     .filter(r => parseInt(r.leagueId, 10) === leagueId && r.context === 'club_domestic' && r.homeFactors && r.awayFactors && r.actualOutcome && r.date)
-    .map(r => ({ x: buildFeatures(r.homeFactors, r.awayFactors, r.context), y: r.actualOutcome, date: r.date, context: r.context, leagueId: r.leagueId, fixtureId: r.fixtureId }));
+    .map(r => ({ x: buildFeatures(r.homeFactors, r.awayFactors, r.context), y: r.actualOutcome, date: r.date, context: r.context, leagueId: r.leagueId, fixtureId: r.fixtureId, homeFactors: r.homeFactors, awayFactors: r.awayFactors }));
 }
 
 function pocketGate(gate, candFn, depFn) {
@@ -150,8 +150,12 @@ function pocketGate(gate, candFn, depFn) {
   let closing = {}, settings = {};
   try { closing = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'closing-odds.json'), 'utf8')); } catch {}
   try { settings = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'settings.json'), 'utf8')); } catch {}
-  const rules = (settings.deployedCorrectionRuleIds || []).length ? CORRECTION_LAYER_RULES.filter(r => settings.deployedCorrectionRuleIds.includes(r.id)) : [];
-  const chain = (raw) => { let p = applyLeagueBiasCorrection(raw, gate.leagueId, LEAGUE_CONFIG); if (rules.some(r => r.leagues.includes(gate.leagueId))) p = applyVariableCorrectionLayer(p, gate.leagueId, rules); return p; };
+  // 2026-09-22 (Part 6 check): the gate no longer mirrors the chain by hand — candidate and
+  // deployed raw probabilities go through sharedScorer.scoreProbabilities itself (pooled
+  // template, validation options), so every stage the live chain has — bias, correction
+  // layer, regime offset, anything added later — is the one the gate measures.
+  const { scoreProbabilities } = require('../sharedScorer'); const { WEIGHTS_BY_CONTEXT, CONTEXT_CONFIG } = require('../scoring');
+  const chain = (raw, rec) => scoreProbabilities({ rawProbsOverride: raw, homeF: rec?.homeFactors || {}, awayF: rec?.awayFactors || {}, weights: WEIGHTS_BY_CONTEXT.club_domestic, context: 'club_domestic', leagueId: gate.leagueId, leagueConfig: LEAGUE_CONFIG[gate.leagueId], settings, cfg: CONTEXT_CONFIG.club_domestic, dataConf: 1, modelKey: 'pooled', options: { rankAdjust: false, hostBoost: false, modifiers: false } }).probs;
   // hard: paired log-loss on the league's own records (raw model probabilities, same currency as the main gate)
   const ll = pairedLogLoss(recs, candFn, depFn);
   // soft: pocket residual under the live chain on matched pre-cutoff rows
@@ -161,7 +165,7 @@ function pocketGate(gate, candFn, depFn) {
       if (r.date >= gate.cutoff) continue;
       const co = closing[r.fixtureId] || closing[String(r.fixtureId)];
       if (!co || co.bookmaker !== 'pinnacle' || !(co.homeOdds > 1 && co.drawOdds > 1 && co.awayOdds > 1)) continue;
-      const p = chain(fn(r));
+      const p = chain(fn(r), r);
       const pick = p.home >= p.draw && p.home >= p.away ? 'home' : p.away >= p.draw ? 'away' : 'draw';
       const calProb = Math.min(0.97, p[pick] * gate.factor);
       const stripped = marginStrippedImplied(co);

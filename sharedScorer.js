@@ -284,7 +284,8 @@ function scoreProbabilities(p) {
   const options = chainOptionsFor(modelKey, p.options || {});
 
   let rawProbs, modelVersion;
-  if (modelKey === 'pooled') {
+  if (p.rawProbsOverride) { rawProbs = p.rawProbsOverride; modelVersion = p.rawProbsVersion || 'override'; } // 2026-09-22: the trainer's pocket gate feeds candidate/deployed raw probs through the SAME chain
+  else if (modelKey === 'pooled') {
     rawProbs = model.predict(homeF, awayF, weights, context, leagueConfig);
     modelVersion = model.getVersion ? model.getVersion() : null;
   } else {

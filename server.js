@@ -2609,6 +2609,10 @@ async function runPreMatchScan(watchingEntry, overrides = {}) {
           home:      parseApiLineup(lu.response[0]),
           away:      parseApiLineup(lu.response[1]),
           fetchedAt: new Date().toISOString(),
+          // 2026-09-22: explicit pre-match provenance — polled BEFORE kick-off by the
+          // lineup-triggered lock; the nightly post-match backfill never overwrites an
+          // existing entry, so this is the genuine pre-match record.
+          capturedAt: 'pre-match', minutesToKickoff: fix.fixture?.date ? +(((new Date(fix.fixture.date).getTime() - Date.now()) / 60000).toFixed(1)) : null, complete: lineupsConfirmedAtLock,
         };
         const lineups = getLineups();
         lineups[String(fix.fixture.id)] = lineupEntry;
@@ -3591,6 +3595,8 @@ function setupScheduler() {
   // morning scan, so it's never competing with either for the same window.
   // Low-fixture time of day/week by design — early Monday UTC, between weekend
   // and the new week's fixtures.
+  // 2026-09-22 (stock-take #1): weekly model-vs-market monitor, Monday 06:30 UTC.
+  cron.schedule('30 6 * * 1', () => { runModelMonitor('weekly').catch(e => console.error(`[Cron:ModelMonitor] ${e.message}`)); }, { timezone: 'UTC' });
   cron.schedule('15 5 * * 1', () => {
     runWeeklyRetrainCycle().catch(e => console.error(`[Cron:WeeklyRetrain] ${e.message}`));
   }, { timezone: 'UTC' });
@@ -10651,11 +10657,13 @@ function _totalsSummary(ev) {
 app.get('/api/admin/research/odds-probe', async (req, res) => {
   const u = _researchUsage(); const out = { startedAt: new Date().toISOString(), leagues: {}, historical: {}, additionalMarkets: {}, errors: [] };
   try {
-    const sp = await oddsApi.get('/sports', { params: { apiKey: ODDS_API_KEY } }); _logOddsCall(u, 'sports', sp.headers);
+    const sp = await oddsApi.get('/sports', { params: { apiKey: ODDS_API_KEY, all: 'true' } }); _logOddsCall(u, 'sports', sp.headers);
     out.creditsRemainingAtStart = u.remaining;
+    out.soccerSportKeys = (sp.data || []).filter(x => x.group === 'Soccer').map(x => `${x.key}${x.active ? '' : ' (inactive)'}`);
+    const sportsOverride = req.query.sports ? Object.fromEntries(req.query.sports.split(',').map((k, i) => [`x${i}`, k])) : null;
     const dates = (req.query.dates || '2020-10-03,2021-10-02,2022-10-01,2023-10-07,2024-10-05,2025-10-04').split(',');
     const addl = (req.query.markets || 'btts,draw_no_bet,alternate_totals,team_totals,alternate_team_totals,totals_corners,alternate_totals_corners,totals_cards,player_shots_on_target,player_shots,h2h_h1,totals_h1').split(',');
-    for (const [lid, sport] of Object.entries(RESEARCH_SPORTS)) {
+    for (const [lid, sport] of Object.entries(sportsOverride || RESEARCH_SPORTS)) {
       // 1. Current featured markets, EU region (Pinnacle lives here)
       try {
         const r = await oddsApi.get(`/sports/${sport}/odds`, { params: { apiKey: ODDS_API_KEY, regions: 'eu,uk', markets: 'h2h,totals,spreads', oddsFormat: 'decimal' } });
@@ -10979,11 +10987,9 @@ app.get('/api/admin/research/totals-pocket-status', (_req, res) => res.json(_tpS
 // league's date-split cutoff (never trained on by the pooled model), 'post' = forward rows.
 // Standalone models (42, 41) reported on their own rows through the standalone template.
 let _mvmStatus = { running: false };
-app.post('/api/admin/research/model-vs-market', (req, res) => {
-  if (_mvmStatus.running) return res.json({ started: false });
-  _mvmStatus = { running: true, startedAt: new Date().toISOString() };
-  setImmediate(async () => {
-    try {
+async function computeModelVsMarket() {
+  {
+    {
       const hist = readHistoricalCached() || {}; const closing = getClosingOdds(); const settings = getSettings();
       const recs = (hist.scoredRecords || []).filter(r => r.homeFactors && r.awayFactors && r.actualOutcome && r.context === 'club_domestic' && !isRetiredLeague(r.leagueId));
       const ll = (p, y) => -Math.log(Math.max(1e-12, p[y]));
@@ -11004,12 +11010,107 @@ app.post('/api/admin/research/model-vs-market', (req, res) => {
       const out = { ranAt: new Date().toISOString(), rows: rows.length, note: 'model − market log-loss per fixture; negative = model better. constant = the window\'s own outcome frequencies per league (in-sample, conservative). pre = before the league\'s cutoff (never trained on); post = forward.',
         overall: { all: summarise(rows), pre: summarise(rows.filter(r => r.win === 'pre')), post: summarise(rows.filter(r => r.win === 'post')) },
         byLeaguePre: by(rows.filter(r => r.win === 'pre'), r => r.lid), byLeaguePost: by(rows.filter(r => r.win === 'post'), r => r.lid), byLeagueAll: by(rows, r => r.lid), byYear: by(rows, r => r.year) };
-      writeJSON('research-1x2-vs-market.json', out); _mvmStatus = { running: false, finishedAt: new Date().toISOString(), rows: rows.length };
-    } catch (e) { _mvmStatus = { running: false, error: e.message, stack: (e.stack || '').split('\n').slice(0, 3) }; }
-  });
+      // Seasonal calibration read (2026-09-22, stock-take #6): per league × season, mean model / market
+      // probabilities vs actual outcome rates — drift shows as a persistent gap in one season.
+      const seasonOf = (d) => { const dt = new Date(d); return dt.getUTCMonth() >= 6 ? dt.getUTCFullYear() : dt.getUTCFullYear() - 1; };
+      const cal = {}; for (const r of rows) { const k = `${r.lid}|${seasonOf(r.date)}`; (cal[k] = cal[k] || []).push(r); }
+      out.seasonalCalibration = Object.fromEntries(Object.entries(cal).filter(([, l]) => l.length >= 100).sort().map(([k, l]) => { const n = l.length; const mean = (fn) => +(l.reduce((a, r) => a + fn(r), 0) / n).toFixed(3); return [k, { n, actual: { home: mean(r => r.y === 'home' ? 1 : 0), draw: mean(r => r.y === 'draw' ? 1 : 0), away: mean(r => r.y === 'away' ? 1 : 0) }, model: { home: mean(r => r.model.home), draw: mean(r => r.model.draw), away: mean(r => r.model.away) }, market: { home: mean(r => r.market.home), draw: mean(r => r.market.draw), away: mean(r => r.market.away) }, modelHomeGapPp: +((mean(r => r.model.home) - mean(r => r.y === 'home' ? 1 : 0)) * 100).toFixed(1) }]; }));
+      return out;
+    }
+  }
+}
+app.post('/api/admin/research/model-vs-market', (req, res) => {
+  if (_mvmStatus.running) return res.json({ started: false });
+  _mvmStatus = { running: true, startedAt: new Date().toISOString() };
+  setImmediate(async () => { try { const out = await computeModelVsMarket(); writeJSON('research-1x2-vs-market.json', out); _mvmStatus = { running: false, finishedAt: new Date().toISOString(), rows: out.rows }; } catch (e) { _mvmStatus = { running: false, error: e.message, stack: (e.stack || '').split('\n').slice(0, 3) }; } });
   res.json({ started: true });
 });
+// Weekly model monitor (stock-take #1, #6): the direct model-vs-Pinnacle gap on forward and
+// out-of-sample rows plus the seasonal calibration read, appended to model-monitor.json.
+async function runModelMonitor(reason = 'weekly') {
+  const out = await computeModelVsMarket();
+  const file = readJSON('model-monitor.json') || { history: [] };
+  const entry = { at: new Date().toISOString(), reason, rows: out.rows, overallPre: out.overall.pre, overallPost: out.overall.post, byLeaguePost: out.byLeaguePost, byLeaguePre: Object.fromEntries(Object.entries(out.byLeaguePre).map(([k, v]) => [k, { n: v.n, modelMinusMarket: v.modelMinusMarket, z: v.z, modelMinusConstantPct: v.modelMinusConstantPct, marketMinusConstantPct: v.marketMinusConstantPct }])), seasonalCalibration: Object.fromEntries(Object.entries(out.seasonalCalibration || {}).filter(([k]) => parseInt(k.split('|')[1], 10) >= 2024)) };
+  file.history = [...file.history, entry].slice(-60); file.last = entry; writeJSON('model-monitor.json', file);
+  console.log(`[ModelMonitor] ${reason}: post n=${entry.overallPost?.n} model−market ${entry.overallPost?.modelMinusMarket} (z ${entry.overallPost?.z}); pre n=${entry.overallPre?.n} ${entry.overallPre?.modelMinusMarket} (z ${entry.overallPre?.z})`);
+  return entry;
+}
+app.get('/api/admin/model-monitor', (_req, res) => res.json(readJSON('model-monitor.json') || { history: [] }));
+app.post('/api/admin/model-monitor/run', (req, res) => { runModelMonitor(req.query.reason || 'manual').then(e => res.json(e)).catch(e => res.status(500).json({ error: e.message })); });
 app.get('/api/admin/research/model-vs-market-status', (_req, res) => res.json(_mvmStatus));
+
+// Pre-match sheets accumulation (2026-09-22): lineups.json entries captured before kick-off by the lock.
+app.get('/api/admin/research/lineups-status', (_req, res) => {
+  try {
+    const lineups = getLineups(); const hist = readHistoricalCached() || {}; const byId = new Map((hist.fixtures || []).map(f => [String(f.fixture?.id), f]));
+    const bets = getBets(); const since = '2026-09-17T00:00:00Z';
+    const pre = []; let total = 0;
+    for (const [fid, e] of Object.entries(lineups)) { total++; const f = byId.get(String(fid)); const ko = f?.fixture?.date; const isPre = e.capturedAt === 'pre-match' || (ko && e.fetchedAt && e.fetchedAt < ko); if (isPre) pre.push({ fid, league: f?.league?.id ?? null, kickoff: ko || null, fetchedAt: e.fetchedAt, minutesToKickoff: e.minutesToKickoff ?? (ko && e.fetchedAt ? +(((new Date(ko) - new Date(e.fetchedAt)) / 60000).toFixed(1)) : null), complete: e.complete ?? null }); }
+    const byLeague = {}; for (const p of pre) byLeague[p.league] = (byLeague[p.league] || 0) + 1;
+    const recent = pre.filter(p => p.fetchedAt >= since); const days = Math.max(1, (Date.now() - new Date(since)) / 86400000);
+    res.json({ lineupsEntries: total, preMatchEntries: pre.length, preMatchSince17Sep: recent.length, perWeekSince17Sep: +((recent.length / days) * 7).toFixed(1), byLeague, betsWithLineupsAtLock: bets.filter(b => b.lineupsAtLock === true).length, betsLockedSince17Sep: bets.filter(b => b.lockedAt >= since).length, sample: recent.slice(-5) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// ── Referee + venue + historical weather backfill (stock-take #3, rule 22): research files only ──
+// Referee and venue: one API-Sports /fixtures?league&season call per league-season (the fixture
+// object carries fixture.referee and fixture.venue; the pool trims both). Weather: Open-Meteo's
+// free ERA5 archive, one call per (venue, season) date range, hourly; the kickoff hour is kept.
+let _rwStatus = { running: false };
+async function runRefereeWeatherBackfill({ leagueIds = [41, 42], sinceSeason = 2011, weather = true } = {}) {
+  const status = { running: true, startedAt: new Date().toISOString(), finishedAt: null, apiSportsCalls: 0, refereesFound: 0, venuesFound: 0, fixturesSeen: 0, weatherCalls: 0, weatherFixtures: 0, venuesWithoutCoords: [], errors: [], leagueIds };
+  _rwStatus = status; writeJSON('research-refweather-status.json', status);
+  try {
+    const hist = readHistoricalCached() || {};
+    const seasons = {}; for (const f of (hist.fixtures || [])) { const lid = parseInt(f.league?.id, 10); if (!leagueIds.includes(lid)) continue; const s = f.league?.season; if (s >= sinceSeason) (seasons[lid] = seasons[lid] || new Set()).add(s); }
+    const refs = readJSON('research-referees.json') || {};
+    for (const [lid, set] of Object.entries(seasons)) for (const season of [...set].sort()) {
+      try {
+        const { data } = await apiSports.get('/fixtures', { params: { league: lid, season } }); status.apiSportsCalls++;
+        for (const fx of (data?.response || [])) { const fid = String(fx.fixture?.id); if (!fid) continue; status.fixturesSeen++; refs[fid] = { leagueId: parseInt(lid, 10), season, date: fx.fixture?.date, referee: fx.fixture?.referee || null, venue: fx.fixture?.venue?.name || null, city: fx.fixture?.venue?.city || null, homeTeamId: fx.teams?.home?.id }; if (fx.fixture?.referee) status.refereesFound++; if (fx.fixture?.venue?.name) status.venuesFound++; }
+        await new Promise(r => setTimeout(r, 300));
+      } catch (e) { status.errors.push(`${lid}/${season}: ${e.message}`); }
+    }
+    writeJSON('research-referees.json', refs);
+    if (weather) {
+      const wx = readJSON('research-weather.json') || {};
+      // group fixtures by venue coordinates and season
+      const byVenue = {};
+      for (const [fid, r] of Object.entries(refs)) { if (!leagueIds.includes(r.leagueId) || wx[fid]) continue; const c = venueCoords(r.venue, r.city); if (!c) { if (r.venue && !status.venuesWithoutCoords.includes(r.venue)) status.venuesWithoutCoords.push(r.venue); continue; } const key = `${c.lat.toFixed(3)},${c.lon.toFixed(3)}|${r.season}`; (byVenue[key] = byVenue[key] || { lat: c.lat, lon: c.lon, fids: [] }).fids.push(fid); }
+      for (const [key, g] of Object.entries(byVenue)) {
+        const dates = g.fids.map(f => refs[f].date.slice(0, 10)).sort(); const start = dates[0], end = dates[dates.length - 1]; if (end > new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10)) continue; // archive lags a few days
+        try {
+          const { data } = await axios.get('https://archive-api.open-meteo.com/v1/archive', { params: { latitude: g.lat, longitude: g.lon, start_date: start, end_date: end, hourly: 'temperature_2m,precipitation,wind_speed_10m,relative_humidity_2m', timezone: 'UTC' }, timeout: 20000 }); status.weatherCalls++;
+          const times = data?.hourly?.time || []; const idx = new Map(times.map((t, i) => [t, i]));
+          for (const fid of g.fids) { const ko = refs[fid].date; const hour = ko.slice(0, 13) + ':00'; const i = idx.get(hour); if (i == null) continue; wx[fid] = { tempC: data.hourly.temperature_2m[i], precipMm: data.hourly.precipitation[i], windKmh: data.hourly.wind_speed_10m[i], humidity: data.hourly.relative_humidity_2m[i], hour }; status.weatherFixtures++; }
+          await new Promise(r => setTimeout(r, 150));
+        } catch (e) { status.errors.push(`weather ${key}: ${(e.response?.status || '')} ${e.message}`.slice(0, 160)); if (e.response?.status === 429) await new Promise(r => setTimeout(r, 10000)); }
+        if (status.weatherCalls % 20 === 0) { writeJSON('research-weather.json', wx); writeJSON('research-refweather-status.json', status); }
+      }
+      writeJSON('research-weather.json', wx);
+    }
+  } catch (e) { status.errors.push(e.message); }
+  status.running = false; status.finishedAt = new Date().toISOString(); writeJSON('research-refweather-status.json', status);
+  console.log(`[ResearchRefWeather] done — api-sports ${status.apiSportsCalls} calls, referees ${status.refereesFound}/${status.fixturesSeen}, weather ${status.weatherFixtures} fixtures in ${status.weatherCalls} calls, venues without coords ${status.venuesWithoutCoords.length}`);
+  return status;
+}
+app.post('/api/admin/research/referee-weather-backfill', (req, res) => {
+  if (_rwStatus.running) return res.json({ started: false, status: _rwStatus });
+  const opts = { leagueIds: (req.query.leagues || '41,42').split(',').map(Number), sinceSeason: parseInt(req.query.sinceSeason || '2011', 10), weather: req.query.weather !== '0' };
+  runRefereeWeatherBackfill(opts).catch(e => console.error(`[ResearchRefWeather] ${e.message}`));
+  res.json({ started: true, opts });
+});
+app.get('/api/admin/research/referee-weather-status', (_req, res) => res.json(_rwStatus.running ? _rwStatus : (readJSON('research-refweather-status.json') || _rwStatus)));
+
+// ── Prospector routes (Part 7): background run, results file ──
+let _prosStatus = { running: false };
+app.post('/api/admin/research/prospector', (req, res) => {
+  if (_prosStatus.running) return res.json({ started: false });
+  const params = { split: req.query.split || '2024-09-16', minN: parseInt(req.query.minN || '100', 10), qMax: parseFloat(req.query.qMax || '0.10'), minPp: parseFloat(req.query.minPp || '2'), bandWidth: parseFloat(req.query.band || '0.05'), leagueIds: req.query.leagues ? req.query.leagues.split(',').map(Number) : null };
+  _prosStatus = { running: true, startedAt: new Date().toISOString(), params };
+  setImmediate(() => { try { const out = require('./research/prospector').run({ dataDir: DATA_DIR, retired: RETIRED_LEAGUE_IDS, ...params }); writeJSON(`research-prospector${req.query.tag ? '-' + String(req.query.tag).replace(/[^a-z0-9-]/gi, '') : ''}.json`, out); _prosStatus = { running: false, finishedAt: new Date().toISOString(), cells: out.cellsTested, candidates: out.candidates, seconds: out.seconds }; } catch (e) { _prosStatus = { running: false, error: e.message, stack: (e.stack || '').split('\n').slice(0, 3) }; } });
+  res.json({ started: true, params });
+});
+app.get('/api/admin/research/prospector-status', (_req, res) => res.json(_prosStatus));
 
 app.get('/api/admin/research/odds-usage', (_req, res) => { const u = _researchUsage(); res.json({ creditsUsed: u.creditsUsed, remaining: u.remaining, calls: u.calls.length, byLabel: Object.entries(u.calls.reduce((a, c) => { const k = c.label.split(' ').slice(0, 2).join(' '); a[k] = (a[k] || 0) + c.credits; return a; }, {})) }); });
 
@@ -11174,18 +11275,23 @@ app.get('/api/admin/diag-pocket-search', async (req, res) => {
     const fixedE = parseFloat(req.query.edgeMin) || 0.06, fixedP = parseFloat(req.query.probMin) || 0.45;
     const minN = parseInt(req.query.minN, 10) || 40;
     const minZ = req.query.minZ != null ? parseFloat(req.query.minZ) : 1.5;
+    // 2026-09-22: ?modelKey=archive:<league>:<tag> scores rows through the standalone template
+    // (factor from ?factor, default the league's); ?from= restricts rows to a selection start
+    // (walk-forward: rows the model's trees never saw); ?cutoff= overrides the row end.
+    const modelKey = req.query.modelKey || null; const rowsFrom = req.query.from || null; const rowsTo = req.query.cutoff || cutoff;
     const { classifyFixture, WEIGHTS_BY_CONTEXT, CONTEXT_CONFIG, LEAGUE_CONFIG: LC } = require('./scoring');
     const settings = getSettings();
     const hist = readHistoricalCached() || {};
     const closing = getClosingOdds();
-    const recs = (hist.scoredRecords || []).filter(r => parseInt(r.leagueId, 10) === leagueId && r.homeFactors && r.awayFactors && r.actualOutcome && r.date < cutoff);
+    const recs = (hist.scoredRecords || []).filter(r => parseInt(r.leagueId, 10) === leagueId && r.homeFactors && r.awayFactors && r.actualOutcome && r.date < rowsTo && (!rowsFrom || r.date >= rowsFrom));
     const rows = []; let i = 0;
     for (const r of recs) {
       if (++i % 300 === 0) await new Promise(rr => setImmediate(rr));
       const co = closing[r.fixtureId] || closing[String(r.fixtureId)];
       if (!co || co.bookmaker !== 'pinnacle' || !(co.homeOdds > 1 && co.drawOdds > 1 && co.awayOdds > 1)) continue;
       const context = r.context || classifyFixture(leagueId);
-      const probs = scoreProbabilities({ homeF: r.homeFactors, awayF: r.awayFactors, weights: WEIGHTS_BY_CONTEXT[context], context, leagueId, leagueConfig: LC[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: true, rankAdjust: false, hostBoost: false, modifiers: false } }).probs;
+      const probs = modelKey ? (standaloneChainProbs(modelKey, leagueId, r, context)?.probs || null) : scoreProbabilities({ homeF: r.homeFactors, awayF: r.awayFactors, weights: WEIGHTS_BY_CONTEXT[context], context, leagueId, leagueConfig: LC[leagueId], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: true, rankAdjust: false, hostBoost: false, modifiers: false } }).probs;
+      if (!probs) continue;
       const stripped = marginStrippedImplied(co);
       const pick = probs.home >= probs.draw && probs.home >= probs.away ? 'home' : probs.away >= probs.draw ? 'away' : 'draw';
       const calProb = Math.min(0.97, probs[pick] * factor);

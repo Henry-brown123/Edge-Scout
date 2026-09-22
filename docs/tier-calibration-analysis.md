@@ -11072,3 +11072,71 @@ candidate action, regardless of the investigation's own focus.
 Proposed order: #2 (persist sheets, today) → #1 (weekly monitor) → #3 → #4/#5
 (the line-up-aware League One build with the pooled candidate beside it) →
 #6. Totals stay closed unless #4 shows model-level skill, per Part 3.
+
+## Addendum 70 — Overnight programme 2026-09-22 → 23: stock-take actions, reserve-first standalone-vs-pooled, lower-division re-attempt, Championship re-search, Prospector (pre-registered before any run)
+
+Standing rules applied throughout: 18–22; the underpowered-test rule; the
+stock-take rule. Nothing goes live. All Odds API and API-Sports usage logged.
+
+**Part 1 (stock-take actions) — built tonight:** (1) pre-match sheets: the
+lock already persisted the polled sheets into `lineups.json` before kick-off
+and the nightly backfill never overwrites an existing entry, so the record
+has been accumulating since 2026-09-17; added an explicit
+`capturedAt: 'pre-match'` marker, minutes-to-kickoff and completeness, and a
+status route (`research/lineups-status`) for the count and rate. (2) Weekly
+model-vs-market monitor (`runModelMonitor`, Monday 06:30 UTC, file
+`model-monitor.json`, route `model-monitor`), including (7) the seasonal
+calibration read per league × season. (3) Referee + venue + historical
+weather backfill (`research/referee-weather-backfill`: API-Sports
+`/fixtures` per league-season; Open-Meteo ERA5 archive per venue-season;
+research files only). (4) Rule 22 on the lineup gap: answered in Part 1
+results below. (5)/(6) line-up-aware League One model: attempted after the
+runs below if time allows; otherwise scoped with the exact data counts.
+
+**Part 2 pre-registration (standalone vs pooled, reserve-first):** holdout
+= rows ≥ 2025-08-01 in each league (League Two ≈ 628 with a Pinnacle close,
+League One similar). Twins: standard recipe, trees + Platt on rows before
+2025-08-01 (`TRAIN_BEFORE`, dry-run archive). Comparison on the holdout,
+paired per fixture: log-loss and top-pick beyond-market residual, twin vs
+the deployed pooled model (which never trains on any pre-cutoff row of these
+leagues, so the holdout is out-of-sample for both). Verdict rule: standalone
+"wins clearly" only if better on log-loss at z ≤ −1.645 **or** better on the
+residual by ≥ 1pp at z ≤ −1.645, and worse on neither. Otherwise: equal, or
+pooled wins, stated as such. League Two's twin already exists (`l2wf2025`,
+Addendum 65) and is re-read here with the same rule.
+
+**Part 3 pre-registration (lower divisions, standalone-first):** data gate
+first (probe: current featured markets, historical h2h+totals snapshots per
+season, fabrication signature) for Serie B, Segunda, 2. Bundesliga, Ligue 2
+and any other lower-division soccer key the Odds API lists. Market
+efficiency = Pinnacle vs a per-league constant on the league's pre-cutoff
+rows (already computed for 136/141/79 in Addendum 69 Part 4: markets beat a
+constant by 4.1% / 3.5% / 3.2%). For each league with scored records
+(136, 141, 79): standalone twin with `TRAIN_BEFORE=2025-08-01` (dry run),
+compared against the pooled model on the holdout as in Part 2, then a
+train-only cell grid on the twin's post-tree-boundary rows before
+2025-08-01 with **one** holdout read for a shortlist fixed by the Addendum
+53 rule (n ≥ 60, z ≥ 1.5, top 3 by units/season). Ligue 2 (league id 62) has
+no fixture pool or scored records: tonight only the data gate and a
+market-efficiency read; the standalone build is logged as the next step
+with its cost (fixture backfill ~10 calls, pool scoring, ~6k Odds API
+credits of closing lines).
+
+**Part 4 pre-registration (Championship narrow search):** standalone twin
+`TRAIN_BEFORE=2025-08-01`; the narrow-combination search
+(`diag-pocket-search`, C1–C7: pick side × Jan–May / Aug–Dec × edge/prob
+grid) on rows from 2023-08-01 (after the twin's tree boundary) to
+2025-08-01 as the selection window, `split` = 2025-08-01 as the test
+boundary, one test look on rows 2025-08-01 → 2026-08-11 (the pre-cutoff
+holdout) plus the forward rows. Rule 18: the Championship test slice ≥
+2024-09-16 was read once in Addendum 54 on the pooled chain and a wf2022
+standalone; this holdout overlaps it from 2025-08 — **declared second
+look**.
+
+**Part 7 pre-registration (Prospector):** model-free; cells = scope (each
+league, and pooled groups lower / top / all) × side × implied band (0.05)
+× phase (Aug–Oct / Nov–Jan / Feb–May / all); train < 2024-09-16, test ≥;
+n ≥ 100; BH-adjusted q ≤ 0.10 and |residual| ≥ 2pp to become a candidate;
+candidates read once on test; rule-19: closed doors, four blocks, per
+season, finer bands. Only positive-residual cells are actionable (a
+negative residual has no direct back market).
