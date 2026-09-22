@@ -11273,3 +11273,64 @@ listed as a stock-take action, not done tonight.
 
 **API usage tonight:** Odds API 772 credits (probe; balance 4,831,728);
 API-Sports 32 calls; Open-Meteo 523 (free). Nothing live changed.
+
+**Part 1.5 / 1.6 — line-up-aware League One model (run 18:55Z, 172 s).**
+Data: 13,677 line-up-era rows across 12 leagues (2022-08 →), League One
+2,248; holdout ≥ 2025-08-01: 633 League One fixtures with a Pinnacle close.
+Features: base 26 + 10 line-up features from the post-match XI (per side:
+regulars missing, XI familiarity, newcomers, core retained, XIs available),
+history strictly prior. Windows: trees 2022-08 → 2024-07, Platt 2024-08 →
+2025-07, one holdout read. Four builds, identical rows and windows:
+
+| Build | Tree rows | vs deployed pooled chain (log-loss, z) | vs Pinnacle (log-loss, z) | Top-pick residual / ROI | Line-up share of splits |
+|---|---|---|---|---|---|
+| reference: deployed pooled chain | — | — | +0.028 (z 3.3) | +0.5pp / −5.0% | — |
+| A base-26, standalone | 1,052 | +0.011 (z 1.2) worse | +0.039 (z 3.8) | −0.3pp / −7.2% | 0 |
+| B base-26 + line-up, standalone | 1,052 | +0.003 (z 0.3) equal | +0.031 (z 3.2) | +0.0pp / −6.8% | **15.9%** (h_familiarity the top feature) |
+| C base-26, pooled line-up era | 6,424 | +0.004 (z 0.6) equal | +0.032 (z 4.0) | +0.7pp / −4.2% | 0 |
+| D base-26 + line-up, pooled line-up era | 6,424 | +0.004 (z 0.7) equal | +0.032 (z 4.0) | −0.4pp / −7.1% | 15.4% |
+
+Reading: the line-up features are not noise — they improved the thin
+standalone build by 0.008 of log-loss (A → B) and the trees used them
+heavily — but they add nothing to the pooled build (C → D: +0.0003), and
+**no build narrows the gap to Pinnacle: every one sits at +0.031 to +0.039
+against the deployed chain's +0.028.** Top-pick residuals are all within
+noise of zero on this window (the deployed chain too). Verdict for 1.5: not
+adopted; the model-level gate (beat the deployed chain, close most of the
+gap to Pinnacle) is failed by all four. Verdict for 1.6: **pooled remains
+the League One default**; standalone equal at best (Part 2) and only equal
+here with line-up help.
+
+Under the standing rule, what was and wasn't tested: capably tested — the
+hypothesis that *crude* XI-composition features (who is missing, how
+familiar the XI is) close the gap; ruled out. Only weakly tested — the
+hypothesis that *player-quality-weighted* absence closes it: these
+features weight every player equally, while the project already holds
+per-player WOWY records (`teamProfiles.js`, post-match lineups pool). The
+capable version of this test is a WOWY-weighted "strength missing" feature
+(expected-points delta from the absent regulars) built from the same XI
+history — a day's work, no new data, and the single most direct attack on
+the 2.8% gap still standing. Logged as the next line-up step.
+
+### Closing statement (Addendum 70)
+
+- **Capably tested and ruled out tonight:** standalone-per-league as a
+  performance win over pooling with the current recipe (equal in the three
+  English leagues, worse in Serie B); Championship narrow pockets under a
+  capable standalone; Serie B, Segunda and 2. Bundesliga pockets under
+  capable standalones; a model-free flat-band market pocket across 14
+  leagues after multiple-comparison correction; crude XI-composition
+  features as a route to the market gap.
+- **Only weakly tested — real open opportunities:** (1) WOWY-weighted
+  absence features (the capable line-up test); (2) the Prospector with a
+  market-movement dimension (opening line → close) and coarser bands; (3)
+  Ligue 2, gate passed, build not started; (4) the live weather modifier's
+  retroactive validation on the 13,196 fixtures now holding weather.
+- **Prioritised recommendation for tomorrow:** (1) WOWY-weighted line-up
+  features into the same four-build harness, League One first — it is the
+  one attempt with a mechanism behind it; (2) pool opening lines and rerun
+  the Prospector with movement and 0.10 bands; (3) validate the weather
+  modifier retroactively before anything uses weather; (4) Ligue 2 only if
+  (1) shows model-level gain that could transfer. The two live pockets and
+  their V2 tiles continue unchanged; the weekly model monitor now watches
+  the ceiling every Monday.
