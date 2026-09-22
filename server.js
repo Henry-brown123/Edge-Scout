@@ -10971,6 +10971,46 @@ app.post('/api/admin/research/totals-pocket', (req, res) => {
 });
 app.get('/api/admin/research/totals-pocket-status', (_req, res) => res.json(_tpStatus));
 
+// ── Direct 1X2 model-vs-Pinnacle log-loss (2026-09-22): the same broad read the totals search used ──
+// Every domestic scored record with a Pinnacle 3-way close: live pooled chain (model → bias →
+// correction layer; no rank anchor/host boost/modifiers, as the validation path) vs the
+// margin-stripped market vs a per-league constant (outcome frequencies of the same window —
+// in-sample for the constant, i.e. conservative for the model). Windows: 'pre' = before the
+// league's date-split cutoff (never trained on by the pooled model), 'post' = forward rows.
+// Standalone models (42, 41) reported on their own rows through the standalone template.
+let _mvmStatus = { running: false };
+app.post('/api/admin/research/model-vs-market', (req, res) => {
+  if (_mvmStatus.running) return res.json({ started: false });
+  _mvmStatus = { running: true, startedAt: new Date().toISOString() };
+  setImmediate(async () => {
+    try {
+      const hist = readHistoricalCached() || {}; const closing = getClosingOdds(); const settings = getSettings();
+      const recs = (hist.scoredRecords || []).filter(r => r.homeFactors && r.awayFactors && r.actualOutcome && r.context === 'club_domestic' && !isRetiredLeague(r.leagueId));
+      const ll = (p, y) => -Math.log(Math.max(1e-12, p[y]));
+      const rows = []; let i = 0;
+      for (const r of recs) {
+        const co = closing[r.fixtureId] || closing[String(r.fixtureId)]; if (!co || co.bookmaker !== 'pinnacle' || !(co.homeOdds > 1 && co.drawOdds > 1 && co.awayOdds > 1)) continue;
+        const lid = parseInt(r.leagueId, 10); const context = r.context;
+        const sc = scoreProbabilities({ homeF: r.homeFactors, awayF: r.awayFactors, weights: WEIGHTS_BY_CONTEXT[context], context, leagueId: lid, leagueConfig: LEAGUE_CONFIG[lid], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: isUnifiedLeague(lid), rankAdjust: false, hostBoost: false, modifiers: false } });
+        if (!sc) continue;
+        const mk = marginStrippedImplied(co); const cutoff = DATE_SPLIT_HOLDOUT_CUTOFFS.get(lid) || null;
+        const row = { lid, date: r.date, year: r.date.slice(0, 4), win: cutoff ? (r.date < cutoff ? 'pre' : 'post') : 'nocutoff', y: r.actualOutcome, model: sc.probs, market: mk, pooledRaw: sc.rawProbs };
+        if (STANDALONE_SHADOW_LEAGUE_IDS.has(lid)) { const sp = standaloneChainProbs(lid, lid, r, context); if (sp) row.standalone = sp.probs; }
+        rows.push(row);
+        if (++i % 500 === 0) await new Promise(r2 => setImmediate(r2));
+      }
+      const summarise = (list) => { const n = list.length; if (!n) return { n: 0 }; const freq = { home: 0, draw: 0, away: 0 }; for (const r of list) freq[r.y]++; const constP = { home: freq.home / n, draw: freq.draw / n, away: freq.away / n }; const d = list.map(r => ll(r.model, r.y) - ll(r.market, r.y)); const m = d.reduce((a, b) => a + b, 0) / n, sd = n > 1 ? Math.sqrt(d.reduce((a, x) => a + (x - m) ** 2, 0) / (n - 1)) : 0; const sa = list.filter(r => r.standalone); const ds = sa.map(r => ll(r.standalone, r.y) - ll(r.market, r.y)); const ms = ds.length ? ds.reduce((a, b) => a + b, 0) / ds.length : null, sds = ds.length > 1 ? Math.sqrt(ds.reduce((a, x) => a + (x - ms) ** 2, 0) / (ds.length - 1)) : 0; return { n, modelLL: +(list.reduce((a, r) => a + ll(r.model, r.y), 0) / n).toFixed(4), marketLL: +(list.reduce((a, r) => a + ll(r.market, r.y), 0) / n).toFixed(4), constantLL: +(list.reduce((a, r) => a + ll(constP, r.y), 0) / n).toFixed(4), modelMinusMarket: +m.toFixed(5), z: sd ? +(m / (sd / Math.sqrt(n))).toFixed(2) : null, marketMinusConstantPct: +(((list.reduce((a, r) => a + ll(constP, r.y), 0) - list.reduce((a, r) => a + ll(r.market, r.y), 0)) / list.reduce((a, r) => a + ll(constP, r.y), 0)) * 100).toFixed(2), modelMinusConstantPct: +(((list.reduce((a, r) => a + ll(constP, r.y), 0) - list.reduce((a, r) => a + ll(r.model, r.y), 0)) / list.reduce((a, r) => a + ll(constP, r.y), 0)) * 100).toFixed(2), standalone: ds.length ? { n: ds.length, standaloneLL: +(sa.reduce((a, r) => a + ll(r.standalone, r.y), 0) / ds.length).toFixed(4), standaloneMinusMarket: +ms.toFixed(5), z: sds ? +(ms / (sds / Math.sqrt(ds.length))).toFixed(2) : null } : undefined }; };
+      const by = (list, fn) => { const g = {}; for (const r of list) (g[fn(r)] = g[fn(r)] || []).push(r); return Object.fromEntries(Object.entries(g).sort().map(([k, l]) => [k, summarise(l)])); };
+      const out = { ranAt: new Date().toISOString(), rows: rows.length, note: 'model − market log-loss per fixture; negative = model better. constant = the window\'s own outcome frequencies per league (in-sample, conservative). pre = before the league\'s cutoff (never trained on); post = forward.',
+        overall: { all: summarise(rows), pre: summarise(rows.filter(r => r.win === 'pre')), post: summarise(rows.filter(r => r.win === 'post')) },
+        byLeaguePre: by(rows.filter(r => r.win === 'pre'), r => r.lid), byLeaguePost: by(rows.filter(r => r.win === 'post'), r => r.lid), byLeagueAll: by(rows, r => r.lid), byYear: by(rows, r => r.year) };
+      writeJSON('research-1x2-vs-market.json', out); _mvmStatus = { running: false, finishedAt: new Date().toISOString(), rows: rows.length };
+    } catch (e) { _mvmStatus = { running: false, error: e.message, stack: (e.stack || '').split('\n').slice(0, 3) }; }
+  });
+  res.json({ started: true });
+});
+app.get('/api/admin/research/model-vs-market-status', (_req, res) => res.json(_mvmStatus));
+
 app.get('/api/admin/research/odds-usage', (_req, res) => { const u = _researchUsage(); res.json({ creditsUsed: u.creditsUsed, remaining: u.remaining, calls: u.calls.length, byLabel: Object.entries(u.calls.reduce((a, c) => { const k = c.label.split(' ').slice(0, 2).join(' '); a[k] = (a[k] || 0) + c.credits; return a; }, {})) }); });
 
 app.get('/api/admin/regime-offset/status', (_req, res) => {

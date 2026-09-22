@@ -492,3 +492,24 @@ league-only calibration) is the first search recorded under this rule; its
 limitation was model crudeness, not pooling, and any follow-up must be a
 stronger *league-specific* model, not a pooled one.
 
+## Rule 22 — A blocker is a question to investigate, never a default stop (2026-09-22, standing instruction)
+
+When a search or pocket-discovery effort hits a genuine blocker — a market
+with no sharp pricing through the current source, a signal the historical
+record does not hold, a data source currently unavailable — the line of
+inquiry does not end there by default. For every blocker found, the report
+answers explicitly:
+
+1. Is this a permanent limitation, or only a limitation of what we currently
+   hold or have access to?
+2. If addressable: what would it take (a different provider, a different
+   API, building the record forward from today, re-fetching a dropped
+   field), and is it worth pursuing given the size of the opportunity it
+   would unlock?
+3. If not worth pursuing now: log it specifically — "not available from X;
+   Y or Z might have it; revisit when …" — so it can be picked up later
+   rather than quietly lost.
+
+Blocker log entries live in `docs/blocker-log.md`. This rule has the same
+standing as rules 18–21 and applies to every future search.
+
