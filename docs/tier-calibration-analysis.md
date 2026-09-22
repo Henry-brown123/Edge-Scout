@@ -11175,3 +11175,72 @@ repeatable (route `research/prospector`, parameters for split, band width,
 n, q, leagues); the next runs should try coarser bands (0.10) for power and
 a market-movement dimension once opening lines are pooled (blocker-log
 entry to add).
+
+**Part 1.4 — Rule 22 on the line-up gap (read 18:41Z).** Correction to the
+brief's premise: the pre-match sheets ARE persisted. The lineup-triggered
+lock has written the polled sheets into `lineups.json` before kick-off since
+2026-09-17 (the nightly post-match backfill never overwrites an existing
+entry), so the record was already accumulating; tonight added the explicit
+provenance marker. Current count: **126 pre-match entries** (125 since
+17 Sep) across 13 leagues — League One 12, League Two 12, Premier League 10,
+La Liga 12, Serie B 10, Segunda 11 … — at **~151 per week**; 110 of the 114
+bets locked since 17 Sep had sheets at lock (the other 4 fell back at T-25).
+Retroactively: no provider sells "the XI as announced at T-60" for past
+fixtures — API-Sports, Sportmonks and Opta all return the recorded starting
+XI. That XI equals the announced one in all but rare warm-up withdrawals, so
+**the post-match XI in `lineups.json` (15,397 entries, EFL from 2022) is the
+historical training record for a line-up-aware model; only the market's
+reaction timing is genuinely unrecoverable** (permanent, and irrelevant to a
+feature that is computed from the XI itself). Logged in the blocker log.
+Consequence for item 5: a line-up-aware model trains on the 2022+ post-match
+XI as history and validates forward on the pre-match sheets; the forward
+record alone (126 rows) is nowhere near enough to train on and will not be
+for a season.
+
+**Part 6 — trainer pocket-gate mirror.** Checked: the hand-written mirror
+(bias → correction layer) omitted the regime-offset stage added on 21 Sep —
+harmless today (both terms in shadow, applied deltas exactly zero) but a
+latent divergence the moment a term is switched on. Rather than leave it,
+the gate now feeds candidate and deployed raw probabilities through
+`sharedScorer.scoreProbabilities` itself (`rawProbsOverride`, pooled
+template, validation options), so the gate measures whatever the live chain
+does, now and after any future stage. Verified locally that the override
+path reproduces the chain.
+
+**Part 2 — reserve-first standalone vs pooled, holdout ≥ 2025-08-01 (twins:
+standard recipe, trees + Platt on rows before 2025-08-01; pooled = deployed
+model, which never trains on pre-cutoff rows of these leagues; paired per
+fixture at the Pinnacle close):**
+
+| League | n | Log-loss standalone − pooled (z) | Top-pick residual: pooled / standalone / paired ± SE | Closing ROI pooled / standalone | Verdict (pre-registered rule) |
+|---|---|---|---|---|---|
+| League One | 633 | +0.0006 (z 0.1) | +0.5 / +2.1 / **+1.6 ± 1.0pp** (z 1.5) | −5.0% / −0.6% | equal — standalone leans better on picks, short of the z ≤ −1.645 bar |
+| League Two | 628 | +0.0005 (z 0.1) | +3.7 / +1.9 / −1.8 ± 1.3pp | +4.7% / +0.4% | equal on log-loss, pooled better on picks |
+| Championship | 641 | +0.0019 (z 0.3) | −2.0 / −2.4 / −0.4 ± 1.1pp | −7.9% / −8.8% | equal (both negative) |
+| Serie B | 440 | **+0.0246 (z 2.2)** | +3.8 / +0.0 / −3.7 ± 2.2pp | +3.6% / −6.5% | **pooled wins** — the standalone (≈ 2,200 tree rows) is miscalibrated (home 39.6% expected vs 44.5% actual) |
+
+**Verdict: standalone does not win clearly anywhere.** Equal in the three
+English leagues, worse in Serie B where the league's own history is thin.
+This is an architectural finding, not a tooling gap: same recipe, same
+holdout, out-of-sample for both models, 440–641 fixtures each. Pooling's
+transfer across leagues is worth as much as a league's own rows at these
+sizes, and more in a thin league. **Standard going forward: the pooled
+model stays the default chain; standalone models remain the per-pocket
+counterpart tiles (rule 20) and are promoted per league only on this
+evidence** — League One is the one to watch (+1.6pp on picks, ROI −0.6% vs
+−5.0%), which is exactly the forward read its V2 tile carries. One caveat
+worth stating: the recipe is shared, so a standalone with a *different*
+recipe (e.g. line-up-aware, lineup-era only) is untested by this result.
+
+**Part 4 — Championship narrow-pocket re-search (standalone twin, factor
+1.0; selection 2023-08-01 → 2025-08-01, 1,112 rows the twin's trees never
+saw; one test look 2025-08-01 → 2026-08-24, 568 rows — a declared second
+look, the slice ≥ 2024-09-16 having been read once in Addendum 54):**
+none of C1–C7 (all / recent / Jan–May / home-only / home+Jan–May / away /
+Aug–Dec) has an eligible cell (n ≥ 40, z ≥ 1.5) on the selection window;
+the fixed 6/45 cell reads +1.8pp (z 0.45) on selection and −3.0pp on the
+test look. The twin is model-level equal to the pooled chain (above), so
+this is a capable clean negative for the shape of search that found League
+One's pockets. **Championship stays closed under both models.** Its
+remaining open avenue is the same as everywhere else: a better model
+(line-up-aware), not a different cut of this one.
