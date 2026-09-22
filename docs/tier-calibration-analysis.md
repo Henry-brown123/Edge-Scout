@@ -11244,3 +11244,32 @@ this is a capable clean negative for the shape of search that found League
 One's pockets. **Championship stays closed under both models.** Its
 remaining open avenue is the same as everywhere else: a better model
 (line-up-aware), not a different cut of this one.
+
+**Part 3 — lower divisions, standalone-first (probe 772 credits; twins as
+Part 2; market efficiency from Addendum 69 Part 4):**
+
+| League | Data gate | Market beats constant (pre-cutoff) | Standalone vs pooled, holdout ≥ 2025-08 (n; log-loss diff z; residual paired ± SE) | Narrow search (twin; selection 2023-08 → 2025-08; one look ≥ 2025-08) | Verdict |
+|---|---|---|---|---|---|
+| Serie B (136) | pass — Pinnacle on every priced fixture 2021–2025, margins real | 4.1% | 440; **+0.025 (z 2.2)** standalone worse; −3.7 ± 2.2pp | no eligible cell in C1–C7; fixed 6/45 negative | **capable clean negative** — the pooled chain is the better model here and found nothing either (Addendum 43) |
+| Segunda (141) | pass | 3.5% | 531; +0.009 (z 0.8); −1.4 ± 1.8pp | one eligible cell: Jan–May 6%/35% — selection n 111, +7.2pp (z 1.55), ROI +17.6%; **test n 70, −1.6pp, ROI −12.2%** | **capable clean negative** |
+| 2. Bundesliga (79) | pass (Pinnacle prices ~4 of each snapshot's events — the league's Saturday 13:00 slot; coverage per fixture is complete via the nightly kickoff-minute backfill) | 3.2% | 362; −0.002 (z −0.2); −1.7 ± 1.7pp | one eligible cell: Jan–May 3%/45% — selection n 41, +15.4pp (z 2.0), ROI +29.5%; **test n 27, −0.3pp, ROI −2.2%** | **capable clean negative** |
+| Ligue 2 (`soccer_france_ligue_two`, API-Sports 62) | pass — Pinnacle h2h + totals on every event at the 2021, 2022 and 2023 snapshots, margins real (2024/2025 snapshots caught one Saturday-15:00 event each; Ligue 2 plays Friday/Saturday evenings) | not measurable yet (no pool) | not built — no fixtures, records or closing lines held | — | **blocker-log entry**: one evening's build (~6k credits) gated on a market-efficiency read; not started tonight because the three pooled lower leagues gave nothing under capable models |
+| Other keys the Odds API lists | Brazil Serie B, Argentina Primera, Greece, Switzerland, Turkey, Korea, League of Ireland | — | — | — | outside the project's scope (no API-Sports pool, no lineups, different data-quality regime); logged, not pursued |
+
+The market-efficiency reading is worth stating plainly: Pinnacle beats a
+constant by 3.2–4.1% in these leagues against 2.7% in League Two — the
+lower European divisions are *not* less-informed markets than the EFL on
+this measure, and the model's own skill there is 0–1% (Addendum 69 Part 4).
+The "less-scrutinised league" hypothesis does not survive contact with the
+numbers for these three.
+
+**Part 1.3 — referee, venue, weather (done, research files):** 32
+API-Sports calls, 17,805 League One/Two fixtures seen 2011–2026; referee on
+10,374 (near-complete from ~2016); venue on 17,743; historical weather
+(Open-Meteo ERA5, 523 calls) on 13,196 fixtures; 68 venues without
+coordinates and a few 429-skipped ranges logged for a rerun. The live
+weather modifier can now be validated retroactively on 13,196 fixtures —
+listed as a stock-take action, not done tonight.
+
+**API usage tonight:** Odds API 772 credits (probe; balance 4,831,728);
+API-Sports 32 calls; Open-Meteo 523 (free). Nothing live changed.
