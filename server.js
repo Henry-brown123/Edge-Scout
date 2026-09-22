@@ -10952,6 +10952,24 @@ app.post('/api/admin/research/alt-totals-backfill', (req, res) => {
 });
 app.get('/api/admin/research/alt-totals-status', (_req, res) => res.json(_raStatus.running ? _raStatus : (readJSON('research-alt-status.json') || _raStatus)));
 
+// ── Totals pocket build (Addendum 69): league-specific GBDT, reserve-first; runs in the background, writes research-totals-pocket-<lid>.json ──
+const _tpStatus = {};
+app.post('/api/admin/research/totals-pocket', (req, res) => {
+  const lid = parseInt(req.query.league, 10); if (![41, 42].includes(lid)) return res.status(400).json({ error: 'league must be 41 or 42' });
+  if (_tpStatus[lid]?.running) return res.json({ started: false, status: _tpStatus[lid] });
+  const windows = { treesFrom: req.query.treesFrom || '2011-07-01', treesTo: req.query.treesTo || '2022-08-01', plattTo: req.query.plattTo || '2023-08-01', holdoutFrom: req.query.holdoutFrom || '2025-08-01' };
+  _tpStatus[lid] = { running: true, startedAt: new Date().toISOString(), windows };
+  const settings = getSettings(); const closing = getClosingOdds(); const hist = readHistoricalCached() || {};
+  const realCell = lid === 42 ? { e: 0.09, p: 0.40 } : { e: 0.12, p: 0.50 }; const fP = getCalFactorForLeague(settings, lid);
+  const recById = new Map((hist.scoredRecords || []).filter(r => parseInt(r.leagueId, 10) === lid && r.homeFactors && r.awayFactors && r.actualOutcome).map(r => [String(r.fixtureId), r]));
+  const inRealPocket = (fid) => { const r = recById.get(String(fid)); const co = closing[fid] || closing[String(fid)]; if (!r || !co || co.bookmaker !== 'pinnacle' || !(co.homeOdds > 1 && co.drawOdds > 1 && co.awayOdds > 1)) return null; const context = r.context || 'club_domestic'; const sc = scoreProbabilities({ homeF: r.homeFactors, awayF: r.awayFactors, weights: WEIGHTS_BY_CONTEXT[context], context, leagueId: lid, leagueConfig: LEAGUE_CONFIG[lid], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { rankAdjust: false, hostBoost: false, modifiers: false } }); if (!sc) return null; const p = sc.probs; const pick = p.home >= p.draw && p.home >= p.away ? 'home' : p.away >= p.draw ? 'away' : 'draw'; const st = marginStrippedImplied(co); return (Math.min(0.97, p[pick] * fP) - st[pick] >= realCell.e && p[pick] >= realCell.p); };
+  require('./research/totalsPocket').run({ dataDir: DATA_DIR, leagueId: lid, windows, inRealPocket, seed: parseInt(req.query.seed || '20260922', 10) })
+    .then(out => { writeJSON(`research-totals-pocket-${lid}.json`, out); _tpStatus[lid] = { running: false, finishedAt: new Date().toISOString(), seconds: out.seconds }; console.log(`[ResearchTotalsPocket] league ${lid} done in ${out.seconds}s`); })
+    .catch(e => { _tpStatus[lid] = { running: false, error: e.message, stack: (e.stack || '').split('\n').slice(0, 4) }; console.error(`[ResearchTotalsPocket] league ${lid}: ${e.message}`); });
+  res.json({ started: true, windows });
+});
+app.get('/api/admin/research/totals-pocket-status', (_req, res) => res.json(_tpStatus));
+
 app.get('/api/admin/research/odds-usage', (_req, res) => { const u = _researchUsage(); res.json({ creditsUsed: u.creditsUsed, remaining: u.remaining, calls: u.calls.length, byLabel: Object.entries(u.calls.reduce((a, c) => { const k = c.label.split(' ').slice(0, 2).join(' '); a[k] = (a[k] || 0) + c.credits; return a; }, {})) }); });
 
 app.get('/api/admin/regime-offset/status', (_req, res) => {
