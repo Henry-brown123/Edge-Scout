@@ -10728,7 +10728,15 @@ Rule-19 checks on the under ≥ 3% cell (train bets):
   ~51%".
 - **Overlap** with the real 9/40 1X2 pocket: 8% of bets (50 of 659).
 
-**Verdict: no totals pocket in either league.** What League Two's shortlist
+**Verdict (corrected 2026-09-22 under the standing rule on underpowered
+tests): no signal found, but with a tool that could not have found one.** The
+goals-only Poisson baseline has no skill against Pinnacle's totals line
+(League Two calibration slope 0.05, League One worse than the market), so
+this search rules out only that baseline, not the market. The capable test
+— a learned, league-specific totals model on each league's own rows with the
+factor features plus xG and shots, holdout reserved first (brief V) — has
+not been run and is the recommended next step (see the closing section).
+What League Two's shortlist
 found is not model skill — the Poisson has none here — but an under-bias in
 Pinnacle's League Two totals during the closed-doors season that has since
 decayed, and which was never worth anything at the closing price (ROI 0.0%
@@ -10747,6 +10755,24 @@ declared as such. League One's totals test slice is unread.
 touched; the research files are `research-odds-probe.json`,
 `research-totals-closing.json`, `research-totals-status.json`,
 `research-odds-usage.json`.
+
+### Closing statement (standing format from 2026-09-22)
+
+- **Capably tested and ruled out:** corners, cards, shots and shots-on-target
+  as markets for League One/Two through this data source (no sharp or soft
+  price exists); the goals-only Poisson baseline as a totals model in either
+  league; the League Two "under when Pinnacle's over price > ~51%" market
+  artefact (zero ROI at the close, decayed after closed doors).
+- **Only weakly tested — real open opportunity:** totals in both leagues with
+  a *learned* league-specific model (the data is verified, deep and real;
+  only the model was weak). BTTS once two Pinnacle seasons exist or via the
+  alternate-market pull. The 2.5 line on every fixture via `alternate_totals`
+  (Pinnacle, from ~2023-05) to remove quarter-line noise.
+- **Prioritised next step:** build the standalone learned totals model per
+  league (GBDT on own rows, own factor features + xG/shots, forward window
+  frozen, holdout reserved first, shortlist fixed before the one look).
+  ~half a day. Expected value: unknown but findable — this is the first
+  capable test of the market, not a re-run.
 
 ### Part 3 — Validation speed
 
