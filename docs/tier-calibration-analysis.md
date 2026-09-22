@@ -10780,3 +10780,42 @@ See `docs/design-brief-reserve-first-validation.md`. Tonight's search was
 run under that protocol (reserve = rows after 2024-09-16, shortlist fixed
 before the look, one look, holdout now closed for this cell family), which
 is why it could reach a clean answer in one night.
+
+## Addendum 69 — Totals pocket, League One and League Two: reserve-first build (pre-registered 2026-09-22 09:40Z, before any data pull or training)
+
+**Objective.** A learned, league-specific totals (over/under 2.5) model per
+league, built and validated reserve-first (design brief V, first
+application), aimed at a pocket strong enough to trust with money quickly.
+Rule 21: each league's model trains on that league's own fixtures only.
+
+**Fixed before anything is read:**
+
+| Element | League One | League Two |
+|---|---|---|
+| Holdout (reserved, read once) | fixtures from **2025-08-01** onward (~630) | same |
+| Cell-selection window (trees never see it) | 2023-08-01 → 2025-07-31 | same |
+| Calibration (Platt) window | 2022-08-01 → 2023-07-31 | same |
+| Tree training | league fixtures 2011 → 2022-07-31 (~6,000) | same |
+| Market for edge | Pinnacle **alternate 2.5 line at kickoff** (per-event, from 2023-05); main line where it was 2.5 before that | same |
+| Target | total goals ≥ 3 | same |
+| Shortlist rule | top 3 cells by units/season among selection-window cells with n ≥ 60 and z ≥ 1.5 on the beyond-market residual, **plus** the single highest bets/season cell with n ≥ 100, z ≥ 1.0 and ROI > 0 (volume trade-off shown explicitly); both sides allowed | same |
+| Looks at the holdout | **one**, for the shortlist only | same |
+| Rule-18 overlap | none (totals test slice unread) | **declared second look** for any under-type cell: last night's baseline read the slice ≥ 2024-09-16 once for the under-edge family; this holdout overlaps it from 2025-08 |
+
+Model: gradient-boosted trees (depth 3, 200 trees, learning rate 0.05,
+min leaf 20, 70% subsample, fixed seed) on features built from the league's
+own prior fixtures only: each side's weighted goals for/against (last 10 and
+25, and home-only/away-only variants), over-2.5 rate (last 10/25), shots and
+shots on target for/against and xG where `fixture-stats.json` has them (with
+presence flags), points per game (last 25), rest days, matches played this
+season, head-to-head total goals (last 5 meetings), league over-2.5 rate
+(last 300 fixtures), month. Everything strictly before the fixture's day.
+Nothing from any other league.
+
+Rule-19 checks on every shortlisted cell: dateable event (closed doors —
+checked descriptively on the tree-training period since the selection and
+holdout windows post-date it, and the holdout/selection are split by
+season), seasonality, side, team concentration, recency blocks,
+decomposition by market price band, overlap with the league's 1X2 pockets.
+Reported for each: n, beyond-market residual ± SE, z, closing ROI, bets and
+units per season.

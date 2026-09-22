@@ -10885,6 +10885,73 @@ app.get('/api/admin/research/totals-search', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message, stack: (e.stack || '').split('\n').slice(0, 3) }); }
 });
 
+// ── Alternate totals backfill (research): Pinnacle's 2.5 line on EVERY fixture, per event, from 2023-05 ──
+// Per (sport, kickoff minute): one historical /events call (1 credit) for event ids, then one
+// historical event-odds call per matched fixture (10 credits, markets=alternate_totals, eu).
+// Stores every Pinnacle alternate line plus the 2.5 line into research-alt-totals.json.
+let _raStatus = { running: false };
+async function runResearchAltTotalsBackfill({ budgetCredits = 60000, leagueIds = [41, 42], since = '2023-05-01', until = null } = {}) {
+  const status = { running: true, startedAt: new Date().toISOString(), finishedAt: null, groupsTotal: 0, groupsDone: 0, groupsSkipped: 0, fixturesMatched: 0, fixturesMissed: 0, withPinnacleAlt: 0, with25: 0, creditsUsed: 0, creditsRemaining: null, error: null, budgetCredits, leagueIds, since };
+  _raStatus = status; writeJSON('research-alt-status.json', status);
+  const u = _researchUsage();
+  try {
+    const hist = readHistoricalCached() || {}; const store = readJSON('research-alt-totals.json') || { entries: {}, groupsDone: {} };
+    const groups = new Map();
+    for (const fix of (hist.fixtures || [])) {
+      const lid = parseInt(fix.league?.id, 10); if (!leagueIds.includes(lid)) continue;
+      const sport = RESEARCH_SPORTS[lid]; const date = fix.fixture?.date, fid = fix.fixture?.id; if (!sport || !date || !fid) continue;
+      if (date < since || (until && date >= until)) continue; if (!['FT', 'AET', 'PEN'].includes(fix.fixture?.status?.short)) continue;
+      const key = `${sport}|${date.slice(0, 16)}`; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(fix);
+    }
+    status.groupsTotal = groups.size;
+    const credits = await checkOddsApiCredits(); status.creditsRemaining = credits.remaining;
+    if (!(credits.remaining > ODDS_CREDITS_RESERVE + budgetCredits)) throw new Error(`insufficient credits above reserve: ${credits.remaining}`);
+    for (const [key, fixtures] of [...groups.entries()].sort()) {
+      if (status.creditsUsed >= budgetCredits) { status.error = 'budget cap reached'; break; }
+      if (store.groupsDone[key] && store.groupsDone[key] !== 'error') { status.groupsSkipped++; continue; }
+      const [sport, minuteKey] = key.split('|'); const kickoffIso = `${minuteKey}:00Z`;
+      let evr;
+      try { evr = await oddsApi.get(`/historical/sports/${sport}/events`, { params: { apiKey: ODDS_API_KEY, date: kickoffIso } }); }
+      catch (e) { status.error = `${key} events: ${e.response?.status || ''} ${(e.response?.data?.message || e.message || '').slice(0, 120)}`; if (e.response?.status === 429) { await new Promise(r => setTimeout(r, 5000)); continue; } if ([401, 402].includes(e.response?.status)) break; store.groupsDone[key] = 'error'; continue; }
+      _logOddsCall(u, `research alt events ${sport} ${kickoffIso}`, evr.headers); status.creditsUsed += parseInt(evr.headers['x-requests-last'] || '0', 10) || 0;
+      const events = evr.data?.data || [];
+      for (const fix of fixtures) {
+        const home = fix.teams?.home?.name, away = fix.teams?.away?.name, fid = fix.fixture?.id;
+        const cands = events.filter(e => teamsMatch(e.home_team, home) && teamsMatch(e.away_team, away));
+        const ev = _pickByKickoff(cands, fix.fixture?.date, e => e.commence_time, () => 1) || cands[0] || null;
+        if (!ev) { status.fixturesMissed++; continue; }
+        let r;
+        try { r = await oddsApi.get(`/historical/sports/${sport}/events/${ev.id}/odds`, { params: { apiKey: ODDS_API_KEY, regions: 'eu', markets: 'alternate_totals', oddsFormat: 'decimal', date: kickoffIso } }); }
+        catch (e) { status.error = `${key} ${fid}: ${e.response?.status || ''} ${(e.response?.data?.message || e.message || '').slice(0, 120)}`; if (e.response?.status === 429) { await new Promise(r => setTimeout(r, 5000)); } continue; }
+        _logOddsCall(u, `research alt odds ${sport} ${kickoffIso}`, r.headers); status.creditsUsed += parseInt(r.headers['x-requests-last'] || '0', 10) || 0; status.creditsRemaining = parseInt(r.headers['x-requests-remaining'] || '0', 10) || status.creditsRemaining;
+        if (status.creditsRemaining && status.creditsRemaining <= ODDS_CREDITS_RESERVE) { status.error = 'reserve line reached'; break; }
+        status.fixturesMatched++;
+        const bks = r.data?.data?.bookmakers || []; const pin = bks.find(b => b.key === 'pinnacle'); const m = pin?.markets?.find(x => x.key === 'alternate_totals');
+        const byPoint = {}; for (const o of (m?.outcomes || [])) { const k = String(o.point); byPoint[k] = byPoint[k] || {}; byPoint[k][o.name.toLowerCase()] = o.price; }
+        const lines = Object.entries(byPoint).filter(([, v]) => v.over > 1 && v.under > 1).map(([point, v]) => ({ point: +point, over: v.over, under: v.under, margin: +((1 / v.over + 1 / v.under - 1).toFixed(4)) })).sort((a, b) => a.point - b.point);
+        const l25 = lines.find(l => l.point === 2.5) || null; const otherBooks25 = bks.filter(b => b.key !== 'pinnacle' && b.markets?.some(x => x.key === 'alternate_totals' && x.outcomes?.some(o => o.point === 2.5))).length;
+        if (lines.length) status.withPinnacleAlt++; if (l25) status.with25++;
+        store.entries[fid] = { fixtureId: fid, leagueId: parseInt(fix.league?.id, 10), date: fix.fixture?.date, home, away, goals: { home: fix.goals?.home ?? fix.score?.fulltime?.home, away: fix.goals?.away ?? fix.score?.fulltime?.away }, snapshotTs: r.data?.timestamp || kickoffIso, eventId: ev.id, pinnacleAltLines: lines, line25: l25, otherBooks25 };
+        await new Promise(r => setTimeout(r, 120));
+      }
+      if (status.error === 'reserve line reached') break;
+      store.groupsDone[key] = new Date().toISOString(); status.groupsDone++;
+      if (status.groupsDone % 10 === 0) { writeJSON('research-alt-totals.json', store); writeJSON('research-alt-status.json', status); }
+    }
+    writeJSON('research-alt-totals.json', store);
+  } catch (e) { status.error = e.message; }
+  status.running = false; status.finishedAt = new Date().toISOString(); writeJSON('research-alt-status.json', status);
+  console.log(`[ResearchAlt] done — groups ${status.groupsDone}/${status.groupsTotal}, matched ${status.fixturesMatched}, pinnacle alt ${status.withPinnacleAlt}, 2.5 line ${status.with25}, credits ${status.creditsUsed}${status.error ? ', error: ' + status.error : ''}`);
+  return status;
+}
+app.post('/api/admin/research/alt-totals-backfill', (req, res) => {
+  if (_raStatus.running) return res.json({ started: false, status: _raStatus });
+  const opts = { budgetCredits: parseInt(req.query.budget || '60000', 10), leagueIds: (req.query.leagues || '41,42').split(',').map(Number), since: req.query.since || '2023-05-01', until: req.query.until || null };
+  runResearchAltTotalsBackfill(opts).catch(e => console.error(`[ResearchAlt] ${e.message}`));
+  res.json({ started: true, opts });
+});
+app.get('/api/admin/research/alt-totals-status', (_req, res) => res.json(_raStatus.running ? _raStatus : (readJSON('research-alt-status.json') || _raStatus)));
+
 app.get('/api/admin/research/odds-usage', (_req, res) => { const u = _researchUsage(); res.json({ creditsUsed: u.creditsUsed, remaining: u.remaining, calls: u.calls.length, byLabel: Object.entries(u.calls.reduce((a, c) => { const k = c.label.split(' ').slice(0, 2).join(' '); a[k] = (a[k] || 0) + c.credits; return a; }, {})) }); });
 
 app.get('/api/admin/regime-offset/status', (_req, res) => {
