@@ -11112,6 +11112,20 @@ app.post('/api/admin/research/prospector', (req, res) => {
 });
 app.get('/api/admin/research/prospector-status', (_req, res) => res.json(_prosStatus));
 
+// ── Line-up-aware 1X2 model (Addendum 70 Part 1.5): four builds on the line-up era, one holdout read ──
+const _lmStatus = {};
+app.post('/api/admin/research/lineup-model', (req, res) => {
+  const lid = parseInt(req.query.league, 10) || 41; if (_lmStatus[lid]?.running) return res.json({ started: false });
+  const windows = { treesFrom: req.query.treesFrom || '2022-08-01', treesTo: req.query.treesTo || '2024-08-01', plattTo: req.query.plattTo || '2025-08-01', holdoutFrom: req.query.holdoutFrom || '2025-08-01' };
+  _lmStatus[lid] = { running: true, startedAt: new Date().toISOString(), windows };
+  const settings = getSettings(); const closing = getClosingOdds();
+  const chainProbs = (r) => { const context = r.context || 'club_domestic'; const sc = scoreProbabilities({ homeF: r.homeFactors, awayF: r.awayFactors, weights: WEIGHTS_BY_CONTEXT[context], context, leagueId: lid, leagueConfig: LEAGUE_CONFIG[lid], settings, cfg: CONTEXT_CONFIG[context], dataConf: 1, options: { correctionLayer: isUnifiedLeague(lid), rankAdjust: false, hostBoost: false, modifiers: false } }); return sc ? sc.probs : null; };
+  require('./research/lineupModel').run({ dataDir: DATA_DIR, leagueId: lid, windows, chainProbs, closing, seed: parseInt(req.query.seed || '20260922', 10) })
+    .then(out => { writeJSON(`research-lineup-model-${lid}.json`, out); _lmStatus[lid] = { running: false, finishedAt: new Date().toISOString(), seconds: out.seconds }; console.log(`[ResearchLineup] league ${lid} done in ${out.seconds}s`); })
+    .catch(e => { _lmStatus[lid] = { running: false, error: e.message, stack: (e.stack || '').split('\n').slice(0, 4) }; console.error(`[ResearchLineup] ${e.message}`); });
+  res.json({ started: true, windows });
+});
+app.get('/api/admin/research/lineup-model-status', (_req, res) => res.json(_lmStatus));
 app.get('/api/admin/research/odds-usage', (_req, res) => { const u = _researchUsage(); res.json({ creditsUsed: u.creditsUsed, remaining: u.remaining, calls: u.calls.length, byLabel: Object.entries(u.calls.reduce((a, c) => { const k = c.label.split(' ').slice(0, 2).join(' '); a[k] = (a[k] || 0) + c.credits; return a; }, {})) }); });
 
 app.get('/api/admin/regime-offset/status', (_req, res) => {
