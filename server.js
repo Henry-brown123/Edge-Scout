@@ -10742,9 +10742,9 @@ async function runResearchTotalsBackfill({ budgetCredits = 15000, leagueIds = [4
     if (!(credits.remaining > ODDS_CREDITS_RESERVE + budgetCredits)) throw new Error(`insufficient credits above reserve: ${credits.remaining}`);
     for (const [key, fixtures] of [...groups.entries()].sort()) {
       if (status.creditsUsed >= budgetCredits) { status.error = 'budget cap reached'; break; }
-      if (store.groupsDone[key]) { status.groupsSkipped++; continue; }
-      const [sport, minuteKey] = key.split('|'); const iso = `${minuteKey}:00Z`.replace(/:00Z$/, ':00Z');
-      const kickoffIso = new Date(minuteKey + ':00Z').toISOString();
+      if (store.groupsDone[key] && store.groupsDone[key] !== 'error') { status.groupsSkipped++; continue; } // errored groups are retried
+      const [sport, minuteKey] = key.split('|');
+      const kickoffIso = `${minuteKey}:00Z`; // the Odds API rejects millisecond timestamps (422 Invalid date parameter)
       let resp;
       try { resp = await oddsApi.get(`/historical/sports/${sport}/odds`, { params: { apiKey: ODDS_API_KEY, regions: 'eu', markets: 'totals', oddsFormat: 'decimal', date: kickoffIso } }); }
       catch (e) { status.error = `${key}: ${e.response?.status || ''} ${(e.response?.data?.message || e.message || '').slice(0, 120)}`; if (e.response?.status === 429) { await new Promise(r => setTimeout(r, 5000)); continue; } if (e.response?.status === 401 || e.response?.status === 402) break; store.groupsDone[key] = 'error'; continue; }
