@@ -111,7 +111,7 @@ function summarise(bets, seasons) {
   return { n, wins: bets.filter(b => b.won).length, beyondMarketPp: +(bm * 100).toFixed(2), sePp: sd ? +((sd / Math.sqrt(n)) * 100).toFixed(2) : null, z: sd ? +(bm / (sd / Math.sqrt(n))).toFixed(2) : null, roiClosePct: +((pnl / n) * 100).toFixed(1), unitsPerSeason: +(pnl / seasons).toFixed(1), betsPerSeason: +(n / seasons).toFixed(1) };
 }
 
-async function run({ dataDir, leagueId, windows, inRealPocket = null, seed = 20260922 }) {
+async function run({ dataDir, leagueId, windows, inRealPocket = null, seed = 20260922, modelOnly = false }) {
   const t0 = Date.now();
   const hist = JSON.parse(fs.readFileSync(path.join(dataDir, 'backfill-historical.json'), 'utf8'));
   let stats = {}; try { stats = JSON.parse(fs.readFileSync(path.join(dataDir, 'fixture-stats.json'), 'utf8')); } catch {}
@@ -133,6 +133,14 @@ async function run({ dataDir, leagueId, windows, inRealPocket = null, seed = 202
   const paired = (list) => { const n = list.length; if (!n) return { n: 0 }; const d = list.map(r => ll(r.p, r.over) - ll(r.mOver, r.over)); const m = d.reduce((a, b) => a + b, 0) / n, sd = n > 1 ? Math.sqrt(d.reduce((a, x) => a + (x - m) ** 2, 0) / (n - 1)) : 0; const base = list.reduce((a, r) => a + r.over, 0) / n; return { n, modelLL: +(list.reduce((a, r) => a + ll(r.p, r.over), 0) / n).toFixed(4), marketLL: +(list.reduce((a, r) => a + ll(r.mOver, r.over), 0) / n).toFixed(4), constantLL: +(list.reduce((a, r) => a + ll(base, r.over), 0) / n).toFixed(4), meanDiffVsMarket: +m.toFixed(5), z: sd ? +(m / (sd / Math.sqrt(n))).toFixed(2) : null, overRate: +base.toFixed(3), modelMeanP: +(list.reduce((a, r) => a + r.p, 0) / n).toFixed(3), marketMeanP: +(list.reduce((a, r) => a + r.mOver, 0) / n).toFixed(3) }; };
   const cellBets = (list, side, eMin, pMin) => list.filter(r => side === 'over' ? (r.edgeOver >= eMin - 1e-9 && r.p >= pMin - 1e-9) : (r.edgeUnder >= eMin - 1e-9 && (1 - r.p) >= pMin - 1e-9)).map(r => { const won = side === 'over' ? r.over === 1 : r.over === 0; const mk = side === 'over' ? r.mOver : 1 - r.mOver; const odds = side === 'over' ? r.over25.over : r.over25.under; return { r, date: r.date, day: r.day, won, mk, odds, bm: (won ? 1 : 0) - mk, pnl: won ? odds - 1 : -1 }; });
   const selSeasons = seasonsOf(sel), holdSeasons = seasonsOf(hold);
+  const importanceEarly = Object.entries(model.importance).map(([i, c]) => [names[+i], c]).sort((x, y) => y[1] - x[1]).slice(0, 15);
+  if (modelOnly) { // gate: model-level read only — no grid, no shortlist, no holdout cell look
+    return { leagueId, windows: W, modelOnly: true, ranAt: new Date().toISOString(), seconds: +((Date.now() - t0) / 1000).toFixed(1),
+      data: { leagueFixtures: fixtures.length, treeRows: treeRows.length, plattRows: plattRows.length, selectionRows: sel.length, holdoutRows: hold.length, treeRowsWithShots: treeRows.filter(r => r.feat.h_statsN >= 5).length, treeRowsWithXg: treeRows.filter(r => r.feat.h_xgN >= 5).length },
+      model: { features: names.length, trees: model.nTrees, platt: { A: platt.A, B: platt.B }, topFeatures: importanceEarly },
+      modelVsMarket: { selection: paired(sel), holdout: paired(hold) },
+      allTopPicks: { selectionOver: summarise(cellBets(sel, 'over', 0, 0), selSeasons), selectionUnder: summarise(cellBets(sel, 'under', 0, 0), selSeasons) } };
+  }
   const grid = [];
   for (const side of ['over', 'under']) for (let e = 0; e <= 0.15 + 1e-9; e += 0.01) for (let p = 0.35; p <= 0.70 + 1e-9; p += 0.05) { const s = summarise(cellBets(sel, side, e, p), selSeasons); if (s.n >= 30) grid.push({ side, edgeMin: +e.toFixed(2), probMin: +p.toFixed(2), sel: s }); }
   const eligible = grid.filter(g => g.sel.n >= 60 && g.sel.z != null && g.sel.z >= 1.5).sort((a, b) => b.sel.unitsPerSeason - a.sel.unitsPerSeason);
