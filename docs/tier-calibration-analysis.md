@@ -10976,3 +10976,76 @@ the features present, the windows are clean, and the read is out of sample.
   captures on every bet (`lineupsAtLock`), which is exactly the kind of
   information Pinnacle prices and the historical pool lacks — a forward-only
   edge source worth measuring as it accumulates.
+
+### Part 4 — Rule 22 applied to the totals blockers, and the direct 1X2 model-vs-Pinnacle read (2026-09-22)
+
+**Blockers, assessed (entries in `docs/blocker-log.md`).** The "pre-match
+line-ups not held" blocker was overstated in Part 3: the post-match starting
+XI in `lineups.json` (15,115 EFL fixtures from 2022) is the confirmed
+pre-match XI in all but rare warm-up changes, so a line-up-aware feature is
+testable on history now; what is unrecoverable is the market's reaction
+timing, not the information. Referee is re-fetchable from API-Sports fixture
+objects (~30 bulk calls). Historical weather is free from Open-Meteo's
+archive API at the venue coordinates the live modifier already uses.
+Corners/cards markets need a second odds provider (Pinnacle API or Betfair
+historical data) — logged, not pursued now. **The live lock does not persist
+the polled team sheets** (only `lineupsAtLock` and `lineupSeenAt`), so the
+forward record accumulates timing, not signal; persisting the sheets at lock
+is ~10 lines and is the recommended fix.
+
+**Direct 1X2 read (`research/model-vs-market`, 32,124 domestic fixtures with
+a Pinnacle 3-way close).** Same construction as the totals gate: live pooled
+chain (model → bias → correction layer) vs the margin-stripped close vs a
+per-league constant (the window's own outcome frequencies — in-sample for
+the constant, so conservative for the model). "Pre" = rows before each
+league's date-split cutoff, which the pooled model never trained on; "post"
+= forward rows. Leagues without a cutoff (the big five, Eredivisie, Primeira,
+Scotland) are in-sample for the pooled model and are excluded from the clean
+read.
+
+| Read | n | Model | Pinnacle | Constant | Model − market (z) | Market beats constant by | Model beats constant by |
+|---|---|---|---|---|---|---|---|
+| **Out-of-sample (pre-cutoff, six leagues)** | 16,643 | 1.0612 | 1.0352 | 1.0782 | **+0.026 (z 14.9)** | 4.0% | 1.6% |
+| Forward (post-cutoff) | 309 | 1.0932 | 1.0607 | 1.0837 | +0.032 (z 2.4) | 2.1% | −0.9% (constant fitted on 309 rows — not a fair baseline) |
+| All rows incl. in-sample leagues | 32,124 | 1.0314 | 0.9992 | 1.0765 | +0.032 (z 24.5) | 7.2% | 4.2% |
+
+By league, out-of-sample: Championship model − market +0.019 (model beats
+constant 1.9%); League One +0.025 (3.1%); League Two +0.019 (1.0%);
+2. Bundesliga +0.031 (0.3%); Serie B +0.033 (1.0%); Segunda +0.036 (0.06% —
+no skill). Every league z ≥ 5. By year the pooled gap is stable at
++0.029 to +0.042 from 2020 to 2026. The standalone models' pre-cutoff
+numbers are in-sample (their trees and Platt cover those rows) and are not
+reported here; on the 73 forward League Two fixtures the standalone is
++0.047 (z 1.9) vs market, the pooled +0.051 (z 2.0) — too few to read.
+
+**What this says, plainly.** Pinnacle's informational advantage over our
+core model in 1X2 is large, general and stable: about 2.6% of log-loss out
+of sample, z 15, roughly double the totals gap — and unlike totals, our
+model has real skill (1.6% better than a constant out of sample, 3.1% in
+League One). **The live pockets are therefore narrow regions carved from a
+model that is, on average, weaker than the market**, not cells of a model
+that beats it. Their validity rests entirely on the out-of-sample and
+forward residual reads inside those cells (Addenda 53, 58, and the forward
+tallies), which remain the right evidence — but this read sets the ceiling:
+the single largest lever for the whole project is the 2.6% gap, and the
+Rule-22 items above (persisted line-ups, the post-match XI as history,
+referee, weather) are the concrete, testable routes to narrowing it.
+
+### Closing statement (Part 4)
+
+- **Capably tested:** the core 1X2 model's standing against Pinnacle, out of
+  sample, on 16,643 fixtures — it trails by 2.6% of log-loss with z 15; it
+  beats a constant by 1.6% (League One 3.1%, League Two 1.0%, Segunda 0%).
+- **Open opportunity, now unblocked by Rule 22:** a line-up-aware feature
+  set on the post-match XI (2022+, 15,115 fixtures) for the 1X2 model, with
+  referee and historical weather added at near-zero cost — the first
+  attempt to attack the 2.6% gap with information Pinnacle prices and the
+  model does not see. Test model-level first (paired log-loss vs market on a
+  reserved holdout), pockets second.
+- **Prioritised recommendation:** (1) persist the polled team sheets at
+  lock (today, ~10 lines); (2) re-fetch referee and pull historical weather
+  into the pool (cheap, one evening); (3) build the line-up-aware 1X2
+  standalone for League One first (the league where the model already has
+  the most skill and real money rides), reserve-first per brief V, gated on
+  the model-level read against Pinnacle. Totals stay closed unless that
+  model shows skill, in which case they get one more capable attempt.
