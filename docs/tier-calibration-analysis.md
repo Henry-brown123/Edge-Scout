@@ -11140,3 +11140,38 @@ n ≥ 100; BH-adjusted q ≤ 0.10 and |residual| ≥ 2pp to become a candidate;
 candidates read once on test; rule-19: closed doors, four blocks, per
 season, finer bands. Only positive-residual cells are actionable (a
 negative residual has no direct back market).
+
+### Results as they land (night of 2026-09-22)
+
+**Part 5 — pending forward hypotheses (read 18:41Z, set-level counts from
+the reserved-set status):**
+
+| Reserved set | From | Completed fixtures with a Pinnacle close | Target | Pace | Meaningful read |
+|---|---|---|---|---|---|
+| League Two post-cutoff (holds F: home pick, market-implied < 30%, from 2026-09-07) | 2026-08-11 | 84 | ≥ 500 at season end | ~14/week | F is a subset (home priced < 30% ≈ 15–20% of fixtures): ≈ 12–17 qualifying fixtures so far; a 100-fixture cell read is roughly a season away; the set-level look is at season end as registered |
+| League One home-favourite bias G (home priced 45–65%) | 2026-09-07 | 25 | ≥ 500 | ~12/week | G covers roughly half of fixtures: ≈ 12 so far; ~40 weeks to 500, i.e. the season-end look as registered |
+| League One live pockets (12/50, Jan–May 5/45) | 2026-09-17 | 12 | forward, per pocket stop rule | ~12/week | — |
+| League One parked 6/45 paper track (+ home-only and Jan–May hypotheses) | 2026-09-16 | 12 | 100 paper bets | ~12/week | — |
+
+Both F and G are accumulating cleanly (every completed fixture has a
+Pinnacle close), and both are far from a read; neither has been looked at.
+
+**Part 7 — Prospector, first run (`research-prospector-night1.json`, 2 s):**
+32,124 fixtures with a Pinnacle close (14 leagues, 2020-06 → 2026-09-20),
+train 22,041 / test 10,083; 699 cells with n ≥ 100 (each league plus the
+pooled groups lower / top / all × side × 0.05 implied band × phase).
+Benjamini–Hochberg over all 699: **one** cell at q ≤ 0.10 — Serie B, home
+side priced 25–30%: residual −11.8pp (z −3.9, q 0.06, n 150, four blocks
+all −10 to −15pp) — a negative residual, so no direct back market, and it
+**does not hold on the test slice** (−1.3pp on 87). Everything else has
+q ≥ 0.31 after correction. The near-misses form one recognisable theme:
+home favourites priced 55–70% under-priced (all leagues 65–70%: +5.2pp,
+z 3.1, q 0.35, n 704, ROI +4.5%; 2. Bundesliga 55–60%: +11.9pp, z 2.7;
+lower divisions 60–65% in Nov–Jan: +10.5pp, z 2.6) — the same structure as
+League One's reserved hypothesis G, and no more than that after correction.
+Verdict for this run: **no market-level pocket robust to multiple
+comparisons at 0.05-band granularity.** The capability is built and
+repeatable (route `research/prospector`, parameters for split, band width,
+n, q, leagues); the next runs should try coarser bands (0.10) for power and
+a market-movement dimension once opening lines are pooled (blocker-log
+entry to add).
