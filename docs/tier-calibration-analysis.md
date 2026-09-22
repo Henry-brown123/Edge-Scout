@@ -11049,3 +11049,26 @@ referee, weather) are the concrete, testable routes to narrowing it.
   the most skill and real money rides), reserve-first per brief V, gated on
   the model-level read against Pinnacle. Totals stay closed unless that
   model shows skill, in which case they get one more capable attempt.
+
+### Part 5 — Stock-take: what this programme uncovered for the 1X2 models and live pockets (2026-09-22)
+
+Standing instruction (2026-09-22): anything uncovered in any investigation
+that could improve a model or a pocket is taken stock of and turned into a
+candidate action, regardless of the investigation's own focus.
+
+| # | Finding | Bears on | Action | Cost | Priority |
+|---|---|---|---|---|---|
+| 1 | The core 1X2 model trails Pinnacle by 2.6% of log-loss out of sample (z 15), stable since 2020; it captures ~57% of the market's information in League One, ~35% in League Two | every pocket's ceiling | make the direct model-vs-market read a standing weekly monitor on forward rows (model-level watchdog beside the pocket gates) | ~1 hour | high |
+| 2 | The lock polls team sheets but does not persist them; the post-match XI (15,115 EFL fixtures from 2022) is a valid historical proxy | line-up-aware features for 1X2; WOWY validation | persist the polled sheets on watching/bet records at lock; build XI-derived features (missing regulars vs the team's usual XI, count and share of minutes) in the shared builder from the post-match pool | 10 lines + ~1 day | high |
+| 3 | Referee is re-fetchable; historical weather is free (Open-Meteo archive) at venue coordinates | 1X2 features; the live weather modifier has never been validated historically | pool both into the fixture record; validate the weather modifier retroactively before anything else uses it | one evening | medium |
+| 4 | League One has the most model skill (3.1% over a constant) and carries real money | where a better model pays first | the line-up-aware standalone is built for League One first, reserve-first, model-level gate vs Pinnacle; pooled candidate beside it (rule 21 allows a pooled result beside, not instead) | ~2 days | high |
+| 5 | Pooled vs standalone: no evidenced winner yet (League Two twin equal on log-loss; League One standalone equal on 76 forward) | architecture policy | decide per league on paired log-loss vs market on the same out-of-sample rows once the line-up features exist; do not pre-commit | — | with #4 |
+| 6 | Base rates drift season to season (League Two over-2.5 56% → 45.5% → 47.5%; home rates likewise) | calibration of every model | keep the Platt window recent (already the newest 20% for standalones); the regime index (Term B) is the cross-league detector; consider a per-league seasonal recalibration read in the weekly gate output | small | medium |
+| 7 | Three phase-2 leagues (Serie B, Segunda, 2. Bundesliga): the model has ~0–1% skill over a constant; markets 3–4% | why no pockets were found there | do not re-search them with the current feature set; revisit only after the line-up features show model-level gain elsewhere | — | low |
+| 8 | Features absent for most training rows are never learned by depth-3 trees (totals shots/xG; Addendum 63's flag) | any new feature | new-information models train on the era the information exists for, as a gated candidate family, not bolted onto the 2011+ model | design rule | standing |
+| 9 | The data-reality probe and fabrication-signature check are reusable for any market/provider | future searches | keep as the first step of every search (rule 19 toolkit) | — | standing |
+| 10 | Corners/cards/BTTS: market side blocked on provider, outcome side trivial | future markets | blocker log entries; revisit with a second provider | — | later |
+
+Proposed order: #2 (persist sheets, today) → #1 (weekly monitor) → #3 → #4/#5
+(the line-up-aware League One build with the pooled candidate beside it) →
+#6. Totals stay closed unless #4 shows model-level skill, per Part 3.
