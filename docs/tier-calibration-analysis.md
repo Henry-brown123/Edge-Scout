@@ -10819,3 +10819,93 @@ season), seasonality, side, team concentration, recency blocks,
 decomposition by market price band, overlap with the league's 1X2 pockets.
 Reported for each: n, beyond-market residual ± SE, z, closing ROI, bets and
 units per season.
+
+### Part 2 — Results (run 2026-09-22 15:36Z; alternate-totals backfill 36,112 credits, 3,538 fixtures, 3,404 with Pinnacle's 2.5 line)
+
+**Headline (standing rule on underpowered tests): no pocket found, and the
+learned model as built is NOT yet a capable tool — it is worse than a
+constant on both out-of-sample windows in both leagues. This is not a market
+verdict.**
+
+Data as built: League Two 8,304 league fixtures → 7,923 feature rows; trees
+5,651 (2011-07 → 2022-07), Platt 535 (2022-08 → 2023-07), selection 1,096
+(2023-08 → 2025-05, 1,047 on the alternate 2.5 line), holdout 636 (2025-08
+→ 2026-09-19, all alternate 2.5). League One: 5,606 / 530 / 1,075 / 618.
+49 features, all from the league's own fixtures.
+
+**Model-level read (the gate everything else depends on):**
+
+| League | Window | Model log-loss | Pinnacle | Constant | Model − market (z) | Model mean P(over) vs actual over rate |
+|---|---|---|---|---|---|---|
+| League Two | selection | 0.7094 | 0.6810 | 0.6930 | +0.028 (z 4.4) | 0.425 vs 0.508 |
+| League Two | holdout | 0.7010 | 0.6898 | 0.6919 | +0.011 (z 1.7) | 0.429 vs 0.475 |
+| League One | selection | 0.6946 | 0.6778 | 0.6931 | +0.017 (z 4.5) | 0.466 vs 0.499 |
+| League One | holdout | 0.6967 | 0.6859 | 0.6928 | +0.011 (z 1.9) | 0.466 vs 0.513 |
+
+The market beats a constant by 1.2–1.5% of log-loss (Pinnacle's totals line
+carries real information); the model loses to the constant. League One's
+Platt slope collapsed to 0.05 (the raw score carried no usable signal);
+League Two's held at 0.68 but the model systematically under-predicts overs
+by 5–8pp.
+
+**Why the model failed — three identifiable causes, all fixable:**
+1. **The informative features were absent for three quarters of the training
+   rows.** Shots, shots on target and xG exist in `fixture-stats.json` only
+   from ~2019 (League Two: 1,392 of 5,651 tree rows have them; the selection
+   window has them on 99%). Trees trained mostly on rows where those
+   features were the −1 sentinel could not learn them.
+2. **Goal-environment drift.** The trees learned 2011–2022 scoring rates;
+   League Two's over-2.5 rate in the selection window (50.8%) is well above
+   its training-era rate, and a 535-row Platt window could not re-centre the
+   model (mean 0.425 vs 0.508).
+3. **Too little calibration data for the drift** — one season.
+
+**Cell search, League Two (selection window, train-only):** 133 grid cells,
+8 eligible. Shortlist as pre-registered (top 3 by units/season + the volume
+cell), and the ONE holdout read:
+
+| Cell | Selection n / residual / z / ROI / units·season / bets·season | Holdout n / residual / ROI |
+|---|---|---|
+| under, edge ≥ 3%, P(under) ≥ 65% | 101 / +8.8 ± 4.7pp / 1.87 / +10.6% / 5.9 / 56 | **34 / −4.9 ± 8.8pp / −12.1%** |
+| under, edge ≥ 7%, P ≥ 65% | 91 / +8.8 ± 5.0 / 1.76 / +10.6% / 5.4 / 50 | **32 / −4.6 ± 9.0 / −11.8%** |
+| over, edge ≥ 2%, P ≥ 45% | 63 / +9.3 ± 6.2 / 1.50 / +14.2% / 5.0 / 35 | 45 / +1.9 ± 7.7 / +2.1% |
+| over, any edge, P ≥ 35% (volume) | 154 / +4.6 ± 4.0 / 1.14 / +5.1% / 4.4 / 85 | **105 / −2.7 ± 4.9 / −8.8%** |
+
+None survives. The under family's selection-window strength came from the
+mid/high market-price bands and Nov–Jan (+21pp on 25 bets), reversed on the
+holdout; the over 2%/45% cell's recency blocks run +22, +19, −25, +22 —
+noise. Rule-19 overlap with the real 9/40 1X2 pocket: 3–9% of bets.
+Closed doors (train period, in-sample, descriptive): League Two over-2.5
+rate 42.6% inside vs 47.1% outside — totals did move under closed doors,
+the other way from the home-win effect.
+
+**League One:** zero eligible cells (87 grid cells); no holdout look taken.
+
+**Rule-18 bookkeeping.** League Two's totals holdout (≥ 2025-08-01) has now
+been read once for the four cells above (this counted as a declared second
+look for the under cells, since last night's baseline had read the slice ≥
+2024-09-16 for the under-edge family). League One's holdout is unread at
+cell level. Both holdouts remain usable for *model-level* reads (paired
+log-loss vs market) by any model that has not trained on them, but each
+such read is counted.
+
+### Closing statement
+
+- **Capably tested and ruled out:** nothing new about the market. What is
+  ruled out is this build of the model — trees trained on the pre-stats era
+  with a one-season calibration window.
+- **Only weakly tested — real open opportunity:** totals in both leagues
+  with a model trained on the stats era only. The data foundation is now
+  complete and verified (Pinnacle 2.5 line on 3,404 fixtures 2023–2026 plus
+  the main-line 2.5 rows from 2020), which is the expensive part and is done.
+- **Prioritised next step (≈ 1 hour, no new credits):** iteration 2 of the
+  same reserve-first build with the windows moved into the stats era — trees
+  2019-08 → 2023-07 (~2,200 rows, shots/xG present on nearly all), Platt
+  2023-08 → 2024-07, selection 2024-08 → 2025-07 (one season), holdout
+  unchanged (≥ 2025-08-01). Gate it on the model-level read first: only if
+  the model beats the constant and closes most of the gap to Pinnacle on the
+  selection window does a cell search run; any holdout cell look for an
+  under-type League Two cell is then a third look and is reported as such.
+  If iteration 2 also cannot beat a constant with the informative features
+  present, that is the point at which "no learnable edge in EFL totals with
+  this feature set" becomes a settled negative rather than a tooling gap.
